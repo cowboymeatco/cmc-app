@@ -54,8 +54,16 @@ export interface AnimalReceivingLog {
   live_weight_lbs: number | null
   received_by:     string
   health_cert_no:  string
+  brand_insp_no:   string
   notes:           string
   status:          string
+  // Per-animal fields (added in receiving overhaul)
+  animal_index:    number
+  ear_tag:         string
+  sex:             string
+  breed:           string
+  over_30_months:  boolean
+  photo_url:       string
 }
 
 export interface BoxReceivingLog {
