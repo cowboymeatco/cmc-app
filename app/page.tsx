@@ -27,7 +27,7 @@ const modules = [
     icon:    '📋',
     title:   'Cutting Instructions',
     sub:     'Manage & review cut sheets',
-    enabled: false,
+    enabled: true,
   },
   {
     href:    '/delivery',
