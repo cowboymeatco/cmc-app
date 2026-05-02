@@ -40,8 +40,8 @@ const modules = [
     href:    '/processing',
     icon:    '🔪',
     title:   'Processing',
-    sub:     'Barcode scanner — coming soon',
-    enabled: false,
+    sub:     'PLU browser & Hobart sync',
+    enabled: true,
   },
 ]
 
