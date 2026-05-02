@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 
-type Tab = 'scanner' | 'browser' | 'upload' | 'export' | 'cleanup'
+type Tab = 'scanner' | 'boxes' | 'browser' | 'upload' | 'export' | 'cleanup'
 
 interface PluItem {
   id:                 string
@@ -757,6 +757,355 @@ function UploadTab() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+// LABEL GENERATOR
+// ══════════════════════════════════════════════════════════════════════════════
+interface BoxScan { id: string; item_name: string; plu_number: string; weight_lbs: number; quantity: number }
+interface BoxRecord { id: string; customer_name: string; pack_date: string; box_number: number; is_closed: boolean; is_final: boolean; total_weight_lbs: number; total_cuts: number }
+
+function generateLabel(box: BoxRecord, scans: BoxScan[]): string {
+  // Group by item name, sum weight
+  const grouped: Record<string, { count: number; weight: number }> = {}
+  scans.forEach(s => {
+    const key = s.item_name || s.plu_number || 'Unknown'
+    if (!grouped[key]) grouped[key] = { count: 0, weight: 0 }
+    grouped[key].count  += s.quantity ?? 1
+    grouped[key].weight += Number(s.weight_lbs) || 0
+  })
+  const items = Object.entries(grouped).sort((a, b) => b[1].weight - a[1].weight)
+  const totalWeight = items.reduce((s, [, v]) => s + v.weight, 0)
+  const totalCuts   = items.reduce((s, [, v]) => s + v.count, 0)
+  const boxLabel    = `Box ${box.box_number}${box.is_final ? ' ★' : ''}`
+  const dateStr     = new Date(box.pack_date + 'T12:00:00').toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })
+
+  const itemRows = items.map(([name, v]) =>
+    `<div class="item-row"><span><b>(${v.count})</b> ${name}</span><span>${v.weight.toFixed(2)} lb</span></div>`
+  ).join('')
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Box Label — ${box.customer_name} ${boxLabel}</title>
+<style>
+  @page { size: 4in auto; margin: 0.15in; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 3.7in; font-family: Arial, sans-serif; color: #000; background: #fff; }
+  .company  { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 9pt; font-weight: bold; text-align: center; letter-spacing: 0.05em; margin-bottom: 2px; }
+  .customer { font-size: 20pt; font-weight: bold; text-align: center; line-height: 1.1; margin: 4px 0; }
+  .box-num  { font-size: 14pt; font-weight: bold; text-align: center; margin-bottom: 2px; }
+  .date     { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 9pt; text-align: center; margin-bottom: 4px; }
+  hr        { border: none; border-top: 1px solid #000; margin: 5px 0; }
+  .item-row { display: flex; justify-content: space-between; align-items: baseline;
+              font-family: 'Arial Narrow', Arial, sans-serif; font-size: 11pt; padding: 1px 0; }
+  .footer   { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 10pt; font-weight: bold; text-align: center; margin-top: 2px; }
+  @media print { html, body { width: 4in; } }
+</style>
+</head>
+<body>
+  <div class="company">COWBOY MEAT COMPANY</div>
+  <div class="customer">${box.customer_name.toUpperCase()}</div>
+  <div class="box-num">${boxLabel}</div>
+  <div class="date">${dateStr}</div>
+  <hr>
+  ${itemRows}
+  <hr>
+  <div class="footer">${totalCuts} cut${totalCuts !== 1 ? 's' : ''} | ${totalWeight.toFixed(2)} lbs total</div>
+  <script>window.onload = () => window.print()</script>
+</body>
+</html>`
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// BOX LABELS TAB
+// ══════════════════════════════════════════════════════════════════════════════
+function BoxLabelsTab() {
+  const pluRef    = useRef<HTMLInputElement>(null)
+  const weightRef = useRef<HTMLInputElement>(null)
+
+  const [customer, setCustomer]   = useState('')
+  const [date, setDate]           = useState(new Date().toISOString().slice(0, 10))
+  const [boxes, setBoxes]         = useState<BoxRecord[]>([])
+  const [scans, setScans]         = useState<Record<string, BoxScan[]>>({})
+  const [activeBox, setActiveBox] = useState<BoxRecord | null>(null)
+
+  const [pluInput,  setPluInput]  = useState('')
+  const [itemName,  setItemName]  = useState('')
+  const [weight,    setWeight]    = useState('')
+  const [qty,       setQty]       = useState('1')
+  const [pluStatus, setPluStatus] = useState<'idle' | 'found' | 'notfound'>('idle')
+  const [saving,    setSaving]    = useState(false)
+
+  async function lookupPlu(plu: string) {
+    if (!plu.trim()) return
+    const res  = await fetch(`/api/processing?search=${encodeURIComponent(plu.trim())}`)
+    const json = await res.json()
+    const items: PluItem[] = Array.isArray(json) ? json : []
+    const match = items.find(i => i.plu_number === plu.trim())
+    if (match) { setItemName(match.item_name); setPluStatus('found'); weightRef.current?.focus() }
+    else       { setItemName(''); setPluStatus('notfound') }
+  }
+
+  async function loadScans(boxId: string) {
+    const res  = await fetch(`/api/boxes/scans?box_id=${boxId}`)
+    const data = await res.json()
+    setScans(prev => ({ ...prev, [boxId]: Array.isArray(data) ? data : [] }))
+  }
+
+  async function addBox(isFinal = false) {
+    if (!customer.trim()) { alert('Enter customer name first'); return }
+    setSaving(true)
+    const nextNum = boxes.length + 1
+    const res  = await fetch('/api/boxes', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customer_name: customer, pack_date: date, box_number: nextNum, is_final: isFinal }),
+    })
+    const box: BoxRecord = await res.json()
+    setBoxes(prev => [...prev, box])
+    setScans(prev => ({ ...prev, [box.id]: [] }))
+    setActiveBox(box)
+    setSaving(false)
+    pluRef.current?.focus()
+  }
+
+  async function addScan() {
+    if (!activeBox || !itemName || !weight) return
+    setSaving(true)
+    const res  = await fetch('/api/boxes/scans', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ box_id: activeBox.id, plu_number: pluInput, item_name: itemName, weight_lbs: parseFloat(weight), quantity: parseInt(qty) || 1 }),
+    })
+    const scan: BoxScan = await res.json()
+    setScans(prev => ({ ...prev, [activeBox.id]: [...(prev[activeBox.id] ?? []), scan] }))
+    setPluInput(''); setItemName(''); setWeight(''); setQty('1'); setPluStatus('idle')
+    setSaving(false)
+    pluRef.current?.focus()
+  }
+
+  async function removeScan(boxId: string, scanId: string) {
+    await fetch(`/api/boxes/scans?id=${scanId}`, { method: 'DELETE' })
+    setScans(prev => ({ ...prev, [boxId]: prev[boxId].filter(s => s.id !== scanId) }))
+  }
+
+  async function closeBox(box: BoxRecord) {
+    const boxScans = scans[box.id] ?? []
+    const totalWeight = boxScans.reduce((s, sc) => s + (Number(sc.weight_lbs) || 0), 0)
+    const totalCuts   = boxScans.reduce((s, sc) => s + (sc.quantity || 1), 0)
+    await fetch('/api/boxes', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: box.id, is_closed: true, total_weight_lbs: totalWeight, total_cuts: totalCuts }),
+    })
+    setBoxes(prev => prev.map(b => b.id === box.id ? { ...b, is_closed: true, total_weight_lbs: totalWeight, total_cuts: totalCuts } : b))
+    // Print label
+    const html = generateLabel({ ...box, is_closed: true, total_weight_lbs: totalWeight, total_cuts: totalCuts }, boxScans)
+    const win  = window.open('', '_blank')
+    if (win) { win.document.write(html); win.document.close() }
+  }
+
+  async function printLabel(box: BoxRecord) {
+    if (!scans[box.id]) await loadScans(box.id)
+    const html = generateLabel(box, scans[box.id] ?? [])
+    const win  = window.open('', '_blank')
+    if (win) { win.document.write(html); win.document.close() }
+  }
+
+  async function deleteBox(box: BoxRecord) {
+    if (!confirm(`Delete Box ${box.box_number}?`)) return
+    await fetch(`/api/boxes?id=${box.id}`, { method: 'DELETE' })
+    setBoxes(prev => prev.filter(b => b.id !== box.id))
+    if (activeBox?.id === box.id) setActiveBox(null)
+  }
+
+  const activeScans = activeBox ? (scans[activeBox.id] ?? []) : []
+  const activeTotal = activeScans.reduce((s, sc) => s + (Number(sc.weight_lbs) || 0), 0)
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: '1.5rem', height: '100%' }}>
+      {/* Left — session + box list */}
+      <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ padding: '1rem', borderBottom: '1px solid rgba(166,120,90,0.2)' }}>
+          <div style={{ marginBottom: '0.65rem' }}>
+            <label style={LABEL}>Customer</label>
+            <input style={INPUT} value={customer} onChange={e => setCustomer(e.target.value)} placeholder="Customer name" />
+          </div>
+          <div style={{ marginBottom: '0.75rem' }}>
+            <label style={LABEL}>Pack Date</label>
+            <input type="date" style={INPUT} value={date} onChange={e => setDate(e.target.value)} />
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button style={{ ...BTN(C.tan), flex: 1, fontSize: '0.8rem' }} onClick={() => addBox(false)} disabled={saving}>
+              + Add Box
+            </button>
+            <button
+              style={{ ...BTN('transparent', C.tan), border: `1px solid ${C.tan}`, fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+              onClick={() => addBox(true)}
+              title="Mark as final box (adds ★ to label)"
+              disabled={saving}
+            >
+              + Final ★
+            </button>
+          </div>
+        </div>
+
+        <div style={{ overflowY: 'auto', flex: 1 }}>
+          {boxes.length === 0 && (
+            <p style={{ color: C.lightBrown, fontSize: '0.82rem', padding: '1.25rem', textAlign: 'center' }}>
+              Enter customer name then add a box
+            </p>
+          )}
+          {boxes.map(box => (
+            <div
+              key={box.id}
+              onClick={() => { setActiveBox(box); if (!scans[box.id]) loadScans(box.id) }}
+              style={{
+                padding: '0.85rem 1rem', borderBottom: '1px solid rgba(166,120,90,0.1)',
+                cursor: 'pointer', background: activeBox?.id === box.id ? 'rgba(166,120,90,0.12)' : 'transparent',
+                transition: 'background 0.15s',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: C.cream, fontWeight: 700, fontSize: '0.95rem' }}>
+                  Box {box.box_number}{box.is_final ? ' ★' : ''}
+                </span>
+                <span style={{ fontSize: '0.7rem', fontWeight: 700, borderRadius: 99, padding: '2px 8px',
+                  background: box.is_closed ? 'rgba(76,175,80,0.2)' : 'rgba(201,168,130,0.2)',
+                  color: box.is_closed ? C.green : C.tan,
+                }}>
+                  {box.is_closed ? 'Closed' : 'Open'}
+                </span>
+              </div>
+              {box.is_closed && (
+                <div style={{ fontSize: '0.75rem', color: C.lightBrown, marginTop: '0.2rem' }}>
+                  {box.total_cuts} cuts · {Number(box.total_weight_lbs).toFixed(2)} lbs
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Session totals */}
+        {boxes.length > 0 && (
+          <div style={{ padding: '0.85rem 1rem', borderTop: '1px solid rgba(166,120,90,0.2)', fontSize: '0.78rem', color: C.lightBrown }}>
+            {boxes.length} box{boxes.length !== 1 ? 'es' : ''} ·&nbsp;
+            {boxes.filter(b => b.is_closed).reduce((s, b) => s + (Number(b.total_weight_lbs) || 0), 0).toFixed(2)} lbs closed
+          </div>
+        )}
+      </div>
+
+      {/* Right — active box */}
+      <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {!activeBox ? (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.lightBrown, fontSize: '0.9rem' }}>
+            ← Select or create a box
+          </div>
+        ) : (
+          <>
+            {/* Box header */}
+            <div style={{ padding: '0.85rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <span style={{ color: C.cream, fontWeight: 700, fontSize: '1rem' }}>
+                  Box {activeBox.box_number}{activeBox.is_final ? ' ★' : ''}
+                </span>
+                <span style={{ color: C.lightBrown, fontSize: '0.8rem', marginLeft: '0.75rem' }}>{customer}</span>
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button onClick={() => printLabel(activeBox)} style={{ ...BTN('transparent', C.tan), border: `1px solid ${C.tan}`, fontSize: '0.78rem' }}>
+                  🖨 Print Label
+                </button>
+                {!activeBox.is_closed && (
+                  <button onClick={() => closeBox(activeBox)} style={{ ...BTN(C.green, C.dark), fontSize: '0.78rem' }}>
+                    ✓ Close Box
+                  </button>
+                )}
+                <button onClick={() => deleteBox(activeBox)} style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.2)', fontSize: '0.78rem' }}>
+                  ×
+                </button>
+              </div>
+            </div>
+
+            {/* Add item form — only for open boxes */}
+            {!activeBox.is_closed && (
+              <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.15)', background: 'rgba(0,0,0,0.15)' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 80px 80px', gap: '0.5rem', alignItems: 'end' }}>
+                  <div>
+                    <label style={LABEL}>PLU #</label>
+                    <input
+                      ref={pluRef}
+                      style={{ ...INPUT, fontFamily: 'monospace',
+                        borderColor: pluStatus === 'found' ? 'rgba(76,175,80,0.6)' : pluStatus === 'notfound' ? 'rgba(229,62,62,0.5)' : 'rgba(166,120,90,0.35)',
+                      }}
+                      value={pluInput}
+                      onChange={e => { setPluInput(e.target.value); setPluStatus('idle') }}
+                      onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); lookupPlu(pluInput) } }}
+                      placeholder="PLU → Enter"
+                    />
+                  </div>
+                  <div>
+                    <label style={LABEL}>
+                      {pluStatus === 'found' ? <span style={{ color: C.green }}>✓ {itemName}</span> : 'Item Name'}
+                    </label>
+                    <input style={INPUT} value={itemName} onChange={e => setItemName(e.target.value)} placeholder="Name" />
+                  </div>
+                  <div>
+                    <label style={LABEL}>Wt (lbs)</label>
+                    <input ref={weightRef} type="number" step="0.001" style={INPUT} value={weight} onChange={e => setWeight(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addScan() } }} placeholder="0.00" />
+                  </div>
+                  <div>
+                    <label style={LABEL}>Qty</label>
+                    <input type="number" min="1" style={INPUT} value={qty} onChange={e => setQty(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addScan() } }} />
+                  </div>
+                </div>
+                <button
+                  style={{ ...BTN(itemName && weight ? C.tan : C.medBrown), marginTop: '0.65rem', opacity: itemName && weight ? 1 : 0.5 }}
+                  onClick={addScan}
+                  disabled={saving || !itemName || !weight}
+                >
+                  + Add to Box
+                </button>
+              </div>
+            )}
+
+            {/* Scan list */}
+            <div style={{ overflowY: 'auto', flex: 1 }}>
+              {activeScans.length === 0 && (
+                <div style={{ padding: '2rem', textAlign: 'center', color: C.lightBrown, fontSize: '0.85rem' }}>
+                  {activeBox.is_closed ? 'Box is closed' : 'No items yet — add items above'}
+                </div>
+              )}
+              {activeScans.map(scan => (
+                <div key={scan.id} style={{ padding: '0.75rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.08)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <span style={{ color: C.cream, fontSize: '0.88rem' }}>
+                      <span style={{ color: C.lightBrown, marginRight: '0.5rem' }}>({scan.quantity ?? 1})</span>
+                      {scan.item_name || scan.plu_number}
+                    </span>
+                    {scan.plu_number && <span style={{ color: C.lightBrown, fontSize: '0.75rem', marginLeft: '0.5rem', fontFamily: 'monospace' }}>PLU {scan.plu_number}</span>}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                    <span style={{ color: C.tan, fontWeight: 600 }}>{Number(scan.weight_lbs).toFixed(3)} lb</span>
+                    {!activeBox.is_closed && (
+                      <button onClick={() => removeScan(activeBox.id, scan.id)} style={{ background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '1rem' }}>×</button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Box footer */}
+            <div style={{ padding: '0.75rem 1.25rem', borderTop: '1px solid rgba(166,120,90,0.2)', display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+              <span style={{ color: C.lightBrown }}>{activeScans.length} line{activeScans.length !== 1 ? 's' : ''}</span>
+              <span style={{ color: C.cream, fontWeight: 600 }}>{activeTotal.toFixed(3)} lbs total</span>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // PAGE
 // ══════════════════════════════════════════════════════════════════════════════
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1049,6 +1398,7 @@ export default function ProcessingPage() {
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'scanner', label: '📡 Scanner' },
+    { id: 'boxes',   label: '📦 Box Labels' },
     { id: 'browser', label: '🔪 PLU Browser' },
     { id: 'export',  label: '📤 Export' },
     { id: 'cleanup', label: '🧹 Cleanup' },
@@ -1077,6 +1427,7 @@ export default function ProcessingPage() {
 
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1400px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
         {tab === 'scanner' && <ScannerTab />}
+        {tab === 'boxes'   && <BoxLabelsTab />}
         {tab === 'browser' && <BrowserTab />}
         {tab === 'export'  && <ExportTab />}
         {tab === 'cleanup' && <CleanupTab />}
