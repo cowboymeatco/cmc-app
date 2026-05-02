@@ -3,18 +3,30 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 
-type Tab = 'plu' | 'upload'
+type Tab = 'browser' | 'upload' | 'export' | 'cleanup'
 
 interface PluItem {
-  id:          string
-  plu_number:  string
-  item_name:   string
-  price:       number | null
-  tare_weight: number | null
-  department:  string
-  unit:        string
-  updated_at:  string
-  raw_data:    Record<string, string>
+  id:                 string
+  plu_number:         string
+  item_name:          string
+  price:              number | null
+  retail_price:       number | null
+  wholesale_price:    number | null
+  tare_weight:        number | null
+  department:         string
+  unit:               string
+  species:            string
+  description:        string
+  is_retail:          boolean
+  is_wholesale:       boolean
+  clover_item_id:     string
+  upc:                string
+  label_message:      string
+  sell_by_weight:     boolean
+  active:             boolean
+  notes:              string
+  updated_at:         string
+  raw_data:           Record<string, string>
 }
 
 const C = {
@@ -27,72 +39,312 @@ const C = {
   green:      '#4CAF50',
   red:        '#E53E3E',
   yellow:     '#D97706',
+  blue:       '#3B82F6',
 }
 
 const INPUT: React.CSSProperties = {
   width: '100%', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.35)',
-  borderRadius: 3, padding: '0.5rem 0.75rem', color: C.cream, fontSize: '0.88rem',
+  borderRadius: 3, padding: '0.45rem 0.7rem', color: C.cream, fontSize: '0.85rem',
   outline: 'none', boxSizing: 'border-box',
 }
 const LABEL: React.CSSProperties = {
-  display: 'block', fontSize: '0.72rem', color: C.lightBrown,
-  textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.3rem',
+  display: 'block', fontSize: '0.7rem', color: C.lightBrown,
+  textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.25rem',
 }
 const BTN = (bg: string, color = C.dark): React.CSSProperties => ({
   background: bg, color, border: 'none', borderRadius: 3,
-  padding: '0.55rem 1.2rem', fontSize: '0.85rem', fontWeight: 600,
+  padding: '0.5rem 1.1rem', fontSize: '0.83rem', fontWeight: 600,
   cursor: 'pointer', letterSpacing: '0.04em',
 })
+
+const SPECIES_LIST = ['', 'Beef', 'Pork', 'Lamb', 'Goat', 'Processed', 'Wild Game', 'Cheese', 'Wholesale', 'Other']
+
+function detectSpecies(plu: string): string {
+  const n = parseInt(plu)
+  if (isNaN(n)) return ''
+  if (n >= 413000)             return 'Wholesale'
+  if (n >= 9000 && n <= 11999) return 'Cheese'
+  if (n >= 8000 && n <= 8999)  return 'Wild Game'
+  if (n >= 4000 && n <= 7999)  return 'Processed'
+  if (n >= 3000 && n <= 3999)  return 'Goat'
+  if (n >= 2000 && n <= 2999)  return 'Lamb'
+  if (n >= 1000 && n <= 1999)  return 'Pork'
+  if (n >= 100  && n <= 999)   return 'Beef'
+  return ''
+}
+
+function Field({ label, children, span2 }: { label: string; children: React.ReactNode; span2?: boolean }) {
+  return (
+    <div style={{ marginBottom: '0.75rem', gridColumn: span2 ? 'span 2' : undefined }}>
+      <label style={LABEL}>{label}</label>
+      {children}
+    </div>
+  )
+}
+
+function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.83rem', color: checked ? C.tan : C.lightBrown, marginBottom: '0.5rem' }}>
+      <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} style={{ accentColor: C.tan, width: 15, height: 15 }} />
+      {label}
+    </label>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// EDIT PANEL
+// ══════════════════════════════════════════════════════════════════════════════
+function EditPanel({ item, onSaved, onDeleted, onClose }: {
+  item: PluItem
+  onSaved: (updated: PluItem) => void
+  onDeleted: (id: string) => void
+  onClose: () => void
+}) {
+  const [form, setForm] = useState<PluItem>({ ...item, species: item.species || detectSpecies(item.plu_number) })
+  const [saving, setSaving]   = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [editTab, setEditTab] = useState<'basic' | 'pricing' | 'label' | 'connections'>('basic')
+
+  const f = (k: keyof PluItem) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
+    setForm(p => ({ ...p, [k]: e.target.value }))
+  const num = (k: keyof PluItem) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setForm(p => ({ ...p, [k]: e.target.value === '' ? null : parseFloat(e.target.value) }))
+  const bool = (k: keyof PluItem) => (v: boolean) => setForm(p => ({ ...p, [k]: v }))
+
+  async function save() {
+    setSaving(true)
+    const res = await fetch('/api/processing', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(form),
+    })
+    const updated = await res.json()
+    setSaving(false)
+    onSaved(updated)
+  }
+
+  async function del() {
+    if (!confirm(`Delete PLU ${form.plu_number} — ${form.item_name}? This cannot be undone.`)) return
+    setDeleting(true)
+    await fetch(`/api/processing?id=${form.id}`, { method: 'DELETE' })
+    setDeleting(false)
+    onDeleted(form.id)
+  }
+
+  const editTabs = ['basic', 'pricing', 'label', 'connections'] as const
+
+  return (
+    <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      {/* Edit header */}
+      <div style={{ padding: '0.85rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <span style={{ fontFamily: 'monospace', color: C.lightBrown, fontSize: '0.8rem' }}>PLU {form.plu_number}</span>
+          <span style={{ color: C.cream, fontWeight: 600, marginLeft: '0.75rem', fontSize: '0.95rem' }}>{form.item_name || 'Unnamed'}</span>
+        </div>
+        <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1 }}>×</button>
+      </div>
+
+      {/* Sub-tabs */}
+      <div style={{ display: 'flex', borderBottom: '1px solid rgba(166,120,90,0.15)', background: 'rgba(0,0,0,0.15)' }}>
+        {editTabs.map(t => (
+          <button key={t} onClick={() => setEditTab(t)} style={{
+            padding: '0.5rem 1rem', border: 'none', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600,
+            background: editTab === t ? 'rgba(166,120,90,0.15)' : 'transparent',
+            color: editTab === t ? C.tan : C.lightBrown, textTransform: 'capitalize',
+            borderBottom: editTab === t ? `2px solid ${C.tan}` : '2px solid transparent',
+          }}>{t}</button>
+        ))}
+      </div>
+
+      <div style={{ overflowY: 'auto', flex: 1, padding: '1rem 1.25rem' }}>
+        {/* BASIC */}
+        {editTab === 'basic' && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1rem' }}>
+            <Field label="PLU #">
+              <input style={INPUT} value={form.plu_number} onChange={f('plu_number')} />
+            </Field>
+            <Field label="Species">
+              <select style={{ ...INPUT }} value={form.species} onChange={f('species')}>
+                {SPECIES_LIST.map(s => <option key={s} value={s}>{s || '— auto-detect —'}</option>)}
+              </select>
+            </Field>
+            <Field label="Item Name" span2>
+              <input style={INPUT} value={form.item_name} onChange={f('item_name')} />
+            </Field>
+            <Field label="Description" span2>
+              <input style={INPUT} value={form.description} onChange={f('description')} placeholder="Extended description" />
+            </Field>
+            <Field label="Department">
+              <input style={INPUT} value={form.department} onChange={f('department')} />
+            </Field>
+            <Field label="Unit">
+              <input style={INPUT} value={form.unit} onChange={f('unit')} placeholder="LB / EA / OZ" />
+            </Field>
+            <div style={{ gridColumn: 'span 2', marginBottom: '0.5rem' }}>
+              <Toggle label="Sell by Weight" checked={form.sell_by_weight} onChange={bool('sell_by_weight')} />
+              <Toggle label="Active" checked={form.active} onChange={bool('active')} />
+            </div>
+            <Field label="Notes" span2>
+              <textarea style={{ ...INPUT, height: 64, resize: 'vertical' }} value={form.notes} onChange={f('notes')} />
+            </Field>
+          </div>
+        )}
+
+        {/* PRICING */}
+        {editTab === 'pricing' && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1rem' }}>
+            <Field label="Scale Price ($/lb)">
+              <input type="number" step="0.01" style={INPUT} value={form.price ?? ''} onChange={num('price')} placeholder="0.00" />
+            </Field>
+            <Field label="Retail Price ($/lb)">
+              <input type="number" step="0.01" style={INPUT} value={form.retail_price ?? ''} onChange={num('retail_price')} placeholder="0.00" />
+            </Field>
+            <Field label="Wholesale Price ($/lb)">
+              <input type="number" step="0.01" style={INPUT} value={form.wholesale_price ?? ''} onChange={num('wholesale_price')} placeholder="0.00" />
+            </Field>
+            <Field label="Tare Weight (lbs)">
+              <input type="number" step="0.01" style={INPUT} value={form.tare_weight ?? ''} onChange={num('tare_weight')} placeholder="0.00" />
+            </Field>
+            <div style={{ gridColumn: 'span 2', marginTop: '0.25rem' }}>
+              <Toggle label="Sell in Clover (retail)" checked={form.is_retail} onChange={bool('is_retail')} />
+              <Toggle label="Available wholesale" checked={form.is_wholesale} onChange={bool('is_wholesale')} />
+            </div>
+          </div>
+        )}
+
+        {/* LABEL */}
+        {editTab === 'label' && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1rem' }}>
+            <Field label="UPC / Barcode">
+              <input style={{ ...INPUT, fontFamily: 'monospace' }} value={form.upc} onChange={f('upc')} />
+            </Field>
+            <Field label="Tare Weight (lbs)">
+              <input type="number" step="0.01" style={INPUT} value={form.tare_weight ?? ''} onChange={num('tare_weight')} />
+            </Field>
+            <Field label="Label Message" span2>
+              <textarea style={{ ...INPUT, height: 80, resize: 'vertical' }} value={form.label_message} onChange={f('label_message')} placeholder="Message printed on scale label" />
+            </Field>
+          </div>
+        )}
+
+        {/* CONNECTIONS */}
+        {editTab === 'connections' && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1rem' }}>
+            <Field label="Clover Item ID">
+              <input style={{ ...INPUT, fontFamily: 'monospace' }} value={form.clover_item_id} onChange={f('clover_item_id')} placeholder="Synced from Clover" />
+            </Field>
+            <div style={{ marginBottom: '0.75rem' }}>
+              <label style={LABEL}>Clover Status</label>
+              <div style={{ padding: '0.45rem 0.7rem', background: 'rgba(255,255,255,0.04)', borderRadius: 3, fontSize: '0.83rem', color: form.clover_item_id ? C.green : C.lightBrown }}>
+                {form.clover_item_id ? '✓ Synced' : 'Not synced'}
+              </div>
+            </div>
+            <Field label="QuickBooks Item ID">
+              <input style={{ ...INPUT, fontFamily: 'monospace' }} value={''} readOnly placeholder="Coming soon" />
+            </Field>
+            <div />
+            <div style={{ gridColumn: 'span 2', background: 'rgba(255,255,255,0.03)', borderRadius: 4, padding: '0.85rem 1rem', fontSize: '0.8rem', color: C.lightBrown }}>
+              <strong style={{ color: C.tan, display: 'block', marginBottom: '0.4rem' }}>Connections</strong>
+              Clover sync and QuickBooks integration are managed from their respective tabs.
+              IDs here are set automatically during sync.
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Action bar */}
+      <div style={{ padding: '0.85rem 1.25rem', borderTop: '1px solid rgba(166,120,90,0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <button onClick={del} disabled={deleting} style={{ ...BTN('transparent', C.red), border: `1px solid ${C.red}`, opacity: 0.7 }}>
+          {deleting ? 'Deleting…' : 'Delete'}
+        </button>
+        <div style={{ display: 'flex', gap: '0.6rem' }}>
+          <button onClick={onClose} style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.3)' }}>Cancel</button>
+          <button onClick={save} disabled={saving} style={BTN(C.tan)}>
+            {saving ? 'Saving…' : 'Save Changes'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // PLU BROWSER TAB
 // ══════════════════════════════════════════════════════════════════════════════
-function PluTab() {
+function BrowserTab() {
   const [items, setItems]       = useState<PluItem[]>([])
   const [search, setSearch]     = useState('')
+  const [speciesFilter, setSpeciesFilter] = useState('')
+  const [showInactive, setShowInactive]   = useState(false)
   const [selected, setSelected] = useState<PluItem | null>(null)
   const [loading, setLoading]   = useState(true)
 
-  const load = useCallback(async (q = '') => {
+  const load = useCallback(async (q = '', sp = '', inactive = false) => {
     setLoading(true)
     try {
-      const res = await fetch(`/api/processing${q ? `?search=${encodeURIComponent(q)}` : ''}`)
+      const params = new URLSearchParams()
+      if (q)  params.set('search', q)
+      if (sp) params.set('species', sp)
+      if (!inactive) params.set('active', 'true')
+      const res = await fetch(`/api/processing?${params}`)
       const json = await res.json()
       setItems(Array.isArray(json) ? json : [])
-    } catch {
-      setItems([])
-    }
+    } catch { setItems([]) }
     setLoading(false)
   }, [])
 
   useEffect(() => { load() }, [load])
 
   useEffect(() => {
-    const t = setTimeout(() => load(search), 250)
+    const t = setTimeout(() => load(search, speciesFilter, showInactive), 250)
     return () => clearTimeout(t)
-  }, [search, load])
+  }, [search, speciesFilter, showInactive, load])
 
-  const fmt = (n: number | null, prefix = '') => n != null ? `${prefix}${n.toFixed(2)}` : '—'
+  function handleSaved(updated: PluItem) {
+    setItems(prev => prev.map(x => x.id === updated.id ? updated : x))
+    setSelected(updated)
+  }
+
+  function handleDeleted(id: string) {
+    setItems(prev => prev.filter(x => x.id !== id))
+    setSelected(null)
+  }
+
+  const speciesCounts = items.reduce<Record<string, number>>((acc, item) => {
+    const s = item.species || 'Unknown'
+    acc[s] = (acc[s] ?? 0) + 1
+    return acc
+  }, {})
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '380px 1fr', gap: '1.5rem', height: '100%' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: '1.5rem', height: '100%' }}>
       {/* Left — list */}
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid rgba(166,120,90,0.2)' }}>
-          <input
-            style={INPUT}
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Search PLU # or name…"
-          />
+        {/* Search + filters */}
+        <div style={{ padding: '0.75rem', borderBottom: '1px solid rgba(166,120,90,0.2)' }}>
+          <input style={{ ...INPUT, marginBottom: '0.5rem' }} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search PLU # or name…" />
+          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+            <select style={{ ...INPUT, width: 'auto', flex: 1, fontSize: '0.78rem', padding: '0.3rem 0.5rem' }} value={speciesFilter} onChange={e => setSpeciesFilter(e.target.value)}>
+              <option value="">All species</option>
+              {SPECIES_LIST.filter(Boolean).map(s => (
+                <option key={s} value={s}>{s} {speciesCounts[s] ? `(${speciesCounts[s]})` : ''}</option>
+              ))}
+            </select>
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.4rem', fontSize: '0.75rem', color: C.lightBrown, cursor: 'pointer' }}>
+            <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} style={{ accentColor: C.tan }} />
+            Show inactive
+          </label>
         </div>
-        <div style={{ padding: '0.5rem 1rem', borderBottom: '1px solid rgba(166,120,90,0.15)', fontSize: '0.72rem', color: C.lightBrown }}>
+
+        <div style={{ padding: '0.4rem 0.75rem', borderBottom: '1px solid rgba(166,120,90,0.1)', fontSize: '0.72rem', color: C.lightBrown }}>
           {loading ? 'Loading…' : `${items.length} items`}
         </div>
+
         <div style={{ overflowY: 'auto', flex: 1 }}>
           {!loading && items.length === 0 && (
             <div style={{ padding: '2rem', textAlign: 'center', color: C.lightBrown, fontSize: '0.85rem' }}>
-              {search ? 'No matches found' : 'No PLU items yet — upload a file to get started'}
+              {search || speciesFilter ? 'No matches' : 'No items yet — upload a file to get started'}
             </div>
           )}
           {items.map(item => (
@@ -100,87 +352,254 @@ function PluTab() {
               key={item.id}
               onClick={() => setSelected(item)}
               style={{
-                padding: '0.75rem 1rem', borderBottom: '1px solid rgba(166,120,90,0.1)',
+                padding: '0.65rem 0.85rem', borderBottom: '1px solid rgba(166,120,90,0.08)',
                 cursor: 'pointer', background: selected?.id === item.id ? 'rgba(166,120,90,0.12)' : 'transparent',
                 transition: 'background 0.15s', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                opacity: item.active ? 1 : 0.45,
               }}
             >
               <div>
-                <div style={{ color: C.cream, fontSize: '0.88rem', fontWeight: 600 }}>{item.item_name || '—'}</div>
-                <div style={{ color: C.lightBrown, fontSize: '0.75rem', fontFamily: 'monospace', marginTop: '0.1rem' }}>
-                  PLU {item.plu_number}
-                  {item.department ? ` · ${item.department}` : ''}
+                <div style={{ color: C.cream, fontSize: '0.86rem', fontWeight: 500 }}>{item.item_name || '—'}</div>
+                <div style={{ color: C.lightBrown, fontSize: '0.72rem', fontFamily: 'monospace', marginTop: '0.1rem' }}>
+                  {item.plu_number}
+                  {item.species ? ` · ${item.species}` : ''}
                 </div>
               </div>
-              <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: '0.75rem' }}>
-                {item.price != null && (
-                  <div style={{ color: C.tan, fontSize: '0.88rem', fontWeight: 600 }}>${item.price.toFixed(2)}</div>
-                )}
-                {item.unit && <div style={{ color: C.lightBrown, fontSize: '0.72rem' }}>/{item.unit}</div>}
+              <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: '0.5rem' }}>
+                {item.price != null && <div style={{ color: C.tan, fontSize: '0.85rem', fontWeight: 600 }}>${item.price.toFixed(2)}</div>}
+                {item.is_retail && <div style={{ fontSize: '0.65rem', color: C.blue }}>RETAIL</div>}
               </div>
             </div>
           ))}
         </div>
       </div>
 
-      {/* Right — detail */}
-      <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1.5rem', overflowY: 'auto' }}>
-        {!selected ? (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '60%', color: C.lightBrown, fontSize: '0.9rem' }}>
-            ← Select an item to view details
+      {/* Right — edit panel or placeholder */}
+      {selected ? (
+        <EditPanel
+          key={selected.id}
+          item={selected}
+          onSaved={handleSaved}
+          onDeleted={handleDeleted}
+          onClose={() => setSelected(null)}
+        />
+      ) : (
+        <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.lightBrown, fontSize: '0.9rem' }}>
+          ← Select an item to edit
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// EXPORT TAB
+// ══════════════════════════════════════════════════════════════════════════════
+function ExportTab() {
+  const [species, setSpecies]     = useState('')
+  const [retailOnly, setRetailOnly] = useState(false)
+  const [activeOnly, setActiveOnly] = useState(true)
+  const [exporting, setExporting] = useState(false)
+  const [count, setCount]         = useState<number | null>(null)
+
+  async function fetchCount() {
+    const params = new URLSearchParams()
+    if (species)    params.set('species', species)
+    if (activeOnly) params.set('active', 'true')
+    const res  = await fetch(`/api/processing?${params}`)
+    const json = await res.json()
+    const items: PluItem[] = Array.isArray(json) ? json : []
+    const filtered = retailOnly ? items.filter(i => i.is_retail) : items
+    setCount(filtered.length)
+    return filtered
+  }
+
+  useEffect(() => { fetchCount() }, [species, retailOnly, activeOnly]) // eslint-disable-line
+
+  async function handleExport() {
+    setExporting(true)
+    const items = await fetchCount()
+
+    // Hobart CSV format — standard 28-column layout
+    const headers = [
+      'PLU_NO','ITEM_NAME','PRICE1','PRICE2','PRICE3',
+      'TARE','DEPT','UNIT','DESCRIPTION','UPC',
+      'SELL_BY_WEIGHT','LABEL_MSG','ACTIVE',
+      'RETAIL_PRICE','WHOLESALE_PRICE','SPECIES',
+    ]
+
+    const rows = items.map(i => [
+      i.plu_number,
+      `"${(i.item_name ?? '').replace(/"/g, '""')}"`,
+      i.price?.toFixed(2) ?? '0.00',
+      i.retail_price?.toFixed(2) ?? '0.00',
+      i.wholesale_price?.toFixed(2) ?? '0.00',
+      i.tare_weight?.toFixed(3) ?? '0.000',
+      i.department ?? '',
+      i.unit ?? 'LB',
+      `"${(i.description ?? '').replace(/"/g, '""')}"`,
+      i.upc ?? '',
+      i.sell_by_weight ? '1' : '0',
+      `"${(i.label_message ?? '').replace(/"/g, '""')}"`,
+      i.active ? '1' : '0',
+      i.retail_price?.toFixed(2) ?? '',
+      i.wholesale_price?.toFixed(2) ?? '',
+      i.species ?? '',
+    ].join(','))
+
+    const csv = [headers.join(','), ...rows].join('\r\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href     = url
+    a.download = `PLU_Export_${new Date().toISOString().slice(0,10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+    setExporting(false)
+  }
+
+  return (
+    <div style={{ maxWidth: 680, margin: '0 auto' }}>
+      <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1.5rem', marginBottom: '1.25rem' }}>
+        <h3 style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 1.25rem' }}>
+          Export PLU List
+        </h3>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1.25rem', marginBottom: '1rem' }}>
+          <div style={{ marginBottom: '0.85rem' }}>
+            <label style={LABEL}>Species Filter</label>
+            <select style={{ ...INPUT }} value={species} onChange={e => setSpecies(e.target.value)}>
+              <option value="">All species</option>
+              {SPECIES_LIST.filter(Boolean).map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
           </div>
-        ) : (
-          <>
-            <h2 style={{ fontFamily: 'Georgia, serif', color: C.cream, fontSize: '1.2rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 0.35rem' }}>
-              {selected.item_name || 'Unnamed Item'}
-            </h2>
-            <div style={{ fontSize: '0.8rem', color: C.lightBrown, marginBottom: '1.5rem' }}>
-              Last updated {new Date(selected.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-            </div>
+          <div />
+        </div>
 
-            {/* Key fields */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
-              {[
-                ['PLU #',       selected.plu_number],
-                ['Price',       selected.price != null ? `$${selected.price.toFixed(2)}` : '—'],
-                ['Unit',        selected.unit || '—'],
-                ['Tare Weight', selected.tare_weight != null ? `${selected.tare_weight} lbs` : '—'],
-                ['Department',  selected.department || '—'],
-              ].map(([label, val]) => (
-                <div key={label} style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 4, padding: '0.75rem 1rem' }}>
-                  <div style={{ fontSize: '0.7rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.3rem' }}>{label}</div>
-                  <div style={{ color: C.cream, fontWeight: 600, fontSize: '0.95rem' }}>{val}</div>
-                </div>
-              ))}
-            </div>
+        <Toggle label="Active items only" checked={activeOnly} onChange={setActiveOnly} />
+        <Toggle label="Retail items only (Clover)" checked={retailOnly} onChange={setRetailOnly} />
 
-            {/* Raw data — all fields from the Hobart file */}
-            {Object.keys(selected.raw_data ?? {}).length > 0 && (
-              <>
-                <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.75rem' }}>
-                  All Fields from Hobart
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.4rem' }}>
-                  {Object.entries(selected.raw_data).map(([k, v]) => (
-                    <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.4rem 0.75rem', background: 'rgba(255,255,255,0.03)', borderRadius: 3, fontSize: '0.8rem' }}>
-                      <span style={{ color: C.lightBrown }}>{k}</span>
-                      <span style={{ color: C.tan, fontFamily: 'monospace' }}>{v}</span>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </>
-        )}
+        <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 4, padding: '0.85rem 1rem', margin: '1rem 0', fontSize: '0.85rem', color: C.tan }}>
+          {count !== null ? <><strong style={{ color: C.cream }}>{count}</strong> items will be exported</> : 'Calculating…'}
+        </div>
+
+        <button style={BTN(count ? C.tan : C.medBrown)} onClick={handleExport} disabled={exporting || !count}>
+          {exporting ? 'Generating…' : '⬇ Download CSV'}
+        </button>
+      </div>
+
+      <div style={{ background: 'rgba(26,10,4,0.6)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: 4, padding: '1.25rem 1.5rem', fontSize: '0.82rem', color: C.lightBrown, lineHeight: 1.8 }}>
+        <strong style={{ color: C.tan, display: 'block', marginBottom: '0.5rem' }}>To load into Hobart:</strong>
+        <ol style={{ margin: 0, paddingLeft: '1.25rem' }}>
+          <li>Download the CSV file above</li>
+          <li>Open Hobart Scale Manager</li>
+          <li>Go to PLU → Import → Select file</li>
+          <li>Map columns if prompted, then import</li>
+        </ol>
       </div>
     </div>
   )
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// CSV UPLOAD TAB
+// CLEANUP TAB
 // ══════════════════════════════════════════════════════════════════════════════
-// ── Hobart DAT parser ─────────────────────────────────────────────────────────
+function CleanupTab() {
+  const [items, setItems] = useState<PluItem[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    async function load() {
+      const res  = await fetch('/api/processing')
+      const json = await res.json()
+      setItems(Array.isArray(json) ? json : [])
+      setLoading(false)
+    }
+    load()
+  }, [])
+
+  const noPrice     = items.filter(i => i.price == null && i.active)
+  const noName      = items.filter(i => !i.item_name?.trim() && i.active)
+  const noSpecies   = items.filter(i => !i.species && i.active)
+  const retailNoId  = items.filter(i => i.is_retail && !i.clover_item_id && i.active)
+  const inactive    = items.filter(i => !i.active)
+
+  const groups = [
+    { label: 'No price set',          color: C.red,    items: noPrice },
+    { label: 'Missing name',           color: C.red,    items: noName },
+    { label: 'No species assigned',    color: C.yellow, items: noSpecies },
+    { label: 'Retail but no Clover ID', color: C.yellow, items: retailNoId },
+    { label: 'Inactive items',         color: C.lightBrown, items: inactive },
+  ]
+
+  if (loading) return <div style={{ color: C.lightBrown, padding: '2rem' }}>Loading…</div>
+
+  const totalIssues = noPrice.length + noName.length + noSpecies.length + retailNoId.length
+
+  return (
+    <div style={{ maxWidth: 900, margin: '0 auto' }}>
+      {/* Summary */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
+        {[
+          ['Total PLUs',      items.length,        C.tan],
+          ['Active',          items.filter(i => i.active).length, C.green],
+          ['Issues Found',    totalIssues,          totalIssues > 0 ? C.red : C.green],
+          ['Inactive',        inactive.length,      C.lightBrown],
+        ].map(([label, val, color]) => (
+          <div key={label as string} style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1rem 1.25rem', textAlign: 'center' }}>
+            <div style={{ fontSize: '1.8rem', fontWeight: 700, color: color as string, lineHeight: 1 }}>{val}</div>
+            <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginTop: '0.3rem' }}>{label as string}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Issue groups */}
+      {groups.map(g => g.items.length > 0 && (
+        <div key={g.label} style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, marginBottom: '1rem', overflow: 'hidden' }}>
+          <div style={{ padding: '0.75rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.15)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ color: g.color, fontSize: '0.85rem', fontWeight: 600 }}>{g.label}</span>
+            <span style={{ background: g.color, color: C.dark, fontSize: '0.7rem', fontWeight: 700, borderRadius: 99, padding: '2px 10px' }}>{g.items.length}</span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+              <thead>
+                <tr style={{ background: 'rgba(255,255,255,0.03)' }}>
+                  {['PLU #', 'Name', 'Species', 'Price', 'Retail'].map(h => (
+                    <th key={h} style={{ padding: '0.4rem 0.85rem', borderBottom: '1px solid rgba(166,120,90,0.15)', color: C.tan, textAlign: 'left' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {g.items.slice(0, 20).map(item => (
+                  <tr key={item.id} style={{ borderBottom: '1px solid rgba(166,120,90,0.07)' }}>
+                    <td style={{ padding: '0.4rem 0.85rem', color: C.lightBrown, fontFamily: 'monospace' }}>{item.plu_number}</td>
+                    <td style={{ padding: '0.4rem 0.85rem', color: C.cream }}>{item.item_name || <em style={{ color: C.red }}>missing</em>}</td>
+                    <td style={{ padding: '0.4rem 0.85rem', color: item.species ? C.tan : C.red }}>{item.species || 'not set'}</td>
+                    <td style={{ padding: '0.4rem 0.85rem', color: item.price != null ? C.tan : C.red }}>{item.price != null ? `$${item.price.toFixed(2)}` : 'not set'}</td>
+                    <td style={{ padding: '0.4rem 0.85rem', color: item.is_retail ? C.blue : C.lightBrown }}>{item.is_retail ? 'Yes' : '—'}</td>
+                  </tr>
+                ))}
+                {g.items.length > 20 && (
+                  <tr><td colSpan={5} style={{ padding: '0.5rem 0.85rem', color: C.lightBrown, fontSize: '0.75rem', fontStyle: 'italic' }}>…and {g.items.length - 20} more</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+
+      {totalIssues === 0 && inactive.length === 0 && (
+        <div style={{ background: 'rgba(76,175,80,0.1)', border: '1px solid rgba(76,175,80,0.3)', borderRadius: 4, padding: '1.5rem', textAlign: 'center', color: C.green, fontSize: '0.9rem' }}>
+          ✓ No issues found — all items look good
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// UPLOAD TAB (unchanged)
+// ══════════════════════════════════════════════════════════════════════════════
 interface ParsedPlu {
   plu_number:  string
   item_name:   string
@@ -188,19 +607,16 @@ interface ParsedPlu {
   tare_weight: number | null
   department:  string
   unit:        string
+  species:     string
   raw_data:    Record<string, string>
 }
 
 function parseHobartDat(raw: string): ParsedPlu[] {
-  // Replace non-printable chars (except \r \n \t) with a pipe delimiter
-  const text = raw.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '|')
-
-  // Every PLU record starts with RT89 — split on that marker
+  const text   = raw.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '|')
   const blocks = text.split('RT89').slice(1).filter(b => /p#\d+/.test(b))
 
   return blocks.map(block => {
     const get = (pattern: RegExp) => { const m = block.match(pattern); return m ? m[1].trim() : '' }
-
     const plu_number  = get(/p#(\d+)/)
     const item_name   = get(/dt([^|\r\n]+)/)
     const priceRaw    = get(/\$(\d+)/)
@@ -208,19 +624,10 @@ function parseHobartDat(raw: string): ParsedPlu[] {
     const tareRaw     = get(/ta(\d+)/)
     const upc         = get(/up(\w+)/)
     const unit_code   = get(/u#(\w+)/)
-
-    // Price stored in cents: $549 → $5.49
     const price       = priceRaw ? parseInt(priceRaw) / 100 : null
-    // Tare stored in grams; convert to lbs for display
     const tare_weight = tareRaw  ? Math.round((parseInt(tareRaw) / 453.592) * 100) / 100 : null
-
     return {
-      plu_number,
-      item_name,
-      price,
-      tare_weight,
-      department,
-      unit: unit_code,
+      plu_number, item_name, price, tare_weight, department, unit: unit_code, species: detectSpecies(plu_number),
       raw_data: { plu: plu_number, name: item_name, price: priceRaw, dept: department, tare: tareRaw, upc, unit: unit_code },
     }
   }).filter(item => item.plu_number)
@@ -229,41 +636,37 @@ function parseHobartDat(raw: string): ParsedPlu[] {
 function parseCSVFile(text: string): ParsedPlu[] {
   const lines = text.split(/\r?\n/).filter(l => l.trim())
   if (lines.length < 2) return []
-  const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''))
-  const lower = (s: string) => s.toLowerCase()
-  const col = (keyword: string) => headers.find(h => lower(h).includes(keyword)) ?? ''
-
-  const pluCol  = col('plu') || col('number') || col('no')
-  const nameCol = col('name') || col('desc')
+  const headers  = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''))
+  const lower    = (s: string) => s.toLowerCase()
+  const col      = (kw: string) => headers.find(h => lower(h).includes(kw)) ?? ''
+  const pluCol   = col('plu') || col('number') || col('no')
+  const nameCol  = col('name') || col('desc')
   const priceCol = col('price') || col('cost')
   const tareCol  = col('tare') || col('weight')
   const deptCol  = col('dept')
   const unitCol  = col('unit') || col('uom')
-
   return lines.slice(1).map(line => {
     const vals = line.split(',').map(v => v.trim().replace(/^"|"$/g, ''))
     const r: Record<string, string> = Object.fromEntries(headers.map((h, i) => [h, vals[i] ?? '']))
+    const plu = r[pluCol] ?? ''
     return {
-      plu_number:  r[pluCol]  ?? '',
-      item_name:   r[nameCol] ?? '',
-      price:       r[priceCol] ? parseFloat(r[priceCol]) || null : null,
-      tare_weight: r[tareCol]  ? parseFloat(r[tareCol])  || null : null,
-      department:  r[deptCol]  ?? '',
-      unit:        r[unitCol]  ?? '',
-      raw_data:    r,
+      plu_number: plu, item_name: r[nameCol] ?? '',
+      price: r[priceCol] ? parseFloat(r[priceCol]) || null : null,
+      tare_weight: r[tareCol] ? parseFloat(r[tareCol]) || null : null,
+      department: r[deptCol] ?? '', unit: r[unitCol] ?? '',
+      species: detectSpecies(plu), raw_data: r,
     }
   }).filter(item => item.plu_number.trim())
 }
 
-// ── Upload tab ────────────────────────────────────────────────────────────────
 function UploadTab() {
   const fileRef = useRef<HTMLInputElement>(null)
-  const [preview, setPreview]   = useState<ParsedPlu[]>([])
-  const [fileName, setFileName] = useState('')
-  const [fileType, setFileType] = useState<'dat' | 'csv' | null>(null)
+  const [preview, setPreview]     = useState<ParsedPlu[]>([])
+  const [fileName, setFileName]   = useState('')
+  const [fileType, setFileType]   = useState<'dat' | 'csv' | null>(null)
   const [uploading, setUploading] = useState(false)
-  const [result, setResult]     = useState<{ ok: boolean; count?: number; error?: string } | null>(null)
-  const [allItems, setAllItems] = useState<ParsedPlu[]>([])
+  const [result, setResult]       = useState<{ ok: boolean; count?: number; error?: string } | null>(null)
+  const [allItems, setAllItems]   = useState<ParsedPlu[]>([])
 
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -272,15 +675,13 @@ function UploadTab() {
     setResult(null)
     const isDat = file.name.toLowerCase().endsWith('.dat')
     setFileType(isDat ? 'dat' : 'csv')
-
     const reader = new FileReader()
     reader.onload = ev => {
-      const raw = ev.target?.result as string
+      const raw   = ev.target?.result as string
       const items = isDat ? parseHobartDat(raw) : parseCSVFile(raw)
       setAllItems(items)
       setPreview(items.slice(0, 8))
     }
-    // Read as binary string to preserve non-printable bytes in DAT files
     reader.readAsBinaryString(file)
   }
 
@@ -288,7 +689,7 @@ function UploadTab() {
     if (!allItems.length) return
     setUploading(true)
     setResult(null)
-    const res = await fetch('/api/processing', {
+    const res  = await fetch('/api/processing', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items: allItems }),
@@ -301,110 +702,55 @@ function UploadTab() {
   return (
     <div style={{ maxWidth: 860, margin: '0 auto' }}>
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1.5rem', marginBottom: '1.5rem' }}>
-        <h3 style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 1rem' }}>
-          Upload PLU File
-        </h3>
-
-        {/* Drop zone */}
-        <div
-          onClick={() => fileRef.current?.click()}
-          style={{
-            border: '2px dashed rgba(166,120,90,0.4)', borderRadius: 4, padding: '2rem',
-            textAlign: 'center', cursor: 'pointer', marginBottom: '1.25rem',
-            background: 'rgba(255,255,255,0.02)',
-          }}
-        >
+        <h3 style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 1rem' }}>Upload PLU File</h3>
+        <div onClick={() => fileRef.current?.click()} style={{ border: '2px dashed rgba(166,120,90,0.4)', borderRadius: 4, padding: '2rem', textAlign: 'center', cursor: 'pointer', marginBottom: '1.25rem', background: 'rgba(255,255,255,0.02)' }}>
           <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📂</div>
           <div style={{ color: C.tan, fontSize: '0.9rem', marginBottom: '0.25rem' }}>
-            {fileName
-              ? <><strong>{fileName}</strong> — {allItems.length} PLU items found</>
-              : 'Click to select PLU.dat or a CSV file'}
+            {fileName ? <><strong>{fileName}</strong> — {allItems.length} PLU items found</> : 'Click to select PLU.dat or a CSV file'}
           </div>
-          <div style={{ color: C.lightBrown, fontSize: '0.78rem' }}>
-            Accepts Hobart .dat backup files and .csv exports
-          </div>
+          <div style={{ color: C.lightBrown, fontSize: '0.78rem' }}>Accepts Hobart .dat backup files and .csv exports</div>
           <input ref={fileRef} type="file" accept=".dat,.csv,.txt" onChange={handleFile} style={{ display: 'none' }} />
         </div>
-
-        {/* File type badge */}
         {fileType && (
-          <div style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <div style={{ marginBottom: '1rem' }}>
             <span style={{ background: fileType === 'dat' ? C.tan : C.medBrown, color: C.dark, fontSize: '0.72rem', fontWeight: 700, borderRadius: 99, padding: '3px 12px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
               {fileType === 'dat' ? 'Hobart DAT — auto-parsed' : 'CSV — auto-mapped'}
             </span>
-            {fileType === 'dat' && (
-              <span style={{ fontSize: '0.78rem', color: C.lightBrown }}>
-                No column mapping needed — format detected automatically
-              </span>
-            )}
           </div>
         )}
-
-        {/* Preview table */}
         {preview.length > 0 && (
           <>
-            <div style={{ fontSize: '0.75rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.5rem' }}>
-              Preview — first 8 items
-            </div>
+            <div style={{ fontSize: '0.75rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.5rem' }}>Preview — first 8 items</div>
             <div style={{ overflowX: 'auto', marginBottom: '1.25rem' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
                 <thead>
-                  <tr>
-                    {['PLU #', 'Name', 'Price', 'Tare (lbs)', 'Dept'].map(h => (
-                      <th key={h} style={{ padding: '0.4rem 0.75rem', borderBottom: '1px solid rgba(166,120,90,0.3)', color: C.tan, textAlign: 'left', whiteSpace: 'nowrap' }}>{h}</th>
-                    ))}
-                  </tr>
+                  <tr>{['PLU #', 'Name', 'Species', 'Price', 'Tare (lbs)'].map(h => (
+                    <th key={h} style={{ padding: '0.4rem 0.75rem', borderBottom: '1px solid rgba(166,120,90,0.3)', color: C.tan, textAlign: 'left' }}>{h}</th>
+                  ))}</tr>
                 </thead>
                 <tbody>
                   {preview.map((row, i) => (
                     <tr key={i} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)' }}>
                       <td style={{ padding: '0.4rem 0.75rem', color: C.lightBrown, fontFamily: 'monospace' }}>{row.plu_number}</td>
                       <td style={{ padding: '0.4rem 0.75rem', color: C.cream }}>{row.item_name}</td>
+                      <td style={{ padding: '0.4rem 0.75rem', color: C.tan }}>{row.species || '—'}</td>
                       <td style={{ padding: '0.4rem 0.75rem', color: C.tan }}>{row.price != null ? `$${row.price.toFixed(2)}` : '—'}</td>
                       <td style={{ padding: '0.4rem 0.75rem', color: C.lightBrown }}>{row.tare_weight ?? '—'}</td>
-                      <td style={{ padding: '0.4rem 0.75rem', color: C.lightBrown }}>{row.department || '—'}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-
             {result && (
-              <div style={{
-                background: result.ok ? 'rgba(76,175,80,0.15)' : 'rgba(229,62,62,0.15)',
-                border: `1px solid ${result.ok ? 'rgba(76,175,80,0.4)' : 'rgba(229,62,62,0.4)'}`,
-                borderRadius: 4, padding: '0.75rem 1rem', marginBottom: '1rem',
-                color: result.ok ? C.green : C.red, fontSize: '0.85rem',
-              }}>
+              <div style={{ background: result.ok ? 'rgba(76,175,80,0.15)' : 'rgba(229,62,62,0.15)', border: `1px solid ${result.ok ? 'rgba(76,175,80,0.4)' : 'rgba(229,62,62,0.4)'}`, borderRadius: 4, padding: '0.75rem 1rem', marginBottom: '1rem', color: result.ok ? C.green : C.red, fontSize: '0.85rem' }}>
                 {result.ok ? `✓ ${result.count} PLU items saved / updated` : `Error: ${result.error}`}
               </div>
             )}
-
-            <button
-              style={BTN(C.tan)}
-              onClick={handleUpload}
-              disabled={uploading}
-            >
+            <button style={BTN(C.tan)} onClick={handleUpload} disabled={uploading}>
               {uploading ? 'Uploading…' : `Push ${allItems.length} items to Supabase`}
             </button>
           </>
         )}
-      </div>
-
-      {/* Instructions */}
-      <div style={{ background: 'rgba(26,10,4,0.6)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: 4, padding: '1.25rem 1.5rem', fontSize: '0.82rem', color: C.lightBrown, lineHeight: 1.8 }}>
-        <strong style={{ color: C.tan, display: 'block', marginBottom: '0.5rem' }}>Two ways to upload:</strong>
-        <div style={{ marginBottom: '0.75rem' }}>
-          <strong style={{ color: C.cream }}>Option 1 — Hobart Backup (PLU.dat):</strong><br />
-          Find the PLU.dat file in the Hobart backup folder and upload it directly. No setup needed.
-        </div>
-        <div>
-          <strong style={{ color: C.cream }}>Option 2 — CSV Export:</strong><br />
-          Open Hobart Scale Manager → PLU list → Export as CSV → upload here.
-        </div>
-        <div style={{ marginTop: '0.75rem', fontSize: '0.78rem' }}>
-          Uploading the same PLU number twice updates the existing record — never creates duplicates.
-        </div>
       </div>
     </div>
   )
@@ -414,7 +760,14 @@ function UploadTab() {
 // PAGE
 // ══════════════════════════════════════════════════════════════════════════════
 export default function ProcessingPage() {
-  const [tab, setTab] = useState<Tab>('plu')
+  const [tab, setTab] = useState<Tab>('browser')
+
+  const tabs: { id: Tab; label: string }[] = [
+    { id: 'browser', label: '🔪 PLU Browser' },
+    { id: 'export',  label: '📤 Export' },
+    { id: 'cleanup', label: '🧹 Cleanup' },
+    { id: 'upload',  label: '📂 Upload File' },
+  ]
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--dark-brown)', display: 'flex', flexDirection: 'column' }}>
@@ -422,32 +775,25 @@ export default function ProcessingPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
           <Link href="/" style={{ color: C.lightBrown, textDecoration: 'none', fontSize: '0.82rem' }}>← Dashboard</Link>
           <span style={{ color: 'rgba(166,120,90,0.4)' }}>|</span>
-          <h1 style={{ fontFamily: 'Georgia, serif', fontSize: '1.1rem', fontWeight: 700, color: C.cream, letterSpacing: '0.08em', textTransform: 'uppercase', margin: 0 }}>
-            Processing
-          </h1>
+          <h1 style={{ fontFamily: 'Georgia, serif', fontSize: '1.1rem', fontWeight: 700, color: C.cream, letterSpacing: '0.08em', textTransform: 'uppercase', margin: 0 }}>Processing</h1>
         </div>
-
         <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden' }}>
-          {(['plu', 'upload'] as Tab[]).map(t => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              style={{
-                padding: '0.45rem 1.25rem', border: 'none', cursor: 'pointer', fontSize: '0.83rem', fontWeight: 600,
-                background: tab === t ? C.medBrown : 'transparent',
-                color: tab === t ? C.cream : C.lightBrown,
-                letterSpacing: '0.05em', textTransform: 'uppercase',
-                transition: 'background 0.15s',
-              }}
-            >
-              {t === 'plu' ? '🔪 PLU Browser' : '📂 Upload File'}
-            </button>
+          {tabs.map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)} style={{
+              padding: '0.45rem 1.1rem', border: 'none', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
+              background: tab === t.id ? C.medBrown : 'transparent',
+              color: tab === t.id ? C.cream : C.lightBrown,
+              letterSpacing: '0.04em', transition: 'background 0.15s',
+            }}>{t.label}</button>
           ))}
         </div>
       </header>
 
-      <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1300px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
-        {tab === 'plu' ? <PluTab /> : <UploadTab />}
+      <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1400px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
+        {tab === 'browser' && <BrowserTab />}
+        {tab === 'export'  && <ExportTab />}
+        {tab === 'cleanup' && <CleanupTab />}
+        {tab === 'upload'  && <UploadTab />}
       </main>
 
       <footer style={{ background: 'var(--dark)', borderTop: '1px solid rgba(166,120,90,0.2)', padding: '0.5rem 2rem', textAlign: 'center', fontSize: '0.72rem', color: C.lightBrown, flexShrink: 0 }}>
