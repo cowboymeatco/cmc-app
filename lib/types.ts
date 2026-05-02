@@ -74,6 +74,42 @@ export interface BoxReceivingLog {
   status:      string
 }
 
+// ── Harvest ───────────────────────────────────────────────────────────────────
+
+export interface HarvestLog {
+  id:                     string
+  created_at:             string
+  appointment_id:         string
+  harvest_date:           string
+  species:                string
+  carcass_tag:            string
+  sex:                    string
+  live_weight_lbs:        number | null
+  hot_carcass_weight_lbs: number | null
+  yield_pct:              number | null
+  inspector_initials:     string
+  intervention_applied:   boolean
+  intervention_type:      string
+  intervention_temp_f:    number | null
+  final_carcass_temp_f:   number | null
+  ccp_pass:               boolean
+  performed_by:           string
+  notes:                  string
+  status:                 string   // 'chilling' | 'complete'
+}
+
+export interface ChillLog {
+  id:             string
+  created_at:     string
+  harvest_log_id: string
+  carcass_tag:    string
+  checked_at:     string
+  carcass_temp_f: number | null
+  cooler_temp_f:  number | null
+  checked_by:     string
+  notes:          string
+}
+
 // ── Delivery Scans ────────────────────────────────────────────────────────────
 
 export interface DeliveryScan {

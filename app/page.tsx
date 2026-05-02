@@ -20,7 +20,7 @@ const modules = [
     icon:    '🐄',
     title:   'Harvest',
     sub:     'Weights, CCP & chill log',
-    enabled: false,
+    enabled: true,
   },
   {
     href:    '/cutting-instructions',
