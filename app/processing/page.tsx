@@ -175,99 +175,126 @@ function PluTab() {
 // ══════════════════════════════════════════════════════════════════════════════
 // CSV UPLOAD TAB
 // ══════════════════════════════════════════════════════════════════════════════
+// ── Hobart DAT parser ─────────────────────────────────────────────────────────
+interface ParsedPlu {
+  plu_number:  string
+  item_name:   string
+  price:       number | null
+  tare_weight: number | null
+  department:  string
+  unit:        string
+  raw_data:    Record<string, string>
+}
+
+function parseHobartDat(raw: string): ParsedPlu[] {
+  // Replace non-printable chars (except \r \n \t) with a pipe delimiter
+  const text = raw.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '|')
+
+  // Records are separated by blank lines; each starts with RT89
+  const blocks = text.split(/\n\s*\n/).filter(b => /p#\d+/.test(b))
+
+  return blocks.map(block => {
+    const get = (pattern: RegExp) => { const m = block.match(pattern); return m ? m[1].trim() : '' }
+
+    const plu_number  = get(/p#(\d+)/)
+    const item_name   = get(/dt([^|\r\n]+)/)
+    const priceRaw    = get(/\$(\d+)/)
+    const department  = get(/d#(\d+)/)
+    const tareRaw     = get(/ta(\d+)/)
+    const upc         = get(/up(\w+)/)
+    const unit_code   = get(/u#(\w+)/)
+
+    // Price stored in cents: $549 → $5.49
+    const price       = priceRaw ? parseInt(priceRaw) / 100 : null
+    // Tare stored in grams; convert to lbs for display
+    const tare_weight = tareRaw  ? Math.round((parseInt(tareRaw) / 453.592) * 100) / 100 : null
+
+    return {
+      plu_number,
+      item_name,
+      price,
+      tare_weight,
+      department,
+      unit: unit_code,
+      raw_data: { plu: plu_number, name: item_name, price: priceRaw, dept: department, tare: tareRaw, upc, unit: unit_code },
+    }
+  }).filter(item => item.plu_number)
+}
+
+function parseCSVFile(text: string): ParsedPlu[] {
+  const lines = text.split(/\r?\n/).filter(l => l.trim())
+  if (lines.length < 2) return []
+  const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''))
+  const lower = (s: string) => s.toLowerCase()
+  const col = (keyword: string) => headers.find(h => lower(h).includes(keyword)) ?? ''
+
+  const pluCol  = col('plu') || col('number') || col('no')
+  const nameCol = col('name') || col('desc')
+  const priceCol = col('price') || col('cost')
+  const tareCol  = col('tare') || col('weight')
+  const deptCol  = col('dept')
+  const unitCol  = col('unit') || col('uom')
+
+  return lines.slice(1).map(line => {
+    const vals = line.split(',').map(v => v.trim().replace(/^"|"$/g, ''))
+    const r: Record<string, string> = Object.fromEntries(headers.map((h, i) => [h, vals[i] ?? '']))
+    return {
+      plu_number:  r[pluCol]  ?? '',
+      item_name:   r[nameCol] ?? '',
+      price:       r[priceCol] ? parseFloat(r[priceCol]) || null : null,
+      tare_weight: r[tareCol]  ? parseFloat(r[tareCol])  || null : null,
+      department:  r[deptCol]  ?? '',
+      unit:        r[unitCol]  ?? '',
+      raw_data:    r,
+    }
+  }).filter(item => item.plu_number.trim())
+}
+
+// ── Upload tab ────────────────────────────────────────────────────────────────
 function UploadTab() {
   const fileRef = useRef<HTMLInputElement>(null)
-  const [preview, setPreview]     = useState<Record<string, string>[]>([])
-  const [headers, setHeaders]     = useState<string[]>([])
-  const [fileName, setFileName]   = useState('')
+  const [preview, setPreview]   = useState<ParsedPlu[]>([])
+  const [fileName, setFileName] = useState('')
+  const [fileType, setFileType] = useState<'dat' | 'csv' | null>(null)
   const [uploading, setUploading] = useState(false)
-  const [result, setResult]       = useState<{ ok: boolean; count?: number; error?: string } | null>(null)
-
-  // Column mapping state — user picks which CSV column maps to which field
-  const [mapping, setMapping] = useState({
-    plu_number:  '',
-    item_name:   '',
-    price:       '',
-    tare_weight: '',
-    department:  '',
-    unit:        '',
-  })
-
-  function parseCSV(text: string): { headers: string[]; rows: Record<string, string>[] } {
-    const lines = text.split(/\r?\n/).filter(l => l.trim())
-    if (lines.length < 2) return { headers: [], rows: [] }
-    const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''))
-    const rows = lines.slice(1).map(line => {
-      const vals = line.split(',').map(v => v.trim().replace(/^"|"$/g, ''))
-      return Object.fromEntries(headers.map((h, i) => [h, vals[i] ?? '']))
-    })
-    return { headers, rows }
-  }
+  const [result, setResult]     = useState<{ ok: boolean; count?: number; error?: string } | null>(null)
+  const [allItems, setAllItems] = useState<ParsedPlu[]>([])
 
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
     setFileName(file.name)
     setResult(null)
+    const isDat = file.name.toLowerCase().endsWith('.dat')
+    setFileType(isDat ? 'dat' : 'csv')
+
     const reader = new FileReader()
     reader.onload = ev => {
-      const { headers, rows } = parseCSV(ev.target?.result as string)
-      setHeaders(headers)
-      setPreview(rows.slice(0, 5))
-      // Auto-map common column names
-      const autoMap = { ...mapping }
-      const lower = (s: string) => s.toLowerCase()
-      headers.forEach(h => {
-        const l = lower(h)
-        if (!autoMap.plu_number  && (l.includes('plu') || l.includes('number') || l === 'no')) autoMap.plu_number = h
-        if (!autoMap.item_name   && (l.includes('name') || l.includes('desc')))                autoMap.item_name = h
-        if (!autoMap.price       && (l.includes('price') || l.includes('cost')))               autoMap.price = h
-        if (!autoMap.tare_weight && (l.includes('tare') || l.includes('weight')))              autoMap.tare_weight = h
-        if (!autoMap.department  && (l.includes('dept') || l.includes('department')))          autoMap.department = h
-        if (!autoMap.unit        && (l.includes('unit') || l.includes('uom')))                 autoMap.unit = h
-      })
-      setMapping(autoMap)
+      const raw = ev.target?.result as string
+      const items = isDat ? parseHobartDat(raw) : parseCSVFile(raw)
+      setAllItems(items)
+      setPreview(items.slice(0, 8))
     }
-    reader.readAsText(file)
+    // Read as binary string to preserve non-printable bytes in DAT files
+    reader.readAsBinaryString(file)
   }
 
   async function handleUpload() {
-    if (!preview.length || !mapping.plu_number) return
+    if (!allItems.length) return
     setUploading(true)
     setResult(null)
-
-    // Re-read full file
-    const file = fileRef.current?.files?.[0]
-    if (!file) return
-    const text = await file.text()
-    const { rows } = parseCSV(text)
-
-    const items = rows
-      .filter(r => r[mapping.plu_number]?.trim())
-      .map(r => ({
-        plu_number:  r[mapping.plu_number]?.trim() ?? '',
-        item_name:   mapping.item_name   ? (r[mapping.item_name]   ?? '') : '',
-        price:       mapping.price       ? (parseFloat(r[mapping.price])   || null) : null,
-        tare_weight: mapping.tare_weight ? (parseFloat(r[mapping.tare_weight]) || null) : null,
-        department:  mapping.department  ? (r[mapping.department]  ?? '') : '',
-        unit:        mapping.unit        ? (r[mapping.unit]        ?? '') : '',
-        raw_data:    r,
-      }))
-
     const res = await fetch('/api/processing', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items }),
+      body: JSON.stringify({ items: allItems }),
     })
     const json = await res.json()
     setResult(json.ok ? { ok: true, count: json.count } : { ok: false, error: json.error })
     setUploading(false)
   }
 
-  const colOpts = ['', ...headers]
-
   return (
-    <div style={{ maxWidth: 800, margin: '0 auto' }}>
+    <div style={{ maxWidth: 860, margin: '0 auto' }}>
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1.5rem', marginBottom: '1.5rem' }}>
         <h3 style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 1rem' }}>
           Upload PLU File
@@ -279,50 +306,46 @@ function UploadTab() {
           style={{
             border: '2px dashed rgba(166,120,90,0.4)', borderRadius: 4, padding: '2rem',
             textAlign: 'center', cursor: 'pointer', marginBottom: '1.25rem',
-            background: 'rgba(255,255,255,0.02)', transition: 'border-color 0.15s',
+            background: 'rgba(255,255,255,0.02)',
           }}
         >
           <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📂</div>
           <div style={{ color: C.tan, fontSize: '0.9rem', marginBottom: '0.25rem' }}>
-            {fileName || 'Click to select a CSV file'}
+            {fileName
+              ? <><strong>{fileName}</strong> — {allItems.length} PLU items found</>
+              : 'Click to select PLU.dat or a CSV file'}
           </div>
-          <div style={{ color: C.lightBrown, fontSize: '0.78rem' }}>Export from Hobart as CSV, then upload here</div>
-          <input ref={fileRef} type="file" accept=".csv,.txt" onChange={handleFile} style={{ display: 'none' }} />
+          <div style={{ color: C.lightBrown, fontSize: '0.78rem' }}>
+            Accepts Hobart .dat backup files and .csv exports
+          </div>
+          <input ref={fileRef} type="file" accept=".dat,.csv,.txt" onChange={handleFile} style={{ display: 'none' }} />
         </div>
 
-        {/* Column mapping */}
-        {headers.length > 0 && (
-          <>
-            <div style={{ fontSize: '0.75rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.75rem' }}>
-              Map Columns — tell us which column is which
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem 1rem', marginBottom: '1.25rem' }}>
-              {(Object.keys(mapping) as (keyof typeof mapping)[]).map(field => (
-                <div key={field}>
-                  <label style={LABEL}>
-                    {field.replace(/_/g, ' ')}
-                    {field === 'plu_number' ? ' *' : ''}
-                  </label>
-                  <select
-                    style={{ ...INPUT }}
-                    value={mapping[field]}
-                    onChange={e => setMapping(p => ({ ...p, [field]: e.target.value }))}
-                  >
-                    {colOpts.map(o => <option key={o} value={o}>{o || '— not mapped —'}</option>)}
-                  </select>
-                </div>
-              ))}
-            </div>
+        {/* File type badge */}
+        {fileType && (
+          <div style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <span style={{ background: fileType === 'dat' ? C.tan : C.medBrown, color: C.dark, fontSize: '0.72rem', fontWeight: 700, borderRadius: 99, padding: '3px 12px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+              {fileType === 'dat' ? 'Hobart DAT — auto-parsed' : 'CSV — auto-mapped'}
+            </span>
+            {fileType === 'dat' && (
+              <span style={{ fontSize: '0.78rem', color: C.lightBrown }}>
+                No column mapping needed — format detected automatically
+              </span>
+            )}
+          </div>
+        )}
 
-            {/* Preview */}
+        {/* Preview table */}
+        {preview.length > 0 && (
+          <>
             <div style={{ fontSize: '0.75rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.5rem' }}>
-              Preview (first 5 rows)
+              Preview — first 8 items
             </div>
             <div style={{ overflowX: 'auto', marginBottom: '1.25rem' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
                 <thead>
                   <tr>
-                    {headers.map(h => (
+                    {['PLU #', 'Name', 'Price', 'Tare (lbs)', 'Dept'].map(h => (
                       <th key={h} style={{ padding: '0.4rem 0.75rem', borderBottom: '1px solid rgba(166,120,90,0.3)', color: C.tan, textAlign: 'left', whiteSpace: 'nowrap' }}>{h}</th>
                     ))}
                   </tr>
@@ -330,9 +353,11 @@ function UploadTab() {
                 <tbody>
                   {preview.map((row, i) => (
                     <tr key={i} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)' }}>
-                      {headers.map(h => (
-                        <td key={h} style={{ padding: '0.4rem 0.75rem', color: C.cream, borderBottom: '1px solid rgba(166,120,90,0.08)', whiteSpace: 'nowrap' }}>{row[h]}</td>
-                      ))}
+                      <td style={{ padding: '0.4rem 0.75rem', color: C.lightBrown, fontFamily: 'monospace' }}>{row.plu_number}</td>
+                      <td style={{ padding: '0.4rem 0.75rem', color: C.cream }}>{row.item_name}</td>
+                      <td style={{ padding: '0.4rem 0.75rem', color: C.tan }}>{row.price != null ? `$${row.price.toFixed(2)}` : '—'}</td>
+                      <td style={{ padding: '0.4rem 0.75rem', color: C.lightBrown }}>{row.tare_weight ?? '—'}</td>
+                      <td style={{ padding: '0.4rem 0.75rem', color: C.lightBrown }}>{row.department || '—'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -351,27 +376,29 @@ function UploadTab() {
             )}
 
             <button
-              style={{ ...BTN(mapping.plu_number ? C.tan : C.medBrown), opacity: mapping.plu_number ? 1 : 0.55 }}
+              style={BTN(C.tan)}
               onClick={handleUpload}
-              disabled={uploading || !mapping.plu_number}
+              disabled={uploading}
             >
-              {uploading ? 'Uploading…' : 'Upload to Supabase'}
+              {uploading ? 'Uploading…' : `Push ${allItems.length} items to Supabase`}
             </button>
           </>
         )}
       </div>
 
       {/* Instructions */}
-      <div style={{ background: 'rgba(26,10,4,0.6)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: 4, padding: '1.25rem 1.5rem', fontSize: '0.82rem', color: C.lightBrown, lineHeight: 1.7 }}>
-        <strong style={{ color: C.tan, display: 'block', marginBottom: '0.5rem' }}>How to export from Hobart:</strong>
-        <ol style={{ margin: 0, paddingLeft: '1.25rem' }}>
-          <li>Open the Hobart Scale Manager software</li>
-          <li>Go to PLU / Items list</li>
-          <li>Export or Save As → CSV format</li>
-          <li>Upload that file here</li>
-        </ol>
-        <div style={{ marginTop: '0.75rem', color: C.lightBrown, fontSize: '0.78rem' }}>
-          Uploading the same PLU number twice will update the existing record, not create a duplicate.
+      <div style={{ background: 'rgba(26,10,4,0.6)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: 4, padding: '1.25rem 1.5rem', fontSize: '0.82rem', color: C.lightBrown, lineHeight: 1.8 }}>
+        <strong style={{ color: C.tan, display: 'block', marginBottom: '0.5rem' }}>Two ways to upload:</strong>
+        <div style={{ marginBottom: '0.75rem' }}>
+          <strong style={{ color: C.cream }}>Option 1 — Hobart Backup (PLU.dat):</strong><br />
+          Find the PLU.dat file in the Hobart backup folder and upload it directly. No setup needed.
+        </div>
+        <div>
+          <strong style={{ color: C.cream }}>Option 2 — CSV Export:</strong><br />
+          Open Hobart Scale Manager → PLU list → Export as CSV → upload here.
+        </div>
+        <div style={{ marginTop: '0.75rem', fontSize: '0.78rem' }}>
+          Uploading the same PLU number twice updates the existing record — never creates duplicates.
         </div>
       </div>
     </div>
