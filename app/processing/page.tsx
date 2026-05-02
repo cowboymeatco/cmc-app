@@ -55,8 +55,13 @@ function PluTab() {
 
   const load = useCallback(async (q = '') => {
     setLoading(true)
-    const res = await fetch(`/api/processing${q ? `?search=${encodeURIComponent(q)}` : ''}`)
-    setItems(await res.json())
+    try {
+      const res = await fetch(`/api/processing${q ? `?search=${encodeURIComponent(q)}` : ''}`)
+      const json = await res.json()
+      setItems(Array.isArray(json) ? json : [])
+    } catch {
+      setItems([])
+    }
     setLoading(false)
   }, [])
 
