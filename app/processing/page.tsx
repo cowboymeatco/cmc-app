@@ -195,8 +195,8 @@ function parseHobartDat(raw: string): ParsedPlu[] {
   // Replace non-printable chars (except \r \n \t) with a pipe delimiter
   const text = raw.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '|')
 
-  // Records are separated by blank lines; each starts with RT89
-  const blocks = text.split(/\n\s*\n/).filter(b => /p#\d+/.test(b))
+  // Every PLU record starts with RT89 — split on that marker
+  const blocks = text.split('RT89').slice(1).filter(b => /p#\d+/.test(b))
 
   return blocks.map(block => {
     const get = (pattern: RegExp) => { const m = block.match(pattern); return m ? m[1].trim() : '' }
