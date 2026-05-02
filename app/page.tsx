@@ -13,7 +13,7 @@ const modules = [
     icon:    '📦',
     title:   'Receiving',
     sub:     'Live animals & box product',
-    enabled: false,
+    enabled: true,
   },
   {
     href:    '/harvest',

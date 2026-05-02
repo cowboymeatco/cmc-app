@@ -44,6 +44,36 @@ export interface CuttingInstruction {
   data:         Record<string, string>
 }
 
+// ── Receiving ─────────────────────────────────────────────────────────────────
+
+export interface AnimalReceivingLog {
+  id:              string
+  created_at:      string
+  appointment_id:  string
+  received_at:     string
+  live_weight_lbs: number | null
+  received_by:     string
+  health_cert_no:  string
+  notes:           string
+  status:          string
+}
+
+export interface BoxReceivingLog {
+  id:          string
+  created_at:  string
+  received_at: string
+  vendor:      string
+  product:     string
+  quantity:    number
+  weight_lbs:  number | null
+  invoice_no:  string
+  lot_no:      string
+  temp_f:      number | null
+  received_by: string
+  notes:       string
+  status:      string
+}
+
 // ── Delivery Scans ────────────────────────────────────────────────────────────
 
 export interface DeliveryScan {
