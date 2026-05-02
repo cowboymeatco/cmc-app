@@ -59,6 +59,17 @@ const BTN = (bg: string, color = C.dark): React.CSSProperties => ({
 
 const SPECIES_LIST = ['', 'Beef', 'Pork', 'Lamb', 'Goat', 'Processed', 'Wild Game', 'Cheese', 'Wholesale', 'Other']
 
+// ── EAN-13 weight-embedded barcode parser ─────────────────────────────────────
+// Format: 2 NNNNN WWWWW C  (prefix=2, PLU=digits 1-5, weight=digits 6-10 ÷1000 lbs, check=digit 12)
+function parseEAN13(barcode: string): { plu: string; weight_lbs: number } | null {
+  if (barcode.length !== 13 || !barcode.startsWith('2')) return null
+  if (!/^\d{13}$/.test(barcode)) return null
+  const plu        = String(parseInt(barcode.slice(1, 6), 10))   // "00114" → "114"
+  const weight_lbs = parseInt(barcode.slice(6, 11), 10) / 1000   // "40006" → 40.006
+  if (isNaN(parseInt(plu)) || isNaN(weight_lbs) || weight_lbs <= 0) return null
+  return { plu, weight_lbs }
+}
+
 function detectSpecies(plu: string): string {
   const n = parseInt(plu)
   if (isNaN(n)) return ''
@@ -760,10 +771,13 @@ function UploadTab() {
 // ══════════════════════════════════════════════════════════════════════════════
 // LABEL GENERATOR
 // ══════════════════════════════════════════════════════════════════════════════
-interface BoxScan { id: string; item_name: string; plu_number: string; weight_lbs: number; quantity: number }
+interface BoxScan   { id: string; item_name: string; plu_number: string; weight_lbs: number; quantity: number }
 interface BoxRecord { id: string; customer_name: string; pack_date: string; box_number: number; is_closed: boolean; is_final: boolean; total_weight_lbs: number; total_cuts: number }
+interface LabelFlags { usda_bug: boolean; retail_exempt: boolean; not_for_sale: boolean }
 
-function generateLabel(box: BoxRecord, scans: BoxScan[]): string {
+const DEFAULT_FLAGS: LabelFlags = { usda_bug: true, retail_exempt: false, not_for_sale: false }
+
+function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlags = DEFAULT_FLAGS): string {
   // Group by item name, sum weight
   const grouped: Record<string, { count: number; weight: number }> = {}
   scans.forEach(s => {
@@ -782,6 +796,14 @@ function generateLabel(box: BoxRecord, scans: BoxScan[]): string {
     `<div class="item-row"><span><b>(${v.count})</b> ${name}</span><span>${v.weight.toFixed(2)} lb</span></div>`
   ).join('')
 
+  const usdaHTML = flags.usda_bug ? `
+    <div class="usda-bug">
+      <div style="font-size:7pt;font-weight:bold;letter-spacing:0.08em">USDA</div>
+      <div style="font-size:5.5pt;letter-spacing:0.04em">INSPECTED &amp; PASSED</div>
+    </div>` : ''
+  const exemptHTML     = flags.retail_exempt ? `<div class="badge">RETAIL EXEMPT</div>` : ''
+  const notForSaleHTML = flags.not_for_sale   ? `<div class="nfs">★ NOT FOR SALE ★</div>` : ''
+
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -791,7 +813,9 @@ function generateLabel(box: BoxRecord, scans: BoxScan[]): string {
   @page { size: 4in auto; margin: 0.15in; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { width: 3.7in; font-family: Arial, sans-serif; color: #000; background: #fff; }
-  .company  { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 9pt; font-weight: bold; text-align: center; letter-spacing: 0.05em; margin-bottom: 2px; }
+  .top-bar  { display: flex; justify-content: space-between; align-items: flex-start; }
+  .company  { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 9pt; font-weight: bold; text-align: center; letter-spacing: 0.05em; margin-bottom: 2px; flex: 1; }
+  .usda-bug { border: 1.5px solid #000; border-radius: 50%; padding: 3px 5px; text-align: center; line-height: 1.25; flex-shrink: 0; }
   .customer { font-size: 20pt; font-weight: bold; text-align: center; line-height: 1.1; margin: 4px 0; }
   .box-num  { font-size: 14pt; font-weight: bold; text-align: center; margin-bottom: 2px; }
   .date     { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 9pt; text-align: center; margin-bottom: 4px; }
@@ -799,11 +823,20 @@ function generateLabel(box: BoxRecord, scans: BoxScan[]): string {
   .item-row { display: flex; justify-content: space-between; align-items: baseline;
               font-family: 'Arial Narrow', Arial, sans-serif; font-size: 11pt; padding: 1px 0; }
   .footer   { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 10pt; font-weight: bold; text-align: center; margin-top: 2px; }
+  .badge    { text-align: center; font-size: 7.5pt; font-weight: bold; border: 1px solid #000; border-radius: 2px; padding: 1px 4px; display: inline-block; margin: 2px auto; letter-spacing: 0.06em; }
+  .nfs      { text-align: center; font-size: 9pt; font-weight: bold; letter-spacing: 0.1em; margin: 3px 0; }
   @media print { html, body { width: 4in; } }
 </style>
 </head>
 <body>
-  <div class="company">COWBOY MEAT COMPANY</div>
+  <div class="top-bar">
+    <div style="flex:1;text-align:center">
+      <div class="company">COWBOY MEAT COMPANY</div>
+    </div>
+    ${usdaHTML}
+  </div>
+  ${notForSaleHTML}
+  ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
   <div class="customer">${box.customer_name.toUpperCase()}</div>
   <div class="box-num">${boxLabel}</div>
   <div class="date">${dateStr}</div>
@@ -829,12 +862,17 @@ function BoxLabelsTab() {
   const [scans, setScans]         = useState<Record<string, BoxScan[]>>({})
   const [activeBox, setActiveBox] = useState<BoxRecord | null>(null)
 
-  const [pluInput,  setPluInput]  = useState('')
-  const [itemName,  setItemName]  = useState('')
-  const [weight,    setWeight]    = useState('')
-  const [qty,       setQty]       = useState('1')
-  const [pluStatus, setPluStatus] = useState<'idle' | 'found' | 'notfound'>('idle')
-  const [saving,    setSaving]    = useState(false)
+  const [pluInput,    setPluInput]    = useState('')
+  const [itemName,    setItemName]    = useState('')
+  const [weight,      setWeight]      = useState('')
+  const [qty,         setQty]         = useState('1')
+  const [pluStatus,   setPluStatus]   = useState<'idle' | 'found' | 'notfound'>('idle')
+  const [saving,      setSaving]      = useState(false)
+  const [labelFlags,  setLabelFlags]  = useState<LabelFlags>(DEFAULT_FLAGS)
+
+  function toggleFlag(k: keyof LabelFlags) {
+    setLabelFlags(f => ({ ...f, [k]: !f[k] }))
+  }
 
   async function lookupPlu(plu: string) {
     if (!plu.trim()) return
@@ -844,6 +882,42 @@ function BoxLabelsTab() {
     const match = items.find(i => i.plu_number === plu.trim())
     if (match) { setItemName(match.item_name); setPluStatus('found'); weightRef.current?.focus() }
     else       { setItemName(''); setPluStatus('notfound') }
+  }
+
+  // Scan a barcode — auto-adds to active box if EAN-13 weight format
+  async function scanBarcode(barcode: string) {
+    if (!activeBox) return
+    const parsed = parseEAN13(barcode)
+    if (!parsed) {
+      // Treat as PLU
+      setPluInput(barcode)
+      lookupPlu(barcode)
+      return
+    }
+    // EAN-13: look up PLU, then auto-add
+    const res   = await fetch(`/api/processing?search=${encodeURIComponent(parsed.plu)}`)
+    const json  = await res.json()
+    const items: PluItem[] = Array.isArray(json) ? json : []
+    const match = items.find(i => i.plu_number === parsed.plu)
+    const name  = match?.item_name ?? ''
+    if (!name) {
+      // Unknown PLU — fill in fields for manual completion
+      setPluInput(parsed.plu)
+      setWeight(parsed.weight_lbs.toFixed(3))
+      setPluStatus('notfound')
+      return
+    }
+    // Auto-add scan
+    setSaving(true)
+    const res2  = await fetch('/api/boxes/scans', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ box_id: activeBox.id, plu_number: parsed.plu, item_name: name, weight_lbs: parsed.weight_lbs, quantity: 1 }),
+    })
+    const scan: BoxScan = await res2.json()
+    setScans(prev => ({ ...prev, [activeBox.id]: [...(prev[activeBox.id] ?? []), scan] }))
+    setPluInput(''); setItemName(''); setWeight(''); setQty('1'); setPluStatus('idle')
+    setSaving(false)
+    pluRef.current?.focus()
   }
 
   async function loadScans(boxId: string) {
@@ -897,14 +971,14 @@ function BoxLabelsTab() {
     })
     setBoxes(prev => prev.map(b => b.id === box.id ? { ...b, is_closed: true, total_weight_lbs: totalWeight, total_cuts: totalCuts } : b))
     // Print label
-    const html = generateLabel({ ...box, is_closed: true, total_weight_lbs: totalWeight, total_cuts: totalCuts }, boxScans)
+    const html = generateLabel({ ...box, is_closed: true, total_weight_lbs: totalWeight, total_cuts: totalCuts }, boxScans, labelFlags)
     const win  = window.open('', '_blank')
     if (win) { win.document.write(html); win.document.close() }
   }
 
   async function printLabel(box: BoxRecord) {
     if (!scans[box.id]) await loadScans(box.id)
-    const html = generateLabel(box, scans[box.id] ?? [])
+    const html = generateLabel(box, scans[box.id] ?? [], labelFlags)
     const win  = window.open('', '_blank')
     if (win) { win.document.write(html); win.document.close() }
   }
@@ -932,6 +1006,28 @@ function BoxLabelsTab() {
             <label style={LABEL}>Pack Date</label>
             <input type="date" style={INPUT} value={date} onChange={e => setDate(e.target.value)} />
           </div>
+          {/* Label flags */}
+          <div style={{ marginBottom: '0.65rem' }}>
+            <label style={LABEL}>Label Options</label>
+            <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+              {([
+                { k: 'usda_bug'      as keyof LabelFlags, label: 'USDA Bug'       },
+                { k: 'retail_exempt' as keyof LabelFlags, label: 'Retail Exempt'  },
+                { k: 'not_for_sale'  as keyof LabelFlags, label: 'Not For Sale'   },
+              ] as { k: keyof LabelFlags; label: string }[]).map(({ k, label }) => (
+                <button key={k} onClick={() => toggleFlag(k)} style={{
+                  background: labelFlags[k] ? 'rgba(201,168,130,0.25)' : 'rgba(255,255,255,0.04)',
+                  border: `1px solid ${labelFlags[k] ? C.tan : 'rgba(166,120,90,0.2)'}`,
+                  color: labelFlags[k] ? C.cream : C.lightBrown,
+                  borderRadius: 3, padding: '0.3rem 0.6rem', fontSize: '0.72rem',
+                  cursor: 'pointer', fontWeight: labelFlags[k] ? 700 : 400,
+                }}>
+                  {labelFlags[k] ? '✓ ' : ''}{label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <button style={{ ...BTN(C.tan), flex: 1, fontSize: '0.8rem' }} onClick={() => addBox(false)} disabled={saving}>
               + Add Box
@@ -1028,16 +1124,34 @@ function BoxLabelsTab() {
               <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.15)', background: 'rgba(0,0,0,0.15)' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 80px 80px', gap: '0.5rem', alignItems: 'end' }}>
                   <div>
-                    <label style={LABEL}>PLU #</label>
+                    <label style={LABEL}>Barcode / PLU #</label>
                     <input
                       ref={pluRef}
                       style={{ ...INPUT, fontFamily: 'monospace',
                         borderColor: pluStatus === 'found' ? 'rgba(76,175,80,0.6)' : pluStatus === 'notfound' ? 'rgba(229,62,62,0.5)' : 'rgba(166,120,90,0.35)',
                       }}
                       value={pluInput}
-                      onChange={e => { setPluInput(e.target.value); setPluStatus('idle') }}
-                      onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); lookupPlu(pluInput) } }}
-                      placeholder="PLU → Enter"
+                      onChange={e => {
+                        const v = e.target.value
+                        setPluInput(v)
+                        setPluStatus('idle')
+                        // Auto-fire on 13-digit EAN-13 scan
+                        if (/^\d{13}$/.test(v) && parseEAN13(v)) {
+                          scanBarcode(v)
+                          setPluInput('')
+                        }
+                      }}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' || e.key === 'Tab') {
+                          e.preventDefault()
+                          if (/^\d{13}$/.test(pluInput) && parseEAN13(pluInput)) {
+                            scanBarcode(pluInput); setPluInput('')
+                          } else {
+                            lookupPlu(pluInput)
+                          }
+                        }
+                      }}
+                      placeholder="Scan barcode or type PLU → Enter"
                     />
                   </div>
                   <div>
@@ -1239,7 +1353,7 @@ function ScannerTab() {
         </div>
 
         <div style={{ borderTop: '1px solid rgba(166,120,90,0.2)', paddingTop: '0.85rem' }}>
-          <label style={{ ...LABEL, marginBottom: '0.6rem' }}>PLU Number</label>
+          <label style={{ ...LABEL, marginBottom: '0.6rem' }}>Barcode / PLU Number</label>
           <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
             <input
               ref={pluRef}
@@ -1247,9 +1361,34 @@ function ScannerTab() {
                 borderColor: pluStatus === 'found' ? 'rgba(76,175,80,0.6)' : pluStatus === 'notfound' ? 'rgba(229,62,62,0.6)' : 'rgba(166,120,90,0.35)',
               }}
               value={pluInput}
-              onChange={e => { setPluInput(e.target.value); setPluStatus('idle') }}
-              onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); lookupPlu(pluInput) } }}
-              placeholder="Type PLU # → Enter"
+              onChange={e => {
+                const v = e.target.value
+                setPluInput(v)
+                setPluStatus('idle')
+                // Auto-parse EAN-13 weight barcode on 13-digit input
+                if (/^\d{13}$/.test(v)) {
+                  const parsed = parseEAN13(v)
+                  if (parsed) {
+                    setPluInput(parsed.plu)
+                    setWeight(parsed.weight_lbs.toFixed(3))
+                    lookupPlu(parsed.plu)
+                  }
+                }
+              }}
+              onKeyDown={e => {
+                if (e.key === 'Enter' || e.key === 'Tab') {
+                  e.preventDefault()
+                  const parsed = parseEAN13(pluInput)
+                  if (parsed) {
+                    setPluInput(parsed.plu)
+                    setWeight(parsed.weight_lbs.toFixed(3))
+                    lookupPlu(parsed.plu)
+                  } else {
+                    lookupPlu(pluInput)
+                  }
+                }
+              }}
+              placeholder="Scan barcode or type PLU → Enter"
               autoFocus
             />
             <button style={BTN(C.medBrown, C.cream)} onClick={() => lookupPlu(pluInput)}>Look up</button>
