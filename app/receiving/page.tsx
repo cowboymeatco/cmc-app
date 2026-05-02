@@ -1,12 +1,11 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { HarvestAppointment, AnimalReceivingLog, BoxReceivingLog } from '@/lib/types'
 
 type Tab = 'animal' | 'box'
 
-// ── Colours ────────────────────────────────────────────────────────────────────
 const C = {
   dark:       '#1A0A04',
   darkBrown:  '#351E0E',
@@ -35,29 +34,71 @@ const BTN = (bg: string, color = C.dark): React.CSSProperties => ({
   cursor: 'pointer', letterSpacing: '0.04em',
 })
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children, half }: { label: string; children: React.ReactNode; half?: boolean }) {
   return (
-    <div style={{ marginBottom: '1rem' }}>
+    <div style={{ marginBottom: '1rem', gridColumn: half ? undefined : undefined }}>
       <label style={LABEL}>{label}</label>
       {children}
     </div>
   )
 }
 
-// ── Status badge ───────────────────────────────────────────────────────────────
-function Badge({ status }: { status: string }) {
-  const map: Record<string, string> = {
-    received: C.green, reviewed: C.tan,
-    Booked: C.tan, InstructionsReceived: C.green, AnimalIn: C.blue,
-    Processing: C.yellow, Complete: '#6B7280',
-  }
-  return (
-    <span style={{
-      background: map[status] ?? C.medBrown, color: status === 'Booked' || status === 'received' ? C.dark : C.cream,
-      fontSize: '0.7rem', fontWeight: 700, borderRadius: 99, padding: '2px 10px',
-      textTransform: 'uppercase', letterSpacing: '0.08em',
-    }}>{status}</span>
-  )
+// Sex options by species
+const SEX_BY_SPECIES: Record<string, string[]> = {
+  Beef: ['Steer', 'Heifer', 'Cow', 'Bull'],
+  Hog:  ['Barrow', 'Gilt', 'Sow', 'Boar'],
+  Lamb: ['Wether', 'Ewe', 'Ram'],
+  Goat: ['Wether', 'Doe', 'Buck'],
+}
+
+interface AnimalSlot {
+  ear_tag:        string
+  sex:            string
+  breed:          string
+  over_30_months: boolean
+  photo_url:      string
+  uploading:      boolean
+}
+
+function blankSlot(species: string): AnimalSlot {
+  const sexOpts = SEX_BY_SPECIES[species] ?? ['Male', 'Female']
+  return { ear_tag: '', sex: sexOpts[0], breed: '', over_30_months: false, photo_url: '', uploading: false }
+}
+
+// ── Box receiving label printer ───────────────────────────────────────────────
+function printReceivingLabel(log: BoxReceivingLog) {
+  const date = new Date(log.received_at + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  const html = `<!DOCTYPE html><html><head><style>
+    @page{size:4in auto;margin:0.15in}
+    body{font-family:Arial,sans-serif;font-size:9pt;color:#000;margin:0;padding:0}
+    .co{text-align:center;font-size:7pt;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:2px}
+    .title{text-align:center;font-size:11pt;font-weight:bold;margin-bottom:6px;text-transform:uppercase}
+    .product{font-size:16pt;font-weight:bold;text-align:center;margin:4px 0}
+    .vendor{text-align:center;font-size:9pt;color:#444;margin-bottom:6px}
+    hr{border:none;border-top:1px solid #000;margin:5px 0}
+    .row{display:flex;justify-content:space-between;font-size:8pt;margin:1px 0}
+    .label{color:#666}
+    .footer{text-align:center;font-size:7pt;margin-top:6px;color:#555}
+  </style></head><body>
+  <div class="co">Cowboy Meat Company</div>
+  <hr/>
+  <div class="title">Received</div>
+  <div class="product">${log.product}</div>
+  <div class="vendor">${log.vendor}</div>
+  <hr/>
+  <div class="row"><span class="label">Date:</span><span>${date}</span></div>
+  <div class="row"><span class="label">Qty:</span><span>${log.quantity}</span></div>
+  ${log.weight_lbs != null ? `<div class="row"><span class="label">Weight:</span><span>${log.weight_lbs} lbs</span></div>` : ''}
+  ${log.lot_no ? `<div class="row"><span class="label">Lot #:</span><span>${log.lot_no}</span></div>` : ''}
+  ${log.invoice_no ? `<div class="row"><span class="label">Invoice:</span><span>${log.invoice_no}</span></div>` : ''}
+  ${log.temp_f != null ? `<div class="row"><span class="label">Temp:</span><span>${log.temp_f}°F</span></div>` : ''}
+  ${log.received_by ? `<div class="row"><span class="label">Rcvd by:</span><span>${log.received_by}</span></div>` : ''}
+  <hr/>
+  <div class="footer">1109 Front St · Forsyth MT</div>
+  <script>window.onload=()=>window.print()</script>
+  </body></html>`
+  const w = window.open('', '_blank', 'width=420,height=600')
+  if (w) { w.document.write(html); w.document.close() }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -65,74 +106,112 @@ function Badge({ status }: { status: string }) {
 // ══════════════════════════════════════════════════════════════════════════════
 function AnimalTab() {
   const [appointments, setAppointments] = useState<HarvestAppointment[]>([])
-  const [logs, setLogs] = useState<AnimalReceivingLog[]>([])
-  const [selected, setSelected] = useState<HarvestAppointment | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [success, setSuccess] = useState(false)
+  const [logs,         setLogs]         = useState<AnimalReceivingLog[]>([])
+  const [selected,     setSelected]     = useState<HarvestAppointment | null>(null)
+  const [saving,       setSaving]       = useState(false)
+  const [success,      setSuccess]      = useState(false)
 
-  const [form, setForm] = useState({
-    live_weight_lbs: '',
-    received_by: '',
+  const [shared, setShared] = useState({
+    received_at:    new Date().toISOString().slice(0, 16),
+    received_by:    '',
     health_cert_no: '',
-    notes: '',
-    received_at: new Date().toISOString().slice(0, 16),
+    brand_insp_no:  '',
+    notes:          '',
   })
+  const [slots, setSlots] = useState<AnimalSlot[]>([])
 
   const load = useCallback(async () => {
     const [apptRes, logRes] = await Promise.all([
       fetch('/api/appointments'),
       fetch('/api/receiving?type=animal'),
     ])
-    const appts: HarvestAppointment[] = await apptRes.json()
-    const ls: AnimalReceivingLog[] = await logRes.json()
-    // Only show appointments not yet fully received (not Complete)
-    setAppointments(appts.filter(a => a.status !== 'Complete'))
-    setLogs(ls)
+    const appts: HarvestAppointment[] = await apptRes.json().catch(() => [])
+    const ls: AnimalReceivingLog[] = await logRes.json().catch(() => [])
+    setAppointments(Array.isArray(appts) ? appts.filter(a => a.status !== 'Complete') : [])
+    setLogs(Array.isArray(ls) ? ls : [])
   }, [])
 
   useEffect(() => { load() }, [load])
 
-  const checkedInIds = new Set(logs.map(l => l.appointment_id))
+  // Group logs by appointment_id
+  const logsByAppt: Record<string, AnimalReceivingLog[]> = {}
+  for (const l of logs) {
+    if (!logsByAppt[l.appointment_id]) logsByAppt[l.appointment_id] = []
+    logsByAppt[l.appointment_id].push(l)
+  }
 
+  const checkedInIds = new Set(logs.map(l => l.appointment_id))
   const pending = appointments.filter(a => !checkedInIds.has(a.id))
   const done    = appointments.filter(a =>  checkedInIds.has(a.id))
 
   function selectAppt(a: HarvestAppointment) {
     setSelected(a)
     setSuccess(false)
-    setForm({ live_weight_lbs: '', received_by: '', health_cert_no: '', notes: '', received_at: new Date().toISOString().slice(0, 16) })
+    setShared({ received_at: new Date().toISOString().slice(0, 16), received_by: '', health_cert_no: '', brand_insp_no: '', notes: '' })
+    setSlots(Array.from({ length: a.head_count ?? 1 }, () => blankSlot(a.species)))
+  }
+
+  function updateSlot(idx: number, updates: Partial<AnimalSlot>) {
+    setSlots(prev => prev.map((s, i) => i === idx ? { ...s, ...updates } : s))
+  }
+
+  async function uploadPhoto(idx: number, file: File) {
+    if (!selected) return
+    updateSlot(idx, { uploading: true })
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('appointment_id', selected.id)
+    fd.append('animal_index', String(idx + 1))
+    try {
+      const res = await fetch('/api/receiving/photo', { method: 'POST', body: fd })
+      const json = await res.json()
+      if (json.url) updateSlot(idx, { photo_url: json.url, uploading: false })
+      else updateSlot(idx, { uploading: false })
+    } catch {
+      updateSlot(idx, { uploading: false })
+    }
   }
 
   async function handleCheckIn() {
     if (!selected) return
     setSaving(true)
+    const animals = slots.map((s, i) => ({
+      animal_index:   i + 1,
+      ear_tag:        s.ear_tag,
+      sex:            s.sex,
+      breed:          s.breed,
+      over_30_months: s.over_30_months,
+      photo_url:      s.photo_url,
+    }))
     await fetch('/api/receiving', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        type:            'animal',
-        appointment_id:  selected.id,
-        received_at:     form.received_at,
-        live_weight_lbs: form.live_weight_lbs ? parseFloat(form.live_weight_lbs) : null,
-        received_by:     form.received_by,
-        health_cert_no:  form.health_cert_no,
-        notes:           form.notes,
+        type:           'animal',
+        appointment_id: selected.id,
+        received_at:    shared.received_at,
+        received_by:    shared.received_by,
+        health_cert_no: shared.health_cert_no,
+        brand_insp_no:  shared.brand_insp_no,
+        notes:          shared.notes,
+        animals,
       }),
     })
     setSaving(false)
     setSuccess(true)
     setSelected(null)
+    setSlots([])
     load()
   }
 
-  const f = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
-    setForm(p => ({ ...p, [k]: e.target.value }))
+  const over30Count = slots.filter(s => s.over_30_months).length
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: '1.5rem', height: '100%' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: '1.5rem', height: '100%' }}>
+
       {/* Left — appointment list */}
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.2)', fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.12em' }}>
+        <div style={{ padding: '0.85rem 1.1rem', borderBottom: '1px solid rgba(166,120,90,0.2)', fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.12em' }}>
           Pending Check-In ({pending.length})
         </div>
         <div style={{ overflowY: 'auto', flex: 1 }}>
@@ -140,27 +219,25 @@ function AnimalTab() {
             <p style={{ color: C.lightBrown, fontSize: '0.85rem', padding: '1.5rem', textAlign: 'center' }}>No animals pending</p>
           )}
           {pending.map(a => (
-            <div
-              key={a.id}
-              onClick={() => selectAppt(a)}
-              style={{
-                padding: '1rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.12)',
-                cursor: 'pointer', background: selected?.id === a.id ? 'rgba(166,120,90,0.12)' : 'transparent',
-                transition: 'background 0.15s',
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.3rem' }}>
-                <span style={{ color: C.cream, fontWeight: 600, fontSize: '0.9rem' }}>
-                  {a.species} — {a.head_count} head
+            <div key={a.id} onClick={() => selectAppt(a)} style={{
+              padding: '0.9rem 1.1rem', borderBottom: '1px solid rgba(166,120,90,0.1)',
+              cursor: 'pointer', background: selected?.id === a.id ? 'rgba(166,120,90,0.12)' : 'transparent',
+              transition: 'background 0.15s',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                <span style={{ color: C.cream, fontWeight: 600, fontSize: '0.88rem' }}>
+                  {a.species} · {a.head_count} head
                 </span>
-                <Badge status={a.status} />
+                <span style={{ fontSize: '0.7rem', background: 'rgba(166,120,90,0.2)', color: C.tan, borderRadius: 3, padding: '2px 7px' }}>
+                  {a.status}
+                </span>
               </div>
-              <div style={{ fontSize: '0.78rem', color: C.tan }}>
+              <div style={{ fontSize: '0.77rem', color: C.tan }}>
                 {new Date(a.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
                 {a.source ? ` · ${a.source}` : ''}
               </div>
               {a.customers?.length > 0 && (
-                <div style={{ fontSize: '0.75rem', color: C.lightBrown, marginTop: '0.2rem' }}>
+                <div style={{ fontSize: '0.73rem', color: C.lightBrown, marginTop: '0.15rem' }}>
                   {a.customers.map(c => c.customer_name).join(', ')}
                 </div>
               )}
@@ -169,21 +246,24 @@ function AnimalTab() {
 
           {done.length > 0 && (
             <>
-              <div style={{ padding: '0.75rem 1.25rem', fontSize: '0.7rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', borderTop: '1px solid rgba(166,120,90,0.2)', marginTop: '0.5rem' }}>
+              <div style={{ padding: '0.6rem 1.1rem', fontSize: '0.68rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', borderTop: '1px solid rgba(166,120,90,0.2)', marginTop: '0.25rem' }}>
                 Checked In ({done.length})
               </div>
               {done.map(a => {
-                const log = logs.find(l => l.appointment_id === a.id)
+                const aLogs = logsByAppt[a.id] ?? []
+                const tags  = aLogs.map(l => l.ear_tag).filter(Boolean).join(', ')
                 return (
-                  <div key={a.id} style={{ padding: '0.85rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.08)', opacity: 0.65 }}>
+                  <div key={a.id} style={{ padding: '0.75rem 1.1rem', borderBottom: '1px solid rgba(166,120,90,0.08)', opacity: 0.7 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ color: C.cream, fontSize: '0.87rem' }}>{a.species} — {a.head_count} head</span>
-                      <span style={{ color: C.green, fontSize: '0.75rem', fontWeight: 600 }}>✓ In</span>
+                      <span style={{ color: C.cream, fontSize: '0.85rem' }}>{a.species} · {a.head_count} head</span>
+                      <span style={{ color: C.green, fontSize: '0.73rem', fontWeight: 600 }}>✓ In</span>
                     </div>
-                    <div style={{ fontSize: '0.75rem', color: C.tan, marginTop: '0.15rem' }}>
-                      {log?.live_weight_lbs ? `${log.live_weight_lbs} lbs live` : ''}
-                      {log?.received_by ? ` · Rcvd by ${log.received_by}` : ''}
-                    </div>
+                    {tags && <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.1rem' }}>Tags: {tags}</div>}
+                    {aLogs.some(l => l.over_30_months) && (
+                      <div style={{ fontSize: '0.7rem', color: '#fca5a5', marginTop: '0.1rem' }}>
+                        ⚠ {aLogs.filter(l => l.over_30_months).length} over 30 mo
+                      </div>
+                    )}
                   </div>
                 )
               })}
@@ -193,10 +273,10 @@ function AnimalTab() {
       </div>
 
       {/* Right — check-in form */}
-      <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1.5rem' }}>
+      <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflowY: 'auto' }}>
         {success && (
-          <div style={{ background: 'rgba(76,175,80,0.15)', border: '1px solid rgba(76,175,80,0.4)', borderRadius: 4, padding: '0.85rem 1.25rem', marginBottom: '1.5rem', color: C.green, fontSize: '0.9rem' }}>
-            ✓ Animal checked in — appointment updated to AnimalIn
+          <div style={{ background: 'rgba(76,175,80,0.15)', border: '1px solid rgba(76,175,80,0.4)', borderRadius: 4, padding: '0.85rem 1.25rem', margin: '1.25rem 1.5rem 0', color: C.green, fontSize: '0.9rem' }}>
+            ✓ Animals checked in successfully
           </div>
         )}
 
@@ -205,57 +285,186 @@ function AnimalTab() {
             ← Select an appointment to check in
           </div>
         ) : (
-          <>
-            {/* Appointment summary */}
+          <div style={{ padding: '1.5rem' }}>
+            {/* Appointment banner */}
             <div style={{ background: 'rgba(166,120,90,0.08)', border: '1px solid rgba(166,120,90,0.2)', borderRadius: 4, padding: '1rem 1.25rem', marginBottom: '1.5rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <div style={{ color: C.cream, fontWeight: 700, fontSize: '1.05rem', marginBottom: '0.25rem' }}>
-                    {selected.species} — {selected.head_count} head
-                  </div>
-                  <div style={{ color: C.tan, fontSize: '0.82rem' }}>
-                    {new Date(selected.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
-                  </div>
-                  {selected.source && <div style={{ color: C.lightBrown, fontSize: '0.8rem', marginTop: '0.15rem' }}>Source: {selected.source}</div>}
-                  {selected.customers?.length > 0 && (
-                    <div style={{ color: C.lightBrown, fontSize: '0.8rem', marginTop: '0.15rem' }}>
-                      Customers: {selected.customers.map(c => c.customer_name).join(', ')}
-                    </div>
-                  )}
+              <div style={{ color: C.cream, fontWeight: 700, fontSize: '1.05rem', marginBottom: '0.2rem' }}>
+                {selected.species} · {selected.head_count} head
+              </div>
+              <div style={{ color: C.tan, fontSize: '0.82rem' }}>
+                {new Date(selected.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+              </div>
+              {selected.source && <div style={{ color: C.lightBrown, fontSize: '0.8rem', marginTop: '0.1rem' }}>Ranch: {selected.source}</div>}
+              {selected.customers?.length > 0 && (
+                <div style={{ color: C.lightBrown, fontSize: '0.8rem', marginTop: '0.1rem' }}>
+                  Customers: {selected.customers.map(c => c.customer_name).join(', ')}
                 </div>
-                <Badge status={selected.status} />
+              )}
+            </div>
+
+            {/* Shared fields */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1.25rem' }}>
+              <Field label="Date / Time Received">
+                <input type="datetime-local" style={INPUT} value={shared.received_at} onChange={e => setShared(p => ({ ...p, received_at: e.target.value }))} />
+              </Field>
+              <Field label="Received By">
+                <input type="text" placeholder="Name" style={INPUT} value={shared.received_by} onChange={e => setShared(p => ({ ...p, received_by: e.target.value }))} />
+              </Field>
+              <Field label="Health Cert #">
+                <input type="text" placeholder="Optional" style={INPUT} value={shared.health_cert_no} onChange={e => setShared(p => ({ ...p, health_cert_no: e.target.value }))} />
+              </Field>
+              <Field label="Brand Inspection #">
+                <input type="text" placeholder="Brand inspection number" style={INPUT} value={shared.brand_insp_no} onChange={e => setShared(p => ({ ...p, brand_insp_no: e.target.value }))} />
+              </Field>
+            </div>
+            <Field label="Notes">
+              <textarea placeholder="Condition, issues, observations…" style={{ ...INPUT, height: 64, resize: 'vertical' }} value={shared.notes} onChange={e => setShared(p => ({ ...p, notes: e.target.value }))} />
+            </Field>
+
+            {/* Per-animal slots */}
+            <div style={{ borderTop: '1px solid rgba(166,120,90,0.2)', marginTop: '0.5rem', paddingTop: '1.25rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+                <span style={{ color: C.cream, fontWeight: 700, fontSize: '0.95rem', fontFamily: 'Georgia, serif', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                  Individual Animals ({selected.head_count})
+                </span>
+                {over30Count > 0 && (
+                  <span style={{ fontSize: '0.78rem', color: '#fca5a5', background: 'rgba(200,50,50,0.15)', border: '1px solid rgba(200,50,50,0.3)', borderRadius: 3, padding: '0.2rem 0.6rem' }}>
+                    ⚠ {over30Count} over 30 months — SRM removal required
+                  </span>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                {slots.map((slot, idx) => (
+                  <AnimalCard
+                    key={idx}
+                    index={idx + 1}
+                    total={slots.length}
+                    species={selected.species}
+                    slot={slot}
+                    onChange={updates => updateSlot(idx, updates)}
+                    onPhotoChange={file => uploadPhoto(idx, file)}
+                    appointmentId={selected.id}
+                  />
+                ))}
               </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1.25rem' }}>
-              <Field label="Date / Time Received">
-                <input type="datetime-local" style={INPUT} value={form.received_at} onChange={f('received_at')} />
-              </Field>
-              <Field label="Live Weight (lbs)">
-                <input type="number" step="0.1" placeholder="e.g. 1240" style={INPUT} value={form.live_weight_lbs} onChange={f('live_weight_lbs')} />
-              </Field>
-              <Field label="Received By">
-                <input type="text" placeholder="Name" style={INPUT} value={form.received_by} onChange={f('received_by')} />
-              </Field>
-              <Field label="Health Cert #">
-                <input type="text" placeholder="Optional" style={INPUT} value={form.health_cert_no} onChange={f('health_cert_no')} />
-              </Field>
-            </div>
-
-            <Field label="Notes">
-              <textarea placeholder="Any observations, issues, condition notes…" style={{ ...INPUT, height: 80, resize: 'vertical' }} value={form.notes} onChange={f('notes')} />
-            </Field>
-
-            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
+            {/* Actions */}
+            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem' }}>
               <button style={BTN(C.green, C.dark)} onClick={handleCheckIn} disabled={saving}>
-                {saving ? 'Saving…' : '✓ Check In Animal'}
+                {saving ? 'Saving…' : `✓ Check In ${slots.length} Animal${slots.length !== 1 ? 's' : ''}`}
               </button>
-              <button style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.3)' }} onClick={() => setSelected(null)}>
+              <button style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.3)' }} onClick={() => { setSelected(null); setSlots([]) }}>
                 Cancel
               </button>
             </div>
-          </>
+          </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ── Individual animal card ─────────────────────────────────────────────────────
+function AnimalCard({ index, total, species, slot, onChange, onPhotoChange, appointmentId }: {
+  index:          number
+  total:          number
+  species:        string
+  slot:           AnimalSlot
+  onChange:       (u: Partial<AnimalSlot>) => void
+  onPhotoChange:  (f: File) => void
+  appointmentId:  string
+}) {
+  const fileRef = useRef<HTMLInputElement>(null)
+  const sexOpts = SEX_BY_SPECIES[species] ?? ['Male', 'Female']
+
+  return (
+    <div style={{
+      background: 'rgba(255,255,255,0.04)', border: `1px solid ${slot.over_30_months ? 'rgba(200,50,50,0.4)' : 'rgba(166,120,90,0.2)'}`,
+      borderRadius: 4, padding: '1rem 1.25rem',
+    }}>
+      {/* Card header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem' }}>
+        <span style={{ color: C.tan, fontWeight: 700, fontSize: '0.82rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+          Animal {index} of {total}
+          {slot.ear_tag ? <span style={{ color: C.cream, marginLeft: '0.5rem', fontWeight: 400 }}>· Tag #{slot.ear_tag}</span> : ''}
+        </span>
+        {slot.over_30_months && (
+          <span style={{ fontSize: '0.72rem', color: '#fca5a5', background: 'rgba(200,50,50,0.2)', borderRadius: 3, padding: '2px 8px' }}>
+            ⚠ Over 30 mo
+          </span>
+        )}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0 1rem' }}>
+        {/* Ear Tag */}
+        <div style={{ marginBottom: '0.75rem' }}>
+          <label style={LABEL}>Ear Tag #</label>
+          <input type="text" placeholder="e.g. 3271" style={INPUT}
+            value={slot.ear_tag} onChange={e => onChange({ ear_tag: e.target.value })} />
+        </div>
+        {/* Sex */}
+        <div style={{ marginBottom: '0.75rem' }}>
+          <label style={LABEL}>Sex</label>
+          <select style={INPUT} value={slot.sex} onChange={e => onChange({ sex: e.target.value })}>
+            {sexOpts.map(s => <option key={s}>{s}</option>)}
+          </select>
+        </div>
+        {/* Breed */}
+        <div style={{ marginBottom: '0.75rem' }}>
+          <label style={LABEL}>Breed</label>
+          <input type="text" placeholder="e.g. Angus" style={INPUT}
+            value={slot.breed} onChange={e => onChange({ breed: e.target.value })} />
+        </div>
+      </div>
+
+      {/* Over/Under 30 months + Photo */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+        <div>
+          <label style={LABEL}>Age at Slaughter</label>
+          <div style={{ display: 'flex', gap: '0.4rem' }}>
+            <button
+              onClick={() => onChange({ over_30_months: false })}
+              style={{
+                ...BTN(!slot.over_30_months ? 'rgba(76,175,80,0.25)' : 'rgba(255,255,255,0.05)', !slot.over_30_months ? C.green : C.lightBrown),
+                border: `1px solid ${!slot.over_30_months ? 'rgba(76,175,80,0.5)' : 'rgba(166,120,90,0.2)'}`,
+                padding: '0.4rem 0.9rem', fontSize: '0.8rem',
+              }}
+            >
+              Under 30 mo
+            </button>
+            <button
+              onClick={() => onChange({ over_30_months: true })}
+              style={{
+                ...BTN(slot.over_30_months ? 'rgba(200,50,50,0.25)' : 'rgba(255,255,255,0.05)', slot.over_30_months ? '#fca5a5' : C.lightBrown),
+                border: `1px solid ${slot.over_30_months ? 'rgba(200,50,50,0.5)' : 'rgba(166,120,90,0.2)'}`,
+                padding: '0.4rem 0.9rem', fontSize: '0.8rem',
+              }}
+            >
+              Over 30 mo ⚠
+            </button>
+          </div>
+        </div>
+
+        {/* Photo */}
+        <div style={{ marginLeft: 'auto' }}>
+          <label style={LABEL}>Photo</label>
+          {slot.photo_url ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <img src={slot.photo_url} alt="animal" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 4, border: '1px solid rgba(166,120,90,0.3)' }} />
+              <button onClick={() => onChange({ photo_url: '' })} style={{ ...BTN('rgba(200,50,50,0.2)', '#fca5a5'), fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}>✕</button>
+            </div>
+          ) : (
+            <label style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+              background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3,
+              padding: '0.4rem 0.85rem', fontSize: '0.8rem', color: C.tan }}>
+              {slot.uploading ? '⏳ Uploading…' : '📷 Add Photo'}
+              <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
+                onChange={e => { const f = e.target.files?.[0]; if (f) onPhotoChange(f) }} />
+            </label>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -265,8 +474,8 @@ function AnimalTab() {
 // BOX PRODUCT TAB
 // ══════════════════════════════════════════════════════════════════════════════
 function BoxTab() {
-  const [logs, setLogs] = useState<BoxReceivingLog[]>([])
-  const [saving, setSaving] = useState(false)
+  const [logs,    setLogs]    = useState<BoxReceivingLog[]>([])
+  const [saving,  setSaving]  = useState(false)
   const [success, setSuccess] = useState(false)
 
   const empty = {
@@ -278,7 +487,7 @@ function BoxTab() {
 
   const load = useCallback(async () => {
     const res = await fetch('/api/receiving?type=box')
-    setLogs(await res.json())
+    setLogs(await res.json().catch(() => []))
   }, [])
 
   useEffect(() => { load() }, [load])
@@ -306,15 +515,12 @@ function BoxTab() {
         notes:       form.notes,
       }),
     })
-    setSaving(false)
-    setSuccess(true)
-    setForm(empty)
-    load()
+    setSaving(false); setSuccess(true); setForm(empty); load()
     setTimeout(() => setSuccess(false), 4000)
   }
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '400px 1fr', gap: '1.5rem', height: '100%' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '380px 1fr', gap: '1.5rem', height: '100%' }}>
       {/* Left — entry form */}
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1.5rem', overflowY: 'auto' }}>
         <h3 style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 1.25rem' }}>
@@ -338,7 +544,7 @@ function BoxTab() {
         </Field>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1rem' }}>
-          <Field label="Quantity (boxes/units)">
+          <Field label="Quantity (units)">
             <input type="number" min="1" style={INPUT} value={form.quantity} onChange={f('quantity')} />
           </Field>
           <Field label="Total Weight (lbs)">
@@ -381,17 +587,24 @@ function BoxTab() {
             <p style={{ color: C.lightBrown, fontSize: '0.85rem', padding: '1.5rem', textAlign: 'center' }}>No box product entries yet</p>
           )}
           {logs.map(log => (
-            <div key={log.id} style={{ padding: '1rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.1)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.25rem' }}>
+            <div key={log.id} style={{ padding: '0.9rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.1)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.2rem' }}>
                 <span style={{ color: C.cream, fontWeight: 600, fontSize: '0.9rem' }}>{log.product}</span>
-                <span style={{ color: C.lightBrown, fontSize: '0.78rem' }}>
-                  {new Date(log.received_at + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                </span>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <span style={{ color: C.lightBrown, fontSize: '0.76rem' }}>
+                    {new Date(log.received_at + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  </span>
+                  <button
+                    onClick={() => printReceivingLabel(log)}
+                    title="Print receiving label"
+                    style={{ background: 'rgba(166,120,90,0.15)', border: '1px solid rgba(166,120,90,0.3)', color: C.tan, borderRadius: 3, padding: '2px 8px', fontSize: '0.72rem', cursor: 'pointer' }}
+                  >
+                    🖨 Label
+                  </button>
+                </div>
               </div>
-              <div style={{ fontSize: '0.8rem', color: C.tan }}>
-                {log.vendor}
-              </div>
-              <div style={{ fontSize: '0.78rem', color: C.lightBrown, marginTop: '0.2rem', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+              <div style={{ fontSize: '0.8rem', color: C.tan }}>{log.vendor}</div>
+              <div style={{ fontSize: '0.77rem', color: C.lightBrown, marginTop: '0.2rem', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
                 <span>Qty: {log.quantity}</span>
                 {log.weight_lbs != null && <span>{log.weight_lbs} lbs</span>}
                 {log.temp_f != null && <span>{log.temp_f}°F</span>}
@@ -399,7 +612,7 @@ function BoxTab() {
                 {log.lot_no && <span>Lot: {log.lot_no}</span>}
                 {log.received_by && <span>Rcvd by: {log.received_by}</span>}
               </div>
-              {log.notes && <div style={{ fontSize: '0.77rem', color: C.lightBrown, marginTop: '0.3rem', fontStyle: 'italic' }}>{log.notes}</div>}
+              {log.notes && <div style={{ fontSize: '0.76rem', color: C.lightBrown, marginTop: '0.25rem', fontStyle: 'italic' }}>{log.notes}</div>}
             </div>
           ))}
         </div>
@@ -416,7 +629,6 @@ export default function ReceivingPage() {
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--dark-brown)', display: 'flex', flexDirection: 'column' }}>
-      {/* Header */}
       <header style={{ background: 'var(--dark)', borderBottom: '1px solid rgba(166,120,90,0.3)', padding: '0 2rem', height: '64px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
           <Link href="/" style={{ color: C.lightBrown, textDecoration: 'none', fontSize: '0.82rem' }}>← Dashboard</Link>
@@ -426,32 +638,24 @@ export default function ReceivingPage() {
           </h1>
         </div>
 
-        {/* Tab toggle */}
         <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden' }}>
           {(['animal', 'box'] as Tab[]).map(t => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              style={{
-                padding: '0.45rem 1.25rem', border: 'none', cursor: 'pointer', fontSize: '0.83rem', fontWeight: 600,
-                background: tab === t ? C.medBrown : 'transparent',
-                color: tab === t ? C.cream : C.lightBrown,
-                letterSpacing: '0.05em', textTransform: 'uppercase',
-                transition: 'background 0.15s',
-              }}
-            >
+            <button key={t} onClick={() => setTab(t)} style={{
+              padding: '0.45rem 1.25rem', border: 'none', cursor: 'pointer', fontSize: '0.83rem', fontWeight: 600,
+              background: tab === t ? C.medBrown : 'transparent',
+              color: tab === t ? C.cream : C.lightBrown,
+              letterSpacing: '0.05em', textTransform: 'uppercase', transition: 'background 0.15s',
+            }}>
               {t === 'animal' ? '🐄 Live Animal' : '📦 Box Product'}
             </button>
           ))}
         </div>
       </header>
 
-      {/* Content */}
-      <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1200px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
+      <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1300px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
         {tab === 'animal' ? <AnimalTab /> : <BoxTab />}
       </main>
 
-      {/* Footer */}
       <footer style={{ background: 'var(--dark)', borderTop: '1px solid rgba(166,120,90,0.2)', padding: '0.5rem 2rem', textAlign: 'center', fontSize: '0.72rem', color: C.lightBrown, flexShrink: 0 }}>
         Cowboy Meat Company · 1109 Front St, Forsyth MT · (406) 346-7660
       </footer>
