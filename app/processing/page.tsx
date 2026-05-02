@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 
-type Tab = 'browser' | 'upload' | 'export' | 'cleanup'
+type Tab = 'scanner' | 'browser' | 'upload' | 'export' | 'cleanup'
 
 interface PluItem {
   id:                 string
@@ -759,10 +759,296 @@ function UploadTab() {
 // ══════════════════════════════════════════════════════════════════════════════
 // PAGE
 // ══════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+// SCANNER TAB
+// ══════════════════════════════════════════════════════════════════════════════
+interface ScanRow {
+  key:          string
+  plu_number:   string
+  item_name:    string
+  weight_lbs:   string
+  price_per_lb: string
+  barcode:      string
+}
+
+function ScannerTab() {
+  const pluRef     = useRef<HTMLInputElement>(null)
+  const weightRef  = useRef<HTMLInputElement>(null)
+  const barcodeRef = useRef<HTMLInputElement>(null)
+
+  const [processedBy, setProcessedBy] = useState('')
+  const [date, setDate]               = useState(new Date().toISOString().slice(0, 10))
+  const [rows, setRows]               = useState<ScanRow[]>([])
+  const [saving, setSaving]           = useState(false)
+  const [saved, setSaved]             = useState(false)
+
+  // Current entry fields
+  const [pluInput,   setPluInput]   = useState('')
+  const [itemName,   setItemName]   = useState('')
+  const [weight,     setWeight]     = useState('')
+  const [pricePerLb, setPricePerLb] = useState('')
+  const [barcode,    setBarcode]    = useState('')
+  const [pluStatus,  setPluStatus]  = useState<'idle' | 'found' | 'notfound'>('idle')
+
+  // Look up PLU from database
+  async function lookupPlu(plu: string) {
+    if (!plu.trim()) return
+    const res  = await fetch(`/api/processing?search=${encodeURIComponent(plu.trim())}`)
+    const json = await res.json()
+    const items: PluItem[] = Array.isArray(json) ? json : []
+    const match = items.find(i => i.plu_number === plu.trim())
+    if (match) {
+      setItemName(match.item_name)
+      setPricePerLb(match.price?.toFixed(2) ?? '')
+      setPluStatus('found')
+      weightRef.current?.focus()
+    } else {
+      setItemName('')
+      setPricePerLb('')
+      setPluStatus('notfound')
+    }
+  }
+
+  function addRow() {
+    if (!pluInput.trim() || !weight.trim()) return
+    const w = parseFloat(weight)
+    const p = parseFloat(pricePerLb)
+    const total = (!isNaN(w) && !isNaN(p)) ? w * p : null
+    setRows(prev => [...prev, {
+      key:          `${Date.now()}-${Math.random()}`,
+      plu_number:   pluInput.trim(),
+      item_name:    itemName,
+      weight_lbs:   weight,
+      price_per_lb: pricePerLb,
+      barcode:      barcode,
+    }])
+    // Reset for next item
+    setPluInput('')
+    setItemName('')
+    setWeight('')
+    setPricePerLb('')
+    setBarcode('')
+    setPluStatus('idle')
+    pluRef.current?.focus()
+    void total // suppress unused warning
+  }
+
+  function removeRow(key: string) {
+    setRows(prev => prev.filter(r => r.key !== key))
+  }
+
+  const totalWeight = rows.reduce((s, r) => s + (parseFloat(r.weight_lbs) || 0), 0)
+  const totalValue  = rows.reduce((s, r) => {
+    const w = parseFloat(r.weight_lbs) || 0
+    const p = parseFloat(r.price_per_lb) || 0
+    return s + w * p
+  }, 0)
+
+  async function handleSave() {
+    if (!rows.length) return
+    setSaving(true)
+    const records = rows.map(r => ({
+      processed_at:   new Date(`${date}T12:00:00`).toISOString(),
+      plu_number:     r.plu_number,
+      item_name:      r.item_name,
+      barcode:        r.barcode,
+      weight_lbs:     parseFloat(r.weight_lbs) || null,
+      price_per_lb:   parseFloat(r.price_per_lb) || null,
+      total_price:    (parseFloat(r.weight_lbs) || 0) * (parseFloat(r.price_per_lb) || 0) || null,
+      processed_by:   processedBy,
+    }))
+    await fetch('/api/processing/records', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ records }),
+    })
+    setSaving(false)
+    setSaved(true)
+    setRows([])
+    setTimeout(() => setSaved(false), 4000)
+    pluRef.current?.focus()
+  }
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '420px 1fr', gap: '1.5rem', height: '100%' }}>
+      {/* Left — entry form */}
+      <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+        <h3 style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0 }}>
+          Processing Scanner
+        </h3>
+
+        {/* Session header */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+          <div>
+            <label style={LABEL}>Date</label>
+            <input type="date" style={INPUT} value={date} onChange={e => setDate(e.target.value)} />
+          </div>
+          <div>
+            <label style={LABEL}>Processed By</label>
+            <input style={INPUT} value={processedBy} onChange={e => setProcessedBy(e.target.value)} placeholder="Name" />
+          </div>
+        </div>
+
+        <div style={{ borderTop: '1px solid rgba(166,120,90,0.2)', paddingTop: '0.85rem' }}>
+          <label style={{ ...LABEL, marginBottom: '0.6rem' }}>PLU Number</label>
+          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
+            <input
+              ref={pluRef}
+              style={{ ...INPUT, fontFamily: 'monospace', fontSize: '1rem', flex: 1,
+                borderColor: pluStatus === 'found' ? 'rgba(76,175,80,0.6)' : pluStatus === 'notfound' ? 'rgba(229,62,62,0.6)' : 'rgba(166,120,90,0.35)',
+              }}
+              value={pluInput}
+              onChange={e => { setPluInput(e.target.value); setPluStatus('idle') }}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); lookupPlu(pluInput) } }}
+              placeholder="Type PLU # → Enter"
+              autoFocus
+            />
+            <button style={BTN(C.medBrown, C.cream)} onClick={() => lookupPlu(pluInput)}>Look up</button>
+          </div>
+
+          {/* Item name display */}
+          <div style={{ padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.04)', borderRadius: 3, minHeight: '2rem', marginBottom: '0.75rem' }}>
+            {pluStatus === 'found'    && <span style={{ color: C.green,   fontSize: '0.85rem' }}>✓ {itemName}</span>}
+            {pluStatus === 'notfound' && <span style={{ color: C.red,     fontSize: '0.85rem' }}>PLU not found — enter name manually</span>}
+            {pluStatus === 'idle'     && <span style={{ color: C.lightBrown, fontSize: '0.82rem' }}>Item name will appear here</span>}
+          </div>
+
+          {pluStatus === 'notfound' && (
+            <div style={{ marginBottom: '0.75rem' }}>
+              <label style={LABEL}>Item Name (manual)</label>
+              <input style={INPUT} value={itemName} onChange={e => setItemName(e.target.value)} placeholder="Enter item name" />
+            </div>
+          )}
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '0.75rem' }}>
+            <div>
+              <label style={LABEL}>Weight (lbs)</label>
+              <input
+                ref={weightRef}
+                type="number" step="0.001"
+                style={{ ...INPUT, fontSize: '1rem' }}
+                value={weight}
+                onChange={e => setWeight(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); barcodeRef.current?.focus() } }}
+                placeholder="0.000"
+              />
+            </div>
+            <div>
+              <label style={LABEL}>Price / lb</label>
+              <input
+                type="number" step="0.01"
+                style={INPUT}
+                value={pricePerLb}
+                onChange={e => setPricePerLb(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); barcodeRef.current?.focus() } }}
+                placeholder="0.00"
+              />
+            </div>
+          </div>
+
+          <div style={{ marginBottom: '0.85rem' }}>
+            <label style={LABEL}>Barcode / Label # (optional)</label>
+            <input
+              ref={barcodeRef}
+              style={{ ...INPUT, fontFamily: 'monospace' }}
+              value={barcode}
+              onChange={e => setBarcode(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addRow() } }}
+              placeholder="Scan label or skip → Enter to add"
+            />
+          </div>
+
+          {/* Total for current entry */}
+          {weight && pricePerLb && (
+            <div style={{ fontSize: '0.85rem', color: C.tan, marginBottom: '0.75rem', textAlign: 'right' }}>
+              {parseFloat(weight).toFixed(3)} lbs × ${parseFloat(pricePerLb).toFixed(2)} = <strong style={{ color: C.cream }}>${(parseFloat(weight) * parseFloat(pricePerLb)).toFixed(2)}</strong>
+            </div>
+          )}
+
+          <button
+            style={{ ...BTN(pluInput && weight ? C.tan : C.medBrown), width: '100%', fontSize: '0.95rem', padding: '0.65rem', opacity: pluInput && weight ? 1 : 0.5 }}
+            onClick={addRow}
+            disabled={!pluInput || !weight}
+          >
+            + Add Item
+          </button>
+        </div>
+      </div>
+
+      {/* Right — running list */}
+      <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {/* Summary bar */}
+        <div style={{ padding: '0.85rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.12em' }}>
+            {rows.length} item{rows.length !== 1 ? 's' : ''} this session
+          </span>
+          <div style={{ display: 'flex', gap: '1.5rem', fontSize: '0.85rem' }}>
+            <span style={{ color: C.tan }}>{totalWeight.toFixed(3)} lbs total</span>
+            <span style={{ color: C.cream, fontWeight: 600 }}>${totalValue.toFixed(2)} total value</span>
+          </div>
+        </div>
+
+        {/* List */}
+        <div style={{ overflowY: 'auto', flex: 1 }}>
+          {rows.length === 0 && (
+            <div style={{ padding: '3rem', textAlign: 'center', color: C.lightBrown, fontSize: '0.85rem' }}>
+              No items yet — enter a PLU and weight to start scanning
+            </div>
+          )}
+          {[...rows].reverse().map((row) => {
+            const total = (parseFloat(row.weight_lbs) || 0) * (parseFloat(row.price_per_lb) || 0)
+            return (
+              <div key={row.key} style={{ padding: '0.85rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ color: C.cream, fontWeight: 600, fontSize: '0.9rem' }}>{row.item_name || row.plu_number}</div>
+                  <div style={{ fontSize: '0.75rem', color: C.lightBrown, marginTop: '0.15rem', display: 'flex', gap: '0.85rem' }}>
+                    <span>PLU {row.plu_number}</span>
+                    <span>{parseFloat(row.weight_lbs).toFixed(3)} lbs</span>
+                    {row.price_per_lb && <span>${parseFloat(row.price_per_lb).toFixed(2)}/lb</span>}
+                    {row.barcode && <span style={{ fontFamily: 'monospace' }}>{row.barcode}</span>}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                  {total > 0 && <span style={{ color: C.tan, fontWeight: 600 }}>${total.toFixed(2)}</span>}
+                  <button onClick={() => removeRow(row.key)} style={{ background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1 }}>×</button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Save bar */}
+        <div style={{ padding: '0.85rem 1.25rem', borderTop: '1px solid rgba(166,120,90,0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          {saved && <span style={{ color: C.green, fontSize: '0.85rem' }}>✓ Session saved</span>}
+          {!saved && <span style={{ fontSize: '0.78rem', color: C.lightBrown }}>{rows.length > 0 ? 'Ready to save' : 'Add items above'}</span>}
+          <div style={{ display: 'flex', gap: '0.6rem' }}>
+            {rows.length > 0 && (
+              <button onClick={() => setRows([])} style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.3)' }}>
+                Clear
+              </button>
+            )}
+            <button
+              style={{ ...BTN(rows.length ? C.green : C.medBrown, C.dark), opacity: rows.length ? 1 : 0.5 }}
+              onClick={handleSave}
+              disabled={saving || !rows.length}
+            >
+              {saving ? 'Saving…' : `Save ${rows.length} item${rows.length !== 1 ? 's' : ''}`}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PAGE
+// ══════════════════════════════════════════════════════════════════════════════
 export default function ProcessingPage() {
-  const [tab, setTab] = useState<Tab>('browser')
+  const [tab, setTab] = useState<Tab>('scanner')
 
   const tabs: { id: Tab; label: string }[] = [
+    { id: 'scanner', label: '📡 Scanner' },
     { id: 'browser', label: '🔪 PLU Browser' },
     { id: 'export',  label: '📤 Export' },
     { id: 'cleanup', label: '🧹 Cleanup' },
@@ -790,6 +1076,7 @@ export default function ProcessingPage() {
       </header>
 
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1400px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
+        {tab === 'scanner' && <ScannerTab />}
         {tab === 'browser' && <BrowserTab />}
         {tab === 'export'  && <ExportTab />}
         {tab === 'cleanup' && <CleanupTab />}
