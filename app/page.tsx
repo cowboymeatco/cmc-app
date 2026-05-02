@@ -34,7 +34,7 @@ const modules = [
     icon:    '🚚',
     title:   'Delivery',
     sub:     'Scan & review deliveries',
-    enabled: false,
+    enabled: true,
   },
   {
     href:    '/processing',
