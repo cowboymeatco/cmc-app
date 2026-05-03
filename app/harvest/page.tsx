@@ -51,47 +51,71 @@ const SEX_OPTIONS: Record<string, string[]> = {
   Goat:  ['Wether', 'Doe', 'Buck'],
 }
 
-// ── Carcass tag label — 2.4" Brother DK, Code 128 barcode ───────────────────
+// ── Carcass tag label — 2.4" × max 5" Brother DK continuous, Code 128 ───────
 function printCarcassLabel(h: HarvestLog) {
-  const barcodeVal = `CT-${h.id}`
-  const dateStr    = new Date(h.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  const barcodeVal  = `CT-${h.id}`
+  const dateStr     = new Date(h.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  const perHalf     = h.hot_carcass_weight_lbs != null ? (h.hot_carcass_weight_lbs / 2).toFixed(1) : null
+  const otmHtml     = h.over_30_months
+    ? `<div class="otm">&#9888; OVER 30 MONTHS</div>`
+    : ''
+  const hcwHtml     = perHalf != null
+    ? `<div class="row"><span class="lbl">HCW / half</span><span class="val">${perHalf} lbs</span></div>`
+    : ''
+  const yieldHtml   = h.yield_pct != null
+    ? `<div class="row"><span class="lbl">Yield</span><span class="val">${h.yield_pct}%</span></div>`
+    : ''
+  const inspHtml    = h.inspector_initials
+    ? `<div class="row"><span class="lbl">Inspector</span><span class="val">${h.inspector_initials}</span></div>`
+    : ''
+
   const html = `<!DOCTYPE html><html><head>
   <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
   <style>
-    @page { size: 2.4in auto; margin: 0.08in 0.1in; }
+    @page { size: 2.4in 5in; margin: 0.07in 0.12in; }
     * { box-sizing: border-box; }
-    body { font-family: Arial, sans-serif; font-size: 8pt; color: #000; margin: 0; padding: 0; width: 2.2in; }
-    .header { text-align: center; font-size: 6pt; letter-spacing: 0.14em; text-transform: uppercase; color: #555; margin-bottom: 1px; }
-    .divider { border: none; border-top: 0.5pt solid #000; margin: 3px 0; }
-    .tag { text-align: center; font-size: 22pt; font-weight: bold; margin: 3px 0; }
-    .species { text-align: center; font-size: 10pt; font-weight: bold; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 2px; }
-    .barcode-wrap { text-align: center; margin: 3px 0; }
-    .barcode-wrap svg { max-width: 100%; }
-    .row { display: flex; justify-content: space-between; font-size: 7.5pt; margin: 1px 0; }
-    .lbl { color: #666; }
+    body { font-family: Arial, sans-serif; color: #000; margin: 0; padding: 0; width: 2.16in; }
+    .co      { text-align: center; font-size: 7pt; font-weight: bold; letter-spacing: 0.16em;
+               text-transform: uppercase; margin-bottom: 1pt; }
+    .sub     { text-align: center; font-size: 5.5pt; letter-spacing: 0.22em;
+               text-transform: uppercase; color: #555; margin-bottom: 4pt; }
+    hr       { border: none; border-top: 0.6pt solid #000; margin: 3pt 0; }
+    .species { text-align: center; font-size: 10pt; font-weight: bold;
+               text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0; }
+    .tagnum  { text-align: center; font-size: 38pt; font-weight: bold;
+               line-height: 1.05; margin: 0; letter-spacing: 0.03em; }
+    .bc-wrap { text-align: center; margin: 4pt 0 2pt; }
+    .bc-wrap svg { max-width: 100%; }
+    .row     { display: flex; justify-content: space-between; align-items: baseline;
+               font-size: 7.5pt; margin: 2pt 0; }
+    .lbl     { color: #555; }
+    .val     { font-weight: 600; }
+    .otm     { margin-top: 5pt; text-align: center; font-size: 8pt; font-weight: bold;
+               color: #bb0000; border: 1.5pt solid #bb0000; padding: 2pt 0;
+               letter-spacing: 0.14em; }
   </style>
   </head><body>
-  <div class="header">Cowboy Meat Co. · Carcass Tag</div>
-  <hr class="divider"/>
+  <div class="co">Cowboy Meat Co.</div>
+  <div class="sub">&middot; Carcass Tag &middot;</div>
+  <hr/>
   <div class="species">${h.species}</div>
-  <div class="tag">Tag #${h.carcass_tag || '—'}</div>
-  <div class="barcode-wrap"><svg id="bc"></svg></div>
-  <hr class="divider"/>
-  <div class="row"><span class="lbl">Date:</span><span>${dateStr}</span></div>
-  <div class="row"><span class="lbl">Sex:</span><span>${h.sex || '—'}</span></div>
-  ${h.hot_carcass_weight_lbs != null ? `<div class="row"><span class="lbl">HCW:</span><span>${h.hot_carcass_weight_lbs} lbs</span></div>` : ''}
-  ${h.yield_pct != null ? `<div class="row"><span class="lbl">Yield:</span><span>${h.yield_pct}%</span></div>` : ''}
+  <div class="tagnum">${h.carcass_tag || '—'}</div>
+  <div class="bc-wrap"><svg id="bc"></svg></div>
+  <hr/>
+  <div class="row"><span class="lbl">Date</span><span class="val">${dateStr}</span></div>
+  <div class="row"><span class="lbl">Sex</span><span class="val">${h.sex || '—'}</span></div>
+  ${hcwHtml}${yieldHtml}${inspHtml}${otmHtml}
   <script>
     window.onload = function() {
       JsBarcode("#bc", "${barcodeVal}", {
-        format: "CODE128", width: 1.5, height: 38,
-        displayValue: true, fontSize: 8, margin: 2, textMargin: 2,
+        format: "CODE128", width: 1.4, height: 44,
+        displayValue: true, fontSize: 7, margin: 2, textMargin: 1,
       });
       window.print();
     };
   <\/script>
   </body></html>`
-  const w = window.open('', '_blank', 'width=320,height=460')
+  const w = window.open('', '_blank', 'width=290,height=530')
   if (w) { w.document.write(html); w.document.close() }
 }
 
