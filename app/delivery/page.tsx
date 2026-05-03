@@ -7,6 +7,17 @@ import { DeliveryScan } from '@/lib/types'
 type Tab = 'new' | 'log'
 type LogFilter = 'all' | 'pending' | 'reviewed'
 
+// ── EAN-13 weight-embedded decode ─────────────────────────────────────────────
+// [0]='2', [1–5]=PLU, [6]=flag, [7–11]=weight in hundredths lb ÷100, [12]=check
+function decodeBarcode(barcode: string): { plu: string; weightLbs: number } | null {
+  if (barcode.length !== 13 || barcode[0] !== '2') return null
+  if (!/^\d{13}$/.test(barcode)) return null
+  const plu    = parseInt(barcode.substring(1, 6), 10)
+  const weight = parseInt(barcode.substring(7, 12), 10) / 100
+  if (plu <= 0 || weight <= 0) return null
+  return { plu: String(plu), weightLbs: weight }
+}
+
 const C = {
   dark:       '#1A0A04',
   darkBrown:  '#351E0E',
@@ -51,7 +62,7 @@ function StatusBadge({ status }: { status: string }) {
 // ══════════════════════════════════════════════════════════════════════════════
 // NEW DELIVERY TAB
 // ══════════════════════════════════════════════════════════════════════════════
-function NewDeliveryTab({ onSaved }: { onSaved: () => void }) {
+function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Record<string, string> }) {
   const barcodeInputRef = useRef<HTMLInputElement>(null)
   const [saving, setSaving] = useState(false)
   const [success, setSuccess] = useState(false)
@@ -194,14 +205,22 @@ function NewDeliveryTab({ onSaved }: { onSaved: () => void }) {
             </p>
           )}
           {[...barcodes].reverse().map((b, ri) => {
-            const idx = barcodes.length - 1 - ri
+            const idx     = barcodes.length - 1 - ri
+            const decoded = decodeBarcode(b.barcode)
+            const cutName = decoded ? (pluMap[decoded.plu] ?? `PLU ${decoded.plu}`) : null
             return (
               <div key={b.barcode} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.6rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.08)' }}>
                 <div>
-                  <span style={{ fontFamily: 'monospace', color: C.cream, fontSize: '0.95rem' }}>{b.barcode}</span>
-                  <span style={{ color: C.lightBrown, fontSize: '0.75rem', marginLeft: '0.75rem' }}>
+                  <div style={{ fontFamily: 'monospace', color: C.cream, fontSize: '0.88rem' }}>{b.barcode}</div>
+                  {cutName && (
+                    <div style={{ fontSize: '0.82rem', color: C.tan, fontWeight: 600, marginTop: '0.1rem' }}>
+                      {cutName}
+                      {decoded && <span style={{ color: C.lightBrown, fontWeight: 400, marginLeft: '0.5rem' }}>{decoded.weightLbs.toFixed(2)} lb</span>}
+                    </div>
+                  )}
+                  <div style={{ color: C.lightBrown, fontSize: '0.72rem', marginTop: cutName ? '0.1rem' : 0 }}>
                     {new Date(b.scannedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}
-                  </span>
+                  </div>
                 </div>
                 <button
                   onClick={() => removeBarcode(idx)}
@@ -234,7 +253,7 @@ function NewDeliveryTab({ onSaved }: { onSaved: () => void }) {
 // ══════════════════════════════════════════════════════════════════════════════
 // DELIVERY LOG TAB
 // ══════════════════════════════════════════════════════════════════════════════
-function DeliveryLogTab() {
+function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
   const [deliveries, setDeliveries] = useState<DeliveryScan[]>([])
   const [selected, setSelected] = useState<DeliveryScan | null>(null)
   const [filter, setFilter] = useState<LogFilter>('all')
@@ -370,15 +389,29 @@ function DeliveryLogTab() {
                 <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.75rem' }}>
                   Scanned Items
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '0.5rem' }}>
-                  {selected.barcodes.map((b, i) => (
-                    <div key={i} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: 3, padding: '0.5rem 0.75rem' }}>
-                      <div style={{ fontFamily: 'monospace', color: C.cream, fontSize: '0.9rem' }}>{b.barcode}</div>
-                      <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.15rem' }}>
-                        {new Date(b.scannedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                  {selected.barcodes.map((b, i) => {
+                    const decoded = decodeBarcode(b.barcode)
+                    const cutName = decoded ? (pluMap[decoded.plu] ?? `PLU ${decoded.plu}`) : null
+                    return (
+                      <div key={i} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: 3, padding: '0.55rem 0.85rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          {cutName && (
+                            <div style={{ color: C.cream, fontWeight: 600, fontSize: '0.88rem' }}>
+                              {cutName}
+                              {decoded && <span style={{ color: C.tan, fontWeight: 400, marginLeft: '0.5rem', fontSize: '0.82rem' }}>{decoded.weightLbs.toFixed(2)} lb</span>}
+                            </div>
+                          )}
+                          <div style={{ fontFamily: 'monospace', color: cutName ? C.lightBrown : C.cream, fontSize: cutName ? '0.72rem' : '0.88rem', marginTop: cutName ? '0.1rem' : 0 }}>
+                            {b.barcode}
+                          </div>
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: C.lightBrown, flexShrink: 0, marginLeft: '1rem' }}>
+                          {new Date(b.scannedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               </>
             ) : (
@@ -395,8 +428,24 @@ function DeliveryLogTab() {
 // PAGE
 // ══════════════════════════════════════════════════════════════════════════════
 export default function DeliveryPage() {
-  const [tab, setTab] = useState<Tab>('new')
+  const [tab,    setTab]    = useState<Tab>('new')
   const [logKey, setLogKey] = useState(0)
+  const [pluMap, setPluMap] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    fetch('/api/processing?active=true')
+      .then(r => r.json())
+      .then((data: unknown) => {
+        if (Array.isArray(data)) {
+          const map: Record<string, string> = {}
+          for (const item of data as { plu_number?: string; item_name?: string }[]) {
+            if (item.plu_number) map[String(item.plu_number)] = item.item_name ?? ''
+          }
+          setPluMap(map)
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--dark-brown)', display: 'flex', flexDirection: 'column' }}>
@@ -430,8 +479,8 @@ export default function DeliveryPage() {
 
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1300px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
         {tab === 'new'
-          ? <NewDeliveryTab onSaved={() => setLogKey(k => k + 1)} />
-          : <DeliveryLogTab key={logKey} />
+          ? <NewDeliveryTab onSaved={() => setLogKey(k => k + 1)} pluMap={pluMap} />
+          : <DeliveryLogTab key={logKey} pluMap={pluMap} />
         }
       </main>
 
