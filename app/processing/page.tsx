@@ -1,9 +1,9 @@
-'use client'
+﻿'use client'
 
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 
-type Tab = 'scanner' | 'browser' | 'upload' | 'export' | 'cleanup'
+type Tab = 'browser' | 'upload' | 'export' | 'cleanup'
 
 interface PluItem {
   id:                 string
@@ -59,19 +59,19 @@ const BTN = (bg: string, color = C.dark): React.CSSProperties => ({
 
 const SPECIES_LIST = ['', 'Beef', 'Pork', 'Lamb', 'Goat', 'Processed', 'Wild Game', 'Cheese', 'Wholesale', 'Other']
 
-// ── EAN-13 weight-embedded barcode parser ─────────────────────────────────────
+// â”€â”€ EAN-13 weight-embedded barcode parser â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Hobart format: 2 NNNNN F WWWWW C
 //   [0]    = '2' (weight-embedded prefix)
-//   [1–5]  = PLU number (5 digits, zero-padded)
+//   [1â€“5]  = PLU number (5 digits, zero-padded)
 //   [6]    = flag digit (always '0' on Hobart lb config)
-//   [7–11] = weight in hundredths of a pound  (÷ 100)
+//   [7â€“11] = weight in hundredths of a pound  (Ã· 100)
 //   [12]   = EAN-13 check digit (ignored)
-// Example: 2 00114 0 00069 9  →  PLU=114, Weight=0.69 lbs
+// Example: 2 00114 0 00069 9  â†’  PLU=114, Weight=0.69 lbs
 function parseEAN13(barcode: string): { plu: string; weight_lbs: number } | null {
   if (barcode.length !== 13 || !barcode.startsWith('2')) return null
   if (!/^\d{13}$/.test(barcode)) return null
-  const plu        = String(parseInt(barcode.substring(1, 6), 10))   // "00114" → "114"
-  const weight_lbs = parseInt(barcode.substring(7, 12), 10) / 100    // "00069" → 0.69
+  const plu        = String(parseInt(barcode.substring(1, 6), 10))   // "00114" â†’ "114"
+  const weight_lbs = parseInt(barcode.substring(7, 12), 10) / 100    // "00069" â†’ 0.69
   if (!plu || isNaN(weight_lbs) || weight_lbs <= 0) return null
   return { plu, weight_lbs }
 }
@@ -108,9 +108,9 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
   )
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // EDIT PANEL
-// ══════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 function EditPanel({ item, onSaved, onDeleted, onClose }: {
   item: PluItem
   onSaved: (updated: PluItem) => void
@@ -141,7 +141,7 @@ function EditPanel({ item, onSaved, onDeleted, onClose }: {
   }
 
   async function del() {
-    if (!confirm(`Delete PLU ${form.plu_number} — ${form.item_name}? This cannot be undone.`)) return
+    if (!confirm(`Delete PLU ${form.plu_number} â€” ${form.item_name}? This cannot be undone.`)) return
     setDeleting(true)
     await fetch(`/api/processing?id=${form.id}`, { method: 'DELETE' })
     setDeleting(false)
@@ -158,7 +158,7 @@ function EditPanel({ item, onSaved, onDeleted, onClose }: {
           <span style={{ fontFamily: 'monospace', color: C.lightBrown, fontSize: '0.8rem' }}>PLU {form.plu_number}</span>
           <span style={{ color: C.cream, fontWeight: 600, marginLeft: '0.75rem', fontSize: '0.95rem' }}>{form.item_name || 'Unnamed'}</span>
         </div>
-        <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1 }}>×</button>
+        <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1 }}>Ã—</button>
       </div>
 
       {/* Sub-tabs */}
@@ -182,7 +182,7 @@ function EditPanel({ item, onSaved, onDeleted, onClose }: {
             </Field>
             <Field label="Species">
               <select style={{ ...INPUT }} value={form.species} onChange={f('species')}>
-                {SPECIES_LIST.map(s => <option key={s} value={s}>{s || '— auto-detect —'}</option>)}
+                {SPECIES_LIST.map(s => <option key={s} value={s}>{s || 'â€” auto-detect â€”'}</option>)}
               </select>
             </Field>
             <Field label="Item Name" span2>
@@ -253,7 +253,7 @@ function EditPanel({ item, onSaved, onDeleted, onClose }: {
             <div style={{ marginBottom: '0.75rem' }}>
               <label style={LABEL}>Clover Status</label>
               <div style={{ padding: '0.45rem 0.7rem', background: 'rgba(255,255,255,0.04)', borderRadius: 3, fontSize: '0.83rem', color: form.clover_item_id ? C.green : C.lightBrown }}>
-                {form.clover_item_id ? '✓ Synced' : 'Not synced'}
+                {form.clover_item_id ? 'âœ“ Synced' : 'Not synced'}
               </div>
             </div>
             <Field label="QuickBooks Item ID">
@@ -272,12 +272,12 @@ function EditPanel({ item, onSaved, onDeleted, onClose }: {
       {/* Action bar */}
       <div style={{ padding: '0.85rem 1.25rem', borderTop: '1px solid rgba(166,120,90,0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <button onClick={del} disabled={deleting} style={{ ...BTN('transparent', C.red), border: `1px solid ${C.red}`, opacity: 0.7 }}>
-          {deleting ? 'Deleting…' : 'Delete'}
+          {deleting ? 'Deletingâ€¦' : 'Delete'}
         </button>
         <div style={{ display: 'flex', gap: '0.6rem' }}>
           <button onClick={onClose} style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.3)' }}>Cancel</button>
           <button onClick={save} disabled={saving} style={BTN(C.tan)}>
-            {saving ? 'Saving…' : 'Save Changes'}
+            {saving ? 'Savingâ€¦' : 'Save Changes'}
           </button>
         </div>
       </div>
@@ -285,9 +285,9 @@ function EditPanel({ item, onSaved, onDeleted, onClose }: {
   )
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // PLU BROWSER TAB
-// ══════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 function BrowserTab() {
   const [items, setItems]       = useState<PluItem[]>([])
   const [search, setSearch]     = useState('')
@@ -335,11 +335,11 @@ function BrowserTab() {
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: '1.5rem', height: '100%' }}>
-      {/* Left — list */}
+      {/* Left â€” list */}
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {/* Search + filters */}
         <div style={{ padding: '0.75rem', borderBottom: '1px solid rgba(166,120,90,0.2)' }}>
-          <input style={{ ...INPUT, marginBottom: '0.5rem' }} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search PLU # or name…" />
+          <input style={{ ...INPUT, marginBottom: '0.5rem' }} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search PLU # or nameâ€¦" />
           <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
             <select style={{ ...INPUT, width: 'auto', flex: 1, fontSize: '0.78rem', padding: '0.3rem 0.5rem' }} value={speciesFilter} onChange={e => setSpeciesFilter(e.target.value)}>
               <option value="">All species</option>
@@ -355,13 +355,13 @@ function BrowserTab() {
         </div>
 
         <div style={{ padding: '0.4rem 0.75rem', borderBottom: '1px solid rgba(166,120,90,0.1)', fontSize: '0.72rem', color: C.lightBrown }}>
-          {loading ? 'Loading…' : `${items.length} items`}
+          {loading ? 'Loadingâ€¦' : `${items.length} items`}
         </div>
 
         <div style={{ overflowY: 'auto', flex: 1 }}>
           {!loading && items.length === 0 && (
             <div style={{ padding: '2rem', textAlign: 'center', color: C.lightBrown, fontSize: '0.85rem' }}>
-              {search || speciesFilter ? 'No matches' : 'No items yet — upload a file to get started'}
+              {search || speciesFilter ? 'No matches' : 'No items yet â€” upload a file to get started'}
             </div>
           )}
           {items.map(item => (
@@ -376,10 +376,10 @@ function BrowserTab() {
               }}
             >
               <div>
-                <div style={{ color: C.cream, fontSize: '0.86rem', fontWeight: 500 }}>{item.item_name || '—'}</div>
+                <div style={{ color: C.cream, fontSize: '0.86rem', fontWeight: 500 }}>{item.item_name || 'â€”'}</div>
                 <div style={{ color: C.lightBrown, fontSize: '0.72rem', fontFamily: 'monospace', marginTop: '0.1rem' }}>
                   {item.plu_number}
-                  {item.species ? ` · ${item.species}` : ''}
+                  {item.species ? ` Â· ${item.species}` : ''}
                 </div>
               </div>
               <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: '0.5rem' }}>
@@ -391,7 +391,7 @@ function BrowserTab() {
         </div>
       </div>
 
-      {/* Right — edit panel or placeholder */}
+      {/* Right â€” edit panel or placeholder */}
       {selected ? (
         <EditPanel
           key={selected.id}
@@ -402,16 +402,16 @@ function BrowserTab() {
         />
       ) : (
         <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.lightBrown, fontSize: '0.9rem' }}>
-          ← Select an item to edit
+          â† Select an item to edit
         </div>
       )}
     </div>
   )
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // EXPORT TAB
-// ══════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 function ExportTab() {
   const [species, setSpecies]     = useState('')
   const [retailOnly, setRetailOnly] = useState(false)
@@ -437,7 +437,7 @@ function ExportTab() {
     setExporting(true)
     const items = await fetchCount()
 
-    // Hobart CSV format — standard 28-column layout
+    // Hobart CSV format â€” standard 28-column layout
     const headers = [
       'PLU_NO','ITEM_NAME','PRICE1','PRICE2','PRICE3',
       'TARE','DEPT','UNIT','DESCRIPTION','UPC',
@@ -497,11 +497,11 @@ function ExportTab() {
         <Toggle label="Retail items only (Clover)" checked={retailOnly} onChange={setRetailOnly} />
 
         <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 4, padding: '0.85rem 1rem', margin: '1rem 0', fontSize: '0.85rem', color: C.tan }}>
-          {count !== null ? <><strong style={{ color: C.cream }}>{count}</strong> items will be exported</> : 'Calculating…'}
+          {count !== null ? <><strong style={{ color: C.cream }}>{count}</strong> items will be exported</> : 'Calculatingâ€¦'}
         </div>
 
         <button style={BTN(count ? C.tan : C.medBrown)} onClick={handleExport} disabled={exporting || !count}>
-          {exporting ? 'Generating…' : '⬇ Download CSV'}
+          {exporting ? 'Generatingâ€¦' : 'â¬‡ Download CSV'}
         </button>
       </div>
 
@@ -510,7 +510,7 @@ function ExportTab() {
         <ol style={{ margin: 0, paddingLeft: '1.25rem' }}>
           <li>Download the CSV file above</li>
           <li>Open Hobart Scale Manager</li>
-          <li>Go to PLU → Import → Select file</li>
+          <li>Go to PLU â†’ Import â†’ Select file</li>
           <li>Map columns if prompted, then import</li>
         </ol>
       </div>
@@ -518,9 +518,9 @@ function ExportTab() {
   )
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // CLEANUP TAB
-// ══════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 function CleanupTab() {
   const [items, setItems] = useState<PluItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -549,7 +549,7 @@ function CleanupTab() {
     { label: 'Inactive items',         color: C.lightBrown, items: inactive },
   ]
 
-  if (loading) return <div style={{ color: C.lightBrown, padding: '2rem' }}>Loading…</div>
+  if (loading) return <div style={{ color: C.lightBrown, padding: '2rem' }}>Loadingâ€¦</div>
 
   const totalIssues = noPrice.length + noName.length + noSpecies.length + retailNoId.length
 
@@ -593,11 +593,11 @@ function CleanupTab() {
                     <td style={{ padding: '0.4rem 0.85rem', color: C.cream }}>{item.item_name || <em style={{ color: C.red }}>missing</em>}</td>
                     <td style={{ padding: '0.4rem 0.85rem', color: item.species ? C.tan : C.red }}>{item.species || 'not set'}</td>
                     <td style={{ padding: '0.4rem 0.85rem', color: item.price != null ? C.tan : C.red }}>{item.price != null ? `$${item.price.toFixed(2)}` : 'not set'}</td>
-                    <td style={{ padding: '0.4rem 0.85rem', color: item.is_retail ? C.blue : C.lightBrown }}>{item.is_retail ? 'Yes' : '—'}</td>
+                    <td style={{ padding: '0.4rem 0.85rem', color: item.is_retail ? C.blue : C.lightBrown }}>{item.is_retail ? 'Yes' : 'â€”'}</td>
                   </tr>
                 ))}
                 {g.items.length > 20 && (
-                  <tr><td colSpan={5} style={{ padding: '0.5rem 0.85rem', color: C.lightBrown, fontSize: '0.75rem', fontStyle: 'italic' }}>…and {g.items.length - 20} more</td></tr>
+                  <tr><td colSpan={5} style={{ padding: '0.5rem 0.85rem', color: C.lightBrown, fontSize: '0.75rem', fontStyle: 'italic' }}>â€¦and {g.items.length - 20} more</td></tr>
                 )}
               </tbody>
             </table>
@@ -607,16 +607,16 @@ function CleanupTab() {
 
       {totalIssues === 0 && inactive.length === 0 && (
         <div style={{ background: 'rgba(76,175,80,0.1)', border: '1px solid rgba(76,175,80,0.3)', borderRadius: 4, padding: '1.5rem', textAlign: 'center', color: C.green, fontSize: '0.9rem' }}>
-          ✓ No issues found — all items look good
+          âœ“ No issues found â€” all items look good
         </div>
       )}
     </div>
   )
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // UPLOAD TAB (unchanged)
-// ══════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 interface ParsedPlu {
   plu_number:  string
   item_name:   string
@@ -721,9 +721,9 @@ function UploadTab() {
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1.5rem', marginBottom: '1.5rem' }}>
         <h3 style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 1rem' }}>Upload PLU File</h3>
         <div onClick={() => fileRef.current?.click()} style={{ border: '2px dashed rgba(166,120,90,0.4)', borderRadius: 4, padding: '2rem', textAlign: 'center', cursor: 'pointer', marginBottom: '1.25rem', background: 'rgba(255,255,255,0.02)' }}>
-          <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📂</div>
+          <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>ðŸ“‚</div>
           <div style={{ color: C.tan, fontSize: '0.9rem', marginBottom: '0.25rem' }}>
-            {fileName ? <><strong>{fileName}</strong> — {allItems.length} PLU items found</> : 'Click to select PLU.dat or a CSV file'}
+            {fileName ? <><strong>{fileName}</strong> â€” {allItems.length} PLU items found</> : 'Click to select PLU.dat or a CSV file'}
           </div>
           <div style={{ color: C.lightBrown, fontSize: '0.78rem' }}>Accepts Hobart .dat backup files and .csv exports</div>
           <input ref={fileRef} type="file" accept=".dat,.csv,.txt" onChange={handleFile} style={{ display: 'none' }} />
@@ -731,13 +731,13 @@ function UploadTab() {
         {fileType && (
           <div style={{ marginBottom: '1rem' }}>
             <span style={{ background: fileType === 'dat' ? C.tan : C.medBrown, color: C.dark, fontSize: '0.72rem', fontWeight: 700, borderRadius: 99, padding: '3px 12px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
-              {fileType === 'dat' ? 'Hobart DAT — auto-parsed' : 'CSV — auto-mapped'}
+              {fileType === 'dat' ? 'Hobart DAT â€” auto-parsed' : 'CSV â€” auto-mapped'}
             </span>
           </div>
         )}
         {preview.length > 0 && (
           <>
-            <div style={{ fontSize: '0.75rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.5rem' }}>Preview — first 8 items</div>
+            <div style={{ fontSize: '0.75rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.5rem' }}>Preview â€” first 8 items</div>
             <div style={{ overflowX: 'auto', marginBottom: '1.25rem' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
                 <thead>
@@ -750,9 +750,9 @@ function UploadTab() {
                     <tr key={i} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)' }}>
                       <td style={{ padding: '0.4rem 0.75rem', color: C.lightBrown, fontFamily: 'monospace' }}>{row.plu_number}</td>
                       <td style={{ padding: '0.4rem 0.75rem', color: C.cream }}>{row.item_name}</td>
-                      <td style={{ padding: '0.4rem 0.75rem', color: C.tan }}>{row.species || '—'}</td>
-                      <td style={{ padding: '0.4rem 0.75rem', color: C.tan }}>{row.price != null ? `$${row.price.toFixed(2)}` : '—'}</td>
-                      <td style={{ padding: '0.4rem 0.75rem', color: C.lightBrown }}>{row.tare_weight ?? '—'}</td>
+                      <td style={{ padding: '0.4rem 0.75rem', color: C.tan }}>{row.species || 'â€”'}</td>
+                      <td style={{ padding: '0.4rem 0.75rem', color: C.tan }}>{row.price != null ? `$${row.price.toFixed(2)}` : 'â€”'}</td>
+                      <td style={{ padding: '0.4rem 0.75rem', color: C.lightBrown }}>{row.tare_weight ?? 'â€”'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -760,11 +760,11 @@ function UploadTab() {
             </div>
             {result && (
               <div style={{ background: result.ok ? 'rgba(76,175,80,0.15)' : 'rgba(229,62,62,0.15)', border: `1px solid ${result.ok ? 'rgba(76,175,80,0.4)' : 'rgba(229,62,62,0.4)'}`, borderRadius: 4, padding: '0.75rem 1rem', marginBottom: '1rem', color: result.ok ? C.green : C.red, fontSize: '0.85rem' }}>
-                {result.ok ? `✓ ${result.count} PLU items saved / updated` : `Error: ${result.error}`}
+                {result.ok ? `âœ“ ${result.count} PLU items saved / updated` : `Error: ${result.error}`}
               </div>
             )}
             <button style={BTN(C.tan)} onClick={handleUpload} disabled={uploading}>
-              {uploading ? 'Uploading…' : `Push ${allItems.length} items to Supabase`}
+              {uploading ? 'Uploadingâ€¦' : `Push ${allItems.length} items to Supabase`}
             </button>
           </>
         )}
@@ -773,10 +773,10 @@ function UploadTab() {
   )
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// ══════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // LABEL GENERATOR
-// ══════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 interface BoxScan   { id: string; item_name: string; plu_number: string; weight_lbs: number; quantity: number }
 interface BoxRecord { id: string; customer_name: string; pack_date: string; box_number: number; is_closed: boolean; is_final: boolean; total_weight_lbs: number; total_cuts: number }
 interface LabelFlags { usda_bug: boolean; retail_exempt: boolean; not_for_sale: boolean }
@@ -795,7 +795,7 @@ function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlags = DEF
   const items = Object.entries(grouped).sort((a, b) => b[1].weight - a[1].weight)
   const totalWeight = items.reduce((s, [, v]) => s + v.weight, 0)
   const totalCuts   = items.reduce((s, [, v]) => s + v.count, 0)
-  const boxLabel    = `Box ${box.box_number}${box.is_final ? ' ★' : ''}`
+  const boxLabel    = `Box ${box.box_number}${box.is_final ? ' â˜…' : ''}`
   const dateStr     = new Date(box.pack_date + 'T12:00:00').toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })
 
   const itemRows = items.map(([name, v]) =>
@@ -808,13 +808,13 @@ function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlags = DEF
       <div style="font-size:5.5pt;letter-spacing:0.04em">INSPECTED &amp; PASSED</div>
     </div>` : ''
   const exemptHTML     = flags.retail_exempt ? `<div class="badge">RETAIL EXEMPT</div>` : ''
-  const notForSaleHTML = flags.not_for_sale   ? `<div class="nfs">★ NOT FOR SALE ★</div>` : ''
+  const notForSaleHTML = flags.not_for_sale   ? `<div class="nfs">â˜… NOT FOR SALE â˜…</div>` : ''
 
   return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
-<title>Box Label — ${box.customer_name} ${boxLabel}</title>
+<title>Box Label â€” ${box.customer_name} ${boxLabel}</title>
 <style>
   @page { size: 4in auto; margin: 0.15in; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -855,9 +855,9 @@ function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlags = DEF
 </html>`
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // BOX LABELS TAB
-// ══════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 function BoxLabelsTab() {
   const pluRef    = useRef<HTMLInputElement>(null)
   const weightRef = useRef<HTMLInputElement>(null)
@@ -890,7 +890,7 @@ function BoxLabelsTab() {
     else       { setItemName(''); setPluStatus('notfound') }
   }
 
-  // Scan a barcode — auto-adds to active box if EAN-13 weight format
+  // Scan a barcode â€” auto-adds to active box if EAN-13 weight format
   async function scanBarcode(barcode: string) {
     if (!activeBox) return
     const parsed = parseEAN13(barcode)
@@ -907,7 +907,7 @@ function BoxLabelsTab() {
     const match = items.find(i => i.plu_number === parsed.plu)
     const name  = match?.item_name ?? ''
     if (!name) {
-      // Unknown PLU — fill in fields for manual completion
+      // Unknown PLU â€” fill in fields for manual completion
       setPluInput(parsed.plu)
       setWeight(parsed.weight_lbs.toFixed(3))
       setPluStatus('notfound')
@@ -1001,7 +1001,7 @@ function BoxLabelsTab() {
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: '1.5rem', height: '100%' }}>
-      {/* Left — session + box list */}
+      {/* Left â€” session + box list */}
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ padding: '1rem', borderBottom: '1px solid rgba(166,120,90,0.2)' }}>
           <div style={{ marginBottom: '0.65rem' }}>
@@ -1028,7 +1028,7 @@ function BoxLabelsTab() {
                   borderRadius: 3, padding: '0.3rem 0.6rem', fontSize: '0.72rem',
                   cursor: 'pointer', fontWeight: labelFlags[k] ? 700 : 400,
                 }}>
-                  {labelFlags[k] ? '✓ ' : ''}{label}
+                  {labelFlags[k] ? 'âœ“ ' : ''}{label}
                 </button>
               ))}
             </div>
@@ -1041,10 +1041,10 @@ function BoxLabelsTab() {
             <button
               style={{ ...BTN('transparent', C.tan), border: `1px solid ${C.tan}`, fontSize: '0.8rem', whiteSpace: 'nowrap' }}
               onClick={() => addBox(true)}
-              title="Mark as final box (adds ★ to label)"
+              title="Mark as final box (adds â˜… to label)"
               disabled={saving}
             >
-              + Final ★
+              + Final â˜…
             </button>
           </div>
         </div>
@@ -1067,7 +1067,7 @@ function BoxLabelsTab() {
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ color: C.cream, fontWeight: 700, fontSize: '0.95rem' }}>
-                  Box {box.box_number}{box.is_final ? ' ★' : ''}
+                  Box {box.box_number}{box.is_final ? ' â˜…' : ''}
                 </span>
                 <span style={{ fontSize: '0.7rem', fontWeight: 700, borderRadius: 99, padding: '2px 8px',
                   background: box.is_closed ? 'rgba(76,175,80,0.2)' : 'rgba(201,168,130,0.2)',
@@ -1078,7 +1078,7 @@ function BoxLabelsTab() {
               </div>
               {box.is_closed && (
                 <div style={{ fontSize: '0.75rem', color: C.lightBrown, marginTop: '0.2rem' }}>
-                  {box.total_cuts} cuts · {Number(box.total_weight_lbs).toFixed(2)} lbs
+                  {box.total_cuts} cuts Â· {Number(box.total_weight_lbs).toFixed(2)} lbs
                 </div>
               )}
             </div>
@@ -1088,17 +1088,17 @@ function BoxLabelsTab() {
         {/* Session totals */}
         {boxes.length > 0 && (
           <div style={{ padding: '0.85rem 1rem', borderTop: '1px solid rgba(166,120,90,0.2)', fontSize: '0.78rem', color: C.lightBrown }}>
-            {boxes.length} box{boxes.length !== 1 ? 'es' : ''} ·&nbsp;
+            {boxes.length} box{boxes.length !== 1 ? 'es' : ''} Â·&nbsp;
             {boxes.filter(b => b.is_closed).reduce((s, b) => s + (Number(b.total_weight_lbs) || 0), 0).toFixed(2)} lbs closed
           </div>
         )}
       </div>
 
-      {/* Right — active box */}
+      {/* Right â€” active box */}
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {!activeBox ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.lightBrown, fontSize: '0.9rem' }}>
-            ← Select or create a box
+            â† Select or create a box
           </div>
         ) : (
           <>
@@ -1106,26 +1106,26 @@ function BoxLabelsTab() {
             <div style={{ padding: '0.85rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
                 <span style={{ color: C.cream, fontWeight: 700, fontSize: '1rem' }}>
-                  Box {activeBox.box_number}{activeBox.is_final ? ' ★' : ''}
+                  Box {activeBox.box_number}{activeBox.is_final ? ' â˜…' : ''}
                 </span>
                 <span style={{ color: C.lightBrown, fontSize: '0.8rem', marginLeft: '0.75rem' }}>{customer}</span>
               </div>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 <button onClick={() => printLabel(activeBox)} style={{ ...BTN('transparent', C.tan), border: `1px solid ${C.tan}`, fontSize: '0.78rem' }}>
-                  🖨 Print Label
+                  ðŸ–¨ Print Label
                 </button>
                 {!activeBox.is_closed && (
                   <button onClick={() => closeBox(activeBox)} style={{ ...BTN(C.green, C.dark), fontSize: '0.78rem' }}>
-                    ✓ Close Box
+                    âœ“ Close Box
                   </button>
                 )}
                 <button onClick={() => deleteBox(activeBox)} style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.2)', fontSize: '0.78rem' }}>
-                  ×
+                  Ã—
                 </button>
               </div>
             </div>
 
-            {/* Add item form — only for open boxes */}
+            {/* Add item form â€” only for open boxes */}
             {!activeBox.is_closed && (
               <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.15)', background: 'rgba(0,0,0,0.15)' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 80px 80px', gap: '0.5rem', alignItems: 'end' }}>
@@ -1157,12 +1157,12 @@ function BoxLabelsTab() {
                           }
                         }
                       }}
-                      placeholder="Scan barcode or type PLU → Enter"
+                      placeholder="Scan barcode or type PLU â†’ Enter"
                     />
                   </div>
                   <div>
                     <label style={LABEL}>
-                      {pluStatus === 'found' ? <span style={{ color: C.green }}>✓ {itemName}</span> : 'Item Name'}
+                      {pluStatus === 'found' ? <span style={{ color: C.green }}>âœ“ {itemName}</span> : 'Item Name'}
                     </label>
                     <input style={INPUT} value={itemName} onChange={e => setItemName(e.target.value)} placeholder="Name" />
                   </div>
@@ -1191,7 +1191,7 @@ function BoxLabelsTab() {
             <div style={{ overflowY: 'auto', flex: 1 }}>
               {activeScans.length === 0 && (
                 <div style={{ padding: '2rem', textAlign: 'center', color: C.lightBrown, fontSize: '0.85rem' }}>
-                  {activeBox.is_closed ? 'Box is closed' : 'No items yet — add items above'}
+                  {activeBox.is_closed ? 'Box is closed' : 'No items yet â€” add items above'}
                 </div>
               )}
               {activeScans.map(scan => (
@@ -1206,7 +1206,7 @@ function BoxLabelsTab() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                     <span style={{ color: C.tan, fontWeight: 600 }}>{Number(scan.weight_lbs).toFixed(3)} lb</span>
                     {!activeBox.is_closed && (
-                      <button onClick={() => removeScan(activeBox.id, scan.id)} style={{ background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '1rem' }}>×</button>
+                      <button onClick={() => removeScan(activeBox.id, scan.id)} style={{ background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '1rem' }}>Ã—</button>
                     )}
                   </div>
                 </div>
@@ -1225,329 +1225,14 @@ function BoxLabelsTab() {
   )
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // PAGE
-// ══════════════════════════════════════════════════════════════════════════════
-// ══════════════════════════════════════════════════════════════════════════════
-// SCANNER TAB
-// ══════════════════════════════════════════════════════════════════════════════
-interface ScanRow {
-  key:          string
-  plu_number:   string
-  item_name:    string
-  weight_lbs:   string
-  price_per_lb: string
-  barcode:      string
-}
-
-function ScannerTab() {
-  const pluRef     = useRef<HTMLInputElement>(null)
-  const weightRef  = useRef<HTMLInputElement>(null)
-  const barcodeRef = useRef<HTMLInputElement>(null)
-
-  const [processedBy, setProcessedBy] = useState('')
-  const [date, setDate]               = useState(new Date().toISOString().slice(0, 10))
-  const [rows, setRows]               = useState<ScanRow[]>([])
-  const [saving, setSaving]           = useState(false)
-  const [saved, setSaved]             = useState(false)
-
-  // Current entry fields
-  const [pluInput,   setPluInput]   = useState('')
-  const [itemName,   setItemName]   = useState('')
-  const [weight,     setWeight]     = useState('')
-  const [pricePerLb, setPricePerLb] = useState('')
-  const [barcode,    setBarcode]    = useState('')
-  const [pluStatus,  setPluStatus]  = useState<'idle' | 'found' | 'notfound'>('idle')
-
-  // Look up PLU from database
-  async function lookupPlu(plu: string) {
-    if (!plu.trim()) return
-    const res  = await fetch(`/api/processing?search=${encodeURIComponent(plu.trim())}`)
-    const json = await res.json()
-    const items: PluItem[] = Array.isArray(json) ? json : []
-    const match = items.find(i => i.plu_number === plu.trim())
-    if (match) {
-      setItemName(match.item_name)
-      setPricePerLb(match.price?.toFixed(2) ?? '')
-      setPluStatus('found')
-      weightRef.current?.focus()
-    } else {
-      setItemName('')
-      setPricePerLb('')
-      setPluStatus('notfound')
-    }
-  }
-
-  function addRow() {
-    if (!pluInput.trim() || !weight.trim()) return
-    const w = parseFloat(weight)
-    const p = parseFloat(pricePerLb)
-    const total = (!isNaN(w) && !isNaN(p)) ? w * p : null
-    setRows(prev => [...prev, {
-      key:          `${Date.now()}-${Math.random()}`,
-      plu_number:   pluInput.trim(),
-      item_name:    itemName,
-      weight_lbs:   weight,
-      price_per_lb: pricePerLb,
-      barcode:      barcode,
-    }])
-    // Reset for next item
-    setPluInput('')
-    setItemName('')
-    setWeight('')
-    setPricePerLb('')
-    setBarcode('')
-    setPluStatus('idle')
-    pluRef.current?.focus()
-    void total // suppress unused warning
-  }
-
-  function removeRow(key: string) {
-    setRows(prev => prev.filter(r => r.key !== key))
-  }
-
-  const totalWeight = rows.reduce((s, r) => s + (parseFloat(r.weight_lbs) || 0), 0)
-  const totalValue  = rows.reduce((s, r) => {
-    const w = parseFloat(r.weight_lbs) || 0
-    const p = parseFloat(r.price_per_lb) || 0
-    return s + w * p
-  }, 0)
-
-  async function handleSave() {
-    if (!rows.length) return
-    setSaving(true)
-    const records = rows.map(r => ({
-      processed_at:   new Date(`${date}T12:00:00`).toISOString(),
-      plu_number:     r.plu_number,
-      item_name:      r.item_name,
-      barcode:        r.barcode,
-      weight_lbs:     parseFloat(r.weight_lbs) || null,
-      price_per_lb:   parseFloat(r.price_per_lb) || null,
-      total_price:    (parseFloat(r.weight_lbs) || 0) * (parseFloat(r.price_per_lb) || 0) || null,
-      processed_by:   processedBy,
-    }))
-    await fetch('/api/processing/records', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ records }),
-    })
-    setSaving(false)
-    setSaved(true)
-    setRows([])
-    setTimeout(() => setSaved(false), 4000)
-    pluRef.current?.focus()
-  }
-
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: '420px 1fr', gap: '1.5rem', height: '100%' }}>
-      {/* Left — entry form */}
-      <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-        <div>
-          <h3 style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 0.35rem' }}>
-            Production Log
-          </h3>
-          <p style={{ margin: 0, fontSize: '0.75rem', color: C.lightBrown, lineHeight: 1.4 }}>
-            Records what was cut, how much, and at what price — used for yield tracking, billing, and production reports. For packaging boxes with labels, use the <strong style={{ color: C.tan }}>Floor Scanner</strong>.
-          </p>
-        </div>
-
-        {/* Session header */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-          <div>
-            <label style={LABEL}>Date</label>
-            <input type="date" style={INPUT} value={date} onChange={e => setDate(e.target.value)} />
-          </div>
-          <div>
-            <label style={LABEL}>Processed By</label>
-            <input style={INPUT} value={processedBy} onChange={e => setProcessedBy(e.target.value)} placeholder="Name" />
-          </div>
-        </div>
-
-        <div style={{ borderTop: '1px solid rgba(166,120,90,0.2)', paddingTop: '0.85rem' }}>
-          <label style={{ ...LABEL, marginBottom: '0.6rem' }}>Barcode / PLU Number</label>
-          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
-            <input
-              ref={pluRef}
-              style={{ ...INPUT, fontFamily: 'monospace', fontSize: '1rem', flex: 1,
-                borderColor: pluStatus === 'found' ? 'rgba(76,175,80,0.6)' : pluStatus === 'notfound' ? 'rgba(229,62,62,0.6)' : 'rgba(166,120,90,0.35)',
-              }}
-              value={pluInput}
-              onChange={e => {
-                const v = e.target.value
-                setPluInput(v)
-                setPluStatus('idle')
-                // Auto-parse EAN-13 weight barcode on 13-digit input
-                if (/^\d{13}$/.test(v)) {
-                  const parsed = parseEAN13(v)
-                  if (parsed) {
-                    setPluInput(parsed.plu)
-                    setWeight(parsed.weight_lbs.toFixed(3))
-                    lookupPlu(parsed.plu)
-                  }
-                }
-              }}
-              onKeyDown={e => {
-                if (e.key === 'Enter' || e.key === 'Tab') {
-                  e.preventDefault()
-                  const parsed = parseEAN13(pluInput)
-                  if (parsed) {
-                    setPluInput(parsed.plu)
-                    setWeight(parsed.weight_lbs.toFixed(3))
-                    lookupPlu(parsed.plu)
-                  } else {
-                    lookupPlu(pluInput)
-                  }
-                }
-              }}
-              placeholder="Scan barcode or type PLU → Enter"
-              autoFocus
-            />
-            <button style={BTN(C.medBrown, C.cream)} onClick={() => lookupPlu(pluInput)}>Look up</button>
-          </div>
-
-          {/* Item name display */}
-          <div style={{ padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.04)', borderRadius: 3, minHeight: '2rem', marginBottom: '0.75rem' }}>
-            {pluStatus === 'found'    && <span style={{ color: C.green,   fontSize: '0.85rem' }}>✓ {itemName}</span>}
-            {pluStatus === 'notfound' && <span style={{ color: C.red,     fontSize: '0.85rem' }}>PLU not found — enter name manually</span>}
-            {pluStatus === 'idle'     && <span style={{ color: C.lightBrown, fontSize: '0.82rem' }}>Item name will appear here</span>}
-          </div>
-
-          {pluStatus === 'notfound' && (
-            <div style={{ marginBottom: '0.75rem' }}>
-              <label style={LABEL}>Item Name (manual)</label>
-              <input style={INPUT} value={itemName} onChange={e => setItemName(e.target.value)} placeholder="Enter item name" />
-            </div>
-          )}
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '0.75rem' }}>
-            <div>
-              <label style={LABEL}>Weight (lbs)</label>
-              <input
-                ref={weightRef}
-                type="number" step="0.001"
-                style={{ ...INPUT, fontSize: '1rem' }}
-                value={weight}
-                onChange={e => setWeight(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); barcodeRef.current?.focus() } }}
-                placeholder="0.000"
-              />
-            </div>
-            <div>
-              <label style={LABEL}>Price / lb</label>
-              <input
-                type="number" step="0.01"
-                style={INPUT}
-                value={pricePerLb}
-                onChange={e => setPricePerLb(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); barcodeRef.current?.focus() } }}
-                placeholder="0.00"
-              />
-            </div>
-          </div>
-
-          <div style={{ marginBottom: '0.85rem' }}>
-            <label style={LABEL}>Barcode / Label # (optional)</label>
-            <input
-              ref={barcodeRef}
-              style={{ ...INPUT, fontFamily: 'monospace' }}
-              value={barcode}
-              onChange={e => setBarcode(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addRow() } }}
-              placeholder="Scan label or skip → Enter to add"
-            />
-          </div>
-
-          {/* Total for current entry */}
-          {weight && pricePerLb && (
-            <div style={{ fontSize: '0.85rem', color: C.tan, marginBottom: '0.75rem', textAlign: 'right' }}>
-              {parseFloat(weight).toFixed(3)} lbs × ${parseFloat(pricePerLb).toFixed(2)} = <strong style={{ color: C.cream }}>${(parseFloat(weight) * parseFloat(pricePerLb)).toFixed(2)}</strong>
-            </div>
-          )}
-
-          <button
-            style={{ ...BTN(pluInput && weight ? C.tan : C.medBrown), width: '100%', fontSize: '0.95rem', padding: '0.65rem', opacity: pluInput && weight ? 1 : 0.5 }}
-            onClick={addRow}
-            disabled={!pluInput || !weight}
-          >
-            + Add Item
-          </button>
-        </div>
-      </div>
-
-      {/* Right — running list */}
-      <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        {/* Summary bar */}
-        <div style={{ padding: '0.85rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.12em' }}>
-            {rows.length} item{rows.length !== 1 ? 's' : ''} this session
-          </span>
-          <div style={{ display: 'flex', gap: '1.5rem', fontSize: '0.85rem' }}>
-            <span style={{ color: C.tan }}>{totalWeight.toFixed(3)} lbs total</span>
-            <span style={{ color: C.cream, fontWeight: 600 }}>${totalValue.toFixed(2)} total value</span>
-          </div>
-        </div>
-
-        {/* List */}
-        <div style={{ overflowY: 'auto', flex: 1 }}>
-          {rows.length === 0 && (
-            <div style={{ padding: '3rem', textAlign: 'center', color: C.lightBrown, fontSize: '0.85rem' }}>
-              No items yet — enter a PLU and weight to start scanning
-            </div>
-          )}
-          {[...rows].reverse().map((row) => {
-            const total = (parseFloat(row.weight_lbs) || 0) * (parseFloat(row.price_per_lb) || 0)
-            return (
-              <div key={row.key} style={{ padding: '0.85rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <div style={{ color: C.cream, fontWeight: 600, fontSize: '0.9rem' }}>{row.item_name || row.plu_number}</div>
-                  <div style={{ fontSize: '0.75rem', color: C.lightBrown, marginTop: '0.15rem', display: 'flex', gap: '0.85rem' }}>
-                    <span>PLU {row.plu_number}</span>
-                    <span>{parseFloat(row.weight_lbs).toFixed(3)} lbs</span>
-                    {row.price_per_lb && <span>${parseFloat(row.price_per_lb).toFixed(2)}/lb</span>}
-                    {row.barcode && <span style={{ fontFamily: 'monospace' }}>{row.barcode}</span>}
-                  </div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                  {total > 0 && <span style={{ color: C.tan, fontWeight: 600 }}>${total.toFixed(2)}</span>}
-                  <button onClick={() => removeRow(row.key)} style={{ background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1 }}>×</button>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-
-        {/* Save bar */}
-        <div style={{ padding: '0.85rem 1.25rem', borderTop: '1px solid rgba(166,120,90,0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          {saved && <span style={{ color: C.green, fontSize: '0.85rem' }}>✓ Session saved</span>}
-          {!saved && <span style={{ fontSize: '0.78rem', color: C.lightBrown }}>{rows.length > 0 ? 'Ready to save' : 'Add items above'}</span>}
-          <div style={{ display: 'flex', gap: '0.6rem' }}>
-            {rows.length > 0 && (
-              <button onClick={() => setRows([])} style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.3)' }}>
-                Clear
-              </button>
-            )}
-            <button
-              style={{ ...BTN(rows.length ? C.green : C.medBrown, C.dark), opacity: rows.length ? 1 : 0.5 }}
-              onClick={handleSave}
-              disabled={saving || !rows.length}
-            >
-              {saving ? 'Saving…' : `Save ${rows.length} item${rows.length !== 1 ? 's' : ''}`}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// PAGE
-// ══════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 export default function ProcessingPage() {
-  const [tab, setTab] = useState<Tab>('scanner')
+  const [tab, setTab] = useState<Tab>('browser')
 
   const tabs: { id: Tab; label: string }[] = [
-    { id: 'scanner', label: '📊 Production Log' },
     { id: 'browser', label: '🔪 PLU Browser' },
     { id: 'export',  label: '📤 Export' },
     { id: 'cleanup', label: '🧹 Cleanup' },
@@ -1558,11 +1243,11 @@ export default function ProcessingPage() {
     <div style={{ minHeight: '100vh', background: 'var(--dark-brown)', display: 'flex', flexDirection: 'column' }}>
       <header style={{ background: 'var(--dark)', borderBottom: '1px solid rgba(166,120,90,0.3)', padding: '0 2rem', height: '64px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <Link href="/" style={{ color: C.lightBrown, textDecoration: 'none', fontSize: '0.82rem' }}>← Dashboard</Link>
+          <Link href="/" style={{ color: C.lightBrown, textDecoration: 'none', fontSize: '0.82rem' }}>â† Dashboard</Link>
           <span style={{ color: 'rgba(166,120,90,0.4)' }}>|</span>
           <h1 style={{ fontFamily: 'Georgia, serif', fontSize: '1.1rem', fontWeight: 700, color: C.cream, letterSpacing: '0.08em', textTransform: 'uppercase', margin: 0 }}>Processing</h1>
           <span style={{ color: 'rgba(166,120,90,0.4)' }}>|</span>
-          <Link href="/scanner" style={{ background: C.green, color: C.dark, textDecoration: 'none', fontSize: '0.78rem', fontWeight: 700, padding: '0.3rem 0.75rem', borderRadius: 3, letterSpacing: '0.04em' }}>🔍 Floor Scanner ↗</Link>
+          <Link href="/scanner" style={{ background: C.green, color: C.dark, textDecoration: 'none', fontSize: '0.78rem', fontWeight: 700, padding: '0.3rem 0.75rem', borderRadius: 3, letterSpacing: '0.04em' }}>ðŸ” Floor Scanner â†—</Link>
         </div>
         <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden' }}>
           {tabs.map(t => (
@@ -1577,7 +1262,6 @@ export default function ProcessingPage() {
       </header>
 
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1400px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
-        {tab === 'scanner' && <ScannerTab />}
         {tab === 'browser' && <BrowserTab />}
         {tab === 'export'  && <ExportTab />}
         {tab === 'cleanup' && <CleanupTab />}
@@ -1585,7 +1269,7 @@ export default function ProcessingPage() {
       </main>
 
       <footer style={{ background: 'var(--dark)', borderTop: '1px solid rgba(166,120,90,0.2)', padding: '0.5rem 2rem', textAlign: 'center', fontSize: '0.72rem', color: C.lightBrown, flexShrink: 0 }}>
-        Cowboy Meat Company · 1109 Front St, Forsyth MT · (406) 346-7660
+        Cowboy Meat Company Â· 1109 Front St, Forsyth MT Â· (406) 346-7660
       </footer>
     </div>
   )
