@@ -122,6 +122,8 @@ export interface HarvestLog {
   performed_by:           string
   notes:                  string
   status:                 string   // 'chilling' | 'complete'
+  is_verification:        boolean
+  direct_observation:     boolean
 }
 
 export interface ChillLog {

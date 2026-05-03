@@ -107,46 +107,101 @@ function tempColor(t: number | null) {
 // CARCASS ROW (inside harvest form)
 // ══════════════════════════════════════════════════════════════════════════════
 interface CarcassRow {
-  carcass_tag:            string
-  sex:                    string
-  live_weight_lbs:        string
-  hot_carcass_weight_lbs: string
-  intervention_applied:   boolean
-  intervention_type:      string
-  intervention_temp_f:    string
-  final_carcass_temp_f:   string
-  ccp_pass:               boolean
-  notes:                  string
+  carcass_tag:          string
+  sex:                  string
+  live_weight_lbs:      string
+  half_1_weight:        string   // each half weighed separately
+  half_2_weight:        string
+  intervention_applied: boolean
+  intervention_temp_f:  string   // per-carcass override; falls back to header default
+  final_carcass_temp_f: string
+  ccp_pass:             boolean
+  is_verification:      boolean
+  direct_observation:   boolean
+  notes:                string
 }
 
 function emptyCarcass(): CarcassRow {
   return {
-    carcass_tag: '', sex: '', live_weight_lbs: '', hot_carcass_weight_lbs: '',
-    intervention_applied: true, intervention_type: 'Lactic Acid',
-    intervention_temp_f: '', final_carcass_temp_f: '', ccp_pass: true, notes: '',
+    carcass_tag: '', sex: '', live_weight_lbs: '',
+    half_1_weight: '', half_2_weight: '',
+    intervention_applied: true, intervention_temp_f: '',
+    final_carcass_temp_f: '', ccp_pass: true,
+    is_verification: false, direct_observation: false, notes: '',
   }
 }
 
 function CarcassForm({
-  idx, row, species, onChange,
+  idx, row, species, onChange, defaultSolutionTemp, verificationCount,
 }: {
-  idx: number
-  row: CarcassRow
-  species: string
-  onChange: (idx: number, field: keyof CarcassRow, val: string | boolean) => void
+  idx:                 number
+  row:                 CarcassRow
+  species:             string
+  onChange:            (idx: number, field: keyof CarcassRow, val: string | boolean) => void
+  defaultSolutionTemp: string
+  verificationCount:   number
 }) {
   const sexOpts = SEX_OPTIONS[species] ?? ['Unknown']
-  const lw = parseFloat(row.live_weight_lbs)
-  const hcw = parseFloat(row.hot_carcass_weight_lbs)
+  const h1  = parseFloat(row.half_1_weight)
+  const h2  = parseFloat(row.half_2_weight)
+  const hcw = (!isNaN(h1) && !isNaN(h2)) ? h1 + h2 : (!isNaN(h1) ? h1 : (!isNaN(h2) ? h2 : NaN))
+  const lw  = parseFloat(row.live_weight_lbs)
   const yld = (!isNaN(lw) && !isNaN(hcw) && lw > 0) ? ((hcw / lw) * 100).toFixed(1) : '—'
+  const perTag = (!isNaN(hcw)) ? (hcw / 2).toFixed(1) : '—'
 
   const f = (field: keyof CarcassRow) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     onChange(idx, field, e.target.type === 'checkbox' ? (e.target as HTMLInputElement).checked : e.target.value)
 
+  const canAddVerification = !row.is_verification && verificationCount >= 2
+
   return (
-    <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.2)', borderRadius: 4, padding: '1rem 1.25rem', marginBottom: '1rem' }}>
-      <div style={{ fontSize: '0.72rem', color: C.tan, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.85rem', fontWeight: 700 }}>
-        Head {idx + 1}
+    <div style={{
+      background: row.is_verification ? 'rgba(59,130,246,0.06)' : 'rgba(255,255,255,0.04)',
+      border: `1px solid ${row.is_verification ? 'rgba(59,130,246,0.4)' : 'rgba(166,120,90,0.2)'}`,
+      borderRadius: 4, padding: '1rem 1.25rem', marginBottom: '1rem',
+    }}>
+
+      {/* Card header row */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem' }}>
+        <span style={{ fontSize: '0.72rem', color: C.tan, textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700 }}>
+          Head {idx + 1}
+        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          {row.is_verification && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.78rem',
+              color: row.direct_observation ? C.blue : C.lightBrown }}>
+              <input
+                type="checkbox"
+                checked={row.direct_observation}
+                onChange={e => onChange(idx, 'direct_observation', e.target.checked)}
+                style={{ accentColor: C.blue, width: 14, height: 14 }}
+              />
+              Direct Observation
+            </label>
+          )}
+          <button
+            onClick={() => {
+              if (row.is_verification) {
+                onChange(idx, 'is_verification', false)
+                onChange(idx, 'direct_observation', false)
+              } else if (!canAddVerification) {
+                onChange(idx, 'is_verification', true)
+              }
+            }}
+            disabled={canAddVerification}
+            title={canAddVerification ? '2 verification animals already selected' : row.is_verification ? 'Remove verification flag' : 'Mark as HACCP verification animal'}
+            style={{
+              background: row.is_verification ? 'rgba(59,130,246,0.2)' : canAddVerification ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.05)',
+              border: `1px solid ${row.is_verification ? 'rgba(59,130,246,0.5)' : 'rgba(166,120,90,0.25)'}`,
+              borderRadius: 3, padding: '0.22rem 0.65rem',
+              color: row.is_verification ? C.blue : canAddVerification ? 'rgba(166,120,90,0.3)' : C.lightBrown,
+              fontSize: '0.73rem', cursor: canAddVerification ? 'not-allowed' : 'pointer',
+              fontWeight: row.is_verification ? 700 : 400,
+            }}
+          >
+            {row.is_verification ? '✓ Verification' : '◎ Verification'}
+          </button>
+        </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1rem' }}>
@@ -155,7 +210,6 @@ function CarcassForm({
           <label style={LABEL}>Carcass Tag #</label>
           <input style={INPUT} value={row.carcass_tag} onChange={f('carcass_tag')} placeholder="e.g. 001" />
         </div>
-
         {/* Sex */}
         <div style={{ marginBottom: '0.85rem' }}>
           <label style={LABEL}>Sex</label>
@@ -164,33 +218,42 @@ function CarcassForm({
             {sexOpts.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
         </div>
-
         {/* Live weight */}
         <div style={{ marginBottom: '0.85rem' }}>
           <label style={LABEL}>Live Weight (lbs)</label>
           <input type="number" step="0.1" style={INPUT} value={row.live_weight_lbs} onChange={f('live_weight_lbs')} placeholder="e.g. 1240" />
         </div>
+        {/* Spacer */}
+        <div />
+      </div>
 
-        {/* HCW */}
-        <div style={{ marginBottom: '0.85rem' }}>
-          <label style={LABEL}>Hot Carcass Weight (lbs)</label>
-          <input type="number" step="0.1" style={INPUT} value={row.hot_carcass_weight_lbs} onChange={f('hot_carcass_weight_lbs')} placeholder="e.g. 750" />
+      {/* Half weights */}
+      <div style={{ marginBottom: '0.5rem' }}>
+        <label style={LABEL}>Hot Carcass Weight — enter by half</label>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1rem' }}>
+          <input type="number" step="0.1" style={INPUT} value={row.half_1_weight} onChange={f('half_1_weight')} placeholder="Half 1 (lbs)" />
+          <input type="number" step="0.1" style={INPUT} value={row.half_2_weight} onChange={f('half_2_weight')} placeholder="Half 2 (lbs)" />
         </div>
       </div>
-
-      {/* Yield calc */}
-      <div style={{ fontSize: '0.8rem', color: C.tan, marginBottom: '1rem', marginTop: '-0.25rem' }}>
-        Calculated Yield: <strong style={{ color: C.cream }}>{yld}{yld !== '—' ? '%' : ''}</strong>
+      {/* HCW summary */}
+      <div style={{ fontSize: '0.8rem', marginBottom: '1rem', display: 'flex', gap: '1.5rem' }}>
+        <span style={{ color: C.tan }}>
+          Total HCW: <strong style={{ color: C.cream }}>{isNaN(hcw) ? '—' : `${hcw.toFixed(1)} lbs`}</strong>
+        </span>
+        <span style={{ color: C.tan }}>
+          Per-tag weight: <strong style={{ color: C.cream }}>{perTag === '—' ? '—' : `${perTag} lbs / half`}</strong>
+        </span>
+        <span style={{ color: C.tan }}>
+          Yield: <strong style={{ color: C.cream }}>{yld}{yld !== '—' ? '%' : ''}</strong>
+        </span>
       </div>
 
-      {/* CCP divider */}
+      {/* CCP */}
       <div style={{ borderTop: '1px solid rgba(166,120,90,0.2)', paddingTop: '0.85rem', marginBottom: '0.85rem' }}>
         <div style={{ fontSize: '0.7rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: '0.75rem' }}>
           CCP — Antimicrobial Intervention
         </div>
-
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1rem' }}>
-          {/* Applied */}
           <div style={{ marginBottom: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <input
               type="checkbox"
@@ -201,33 +264,21 @@ function CarcassForm({
             />
             <label htmlFor={`int-applied-${idx}`} style={{ ...LABEL, margin: 0 }}>Intervention Applied</label>
           </div>
-
-          {/* Type */}
-          <div style={{ marginBottom: '0.85rem' }}>
-            <label style={LABEL}>Type</label>
-            <select style={{ ...INPUT }} value={row.intervention_type} onChange={f('intervention_type')} disabled={!row.intervention_applied}>
-              <option>Lactic Acid</option>
-              <option>Citric Acid</option>
-              <option>PAA</option>
-              <option>Water</option>
-              <option>Other</option>
-            </select>
-          </div>
-
-          {/* Intervention temp */}
           <div style={{ marginBottom: '0.85rem' }}>
             <label style={LABEL}>Solution Temp (°F)</label>
-            <input type="number" step="0.1" style={INPUT} value={row.intervention_temp_f} onChange={f('intervention_temp_f')} placeholder="e.g. 55" disabled={!row.intervention_applied} />
+            <input
+              type="number" step="0.1" style={INPUT}
+              value={row.intervention_temp_f}
+              onChange={f('intervention_temp_f')}
+              placeholder={defaultSolutionTemp ? `default ${defaultSolutionTemp}°F` : 'e.g. 165'}
+              disabled={!row.intervention_applied}
+            />
           </div>
-
-          {/* Final carcass temp */}
           <div style={{ marginBottom: '0.85rem' }}>
             <label style={LABEL}>Final Carcass Temp (°F)</label>
             <input type="number" step="0.1" style={INPUT} value={row.final_carcass_temp_f} onChange={f('final_carcass_temp_f')} placeholder="e.g. 90" />
           </div>
         </div>
-
-        {/* CCP Pass/Fail */}
         <div style={{ display: 'flex', gap: '0.75rem' }}>
           {[true, false].map(v => (
             <label key={String(v)} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.85rem', color: row.ccp_pass === v ? (v ? C.green : C.red) : C.lightBrown }}>
@@ -258,9 +309,11 @@ function HarvestTab() {
   const [success, setSuccess] = useState(false)
 
   const [header, setHeader] = useState({
-    harvest_date:      new Date().toISOString().slice(0, 10),
-    inspector_initials: '',
-    performed_by:       '',
+    harvest_date:          new Date().toISOString().slice(0, 10),
+    inspector_initials:    '',
+    performed_by:          '',
+    intervention_type:     'Hot Water',
+    default_solution_temp: '',
   })
   const [carcasses, setCarcasses] = useState<CarcassRow[]>([emptyCarcass()])
 
@@ -289,7 +342,7 @@ function HarvestTab() {
     setCarcasses(prev => prev.map((r, i) => i === idx ? { ...r, [field]: val } : r))
   }
 
-  const hf = (k: keyof typeof header) => (e: React.ChangeEvent<HTMLInputElement>) =>
+  const hf = (k: keyof typeof header) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setHeader(p => ({ ...p, [k]: e.target.value }))
 
   async function handleSubmit() {
@@ -305,13 +358,30 @@ function HarvestTab() {
         species:            selected.species,
         inspector_initials: header.inspector_initials,
         performed_by:       header.performed_by,
-        carcasses:          carcasses.map(c => ({
-          ...c,
-          live_weight_lbs:        c.live_weight_lbs ? parseFloat(c.live_weight_lbs) : null,
-          hot_carcass_weight_lbs: c.hot_carcass_weight_lbs ? parseFloat(c.hot_carcass_weight_lbs) : null,
-          intervention_temp_f:    c.intervention_temp_f ? parseFloat(c.intervention_temp_f) : null,
-          final_carcass_temp_f:   c.final_carcass_temp_f ? parseFloat(c.final_carcass_temp_f) : null,
-        })),
+        intervention_type:  header.intervention_type,
+        carcasses: carcasses.map(c => {
+          const h1  = parseFloat(c.half_1_weight)
+          const h2  = parseFloat(c.half_2_weight)
+          const hcw = (!isNaN(h1) && !isNaN(h2)) ? h1 + h2
+                    : (!isNaN(h1) ? h1 : (!isNaN(h2) ? h2 : null))
+          // per-carcass solution temp; fall back to header default
+          const solTemp = c.intervention_temp_f
+            ? parseFloat(c.intervention_temp_f)
+            : header.default_solution_temp ? parseFloat(header.default_solution_temp) : null
+          return {
+            carcass_tag:            c.carcass_tag,
+            sex:                    c.sex,
+            live_weight_lbs:        c.live_weight_lbs ? parseFloat(c.live_weight_lbs) : null,
+            hot_carcass_weight_lbs: hcw,
+            intervention_applied:   c.intervention_applied,
+            intervention_temp_f:    solTemp,
+            final_carcass_temp_f:   c.final_carcass_temp_f ? parseFloat(c.final_carcass_temp_f) : null,
+            ccp_pass:               c.ccp_pass,
+            is_verification:        c.is_verification,
+            direct_observation:     c.direct_observation,
+            notes:                  c.notes,
+          }
+        }),
       }),
     })
     setSaving(false)
@@ -419,8 +489,8 @@ function HarvestTab() {
               )}
             </div>
 
-            {/* Header fields */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0 1rem', marginBottom: '1rem' }}>
+            {/* Header fields — row 1 */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0 1rem', marginBottom: '0.85rem' }}>
               <div>
                 <label style={LABEL}>Harvest Date</label>
                 <input type="date" style={INPUT} value={header.harvest_date} onChange={hf('harvest_date')} />
@@ -434,21 +504,75 @@ function HarvestTab() {
                 <input style={INPUT} value={header.performed_by} onChange={hf('performed_by')} placeholder="Name" />
               </div>
             </div>
+            {/* Header fields — row 2 (CCP defaults) */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 2fr', gap: '0 1rem', marginBottom: '1rem', padding: '0.75rem 1rem', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(166,120,90,0.18)', borderRadius: 3 }}>
+              <div>
+                <label style={LABEL}>Intervention Type (day)</label>
+                <select style={{ ...INPUT }} value={header.intervention_type} onChange={hf('intervention_type')}>
+                  <option value="Hot Water">Hot Water</option>
+                  <option value="Steam">Steam</option>
+                  <option value="Organic Acid">Organic Acid</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+              <div>
+                <label style={LABEL}>Default Solution Temp (°F)</label>
+                <input type="number" step="0.1" style={INPUT} value={header.default_solution_temp} onChange={hf('default_solution_temp')} placeholder="e.g. 165" />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'flex-end', paddingBottom: '0.1rem' }}>
+                <span style={{ fontSize: '0.75rem', color: C.lightBrown, fontStyle: 'italic' }}>
+                  These apply to all carcasses. You can override the solution temp per carcass below.
+                </span>
+              </div>
+            </div>
+
+            {/* HACCP Verification Summary */}
+            {(() => {
+              const verCount  = carcasses.filter(c => c.is_verification).length
+              const hasDir    = carcasses.some(c => c.is_verification && c.direct_observation)
+              const ready     = verCount === 2 && hasDir
+              if (verCount === 0) return null
+              return (
+                <div style={{
+                  marginBottom: '1rem', padding: '0.7rem 1rem', borderRadius: 3,
+                  background: ready ? 'rgba(76,175,80,0.1)' : 'rgba(217,119,6,0.12)',
+                  border: `1px solid ${ready ? 'rgba(76,175,80,0.35)' : 'rgba(217,119,6,0.4)'}`,
+                  display: 'flex', alignItems: 'center', gap: '0.75rem',
+                }}>
+                  <span style={{ fontSize: '1rem' }}>{ready ? '✓' : '⚠'}</span>
+                  <div>
+                    <div style={{ fontSize: '0.82rem', fontWeight: 600, color: ready ? C.green : C.yellow }}>
+                      HACCP Hot Water Verification
+                    </div>
+                    <div style={{ fontSize: '0.76rem', color: C.tan, marginTop: '0.15rem' }}>
+                      {verCount} of 2 verification {verCount === 1 ? 'animal' : 'animals'} selected
+                      {' · '}
+                      {hasDir ? '1 Direct Observation ✓' : 'Direct Observation needed on 1 verification animal'}
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
 
             {/* Per-carcass forms */}
             <div style={{ borderTop: '1px solid rgba(166,120,90,0.2)', paddingTop: '1.25rem', marginBottom: '1rem' }}>
               <div style={{ fontSize: '0.75rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '1rem' }}>
                 Carcass Records — {selected.head_count} head
               </div>
-              {carcasses.map((row, i) => (
-                <CarcassForm
-                  key={i}
-                  idx={i}
-                  row={row}
-                  species={selected.species}
-                  onChange={updateCarcass}
-                />
-              ))}
+              {(() => {
+                const verificationCount = carcasses.filter(c => c.is_verification).length
+                return carcasses.map((row, i) => (
+                  <CarcassForm
+                    key={i}
+                    idx={i}
+                    row={row}
+                    species={selected.species}
+                    onChange={updateCarcass}
+                    defaultSolutionTemp={header.default_solution_temp}
+                    verificationCount={verificationCount}
+                  />
+                ))
+              })()}
             </div>
 
             <div style={{ display: 'flex', gap: '0.75rem' }}>

@@ -61,13 +61,15 @@ export async function POST(req: NextRequest) {
                               : null,
     inspector_initials:     fields.inspector_initials ?? '',
     intervention_applied:   c.intervention_applied ?? true,
-    intervention_type:      c.intervention_type ?? 'Lactic Acid',
+    intervention_type:      c.intervention_type ?? fields.intervention_type ?? 'Hot Water',
     intervention_temp_f:    c.intervention_temp_f ?? null,
     final_carcass_temp_f:   c.final_carcass_temp_f ?? null,
     ccp_pass:               c.ccp_pass ?? true,
     performed_by:           fields.performed_by ?? '',
     notes:                  c.notes ?? '',
     status:                 'chilling',
+    is_verification:        c.is_verification ?? false,
+    direct_observation:     c.direct_observation ?? false,
   }))
 
   const { data, error } = await supabase
