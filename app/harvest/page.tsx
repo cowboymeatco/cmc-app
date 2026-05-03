@@ -326,31 +326,15 @@ function CarcassForm({
         <div style={{ fontSize: '0.7rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: '0.75rem' }}>
           CCP — Antimicrobial Intervention
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1rem' }}>
-          <div style={{ marginBottom: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-            <input
-              type="checkbox"
-              id={`int-applied-${idx}`}
-              checked={row.intervention_applied}
-              onChange={f('intervention_applied')}
-              style={{ accentColor: C.tan, width: 16, height: 16 }}
-            />
-            <label htmlFor={`int-applied-${idx}`} style={{ ...LABEL, margin: 0 }}>Intervention Applied</label>
-          </div>
-          <div style={{ marginBottom: '0.85rem' }}>
-            <label style={LABEL}>Solution Temp (°F)</label>
-            <input
-              type="number" step="0.1" style={INPUT}
-              value={row.intervention_temp_f}
-              onChange={f('intervention_temp_f')}
-              placeholder={defaultSolutionTemp ? `default ${defaultSolutionTemp}°F` : 'e.g. 165'}
-              disabled={!row.intervention_applied}
-            />
-          </div>
-          <div style={{ marginBottom: '0.85rem' }}>
-            <label style={LABEL}>Final Carcass Temp (°F)</label>
-            <input type="number" step="0.1" style={INPUT} value={row.final_carcass_temp_f} onChange={f('final_carcass_temp_f')} placeholder="e.g. 90" />
-          </div>
+        <div style={{ marginBottom: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+          <input
+            type="checkbox"
+            id={`int-applied-${idx}`}
+            checked={row.intervention_applied}
+            onChange={f('intervention_applied')}
+            style={{ accentColor: C.tan, width: 16, height: 16 }}
+          />
+          <label htmlFor={`int-applied-${idx}`} style={{ ...LABEL, margin: 0 }}>Intervention Applied</label>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem' }}>
           {[true, false].map(v => (

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Brim -->
+  <ellipse cx="16" cy="23" rx="14" ry="4" fill="#75471B"/>
+  <!-- Brim highlight -->
+  <ellipse cx="16" cy="22.2" rx="13" ry="3" fill="#A6785A"/>
+  <!-- Crown -->
+  <path d="M10 22 Q9 13 12 9 Q16 6 20 9 Q23 13 22 22 Z" fill="#C9A882"/>
+  <!-- Crown shading left -->
+  <path d="M10 22 Q9 13 12 9 Q13 11 13 22 Z" fill="#A6785A" opacity="0.6"/>
+  <!-- Crown shading right -->
+  <path d="M22 22 Q23 13 20 9 Q19 11 19 22 Z" fill="#75471B" opacity="0.5"/>
+  <!-- Top crease -->
+  <path d="M13 9.5 Q16 13 19 9.5" fill="none" stroke="#75471B" stroke-width="1.2" stroke-linecap="round"/>
+  <!-- Hat band -->
+  <rect x="10" y="19.5" width="12" height="2.5" fill="#351E0E" rx="0.5"/>
+  <!-- Band buckle hint -->
+  <rect x="14.5" y="19.8" width="3" height="1.8" fill="#C9A882" rx="0.3"/>
+</svg>

@@ -14,6 +14,18 @@ export async function GET() {
   return NextResponse.json(data)
 }
 
+// POST /api/cutting-instructions — create new instruction internally
+export async function POST(req: NextRequest) {
+  const body = await req.json()
+  const { data, error } = await supabase
+    .from('cutting_instructions')
+    .insert([{ status: 'pending', data: body }])
+    .select()
+    .single()
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json(data)
+}
+
 // PATCH /api/cutting-instructions — update status
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
