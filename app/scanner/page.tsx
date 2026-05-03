@@ -467,174 +467,103 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
 
   async function generateCutoutReport() {
     setReportLoading(true)
-    // Fetch all scans for every box in this session
-    const allScans: ScanLine[] = []
-    for (const box of boxes) {
+    // Fetch all scans for every box, in box-number order
+    const sortedBoxes = [...boxes].sort((a, b) => a.box_number - b.box_number)
+    const allScans: (ScanLine & { boxNum: number })[] = []
+    for (const box of sortedBoxes) {
       const res  = await fetch(`/api/boxes/scans?box_id=${box.id}`)
       const data = await res.json().catch(() => [])
-      if (Array.isArray(data)) allScans.push(...(data as ScanLine[]))
+      if (Array.isArray(data)) {
+        for (const s of data as ScanLine[]) {
+          allScans.push({ ...s, boxNum: box.box_number })
+        }
+      }
     }
 
-    // Group by item name
-    const grouped: Record<string, { plu: string; count: number; weight: number }> = {}
-    for (const scan of allScans) {
-      const key = scan.item_name || `PLU ${scan.plu_number}`
-      if (!grouped[key]) grouped[key] = { plu: scan.plu_number, count: 0, weight: 0 }
-      grouped[key].count  += scan.quantity ?? 1
-      grouped[key].weight += Number(scan.weight_lbs) || 0
-    }
+    const grandLbs  = allScans.reduce((s, sc) => s + (Number(sc.weight_lbs) || 0), 0)
+    const grandPkgs = allScans.length
+    const boxCount  = sortedBoxes.length
 
-    const allItems  = Object.entries(grouped).sort((a, b) => b[1].weight - a[1].weight)
-    const grandLbs  = allItems.reduce((s, [, v]) => s + v.weight, 0)
-    const grandPkgs = allItems.reduce((s, [, v]) => s + v.count, 0)
-
-    // Group items by detected species
-    const speciesOrder = ['Beef', 'Pork', 'Lamb', 'Goat', 'Wild Game', 'Processed', 'Cheese', 'Wholesale', 'Other']
-    const spGroups: Record<string, typeof allItems> = {}
-    for (const item of allItems) {
-      const sp = detectSpecies(item[1].plu) || 'Other'
-      if (!spGroups[sp]) spGroups[sp] = []
-      spGroups[sp].push(item)
-    }
-
-    // Build species table rows
-    const speciesHTML = speciesOrder
-      .filter(sp => spGroups[sp]?.length)
-      .map(sp => {
-        const spItems = spGroups[sp]
-        const spLbs   = spItems.reduce((s, [, v]) => s + v.weight, 0)
-        const spPkgs  = spItems.reduce((s, [, v]) => s + v.count, 0)
-        const pct     = grandLbs > 0 ? (spLbs / grandLbs * 100).toFixed(1) : '0.0'
-        const rows = spItems.map(([name, v]) => `
-          <tr class="item">
-            <td class="name">${name}</td>
-            <td class="num">${v.count}</td>
-            <td class="num">${v.weight.toFixed(2)}</td>
-            <td class="num">${grandLbs > 0 ? (v.weight / grandLbs * 100).toFixed(1) : '0.0'}%</td>
-          </tr>`).join('')
-        return `
-          <tr class="sp-hdr"><td colspan="4">${sp.toUpperCase()}</td></tr>
-          ${rows}
-          <tr class="sp-sub">
-            <td>Subtotal</td>
-            <td class="num">${spPkgs}</td>
-            <td class="num">${spLbs.toFixed(2)}</td>
-            <td class="num">${pct}%</td>
-          </tr>`
-      }).join('')
-
-    // Box summary rows
-    const boxRows = boxes.map(b => `
-      <tr>
-        <td>Box ${b.box_number}${b.is_final ? ' ★' : ''}</td>
-        <td class="num">${b.is_closed ? '✓ Closed' : 'Open'}</td>
-        <td class="num">${b.total_cuts != null ? b.total_cuts : '—'}</td>
-        <td class="num">${b.total_weight_lbs ? Number(b.total_weight_lbs).toFixed(2) : '—'}</td>
+    // Line item rows — every individual scan
+    const lineRows = allScans.map((sc, i) => `
+      <tr class="${i % 2 === 0 ? 'even' : 'odd'}">
+        <td class="num">${i + 1}</td>
+        <td>${sc.item_name || `PLU ${sc.plu_number}`}</td>
+        <td class="num mono">${sc.plu_number}</td>
+        <td class="num mono">${Number(sc.weight_lbs).toFixed(2)}</td>
+        <td class="num">${sc.boxNum}</td>
       </tr>`).join('')
 
-    // Inputs section
-    const inputLbs = inputs.reduce((s, i) => s + (Number(i.weight_lbs) || 0), 0)
-    const yieldCalc = inputLbs > 0 ? (grandLbs / inputLbs * 100).toFixed(1) : null
-    const inputsHTML = inputLbs > 0 ? `
-      <div class="yield-bar">
-        <div>
-          <span class="meta-label">Input Weight</span>
-          <strong>${inputLbs.toFixed(2)} lbs</strong>
-          <span style="margin-left:12px;color:#555;font-size:9pt">${inputs.map(i => i.description || i.box_identifier || 'item').join(', ')}</span>
-        </div>
-        <div style="text-align:right">
-          <span class="meta-label">Packaged</span>
-          <strong>${grandLbs.toFixed(2)} lbs</strong>
-          <span style="margin-left:12px"><strong>Yield: ${yieldCalc}%</strong></span>
-        </div>
-      </div>` : ''
-
-    const dateStr = new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+    const dateStr = new Date(date + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
 
     const html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8">
-<title>Cut-Out Report — ${customer} — ${date}</title>
+<title>CMC Packout — ${customer} — ${date}</title>
 <style>
   @page { size: letter portrait; margin: 0.75in }
   * { box-sizing: border-box; margin: 0; padding: 0 }
   body { font-family: Arial, sans-serif; color: #000; font-size: 10pt }
-  .hdr { text-align: center; border-bottom: 2pt solid #000; padding-bottom: 10px; margin-bottom: 12px }
-  .company { font-size: 15pt; font-weight: bold; letter-spacing: 0.08em; text-transform: uppercase }
-  .title { font-size: 11pt; letter-spacing: 0.14em; text-transform: uppercase; margin-top: 3px; color: #333 }
-  .meta { display: flex; justify-content: space-between; margin: 10px 0 4px; font-size: 9.5pt }
-  .meta-block { }
-  .meta-label { font-size: 7.5pt; text-transform: uppercase; letter-spacing: 0.1em; color: #666; display: block; margin-bottom: 1px }
-  .meta-val { font-weight: bold; font-size: 12pt }
-  .yield-bar { background: #f4f4f4; border: 1px solid #ccc; border-radius: 3px; padding: 7px 12px; margin: 10px 0; display: flex; justify-content: space-between; align-items: center; font-size: 10pt }
-  .sec-title { font-size: 8pt; font-weight: bold; text-transform: uppercase; letter-spacing: 0.12em; color: #555; margin: 14px 0 5px; border-bottom: 1px solid #ccc; padding-bottom: 3px }
+  .hdr { text-align: center; margin-bottom: 14px }
+  .company { font-size: 16pt; font-weight: bold; letter-spacing: 0.06em; text-transform: uppercase }
+  .sub { font-size: 10pt; color: #555; margin-top: 1px }
+  .title { font-size: 13pt; font-weight: bold; letter-spacing: 0.14em; text-transform: uppercase; margin-top: 8px; border-top: 2pt solid #000; border-bottom: 2pt solid #000; padding: 5px 0 }
+  .cust { display: flex; justify-content: space-between; margin: 10px 0 12px; font-size: 10.5pt }
   table { width: 100%; border-collapse: collapse; font-size: 9.5pt }
-  th { font-size: 8pt; text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 1.5pt solid #000; padding: 4px 6px; text-align: left }
+  th { font-size: 8pt; text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 1.5pt solid #000; padding: 5px 6px; text-align: left }
   th.num, td.num { text-align: right }
-  tr.sp-hdr td { background: #ebebeb; font-weight: bold; font-size: 8.5pt; padding: 4px 6px; letter-spacing: 0.06em }
-  tr.item td { padding: 3px 6px; border-bottom: 1px solid #eee }
-  tr.item td.name { padding-left: 18px }
-  tr.sp-sub td { padding: 3px 6px; font-style: italic; border-top: 1px solid #bbb; border-bottom: 1.5pt solid #000; color: #444 }
-  .grand { display: flex; justify-content: space-between; font-size: 13pt; font-weight: bold; border-top: 2pt solid #000; padding-top: 7px; margin: 4px 0 16px }
-  .box-tbl td { padding: 3px 6px; border-bottom: 1px solid #eee; font-size: 9pt }
-  .footer { margin-top: 24px; font-size: 7.5pt; color: #888; text-align: center; border-top: 1px solid #ddd; padding-top: 8px }
+  td { padding: 3.5px 6px }
+  tr.even { background: #fff }
+  tr.odd  { background: #f7f7f7 }
+  .mono { font-family: 'Courier New', monospace }
+  .total-row td { border-top: 1.5pt solid #000; font-weight: bold; padding: 5px 6px; font-size: 10.5pt }
+  .box-line { margin-top: 8px; font-size: 9.5pt; color: #444 }
+  .ack { margin-top: 28px; border-top: 1px solid #ccc; padding-top: 12px }
+  .ack-title { font-weight: bold; font-size: 10pt; margin-bottom: 10px }
+  .sig-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px 30px; margin-top: 6px }
+  .sig-line { border-bottom: 1px solid #000; padding-top: 22px; font-size: 9pt; color: #555 }
 </style></head><body>
 
 <div class="hdr">
   <div class="company">Cowboy Meat Company</div>
-  <div class="title">Cut-Out Report</div>
+  <div class="sub">Forsyth, Montana &nbsp;·&nbsp; cowboymeats.com</div>
+  <div class="title">Packout Slip</div>
 </div>
 
-<div class="meta">
-  <div class="meta-block">
-    <span class="meta-label">Customer</span>
-    <span class="meta-val">${customer}</span>
-  </div>
-  <div class="meta-block" style="text-align:center">
-    <span class="meta-label">Pack Date</span>
-    <span class="meta-val">${dateStr}</span>
-  </div>
-  <div class="meta-block" style="text-align:right">
-    <span class="meta-label">Total Packaged</span>
-    <span class="meta-val">${grandLbs.toFixed(2)} lbs</span>
-  </div>
+<div class="cust">
+  <span><strong>Customer:</strong> &nbsp;${customer}</span>
+  <span><strong>Date:</strong> &nbsp;${dateStr}</span>
 </div>
 
-${inputsHTML}
-
-<div class="sec-title">Cut-Out Breakdown</div>
 <table>
   <thead>
     <tr>
-      <th>Item</th>
-      <th class="num">Pkgs</th>
+      <th class="num">#</th>
+      <th>Item Name</th>
+      <th class="num">PLU</th>
       <th class="num">Weight (lbs)</th>
-      <th class="num">% of Total</th>
+      <th class="num">Box #</th>
     </tr>
   </thead>
-  <tbody>${speciesHTML}</tbody>
-</table>
-
-<div class="grand">
-  <span>${grandPkgs} packages total</span>
-  <span>${grandLbs.toFixed(2)} lbs</span>
-</div>
-
-<div class="sec-title">Box Summary</div>
-<table class="box-tbl">
-  <thead>
-    <tr>
-      <th>Box</th>
-      <th class="num">Status</th>
-      <th class="num">Cuts</th>
-      <th class="num">Weight (lbs)</th>
+  <tbody>
+    ${lineRows}
+    <tr class="total-row">
+      <td colspan="3">TOTAL &nbsp;—&nbsp; ${grandPkgs} item${grandPkgs !== 1 ? 's' : ''}</td>
+      <td class="num mono">${grandLbs.toFixed(2)}</td>
+      <td></td>
     </tr>
-  </thead>
-  <tbody>${boxRows}</tbody>
+  </tbody>
 </table>
 
-<div class="footer">
-  Cowboy Meat Company · 1109 Front St, Forsyth MT · (406) 346-7660<br>
-  Generated ${new Date().toLocaleString('en-US')}
+<div class="box-line">${boxCount} box${boxCount !== 1 ? 'es' : ''} total</div>
+
+<div class="ack">
+  <div class="ack-title">Customer Acknowledgement &nbsp;—&nbsp; I confirm receipt of all products listed above.</div>
+  <div class="sig-grid">
+    <div class="sig-line">Signature</div>
+    <div class="sig-line">Date</div>
+    <div class="sig-line">Print Name</div>
+    <div class="sig-line">Phone</div>
+  </div>
 </div>
 
 <script>window.onload = () => window.print()</script>
@@ -790,7 +719,7 @@ ${inputsHTML}
                 fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
               }}
             >
-              {reportLoading ? '⟳ Building…' : '📋 Cut-Out Report'}
+              {reportLoading ? '⟳ Building…' : '📋 Packout Slip'}
             </button>
           )}
           <Link href="/processing" style={{ color: C.lightBrown, fontSize: '0.78rem', textDecoration: 'none' }}>Processing ›</Link>
