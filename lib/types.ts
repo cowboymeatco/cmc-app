@@ -67,19 +67,37 @@ export interface AnimalReceivingLog {
 }
 
 export interface BoxReceivingLog {
-  id:          string
-  created_at:  string
-  received_at: string
-  vendor:      string
-  product:     string
-  quantity:    number
-  weight_lbs:  number | null
-  invoice_no:  string
-  lot_no:      string
-  temp_f:      number | null
-  received_by: string
-  notes:       string
-  status:      string
+  id:             string
+  created_at:     string
+  received_at:    string
+  vendor:         string
+  product:        string
+  quantity:       number
+  weight_lbs:     number | null
+  invoice_no:     string
+  lot_no:         string
+  temp_f:         number | null
+  received_by:    string
+  notes:          string
+  status:         string
+  box_identifier: string | null
+}
+
+export interface ProcessingInput {
+  id:                    string
+  created_at:            string
+  session_date:          string
+  customer_name:         string | null
+  pack_date:             string | null
+  description:           string
+  weight_lbs:            number | null
+  input_type:            string   // 'raw' | 'premade' | 'carcass'
+  source_type:           string   // 'general' | 'retail_order' | 'appointment' | 'received_box'
+  linked_order_id:       string | null
+  linked_appointment_id: string | null
+  linked_box_id:         string | null
+  box_identifier:        string | null
+  notes:                 string | null
 }
 
 // ── Harvest ───────────────────────────────────────────────────────────────────

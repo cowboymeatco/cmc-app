@@ -73,21 +73,31 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(data)
   }
 
-  // Box product
+  // Box product — auto-generate CMC-YYYYMMDD-NNN identifier
+  const today    = new Date().toISOString().slice(0, 10).replace(/-/g, '')  // e.g. "20260503"
+  const prefix   = `CMC-${today}-`
+  const { count } = await supabase
+    .from('box_receiving_log')
+    .select('*', { count: 'exact', head: true })
+    .like('box_identifier', `${prefix}%`)
+  const seq          = String((count ?? 0) + 1).padStart(3, '0')
+  const box_identifier = `${prefix}${seq}`
+
   const { data, error } = await supabase
     .from('box_receiving_log')
     .insert([{
-      received_at: fields.received_at ?? new Date().toISOString().slice(0, 10),
-      vendor:      fields.vendor      ?? '',
-      product:     fields.product     ?? '',
-      quantity:    fields.quantity    ?? 1,
-      weight_lbs:  fields.weight_lbs  ?? null,
-      invoice_no:  fields.invoice_no  ?? '',
-      lot_no:      fields.lot_no      ?? '',
-      temp_f:      fields.temp_f      ?? null,
-      received_by: fields.received_by ?? '',
-      notes:       fields.notes       ?? '',
-      status:      'received',
+      received_at:    fields.received_at ?? new Date().toISOString().slice(0, 10),
+      vendor:         fields.vendor      ?? '',
+      product:        fields.product     ?? '',
+      quantity:       fields.quantity    ?? 1,
+      weight_lbs:     fields.weight_lbs  ?? null,
+      invoice_no:     fields.invoice_no  ?? '',
+      lot_no:         fields.lot_no      ?? '',
+      temp_f:         fields.temp_f      ?? null,
+      received_by:    fields.received_by ?? '',
+      notes:          fields.notes       ?? '',
+      status:         'received',
+      box_identifier,
     }])
     .select()
     .single()

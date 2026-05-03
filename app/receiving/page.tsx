@@ -66,39 +66,55 @@ function blankSlot(species: string): AnimalSlot {
   return { ear_tag: '', sex: sexOpts[0], breed: '', over_30_months: false, photo_url: '', uploading: false, no_show: false }
 }
 
-// ── Box receiving label printer ───────────────────────────────────────────────
+// ── Box receiving label printer — 2.4" Brother DK label ──────────────────────
 function printReceivingLabel(log: BoxReceivingLog) {
-  const date = new Date(log.received_at + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-  const html = `<!DOCTYPE html><html><head><style>
-    @page{size:4in auto;margin:0.15in}
-    body{font-family:Arial,sans-serif;font-size:9pt;color:#000;margin:0;padding:0}
-    .co{text-align:center;font-size:7pt;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:2px}
-    .title{text-align:center;font-size:11pt;font-weight:bold;margin-bottom:6px;text-transform:uppercase}
-    .product{font-size:16pt;font-weight:bold;text-align:center;margin:4px 0}
-    .vendor{text-align:center;font-size:9pt;color:#444;margin-bottom:6px}
-    hr{border:none;border-top:1px solid #000;margin:5px 0}
-    .row{display:flex;justify-content:space-between;font-size:8pt;margin:1px 0}
-    .label{color:#666}
-    .footer{text-align:center;font-size:7pt;margin-top:6px;color:#555}
-  </style></head><body>
-  <div class="co">Cowboy Meat Company</div>
-  <hr/>
-  <div class="title">Received</div>
+  const date    = new Date(log.received_at + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  const boxId   = log.box_identifier ?? 'NO-ID'
+  const html = `<!DOCTYPE html><html><head>
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
+  <style>
+    @page { size: 2.4in auto; margin: 0.08in 0.1in; }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; font-size: 8pt; color: #000; margin: 0; padding: 0; width: 2.2in; }
+    .header { text-align: center; font-size: 6pt; letter-spacing: 0.14em; text-transform: uppercase; color: #555; margin-bottom: 1px; }
+    .divider { border: none; border-top: 0.5pt solid #000; margin: 3px 0; }
+    .id { text-align: center; font-size: 8pt; font-weight: bold; letter-spacing: 0.06em; font-family: monospace; margin: 2px 0; }
+    .barcode-wrap { text-align: center; margin: 3px 0; }
+    .barcode-wrap svg { max-width: 100%; }
+    .product { font-size: 11pt; font-weight: bold; text-align: center; margin: 3px 0; line-height: 1.2; }
+    .vendor { text-align: center; font-size: 7.5pt; color: #444; margin-bottom: 3px; }
+    .row { display: flex; justify-content: space-between; font-size: 7.5pt; margin: 1px 0; }
+    .lbl { color: #666; }
+    .footer { text-align: center; font-size: 6pt; color: #777; margin-top: 3px; }
+  </style>
+  </head><body>
+  <div class="header">Cowboy Meat Co. · Forsyth MT</div>
+  <hr class="divider"/>
+  <div class="id">${boxId}</div>
+  <div class="barcode-wrap"><svg id="bc"></svg></div>
+  <hr class="divider"/>
   <div class="product">${log.product}</div>
-  <div class="vendor">${log.vendor}</div>
-  <hr/>
-  <div class="row"><span class="label">Date:</span><span>${date}</span></div>
-  <div class="row"><span class="label">Qty:</span><span>${log.quantity}</span></div>
-  ${log.weight_lbs != null ? `<div class="row"><span class="label">Weight:</span><span>${log.weight_lbs} lbs</span></div>` : ''}
-  ${log.lot_no ? `<div class="row"><span class="label">Lot #:</span><span>${log.lot_no}</span></div>` : ''}
-  ${log.invoice_no ? `<div class="row"><span class="label">Invoice:</span><span>${log.invoice_no}</span></div>` : ''}
-  ${log.temp_f != null ? `<div class="row"><span class="label">Temp:</span><span>${log.temp_f}°F</span></div>` : ''}
-  ${log.received_by ? `<div class="row"><span class="label">Rcvd by:</span><span>${log.received_by}</span></div>` : ''}
-  <hr/>
-  <div class="footer">1109 Front St · Forsyth MT</div>
-  <script>window.onload=()=>window.print()</script>
+  ${log.vendor ? `<div class="vendor">${log.vendor}</div>` : ''}
+  <hr class="divider"/>
+  <div class="row"><span class="lbl">Date:</span><span>${date}</span></div>
+  <div class="row"><span class="lbl">Qty:</span><span>${log.quantity}</span></div>
+  ${log.weight_lbs != null ? `<div class="row"><span class="lbl">Weight:</span><span>${log.weight_lbs} lbs</span></div>` : ''}
+  ${log.lot_no    ? `<div class="row"><span class="lbl">Lot #:</span><span>${log.lot_no}</span></div>`    : ''}
+  ${log.invoice_no? `<div class="row"><span class="lbl">Invoice:</span><span>${log.invoice_no}</span></div>` : ''}
+  ${log.temp_f != null ? `<div class="row"><span class="lbl">Temp:</span><span>${log.temp_f}°F</span></div>` : ''}
+  ${log.received_by ? `<div class="row"><span class="lbl">Rcvd by:</span><span>${log.received_by}</span></div>` : ''}
+  <div class="footer">Scan to log as processing input</div>
+  <script>
+    window.onload = function() {
+      JsBarcode("#bc", "${boxId}", {
+        format: "CODE128", width: 1.6, height: 42,
+        displayValue: true, fontSize: 9, margin: 2, textMargin: 2,
+      });
+      window.print();
+    };
+  <\/script>
   </body></html>`
-  const w = window.open('', '_blank', 'width=420,height=600')
+  const w = window.open('', '_blank', 'width=320,height=500')
   if (w) { w.document.write(html); w.document.close() }
 }
 
@@ -560,7 +576,7 @@ function BoxTab() {
   async function handleSubmit() {
     if (!form.vendor || !form.product) return
     setSaving(true)
-    await fetch('/api/receiving', {
+    const res = await fetch('/api/receiving', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -577,8 +593,11 @@ function BoxTab() {
         notes:       form.notes,
       }),
     })
+    const saved: BoxReceivingLog = await res.json()
     setSaving(false); setSuccess(true); setForm(empty); load()
     setTimeout(() => setSuccess(false), 4000)
+    // Auto-print the CMC box label immediately
+    if (saved?.id) printReceivingLabel(saved)
   }
 
   return (

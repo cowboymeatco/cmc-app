@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState, useRef, useCallback } from 'react'
 import Link from 'next/link'
+import type { ProcessingInput } from '@/lib/types'
 
 const C = {
   dark:       '#1A0A04',
@@ -88,6 +89,14 @@ export default function ScannerPage() {
   const [processing,  setProcessing]  = useState(false)
   const [labelFlags,  setLabelFlags]  = useState<LabelFlags>(DEFAULT_FLAGS)
 
+  // ── Inputs ───────────────────────────────────────────────────────────────────
+  const [inputs,       setInputs]       = useState<ProcessingInput[]>([])
+  const [showInputs,   setShowInputs]   = useState(false)
+  const [newInputDesc, setNewInputDesc] = useState('')
+  const [newInputWt,   setNewInputWt]   = useState('')
+  const [newInputType, setNewInputType] = useState<'raw' | 'premade' | 'carcass'>('raw')
+  const [addingInput,  setAddingInput]  = useState(false)
+
   const scanRef       = useRef<HTMLInputElement>(null)
   // Stable refs so event listeners don't go stale
   const activeBoxRef  = useRef<BoxRecord | null>(null)
@@ -95,12 +104,14 @@ export default function ScannerPage() {
   const processingRef = useRef(false)
   const scansRef      = useRef<ScanLine[]>([])
   const startedRef    = useRef(false)
+  const inputsRef     = useRef<ProcessingInput[]>([])
 
   activeBoxRef.current  = activeBox
   pluMapRef.current     = pluMap
   processingRef.current = processing
   scansRef.current      = scans
   startedRef.current    = started
+  inputsRef.current     = inputs
 
   // ── Load PLU database once ───────────────────────────────────────────────────
   useEffect(() => {
@@ -128,7 +139,7 @@ export default function ScannerPage() {
       const target = e.target as HTMLElement
       if (target === scanRef.current) return
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
-      if (/^\d$/.test(e.key)) {
+      if (/^[\dA-Za-z-]$/.test(e.key)) {
         e.preventDefault()
         scanRef.current?.focus()
         setScanValue(prev => prev + e.key)
@@ -203,6 +214,11 @@ export default function ScannerPage() {
     setBoxes([box])
     setActiveBox(box)
     setScans([])
+    // Load any inputs already logged for this customer/date
+    fetch(`/api/processing/inputs?customer_name=${encodeURIComponent(customer.trim())}&session_date=${date}`)
+      .then(r => r.json())
+      .then((data: unknown) => { if (Array.isArray(data)) setInputs(data as ProcessingInput[]) })
+      .catch(() => {})
   }
 
   // ── Add new box ───────────────────────────────────────────────────────────────
@@ -321,11 +337,77 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
     setScans(prev => prev.filter(s => s.id !== id))
   }
 
+  // ── Add input from CMC box scan ───────────────────────────────────────────────
+  async function addInput(boxId: string) {
+    setScanValue('')
+    setFlash('ok')
+    setLastItem(`📦 Box: ${boxId}`)
+    setTimeout(() => setFlash(null), 2000)
+    try {
+      const res = await fetch('/api/processing/inputs', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          session_date:  date,
+          customer_name: customer,
+          pack_date:     date,
+          box_identifier: boxId,
+          input_type:    'raw',
+          source_type:   'received_box',
+        }),
+      })
+      const inp: ProcessingInput = await res.json()
+      setInputs(prev => [...prev, inp])
+      setShowInputs(true)
+    } catch {
+      setFlash('bad')
+      setLastItem('Input save failed')
+    } finally {
+      scanRef.current?.focus()
+    }
+  }
+
+  // ── Add manual input ──────────────────────────────────────────────────────────
+  async function addManualInput() {
+    if (!newInputDesc.trim() && !newInputWt) return
+    setAddingInput(true)
+    try {
+      const res = await fetch('/api/processing/inputs', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          session_date:  date,
+          customer_name: customer,
+          pack_date:     date,
+          description:   newInputDesc.trim() || 'Manual input',
+          weight_lbs:    newInputWt ? parseFloat(newInputWt) : null,
+          input_type:    newInputType,
+          source_type:   'general',
+        }),
+      })
+      const inp: ProcessingInput = await res.json()
+      setInputs(prev => [...prev, inp])
+      setNewInputDesc('')
+      setNewInputWt('')
+    } catch {}
+    finally { setAddingInput(false) }
+  }
+
+  // ── Remove an input ───────────────────────────────────────────────────────────
+  async function removeInput(id: string) {
+    await fetch(`/api/processing/inputs?id=${id}`, { method: 'DELETE' })
+    setInputs(prev => prev.filter(i => i.id !== id))
+  }
+
   // ── Derived ───────────────────────────────────────────────────────────────────
-  const totalWeight  = scans.reduce((s, sc) => s + (Number(sc.weight_lbs) || 0), 0)
-  const isOpen       = activeBox && !activeBox.is_closed
-  const closedWeight = boxes.filter(b => b.is_closed).reduce((s, b) => s + (Number(b.total_weight_lbs) || 0), 0)
-  const borderColor  = flash === 'ok' ? C.green : flash === 'bad' ? C.red : isOpen ? 'rgba(201,168,130,0.5)' : 'rgba(166,120,90,0.2)'
+  const totalWeight    = scans.reduce((s, sc) => s + (Number(sc.weight_lbs) || 0), 0)
+  const isOpen         = activeBox && !activeBox.is_closed
+  const closedWeight   = boxes.filter(b => b.is_closed).reduce((s, b) => s + (Number(b.total_weight_lbs) || 0), 0)
+  const borderColor    = flash === 'ok' ? C.green : flash === 'bad' ? C.red : isOpen ? 'rgba(201,168,130,0.5)' : 'rgba(166,120,90,0.2)'
+  const totalInputLbs  = inputs.reduce((s, i) => s + (Number(i.weight_lbs) || 0), 0)
+  const totalOutputLbs = closedWeight + totalWeight
+  const yieldPct       = totalInputLbs > 0 ? (totalOutputLbs / totalInputLbs) * 100 : 0
+  const yieldColor     = yieldPct >= 80 ? C.green : yieldPct >= 65 ? C.yellow : C.red
 
   // ══════════════════════════════════════════════════════════════════════════════
   // SETUP SCREEN
@@ -411,6 +493,11 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
           <span style={{ color: C.lightBrown, fontSize: '0.82rem' }}>{date}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          {totalInputLbs > 0 && totalOutputLbs > 0 && (
+            <span style={{ fontSize: '0.78rem', fontWeight: 700, color: yieldColor, fontFamily: 'monospace' }}>
+              {yieldPct.toFixed(1)}% yield
+            </span>
+          )}
           <span style={{ fontSize: '0.72rem', color: C.lightBrown }}>{Object.keys(pluMap).length} PLUs</span>
           <Link href="/processing" style={{ color: C.lightBrown, fontSize: '0.78rem', textDecoration: 'none' }}>Processing ›</Link>
         </div>
@@ -466,13 +553,20 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
             ref={scanRef}
             value={scanValue}
             onChange={e => {
-              const v = e.target.value.replace(/\D/g, '')
+              const raw = e.target.value
+              // CMC box identifier complete (CMC-YYYYMMDD-NNN = 16 chars)
+              if (/^CMC-\d{8}-\d{3}$/.test(raw)) { addInput(raw); return }
+              // Partial CMC prefix — let it build up, don't strip
+              if (/^CMC/i.test(raw)) { setScanValue(raw); return }
+              // Hobart EAN-13: digits only
+              const v = raw.replace(/\D/g, '')
               setScanValue(v)
               if (v.length === 13) doScan(v)
             }}
             onKeyDown={e => {
               if (e.key === 'Enter' && scanValue.length > 0 && scanValue.length < 13) {
-                doScan(scanValue)
+                if (/^CMC-\d{8}-\d{3}$/.test(scanValue)) addInput(scanValue)
+                else doScan(scanValue)
               }
             }}
             disabled={!isOpen || processing}
@@ -572,6 +666,106 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
             </div>
           </div>
         )}
+
+        {/* ── Inputs panel ── */}
+        <div style={{ flexShrink: 0 }}>
+          <div
+            onClick={() => setShowInputs(p => !p)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '0.6rem',
+              padding: '0.4rem 0.75rem', borderRadius: showInputs ? '4px 4px 0 0' : 4,
+              cursor: 'pointer', userSelect: 'none',
+              background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(166,120,90,0.18)',
+            }}
+          >
+            <span style={{ fontSize: '0.75rem', color: C.lightBrown, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', flexShrink: 0 }}>
+              📦 Inputs
+            </span>
+            <span style={{ fontSize: '0.78rem', color: C.cream }}>
+              {inputs.length} item{inputs.length !== 1 ? 's' : ''}
+              {totalInputLbs > 0 && <> · {totalInputLbs.toFixed(2)} lbs in</>}
+            </span>
+            {totalInputLbs > 0 && totalOutputLbs > 0 && (
+              <>
+                <span style={{ fontSize: '0.68rem', color: 'rgba(166,120,90,0.35)' }}>→</span>
+                <span style={{ fontSize: '0.78rem', color: C.cream }}>{totalOutputLbs.toFixed(2)} lbs out</span>
+                <span style={{
+                  fontSize: '0.74rem', fontWeight: 700, borderRadius: 3, padding: '0.1rem 0.45rem', flexShrink: 0,
+                  background: yieldPct >= 80 ? 'rgba(76,175,80,0.18)' : yieldPct >= 65 ? 'rgba(217,119,6,0.18)' : 'rgba(229,62,62,0.18)',
+                  color: yieldColor,
+                }}>
+                  {yieldPct.toFixed(1)}% yield
+                </span>
+              </>
+            )}
+            <span style={{ marginLeft: 'auto', fontSize: '0.68rem', color: C.lightBrown }}>{showInputs ? '▲' : '▼'}</span>
+          </div>
+
+          {showInputs && (
+            <div style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(166,120,90,0.18)', borderTop: 'none', borderRadius: '0 0 4px 4px', padding: '0.5rem 0.6rem' }}>
+              {/* Quick-add row */}
+              <div style={{ display: 'flex', gap: '0.35rem', marginBottom: '0.45rem' }}>
+                <input
+                  placeholder="Description"
+                  value={newInputDesc}
+                  onChange={e => setNewInputDesc(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') addManualInput() }}
+                  style={{ flex: 2, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, padding: '0.32rem 0.5rem', color: C.cream, fontSize: '0.82rem', outline: 'none' }}
+                />
+                <input
+                  type="number"
+                  placeholder="Lbs"
+                  value={newInputWt}
+                  onChange={e => setNewInputWt(e.target.value)}
+                  style={{ width: 68, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, padding: '0.32rem 0.4rem', color: C.cream, fontSize: '0.82rem', outline: 'none' }}
+                />
+                <select
+                  value={newInputType}
+                  onChange={e => setNewInputType(e.target.value as 'raw' | 'premade' | 'carcass')}
+                  style={{ background: C.darkBrown, border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, padding: '0.32rem 0.35rem', color: C.cream, fontSize: '0.78rem', outline: 'none' }}
+                >
+                  <option value="raw">Raw</option>
+                  <option value="premade">Premade</option>
+                  <option value="carcass">Carcass</option>
+                </select>
+                <button
+                  onClick={addManualInput}
+                  disabled={addingInput || (!newInputDesc.trim() && !newInputWt)}
+                  style={{ background: (!newInputDesc.trim() && !newInputWt) ? C.medBrown : C.tan, border: 'none', borderRadius: 3, padding: '0.32rem 0.7rem', color: C.dark, fontSize: '0.82rem', fontWeight: 700, cursor: 'pointer', opacity: addingInput ? 0.6 : 1 }}
+                >
+                  + Add
+                </button>
+              </div>
+              {/* Input list */}
+              <div style={{ maxHeight: 150, overflowY: 'auto' }}>
+                {inputs.length === 0 ? (
+                  <div style={{ textAlign: 'center', color: 'rgba(166,120,90,0.4)', fontSize: '0.78rem', padding: '0.65rem', fontStyle: 'italic' }}>
+                    No inputs yet — scan a CMC box label or add manually
+                  </div>
+                ) : inputs.map(inp => (
+                  <div key={inp.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.28rem 0.15rem', borderBottom: '1px solid rgba(166,120,90,0.07)' }}>
+                    <span style={{ fontSize: '0.78rem', flexShrink: 0 }}>
+                      {inp.input_type === 'premade' ? '📦' : inp.input_type === 'carcass' ? '🐄' : '🥩'}
+                    </span>
+                    <span style={{ flex: 1, color: C.cream, fontSize: '0.82rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {inp.description || inp.box_identifier || '—'}
+                    </span>
+                    {inp.box_identifier && (
+                      <span style={{ fontSize: '0.68rem', color: C.lightBrown, fontFamily: 'monospace', flexShrink: 0 }}>{inp.box_identifier}</span>
+                    )}
+                    {inp.weight_lbs != null && (
+                      <span style={{ color: C.tan, fontSize: '0.82rem', fontFamily: 'monospace', flexShrink: 0 }}>{Number(inp.weight_lbs).toFixed(2)} lb</span>
+                    )}
+                    <button
+                      onClick={() => removeInput(inp.id)}
+                      style={{ background: 'none', border: 'none', color: 'rgba(166,120,90,0.35)', cursor: 'pointer', fontSize: '0.95rem', lineHeight: 1, padding: '0 0.15rem', flexShrink: 0 }}
+                    >×</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Scan list */}
         <div style={{ flex: 1, overflowY: 'auto', background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(166,120,90,0.12)', borderRadius: 4, minHeight: 0 }}>
