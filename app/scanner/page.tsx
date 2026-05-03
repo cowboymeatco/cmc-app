@@ -52,6 +52,9 @@ interface ScanLine {
   quantity:   number
 }
 
+interface LabelFlags { usda_bug: boolean; retail_exempt: boolean; not_for_sale: boolean }
+const DEFAULT_FLAGS: LabelFlags = { usda_bug: true, retail_exempt: false, not_for_sale: false }
+
 const LBL: React.CSSProperties = {
   display: 'block', fontSize: '0.68rem', color: C.lightBrown,
   textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: '0.3rem',
@@ -79,10 +82,11 @@ export default function ScannerPage() {
   const [scans,     setScans]     = useState<ScanLine[]>([])   // newest first
 
   // ── Scan input ───────────────────────────────────────────────────────────────
-  const [scanValue,  setScanValue]  = useState('')
-  const [flash,      setFlash]      = useState<'ok' | 'bad' | null>(null)
-  const [lastItem,   setLastItem]   = useState('')
-  const [processing, setProcessing] = useState(false)
+  const [scanValue,   setScanValue]   = useState('')
+  const [flash,       setFlash]       = useState<'ok' | 'bad' | null>(null)
+  const [lastItem,    setLastItem]    = useState('')
+  const [processing,  setProcessing]  = useState(false)
+  const [labelFlags,  setLabelFlags]  = useState<LabelFlags>(DEFAULT_FLAGS)
 
   const scanRef       = useRef<HTMLInputElement>(null)
   // Stable refs so event listeners don't go stale
@@ -224,6 +228,21 @@ export default function ScannerPage() {
     setScans(Array.isArray(data) ? ([...data] as ScanLine[]).reverse() : [])
   }
 
+  // ── Toggle is_final on active box ────────────────────────────────────────────
+  async function toggleFinal() {
+    const box = activeBox
+    if (!box) return
+    const newVal = !box.is_final
+    await fetch('/api/boxes', {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ id: box.id, is_final: newVal }),
+    })
+    const updated = { ...box, is_final: newVal }
+    setBoxes(prev => prev.map(b => b.id === box.id ? updated : b))
+    setActiveBox(updated)
+  }
+
   // ── Close box + auto-print label ─────────────────────────────────────────────
   async function closeBox() {
     const box = activeBox
@@ -239,11 +258,11 @@ export default function ScannerPage() {
     const closed = { ...box, is_closed: true, total_weight_lbs: totalWeight, total_cuts: totalCuts }
     setBoxes(prev => prev.map(b => b.id === box.id ? closed : b))
     setActiveBox(closed)
-    openPrintWindow(closed, snap)
+    openPrintWindow(closed, snap, labelFlags)
   }
 
   // ── Print label ───────────────────────────────────────────────────────────────
-  function openPrintWindow(box: BoxRecord, labelScans: ScanLine[]) {
+  function openPrintWindow(box: BoxRecord, labelScans: ScanLine[], flags: LabelFlags = labelFlags) {
     const grouped: Record<string, { count: number; weight: number }> = {}
     ;[...labelScans].reverse().forEach(s => {
       const k = s.item_name || `PLU ${s.plu_number}`
@@ -259,20 +278,32 @@ export default function ScannerPage() {
     const rows        = items.map(([name, v]) =>
       `<div class="r"><span><b>(${v.count})</b> ${name}</span><span>${v.weight.toFixed(2)} lb</span></div>`
     ).join('')
+    const usdaHTML    = flags.usda_bug
+      ? `<div class="usda"><div style="font-size:7pt;font-weight:bold;letter-spacing:.08em">USDA</div><div style="font-size:5.5pt;letter-spacing:.04em">INSPECTED &amp; PASSED</div></div>`
+      : ''
+    const exemptHTML  = flags.retail_exempt ? `<div class="badge">RETAIL EXEMPT</div>` : ''
+    const nfsHTML     = flags.not_for_sale   ? `<div class="nfs">★ NOT FOR SALE ★</div>` : ''
+
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${box.customer_name} ${boxLabel}</title>
 <style>
 @page { size: 4in auto; margin: .15in }
 * { box-sizing: border-box; margin: 0; padding: 0 }
 body { width: 3.7in; font-family: Arial, sans-serif; color: #000 }
-.co { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 9pt; font-weight: bold; text-align: center; letter-spacing: .05em; margin-bottom: 2px }
-.cu { font-size: 20pt; font-weight: bold; text-align: center; line-height: 1.1; margin: 4px 0 }
-.bn { font-size: 14pt; font-weight: bold; text-align: center; margin-bottom: 2px }
-.dt { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 9pt; text-align: center; margin-bottom: 4px }
-hr  { border: none; border-top: 1px solid #000; margin: 5px 0 }
-.r  { display: flex; justify-content: space-between; font-family: 'Arial Narrow', Arial, sans-serif; font-size: 11pt; padding: 1px 0 }
-.ft { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 10pt; font-weight: bold; text-align: center; margin-top: 2px }
+.top { display: flex; justify-content: space-between; align-items: flex-start }
+.co  { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 9pt; font-weight: bold; text-align: center; letter-spacing: .05em; margin-bottom: 2px; flex: 1 }
+.usda{ border: 1.5px solid #000; border-radius: 50%; padding: 3px 5px; text-align: center; line-height: 1.25; flex-shrink: 0 }
+.cu  { font-size: 20pt; font-weight: bold; text-align: center; line-height: 1.1; margin: 4px 0 }
+.bn  { font-size: 14pt; font-weight: bold; text-align: center; margin-bottom: 2px }
+.dt  { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 9pt; text-align: center; margin-bottom: 4px }
+hr   { border: none; border-top: 1px solid #000; margin: 5px 0 }
+.r   { display: flex; justify-content: space-between; font-family: 'Arial Narrow', Arial, sans-serif; font-size: 11pt; padding: 1px 0 }
+.ft  { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 10pt; font-weight: bold; text-align: center; margin-top: 2px }
+.badge { text-align: center; font-size: 7.5pt; font-weight: bold; border: 1px solid #000; border-radius: 2px; padding: 1px 4px; display: inline-block; margin: 2px auto; letter-spacing: .06em }
+.nfs   { text-align: center; font-size: 9pt; font-weight: bold; letter-spacing: .1em; margin: 3px 0 }
 </style></head><body>
-<div class="co">COWBOY MEAT COMPANY</div>
+<div class="top"><div style="flex:1;text-align:center"><div class="co">COWBOY MEAT COMPANY</div></div>${usdaHTML}</div>
+${nfsHTML}
+${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
 <div class="cu">${box.customer_name.toUpperCase()}</div>
 <div class="bn">${boxLabel}</div>
 <div class="dt">${dateStr}</div>
@@ -471,33 +502,73 @@ hr  { border: none; border-top: 1px solid #000; margin: 5px 0 }
 
         {/* Box bar */}
         {activeBox && (
-          <div style={{ flexShrink: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <span style={{ color: C.cream, fontWeight: 700, fontSize: '1.05rem' }}>
-                Box {activeBox.box_number}{activeBox.is_final ? ' ★' : ''}
-              </span>
-              <span style={{ fontSize: '0.8rem', fontWeight: 700, color: activeBox.is_closed ? C.green : C.tan }}>
-                {activeBox.is_closed ? '✓ Closed' : 'Open'}
-              </span>
-              <span style={{ fontSize: '0.82rem', color: C.lightBrown }}>
-                {scans.length} item{scans.length !== 1 ? 's' : ''} · {totalWeight.toFixed(2)} lbs
-              </span>
-            </div>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button
-                onClick={() => openPrintWindow(activeBox, scans)}
-                style={{ background: 'transparent', border: `1px solid ${C.tan}`, borderRadius: 3, padding: '0.4rem 0.9rem', color: C.tan, fontSize: '0.82rem', cursor: 'pointer', fontWeight: 600 }}
-              >
-                🖨 Print Label
-              </button>
-              {isOpen && (
+          <div style={{ flexShrink: 0 }}>
+            {/* Top row: box info + actions */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+                <span style={{ color: C.cream, fontWeight: 700, fontSize: '1.05rem' }}>
+                  Box {activeBox.box_number}{activeBox.is_final ? ' ★' : ''}
+                </span>
+                <span style={{ fontSize: '0.8rem', fontWeight: 700, color: activeBox.is_closed ? C.green : C.tan }}>
+                  {activeBox.is_closed ? '✓ Closed' : 'Open'}
+                </span>
+                <span style={{ fontSize: '0.82rem', color: C.lightBrown }}>
+                  {scans.length} item{scans.length !== 1 ? 's' : ''} · {totalWeight.toFixed(2)} lbs
+                </span>
+                {/* Final toggle */}
                 <button
-                  onClick={closeBox}
-                  style={{ background: C.green, border: 'none', borderRadius: 3, padding: '0.4rem 1.1rem', color: C.dark, fontSize: '0.85rem', cursor: 'pointer', fontWeight: 700 }}
+                  onClick={toggleFinal}
+                  title={activeBox.is_final ? 'Remove final marker' : 'Mark as final box'}
+                  style={{
+                    background: activeBox.is_final ? 'rgba(201,168,130,0.2)' : 'transparent',
+                    border: `1px solid ${activeBox.is_final ? 'rgba(201,168,130,0.5)' : 'rgba(166,120,90,0.25)'}`,
+                    borderRadius: 3, padding: '0.2rem 0.6rem',
+                    color: activeBox.is_final ? C.tan : C.lightBrown,
+                    fontSize: '0.75rem', cursor: 'pointer', fontWeight: activeBox.is_final ? 700 : 400,
+                  }}
                 >
-                  ✓ Close Box
+                  {activeBox.is_final ? '★ Final' : '☆ Final'}
                 </button>
-              )}
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button
+                  onClick={() => openPrintWindow(activeBox, scans)}
+                  style={{ background: 'transparent', border: `1px solid ${C.tan}`, borderRadius: 3, padding: '0.4rem 0.9rem', color: C.tan, fontSize: '0.82rem', cursor: 'pointer', fontWeight: 600 }}
+                >
+                  🖨 Print Label
+                </button>
+                {isOpen && (
+                  <button
+                    onClick={closeBox}
+                    style={{ background: C.green, border: 'none', borderRadius: 3, padding: '0.4rem 1.1rem', color: C.dark, fontSize: '0.85rem', cursor: 'pointer', fontWeight: 700 }}
+                  >
+                    ✓ Close Box
+                  </button>
+                )}
+              </div>
+            </div>
+            {/* Label flags row */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <span style={{ fontSize: '0.65rem', color: 'rgba(166,120,90,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em', marginRight: '0.2rem' }}>Label:</span>
+              {([
+                { k: 'usda_bug'      as keyof LabelFlags, label: 'USDA Bug'      },
+                { k: 'retail_exempt' as keyof LabelFlags, label: 'Retail Exempt' },
+                { k: 'not_for_sale'  as keyof LabelFlags, label: 'Not For Sale'  },
+              ] as { k: keyof LabelFlags; label: string }[]).map(({ k, label }) => (
+                <button
+                  key={k}
+                  onClick={() => setLabelFlags(f => ({ ...f, [k]: !f[k] }))}
+                  style={{
+                    background: labelFlags[k] ? 'rgba(201,168,130,0.2)' : 'rgba(255,255,255,0.03)',
+                    border: `1px solid ${labelFlags[k] ? 'rgba(201,168,130,0.45)' : 'rgba(166,120,90,0.2)'}`,
+                    borderRadius: 3, padding: '0.2rem 0.6rem',
+                    color: labelFlags[k] ? C.cream : C.lightBrown,
+                    fontSize: '0.72rem', cursor: 'pointer', fontWeight: labelFlags[k] ? 700 : 400,
+                  }}
+                >
+                  {labelFlags[k] ? '✓ ' : ''}{label}
+                </button>
+              ))}
             </div>
           </div>
         )}

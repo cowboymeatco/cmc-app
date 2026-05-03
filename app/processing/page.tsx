@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 
-type Tab = 'scanner' | 'boxes' | 'browser' | 'upload' | 'export' | 'cleanup'
+type Tab = 'scanner' | 'browser' | 'upload' | 'export' | 'cleanup'
 
 interface PluItem {
   id:                 string
@@ -1342,9 +1342,14 @@ function ScannerTab() {
     <div style={{ display: 'grid', gridTemplateColumns: '420px 1fr', gap: '1.5rem', height: '100%' }}>
       {/* Left — entry form */}
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-        <h3 style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0 }}>
-          Processing Scanner
-        </h3>
+        <div>
+          <h3 style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 0.35rem' }}>
+            Production Log
+          </h3>
+          <p style={{ margin: 0, fontSize: '0.75rem', color: C.lightBrown, lineHeight: 1.4 }}>
+            Records what was cut, how much, and at what price — used for yield tracking, billing, and production reports. For packaging boxes with labels, use the <strong style={{ color: C.tan }}>Floor Scanner</strong>.
+          </p>
+        </div>
 
         {/* Session header */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
@@ -1542,8 +1547,7 @@ export default function ProcessingPage() {
   const [tab, setTab] = useState<Tab>('scanner')
 
   const tabs: { id: Tab; label: string }[] = [
-    { id: 'scanner', label: '📡 Scanner' },
-    { id: 'boxes',   label: '📦 Box Labels' },
+    { id: 'scanner', label: '📊 Production Log' },
     { id: 'browser', label: '🔪 PLU Browser' },
     { id: 'export',  label: '📤 Export' },
     { id: 'cleanup', label: '🧹 Cleanup' },
@@ -1574,7 +1578,6 @@ export default function ProcessingPage() {
 
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1400px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
         {tab === 'scanner' && <ScannerTab />}
-        {tab === 'boxes'   && <BoxLabelsTab />}
         {tab === 'browser' && <BrowserTab />}
         {tab === 'export'  && <ExportTab />}
         {tab === 'cleanup' && <CleanupTab />}

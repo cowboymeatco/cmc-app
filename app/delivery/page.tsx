@@ -312,29 +312,55 @@ function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
           {filtered.length === 0 && (
             <p style={{ color: C.lightBrown, fontSize: '0.85rem', padding: '1.5rem', textAlign: 'center' }}>No deliveries found</p>
           )}
-          {filtered.map(d => (
-            <div
-              key={d.id}
-              onClick={() => setSelected(d)}
-              style={{
-                padding: '1rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.12)',
-                cursor: 'pointer', background: selected?.id === d.id ? 'rgba(166,120,90,0.12)' : 'transparent',
-                transition: 'background 0.15s',
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.3rem' }}>
-                <span style={{ color: C.cream, fontWeight: 600, fontSize: '0.9rem' }}>{d.customer}</span>
-                <StatusBadge status={d.status} />
+          {filtered.map(d => {
+            // Build unique cut name list from barcodes
+            const cutNames: string[] = []
+            for (const b of d.barcodes ?? []) {
+              const dec = decodeBarcode(b.barcode)
+              if (dec) {
+                const name = pluMap[dec.plu] ?? `PLU ${dec.plu}`
+                if (!cutNames.includes(name)) cutNames.push(name)
+              }
+            }
+            const shown   = cutNames.slice(0, 3)
+            const overflow = cutNames.length - shown.length
+            return (
+              <div
+                key={d.id}
+                onClick={() => setSelected(d)}
+                style={{
+                  padding: '1rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.12)',
+                  cursor: 'pointer', background: selected?.id === d.id ? 'rgba(166,120,90,0.12)' : 'transparent',
+                  transition: 'background 0.15s',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.3rem' }}>
+                  <span style={{ color: C.cream, fontWeight: 600, fontSize: '0.9rem' }}>{d.customer}</span>
+                  <StatusBadge status={d.status} />
+                </div>
+                <div style={{ fontSize: '0.78rem', color: C.tan }}>
+                  {new Date(d.delivered_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  {d.driver ? ` · ${d.driver}` : ''}
+                </div>
+                {/* Cut names summary */}
+                {shown.length > 0 ? (
+                  <div style={{ fontSize: '0.74rem', color: C.lightBrown, marginTop: '0.25rem', lineHeight: 1.5 }}>
+                    {shown.map((name, i) => (
+                      <span key={name}>
+                        <span style={{ color: C.tan }}>{name}</span>
+                        {i < shown.length - 1 && <span style={{ color: 'rgba(166,120,90,0.4)' }}> · </span>}
+                      </span>
+                    ))}
+                    {overflow > 0 && <span style={{ color: 'rgba(166,120,90,0.5)' }}> +{overflow} more</span>}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '0.74rem', color: C.lightBrown, marginTop: '0.15rem' }}>
+                    {d.barcodes?.length ?? 0} item{(d.barcodes?.length ?? 0) !== 1 ? 's' : ''}
+                  </div>
+                )}
               </div>
-              <div style={{ fontSize: '0.78rem', color: C.tan }}>
-                {new Date(d.delivered_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                {d.driver ? ` · ${d.driver}` : ''}
-              </div>
-              <div style={{ fontSize: '0.75rem', color: C.lightBrown, marginTop: '0.15rem' }}>
-                {d.barcodes?.length ?? 0} item{(d.barcodes?.length ?? 0) !== 1 ? 's' : ''}
-              </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       </div>
 
