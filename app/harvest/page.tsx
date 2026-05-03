@@ -118,6 +118,7 @@ interface CarcassRow {
   ccp_pass:             boolean
   is_verification:      boolean
   direct_observation:   boolean
+  over_30_months:       boolean
   notes:                string
 }
 
@@ -127,7 +128,8 @@ function emptyCarcass(): CarcassRow {
     half_1_weight: '', half_2_weight: '',
     intervention_applied: true, intervention_temp_f: '',
     final_carcass_temp_f: '', ccp_pass: true,
-    is_verification: false, direct_observation: false, notes: '',
+    is_verification: false, direct_observation: false,
+    over_30_months: false, notes: '',
   }
 }
 
@@ -167,6 +169,21 @@ function CarcassForm({
           Head {idx + 1}
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          {/* OTM toggle */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.78rem',
+            color: row.over_30_months ? C.orange : C.lightBrown,
+            background: row.over_30_months ? 'rgba(249,115,22,0.12)' : 'transparent',
+            border: `1px solid ${row.over_30_months ? 'rgba(249,115,22,0.45)' : 'rgba(166,120,90,0.2)'}`,
+            borderRadius: 3, padding: '0.2rem 0.55rem', transition: 'all 0.15s',
+          }}>
+            <input
+              type="checkbox"
+              checked={row.over_30_months}
+              onChange={e => onChange(idx, 'over_30_months', e.target.checked)}
+              style={{ accentColor: C.orange, width: 13, height: 13 }}
+            />
+            OTM
+          </label>
           {row.is_verification && (
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.78rem',
               color: row.direct_observation ? C.blue : C.lightBrown }}>
@@ -330,12 +347,32 @@ function HarvestTab() {
 
   useEffect(() => { load() }, [load])
 
-  function selectAppt(a: HarvestAppointment) {
+  async function selectAppt(a: HarvestAppointment) {
     setSelected(a)
     setSuccess(false)
-    const rows = Array.from({ length: a.head_count }, emptyCarcass)
-    setCarcasses(rows)
     setHeader(h => ({ ...h, harvest_date: a.harvest_date }))
+
+    // Count existing harvest entries for this date so tag numbers continue sequentially
+    const existingForDate = harvestLogs.filter(h => h.harvest_date === a.harvest_date).length
+
+    // Fetch receiving records for this appointment (sorted by animal_index)
+    let receivingAnimals: { animal_index: number; sex: string; over_30_months: boolean }[] = []
+    try {
+      const res = await fetch(`/api/receiving?type=animal&appointment_id=${encodeURIComponent(a.id)}`)
+      if (res.ok) receivingAnimals = await res.json().catch(() => [])
+    } catch { /* ignore — just won't pre-fill */ }
+
+    const rows = Array.from({ length: a.head_count }, (_, i) => {
+      const tagNum  = String(existingForDate + i + 1).padStart(3, '0')
+      const animal  = receivingAnimals[i] ?? null
+      return {
+        ...emptyCarcass(),
+        carcass_tag:    tagNum,
+        sex:            animal?.sex            ?? '',
+        over_30_months: animal?.over_30_months ?? false,
+      }
+    })
+    setCarcasses(rows)
   }
 
   function updateCarcass(idx: number, field: keyof CarcassRow, val: string | boolean) {
@@ -379,6 +416,7 @@ function HarvestTab() {
             ccp_pass:               c.ccp_pass,
             is_verification:        c.is_verification,
             direct_observation:     c.direct_observation,
+            over_30_months:         c.over_30_months,
             notes:                  c.notes,
           }
         }),

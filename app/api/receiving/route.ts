@@ -7,10 +7,13 @@ export async function GET(req: NextRequest) {
   const type = searchParams.get('type') ?? 'animal'
 
   if (type === 'animal') {
-    const { data, error } = await supabase
+    const apptId = searchParams.get('appointment_id')
+    let query = supabase
       .from('animal_receiving_log')
       .select('*')
-      .order('received_at', { ascending: false })
+      .order('animal_index', { ascending: true })
+    if (apptId) query = query.eq('appointment_id', apptId)
+    const { data, error } = await query
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     return NextResponse.json(data)
   }

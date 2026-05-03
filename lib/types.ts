@@ -124,6 +124,7 @@ export interface HarvestLog {
   status:                 string   // 'chilling' | 'complete'
   is_verification:        boolean
   direct_observation:     boolean
+  over_30_months:         boolean
 }
 
 export interface ChillLog {

@@ -70,6 +70,7 @@ export async function POST(req: NextRequest) {
     status:                 'chilling',
     is_verification:        c.is_verification ?? false,
     direct_observation:     c.direct_observation ?? false,
+    over_30_months:         c.over_30_months ?? false,
   }))
 
   const { data, error } = await supabase
