@@ -48,6 +48,18 @@ function decodeBarcode(barcode: string): { plu: string; weightLbs: number } | nu
   return { plu: String(plu), weightLbs: weight }
 }
 
+interface SessionWithStats {
+  id:             string | null
+  customer_name:  string
+  session_date:   string
+  status:         'scanning' | 'value_add' | 'complete'
+  notes:          string
+  box_count:      number
+  closed_count:   number
+  total_weight:   number
+  total_cuts:     number
+}
+
 interface BoxRecord {
   id:               string
   customer_name:    string
@@ -112,8 +124,13 @@ export default function ScannerPage() {
   const [newInputType, setNewInputType] = useState<'raw' | 'premade' | 'carcass'>('raw')
   const [addingInput,  setAddingInput]  = useState(false)
 
-  // ── Recent sessions (for setup screen) ───────────────────────────────────────
-  const [recentSessions, setRecentSessions] = useState<{ customer: string; date: string; boxCount: number; closed: number }[]>([])
+  // ── Session management ─────────────────────────────────��──────────────────────
+  const [sessions,         setSessions]         = useState<SessionWithStats[]>([])
+  const [sessionsLoading,  setSessionsLoading]  = useState(true)
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
+  const [currentStatus,    setCurrentStatus]    = useState<'scanning' | 'value_add' | 'complete'>('scanning')
+  const [showNewForm,      setShowNewForm]      = useState(false)
+  const [showAllComplete,  setShowAllComplete]  = useState(false)
 
   const scanRef       = useRef<HTMLInputElement>(null)
   // Stable refs so event listeners don't go stale
@@ -131,26 +148,18 @@ export default function ScannerPage() {
   startedRef.current    = started
   inputsRef.current     = inputs
 
-  // ── Load PLU database + recent sessions once ────────────────────────────────
-  useEffect(() => {
-    fetch('/api/boxes?recent=1')
-      .then(r => r.json())
-      .then((data: unknown) => {
-        if (!Array.isArray(data)) return
-        const boxes = data as BoxRecord[]
-        // Group by customer_name + pack_date, most recent first
-        const map = new Map<string, { customer: string; date: string; boxCount: number; closed: number }>()
-        for (const b of boxes) {
-          const key = `${b.customer_name}|${b.pack_date}`
-          if (!map.has(key)) map.set(key, { customer: b.customer_name, date: b.pack_date, boxCount: 0, closed: 0 })
-          const s = map.get(key)!
-          s.boxCount++
-          if (b.is_closed) s.closed++
-        }
-        setRecentSessions([...map.values()].slice(0, 8))
-      })
-      .catch(() => {})
+  // ── Load sessions list ───────────────────────────────────────────────────���───
+  const loadSessions = useCallback(async () => {
+    setSessionsLoading(true)
+    try {
+      const res  = await fetch('/api/processing/sessions')
+      const data = await res.json()
+      setSessions(Array.isArray(data) ? data as SessionWithStats[] : [])
+    } catch { setSessions([]) }
+    setSessionsLoading(false)
   }, [])
+
+  useEffect(() => { loadSessions() }, [loadSessions])
 
   useEffect(() => {
     fetch('/api/processing?active=true')
@@ -239,6 +248,91 @@ export default function ScannerPage() {
     }
   }, [])
 
+  // ── Session record helpers ───────────────────────────────────────────────────
+  async function upsertSession(custName: string, sessDate: string, status = 'scanning'): Promise<string | null> {
+    try {
+      const res  = await fetch('/api/processing/sessions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customer_name: custName, session_date: sessDate, status }),
+      })
+      const data = await res.json()
+      return data.id ?? null
+    } catch { return null }
+  }
+
+  async function updateSessionStatus(status: 'scanning' | 'value_add' | 'complete') {
+    setCurrentStatus(status)
+    await fetch('/api/processing/sessions', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customer_name: customer, session_date: date, status }),
+    })
+  }
+
+  async function quickStatus(s: SessionWithStats, status: 'scanning' | 'value_add' | 'complete') {
+    await fetch('/api/processing/sessions', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customer_name: s.customer_name, session_date: s.session_date, status }),
+    })
+    setSessions(prev => prev.map(x =>
+      x.customer_name === s.customer_name && x.session_date === s.session_date ? { ...x, status } : x
+    ))
+  }
+
+  async function generatePackoutForSession(s: SessionWithStats) {
+    const res = await fetch(`/api/boxes?customer_name=${encodeURIComponent(s.customer_name)}&date=${s.session_date}`)
+    const sessionBoxes: BoxRecord[] = await res.json().catch(() => [])
+    const sortedBoxes = [...sessionBoxes].sort((a, b) => a.box_number - b.box_number)
+    const allScans: (ScanLine & { boxNum: number })[] = []
+    for (const box of sortedBoxes) {
+      const r  = await fetch(`/api/boxes/scans?box_id=${box.id}`)
+      const d  = await r.json().catch(() => [])
+      if (Array.isArray(d)) for (const sc of d as ScanLine[]) allScans.push({ ...sc, boxNum: box.box_number })
+    }
+    const grandLbs  = allScans.reduce((t, sc) => t + (Number(sc.weight_lbs) || 0), 0)
+    const grandPkgs = allScans.length
+    const boxCount  = sortedBoxes.length
+    const lineRows  = allScans.map((sc, i) => `
+      <tr class="${i % 2 === 0 ? 'even' : 'odd'}">
+        <td class="num">${i + 1}</td>
+        <td>${sc.item_name || `PLU ${sc.plu_number}`}</td>
+        <td class="num mono">${sc.plu_number}</td>
+        <td class="num mono">${Number(sc.weight_lbs).toFixed(2)}</td>
+        <td class="num">${sc.boxNum}</td>
+      </tr>`).join('')
+    const dateStr = new Date(s.session_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>CMC Packout — ${s.customer_name} — ${s.session_date}</title>
+<style>
+  @page{size:letter portrait;margin:.75in}*{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Arial,sans-serif;color:#000;font-size:10pt}
+  .hdr{text-align:center;margin-bottom:14px}.company{font-size:16pt;font-weight:bold;letter-spacing:.06em;text-transform:uppercase}
+  .sub{font-size:10pt;color:#555;margin-top:1px}.title{font-size:13pt;font-weight:bold;letter-spacing:.14em;text-transform:uppercase;margin-top:8px;border-top:2pt solid #000;border-bottom:2pt solid #000;padding:5px 0}
+  .cust{display:flex;justify-content:space-between;margin:10px 0 12px;font-size:10.5pt}
+  table{width:100%;border-collapse:collapse;font-size:9.5pt}
+  th{font-size:8pt;text-transform:uppercase;letter-spacing:.08em;border-bottom:1.5pt solid #000;padding:5px 6px;text-align:left}
+  th.num,td.num{text-align:right}td{padding:3.5px 6px}
+  tr.even{background:#fff}tr.odd{background:#f7f7f7}.mono{font-family:'Courier New',monospace}
+  .total-row td{border-top:1.5pt solid #000;font-weight:bold;padding:5px 6px;font-size:10.5pt}
+  .box-line{margin-top:8px;font-size:9.5pt;color:#444}
+  .ack{margin-top:28px;border-top:1px solid #ccc;padding-top:12px}
+  .ack-title{font-weight:bold;font-size:10pt;margin-bottom:10px}
+  .sig-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px 30px;margin-top:6px}
+  .sig-line{border-bottom:1px solid #000;padding-top:22px;font-size:9pt;color:#555}
+</style></head><body>
+<div class="hdr"><div class="company">Cowboy Meat Company</div><div class="sub">Forsyth, Montana · cowboymeats.com</div><div class="title">Packout Slip</div></div>
+<div class="cust"><span><strong>Customer:</strong> &nbsp;${s.customer_name}</span><span><strong>Date:</strong> &nbsp;${dateStr}</span></div>
+<table><thead><tr><th class="num">#</th><th>Item Name</th><th class="num">PLU</th><th class="num">Weight (lbs)</th><th class="num">Box #</th></tr></thead>
+<tbody>${lineRows}
+<tr class="total-row"><td colspan="3">TOTAL &nbsp;—&nbsp; ${grandPkgs} item${grandPkgs !== 1 ? 's' : ''}</td><td class="num mono">${grandLbs.toFixed(2)}</td><td></td></tr>
+</tbody></table>
+<div class="box-line">${boxCount} box${boxCount !== 1 ? 'es' : ''} total</div>
+<div class="ack"><div class="ack-title">Customer Acknowledgement &nbsp;—&nbsp; I confirm receipt of all products listed above.</div>
+<div class="sig-grid"><div class="sig-line">Signature</div><div class="sig-line">Date</div><div class="sig-line">Print Name</div><div class="sig-line">Phone</div></div></div>
+<script>window.onload=()=>window.print()</script></body></html>`
+    const win = window.open('', '_blank')
+    if (win) { win.document.write(html); win.document.close() }
+  }
+
   // ── Start session + auto-create Box 1 ────────────────────────────────────────
   async function startSession() {
     if (!customer.trim() || !pluLoaded) return
@@ -252,7 +346,9 @@ export default function ScannerPage() {
     setBoxes([box])
     setActiveBox(box)
     setScans([])
-    // Load any inputs already logged for this customer/date
+    setCurrentStatus('scanning')
+    const sid = await upsertSession(customer.trim(), date, 'scanning')
+    setCurrentSessionId(sid)
     fetch(`/api/processing/inputs?customer_name=${encodeURIComponent(customer.trim())}&session_date=${date}`)
       .then(r => r.json())
       .then((data: unknown) => { if (Array.isArray(data)) setInputs(data as ProcessingInput[]) })
@@ -262,14 +358,18 @@ export default function ScannerPage() {
   // ── Reopen an existing session ───────────────────────────────────────────────
   async function startSessionFromExisting(cust: string, dt: string) {
     if (!pluLoaded) return
+    const existing = sessions.find(s => s.customer_name === cust && s.session_date === dt)
+    const existingStatus = existing?.status ?? 'scanning'
     setCustomer(cust)
     setDate(dt)
     setStarted(true)
+    setCurrentStatus(existingStatus)
+    const sid = await upsertSession(cust, dt, existingStatus)
+    setCurrentSessionId(sid)
     const res = await fetch(`/api/boxes?customer_name=${encodeURIComponent(cust)}&date=${dt}`)
     const loadedBoxes: BoxRecord[] = await res.json().catch(() => [])
     const sorted = [...loadedBoxes].sort((a, b) => a.box_number - b.box_number)
     setBoxes(sorted)
-    // Active box: first open one, else last box
     const openBox = sorted.find(b => !b.is_closed) ?? sorted[sorted.length - 1] ?? null
     setActiveBox(openBox)
     if (openBox) {
@@ -588,99 +688,152 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
   // SETUP SCREEN
   // ══════════════════════════════════════════════════════════════════════════════
   if (!started) {
-    return (
-      <div style={{ minHeight: '100dvh', background: C.dark, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
-        <div style={{ background: C.darkBrown, border: '1px solid rgba(166,120,90,0.3)', borderRadius: 8, padding: '2.5rem', width: '100%', maxWidth: 400 }}>
+    const scanning  = sessions.filter(s => s.status === 'scanning')
+    const valueAdd  = sessions.filter(s => s.status === 'value_add')
+    const complete  = sessions.filter(s => s.status === 'complete')
 
-          <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-            <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>🔍</div>
-            <h1 style={{ fontFamily: 'Georgia, serif', color: C.cream, fontSize: '1.4rem', textTransform: 'uppercase', letterSpacing: '0.1em', margin: '0 0 0.5rem' }}>
-              Processing Scanner
-            </h1>
-            <div style={{ fontSize: '0.78rem', color: pluLoaded ? C.green : C.yellow, fontWeight: 600 }}>
-              {pluLoaded
-                ? `✓ ${Object.keys(pluMap).length} PLUs loaded`
-                : '⟳ Loading PLU database…'}
-            </div>
+    const STATUS_CFG = {
+      scanning:  { label: 'Scanning',   color: C.yellow,        dot: '●' },
+      value_add: { label: 'Value Add',  color: '#E8883A',       dot: '◆' },
+      complete:  { label: 'Complete',   color: C.green,         dot: '✓' },
+    }
+
+    function SessionCard({ s }: { s: SessionWithStats }) {
+      const dateStr = new Date(s.session_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      const cfg = STATUS_CFG[s.status]
+      const btnBase: React.CSSProperties = { borderRadius: 3, padding: '0.3rem 0.75rem', fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer' }
+      return (
+        <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(166,120,90,0.2)', borderRadius: 6, padding: '0.9rem 1.1rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.25rem' }}>
+            <span style={{ color: C.cream, fontWeight: 700, fontSize: '0.95rem' }}>{s.customer_name}</span>
+            <span style={{ color: C.lightBrown, fontSize: '0.75rem' }}>{dateStr}</span>
           </div>
-
-          <div style={{ marginBottom: '1rem' }}>
-            <label style={LBL}>Customer</label>
-            <input
-              autoFocus
-              style={INPUT}
-              value={customer}
-              onChange={e => setCustomer(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && customer.trim() && pluLoaded) startSession() }}
-              placeholder="Customer name"
-            />
+          <div style={{ color: C.lightBrown, fontSize: '0.75rem', marginBottom: '0.7rem' }}>
+            {s.box_count} box{s.box_count !== 1 ? 'es' : ''}
+            {s.closed_count > 0 && ` · ${s.closed_count} closed`}
+            {s.total_weight > 0 && ` · ${s.total_weight.toFixed(1)} lbs`}
           </div>
-
-          <div style={{ marginBottom: '1.75rem' }}>
-            <label style={LBL}>Pack Date</label>
-            <input
-              type="date"
-              style={{ ...INPUT, fontSize: '1rem' }}
-              value={date}
-              onChange={e => setDate(e.target.value)}
-            />
-          </div>
-
-          <button
-            onClick={startSession}
-            disabled={!customer.trim() || !pluLoaded}
-            style={{
-              width: '100%', background: customer.trim() && pluLoaded ? C.tan : C.medBrown,
-              color: C.dark, border: 'none', borderRadius: 4, padding: '0.9rem',
-              fontSize: '1rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
-              cursor: customer.trim() && pluLoaded ? 'pointer' : 'not-allowed',
-              opacity: customer.trim() && pluLoaded ? 1 : 0.6,
-            }}
-          >
-            Start Scanning
-          </button>
-
-          {/* Recent sessions */}
-          {recentSessions.length > 0 && (
-            <div style={{ marginTop: '1.5rem', borderTop: '1px solid rgba(166,120,90,0.2)', paddingTop: '1.25rem' }}>
-              <div style={{ fontSize: '0.65rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: '0.6rem' }}>
-                Reopen Recent Session
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                {recentSessions.map(s => (
-                  <button
-                    key={`${s.customer}|${s.date}`}
-                    onClick={() => startSessionFromExisting(s.customer, s.date)}
-                    disabled={!pluLoaded}
-                    style={{
-                      background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.22)',
-                      borderRadius: 4, padding: '0.55rem 0.85rem', cursor: 'pointer',
-                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                      opacity: pluLoaded ? 1 : 0.5,
-                    }}
-                  >
-                    <div style={{ textAlign: 'left' }}>
-                      <div style={{ color: C.cream, fontSize: '0.88rem', fontWeight: 600 }}>{s.customer}</div>
-                      <div style={{ color: C.lightBrown, fontSize: '0.72rem' }}>
-                        {new Date(s.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
-                      </div>
-                    </div>
-                    <div style={{ textAlign: 'right', fontSize: '0.72rem', color: s.closed === s.boxCount && s.boxCount > 0 ? C.green : C.tan }}>
-                      <div>{s.boxCount} box{s.boxCount !== 1 ? 'es' : ''}</div>
-                      <div>{s.closed}/{s.boxCount} closed</div>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div style={{ marginTop: '1.5rem', textAlign: 'center' }}>
-            <Link href="/processing" style={{ color: C.lightBrown, fontSize: '0.8rem', textDecoration: 'none' }}>
-              ← Back to Processing
-            </Link>
+          <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+            {(s.status === 'scanning' || s.status === 'value_add') && (
+              <button disabled={!pluLoaded} onClick={() => startSessionFromExisting(s.customer_name, s.session_date)}
+                style={{ ...btnBase, background: C.tan, color: C.dark, border: 'none', opacity: pluLoaded ? 1 : 0.5 }}>
+                → Open
+              </button>
+            )}
+            {s.status === 'scanning' && (
+              <button onClick={() => quickStatus(s, 'value_add')}
+                style={{ ...btnBase, background: 'transparent', border: '1px solid rgba(232,136,58,0.5)', color: '#E8883A' }}>
+                → Value Add
+              </button>
+            )}
+            {s.status === 'value_add' && (
+              <button onClick={() => quickStatus(s, 'complete')}
+                style={{ ...btnBase, background: 'transparent', border: `1px solid rgba(76,175,80,0.5)`, color: C.green }}>
+                ✓ Complete
+              </button>
+            )}
+            {s.status === 'complete' && (
+              <button onClick={() => quickStatus(s, 'scanning')}
+                style={{ ...btnBase, background: 'transparent', border: '1px solid rgba(166,120,90,0.3)', color: C.lightBrown }}>
+                ↩ Reopen
+              </button>
+            )}
+            <button onClick={() => generatePackoutForSession(s)}
+              style={{ ...btnBase, background: 'transparent', border: '1px solid rgba(166,120,90,0.25)', color: C.lightBrown }}>
+              📋 Packout
+            </button>
           </div>
         </div>
+      )
+    }
+
+    function Section({ title, color, items, showAll, onToggle }: {
+      title: string; color: string; items: SessionWithStats[]; showAll?: boolean; onToggle?: () => void
+    }) {
+      if (items.length === 0) return null
+      const visible = showAll !== undefined ? (showAll ? items : items.slice(0, 6)) : items
+      return (
+        <div style={{ marginBottom: '1.75rem' }}>
+          <div style={{ fontSize: '0.65rem', color, textTransform: 'uppercase', letterSpacing: '0.14em', fontWeight: 700, marginBottom: '0.65rem' }}>
+            {title} ({items.length})
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(255px, 1fr))', gap: '0.65rem' }}>
+            {visible.map(s => <SessionCard key={`${s.customer_name}|${s.session_date}`} s={s} />)}
+          </div>
+          {onToggle && items.length > 6 && (
+            <button onClick={onToggle} style={{ marginTop: '0.5rem', background: 'none', border: 'none', color: C.lightBrown, fontSize: '0.75rem', cursor: 'pointer', textDecoration: 'underline' }}>
+              {showAll ? 'Show less' : `Show all ${items.length}`}
+            </button>
+          )}
+        </div>
+      )
+    }
+
+    return (
+      <div style={{ minHeight: '100dvh', background: C.dark, display: 'flex', flexDirection: 'column' }}>
+        {/* Header */}
+        <div style={{ background: C.darkBrown, borderBottom: '1px solid rgba(166,120,90,0.3)', padding: '0.75rem 1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <Link href="/processing" style={{ color: C.lightBrown, fontSize: '0.8rem', textDecoration: 'none' }}>← Processing</Link>
+            <span style={{ color: 'rgba(166,120,90,0.35)' }}>|</span>
+            <span style={{ fontFamily: 'Georgia, serif', color: C.cream, fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Processing Scanner</span>
+            <span style={{ fontSize: '0.72rem', color: pluLoaded ? C.green : C.yellow, fontWeight: 600 }}>
+              {pluLoaded ? `✓ ${Object.keys(pluMap).length} PLUs` : '⟳ Loading…'}
+            </span>
+          </div>
+          <button onClick={() => setShowNewForm(true)} style={{ background: C.tan, color: C.dark, border: 'none', borderRadius: 4, padding: '0.5rem 1.1rem', fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer', letterSpacing: '0.04em' }}>
+            + New Session
+          </button>
+        </div>
+
+        {/* Sessions */}
+        <div style={{ flex: 1, padding: '1.5rem', maxWidth: 920, width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
+          {sessionsLoading ? (
+            <div style={{ textAlign: 'center', color: C.lightBrown, padding: '3rem', fontSize: '0.9rem' }}>Loading sessions…</div>
+          ) : sessions.length === 0 ? (
+            <div style={{ textAlign: 'center', color: C.lightBrown, padding: '4rem 2rem' }}>
+              <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🔍</div>
+              <div style={{ fontSize: '0.95rem', marginBottom: '1.25rem' }}>No sessions yet</div>
+              <button onClick={() => setShowNewForm(true)} style={{ background: C.tan, color: C.dark, border: 'none', borderRadius: 4, padding: '0.65rem 1.5rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer' }}>
+                Start First Session
+              </button>
+            </div>
+          ) : (
+            <>
+              <Section title="● Scanning"       color={C.yellow}  items={scanning} />
+              <Section title="◆ Value Add Queue" color="#E8883A"   items={valueAdd} />
+              <Section title="✓ Complete"        color={C.green}   items={complete} showAll={showAllComplete} onToggle={() => setShowAllComplete(p => !p)} />
+            </>
+          )}
+        </div>
+
+        {/* New Session modal */}
+        {showNewForm && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+            <div style={{ background: C.darkBrown, border: '1px solid rgba(166,120,90,0.35)', borderRadius: 8, padding: '2rem', width: '100%', maxWidth: 360 }}>
+              <h2 style={{ fontFamily: 'Georgia, serif', color: C.cream, fontSize: '1.1rem', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 1.5rem' }}>New Session</h2>
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={LBL}>Customer</label>
+                <input autoFocus style={INPUT} value={customer} onChange={e => setCustomer(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && customer.trim() && pluLoaded) { setShowNewForm(false); startSession() } }}
+                  placeholder="Customer name" />
+              </div>
+              <div style={{ marginBottom: '1.5rem' }}>
+                <label style={LBL}>Pack Date</label>
+                <input type="date" style={{ ...INPUT, fontSize: '1rem' }} value={date} onChange={e => setDate(e.target.value)} />
+              </div>
+              <div style={{ display: 'flex', gap: '0.6rem' }}>
+                <button onClick={() => setShowNewForm(false)} style={{ flex: 1, background: 'transparent', border: '1px solid rgba(166,120,90,0.3)', color: C.lightBrown, borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', cursor: 'pointer' }}>
+                  Cancel
+                </button>
+                <button onClick={() => { setShowNewForm(false); startSession() }} disabled={!customer.trim() || !pluLoaded}
+                  style={{ flex: 2, background: customer.trim() && pluLoaded ? C.tan : C.medBrown, color: C.dark, border: 'none', borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer', opacity: customer.trim() && pluLoaded ? 1 : 0.6 }}>
+                  Start Scanning
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     )
   }
@@ -697,10 +850,32 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
         padding: '0.6rem 1.25rem', display: 'flex', alignItems: 'center',
         justifyContent: 'space-between', flexShrink: 0,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <span style={{ fontFamily: 'Georgia, serif', fontSize: '0.85rem', color: C.tan, textTransform: 'uppercase', letterSpacing: '0.1em' }}>CMC Scanner</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+          <button onClick={() => { setStarted(false); loadSessions() }} style={{ background: 'none', border: 'none', color: C.lightBrown, fontSize: '0.8rem', cursor: 'pointer', padding: 0 }}>
+            ← Sessions
+          </button>
+          <span style={{ color: 'rgba(166,120,90,0.35)' }}>|</span>
           <span style={{ color: C.cream, fontWeight: 700, fontSize: '1rem' }}>{customer}</span>
           <span style={{ color: C.lightBrown, fontSize: '0.82rem' }}>{date}</span>
+          {/* Status badge + quick-change */}
+          {currentStatus === 'scanning' && (
+            <button onClick={() => updateSessionStatus('value_add')}
+              style={{ background: 'transparent', border: '1px solid rgba(232,136,58,0.4)', color: '#E8883A', borderRadius: 3, padding: '0.2rem 0.6rem', fontSize: '0.72rem', cursor: 'pointer', fontWeight: 600 }}>
+              → Value Add
+            </button>
+          )}
+          {currentStatus === 'value_add' && (
+            <>
+              <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#E8883A', background: 'rgba(232,136,58,0.12)', borderRadius: 99, padding: '2px 8px' }}>◆ Value Add</span>
+              <button onClick={() => updateSessionStatus('complete')}
+                style={{ background: 'transparent', border: `1px solid rgba(76,175,80,0.4)`, color: C.green, borderRadius: 3, padding: '0.2rem 0.6rem', fontSize: '0.72rem', cursor: 'pointer', fontWeight: 600 }}>
+                ✓ Complete
+              </button>
+            </>
+          )}
+          {currentStatus === 'complete' && (
+            <span style={{ fontSize: '0.72rem', fontWeight: 700, color: C.green, background: 'rgba(76,175,80,0.1)', borderRadius: 99, padding: '2px 8px' }}>✓ Complete</span>
+          )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
           {totalInputLbs > 0 && totalOutputLbs > 0 && (
@@ -722,7 +897,7 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
               {reportLoading ? '⟳ Building…' : '📋 Packout Slip'}
             </button>
           )}
-          <Link href="/processing" style={{ color: C.lightBrown, fontSize: '0.78rem', textDecoration: 'none' }}>Processing ›</Link>
+          <Link href="/processing" style={{ color: C.lightBrown, fontSize: '0.75rem', textDecoration: 'none', opacity: 0.6 }}>PLU Browser ›</Link>
         </div>
       </div>
 
