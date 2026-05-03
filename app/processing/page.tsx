@@ -465,7 +465,8 @@ function ExportTab() {
     ].join(','))
 
     const csv = [headers.join(','), ...rows].join('\r\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
+    // UTF-8 BOM (﻿) tells Excel and Hobart to read as UTF-8, prevents mojibake
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' })
     const url  = URL.createObjectURL(blob)
     const a    = document.createElement('a')
     a.href     = url
@@ -699,7 +700,12 @@ function UploadTab() {
       setAllItems(items)
       setPreview(items.slice(0, 8))
     }
-    reader.readAsBinaryString(file)
+    // .dat files need raw bytes; CSV files should be decoded as text (handles UTF-8 + BOM)
+    if (isDat) {
+      reader.readAsBinaryString(file)
+    } else {
+      reader.readAsText(file, 'utf-8')
+    }
   }
 
   async function handleUpload() {

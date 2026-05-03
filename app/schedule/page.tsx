@@ -36,6 +36,30 @@ const SPECIES_EMOJI: Record<string, string> = {
 }
 function speciesColor(s: string) { return SPECIES_CLR[s] ?? '#9CA3AF' }
 
+// Encode: full days use "FULL|{note}", closed days use plain reason text
+function encodeBlock(type: 'closed' | 'full', note: string) {
+  return type === 'full' ? `FULL|${note}` : note
+}
+function decodeBlock(reason: string): { type: 'full' | 'closed'; note: string } {
+  if (reason.startsWith('FULL|')) return { type: 'full', note: reason.slice(5) }
+  if (reason === 'FULL')          return { type: 'full', note: '' }
+  return { type: 'closed', note: reason }
+}
+
+// Find the next weekday that isn't blocked or a federal holiday
+function findNextOpen(blockedSet: Record<string, string>): string {
+  const dt = new Date()
+  dt.setHours(12, 0, 0, 0)
+  dt.setDate(dt.getDate() + 1)
+  for (let i = 0; i < 365; i++) {
+    const ds  = dt.toISOString().slice(0, 10)
+    const dow = dt.getDay()
+    if (dow !== 0 && dow !== 6 && !blockedSet[ds] && !HOLIDAYS[ds]) return ds
+    dt.setDate(dt.getDate() + 1)
+  }
+  return new Date().toISOString().slice(0, 10)
+}
+
 function abbrevProducer(source: string): string {
   if (!source) return '?'
   const words = source.trim().split(/\s+/)
@@ -221,7 +245,11 @@ export default function SchedulePage() {
         </span>
         <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.75rem', color: '#9CA3AF' }}>
           <span style={{ width: 10, height: 10, borderRadius: '2px', background: 'repeating-linear-gradient(45deg,rgba(120,120,120,0.4) 0px,rgba(120,120,120,0.4) 2px,transparent 2px,transparent 6px)', border: '1px solid rgba(150,150,150,0.3)', display: 'inline-block' }} />
-          Unavailable
+          Closed
+        </span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.75rem', color: '#D97706' }}>
+          <span style={{ width: 10, height: 10, borderRadius: '2px', background: 'rgba(217,119,6,0.35)', border: '1px solid rgba(217,119,6,0.6)', display: 'inline-block' }} />
+          Full
         </span>
       </div>
 
@@ -241,6 +269,17 @@ export default function SchedulePage() {
             </button>
           ))}
 
+          {view === 'calendar' && (
+            <button onClick={() => {
+              const ds = findNextOpen(blockedSet)
+              const dt = new Date(ds + 'T12:00:00')
+              setCalYear(dt.getFullYear())
+              setCalMonth(dt.getMonth())
+              setSelectedDay(ds)
+            }} style={{ ...btnStyle('rgba(76,175,80,0.15)', '#4CAF50'), border: '1px solid rgba(76,175,80,0.3)' }}>
+              → Next Open
+            </button>
+          )}
           <button onClick={load} style={{ ...btnStyle('transparent','var(--tan)'), marginLeft:'auto', border:'1px solid rgba(166,120,90,0.3)' }}>↺ Refresh</button>
         </div>
 
@@ -305,6 +344,7 @@ function CalendarView({
   const cells: (number|null)[] = [...Array(firstDow).fill(null), ...Array.from({length: numDays}, (_,i)=>i+1)]
   while (cells.length % 7 !== 0) cells.push(null)
   const [blockReason, setBlockReason] = useState('')
+  const [blockType,   setBlockType]   = useState<'closed' | 'full'>('closed')
 
   function dateStr(day: number) {
     return `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`
@@ -361,18 +401,28 @@ function CalendarView({
           {cells.map((day, i) => {
             if (!day) return <div key={`e${i}`} style={{ minHeight: '95px', borderRight: '1px solid rgba(166,120,90,0.08)', borderBottom: '1px solid rgba(166,120,90,0.08)', background: 'rgba(0,0,0,0.15)' }} />
 
-            const ds        = dateStr(day)
-            const appts     = apptByDate[ds] ?? []
-            const isToday   = ds === today
-            const isSel     = ds === selectedDay
-            const isHoliday = !!HOLIDAYS[ds]
-            const isBlocked = !!blockedSet[ds]
+            const ds         = dateStr(day)
+            const appts      = apptByDate[ds] ?? []
+            const isToday    = ds === today
+            const isSel      = ds === selectedDay
+            const isHoliday  = !!HOLIDAYS[ds]
+            const isBlocked  = !!blockedSet[ds]
+            const blockInfo  = isBlocked ? decodeBlock(blockedSet[ds]) : null
+            const isFull     = blockInfo?.type === 'full'
+            const isClosed   = isBlocked && !isFull
 
             // Species counts for this day
             const dayCounts: Record<string, number> = {}
             for (const a of appts) dayCounts[a.species] = (dayCounts[a.species] ?? 0) + (a.head_count ?? 1)
 
-            let cellBg = isSel ? 'rgba(117,71,27,0.4)' : isToday ? 'rgba(117,71,27,0.18)' : 'transparent'
+            const baseBg = isSel ? 'rgba(117,71,27,0.4)' : isToday ? 'rgba(117,71,27,0.18)' : 'transparent'
+            const cellBg = isFull
+              ? `linear-gradient(rgba(217,119,6,0.18),rgba(217,119,6,0.18)),${baseBg}`
+              : isClosed
+              ? `repeating-linear-gradient(45deg,rgba(80,80,80,0.25) 0px,rgba(80,80,80,0.25) 3px,${baseBg} 3px,${baseBg} 9px)`
+              : isHoliday
+              ? `linear-gradient(rgba(200,50,50,0.08),rgba(200,50,50,0.08)),${baseBg}`
+              : baseBg
 
             return (
               <div key={ds} onClick={() => onSelectDay(ds)} style={{
@@ -380,11 +430,7 @@ function CalendarView({
                 borderRight: '1px solid rgba(166,120,90,0.08)',
                 borderBottom: '1px solid rgba(166,120,90,0.08)',
                 cursor: 'pointer', position: 'relative', transition: 'background 0.15s',
-                background: isBlocked
-                  ? `repeating-linear-gradient(45deg,rgba(80,80,80,0.25) 0px,rgba(80,80,80,0.25) 3px,${cellBg} 3px,${cellBg} 9px)`
-                  : isHoliday
-                  ? `linear-gradient(rgba(200,50,50,0.08),rgba(200,50,50,0.08)),${cellBg}`
-                  : cellBg,
+                background: cellBg,
               }}>
                 {/* Date number */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.2rem' }}>
@@ -401,9 +447,14 @@ function CalendarView({
                 </div>
 
                 {/* Blocked label */}
-                {isBlocked && (
+                {isFull && (
+                  <div style={{ fontSize: '0.58rem', color: '#D97706', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.2rem', fontWeight: 700 }}>
+                    Full
+                  </div>
+                )}
+                {isClosed && (
                   <div style={{ fontSize: '0.58rem', color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.2rem' }}>
-                    Unavailable
+                    Closed
                   </div>
                 )}
 
@@ -482,25 +533,45 @@ function CalendarView({
               )}
 
               {/* Block / Unblock */}
-              {dayBlocked !== undefined ? (
-                <div>
-                  <div style={{ fontSize: '0.75rem', color: '#9CA3AF', marginBottom: '0.4rem' }}>
-                    🔒 Unavailable{dayBlocked ? `: ${dayBlocked}` : ''}
+              {dayBlocked !== undefined ? (() => {
+                const info = decodeBlock(dayBlocked)
+                return (
+                  <div>
+                    <div style={{ fontSize: '0.75rem', marginBottom: '0.4rem',
+                      color: info.type === 'full' ? '#D97706' : '#9CA3AF' }}>
+                      {info.type === 'full' ? '⚠ Full' : '🔒 Closed'}
+                      {info.note ? `: ${info.note}` : ''}
+                    </div>
+                    <button onClick={() => onUnblock(selectedDay)} style={{ ...btnStyle('rgba(100,100,100,0.3)','#9CA3AF'), fontSize: '0.75rem', padding: '0.3rem 0.7rem' }}>
+                      ✓ Mark Available
+                    </button>
                   </div>
-                  <button onClick={() => onUnblock(selectedDay)} style={{ ...btnStyle('rgba(100,100,100,0.3)','#9CA3AF'), fontSize: '0.75rem', padding: '0.3rem 0.7rem' }}>
-                    ✓ Mark Available
-                  </button>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-                  <input
-                    value={blockReason} onChange={e => setBlockReason(e.target.value)}
-                    placeholder="Reason (optional)"
-                    style={{ flex: 1, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: '3px', padding: '0.3rem 0.5rem', color: 'var(--cream)', fontSize: '0.75rem' }}
-                  />
-                  <button onClick={() => { onBlock(selectedDay, blockReason); setBlockReason('') }} style={{ ...btnStyle('rgba(180,60,60,0.3)','#fca5a5'), fontSize: '0.75rem', padding: '0.3rem 0.6rem', whiteSpace: 'nowrap' }}>
-                    🔒 Block
-                  </button>
+                )
+              })() : (
+                <div>
+                  <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '0.4rem' }}>
+                    {(['closed', 'full'] as const).map(t => (
+                      <button key={t} onClick={() => setBlockType(t)} style={{
+                        background: blockType === t ? (t === 'full' ? 'rgba(217,119,6,0.3)' : 'rgba(100,100,100,0.3)') : 'rgba(255,255,255,0.04)',
+                        border: `1px solid ${blockType === t ? (t === 'full' ? 'rgba(217,119,6,0.5)' : 'rgba(150,150,150,0.4)') : 'rgba(166,120,90,0.2)'}`,
+                        color: blockType === t ? (t === 'full' ? '#D97706' : '#9CA3AF') : 'var(--tan)',
+                        borderRadius: '3px', padding: '0.25rem 0.65rem', fontSize: '0.73rem', cursor: 'pointer', fontWeight: blockType === t ? 700 : 400,
+                      }}>
+                        {t === 'closed' ? '🔒 Closed' : '⚠ Full'}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                    <input
+                      value={blockReason} onChange={e => setBlockReason(e.target.value)}
+                      placeholder="Note (optional)"
+                      style={{ flex: 1, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: '3px', padding: '0.3rem 0.5rem', color: 'var(--cream)', fontSize: '0.75rem' }}
+                    />
+                    <button onClick={() => { onBlock(selectedDay, encodeBlock(blockType, blockReason)); setBlockReason('') }}
+                      style={{ ...btnStyle(blockType === 'full' ? 'rgba(217,119,6,0.25)' : 'rgba(180,60,60,0.3)', blockType === 'full' ? '#D97706' : '#fca5a5'), fontSize: '0.75rem', padding: '0.3rem 0.6rem', whiteSpace: 'nowrap' }}>
+                      Mark
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

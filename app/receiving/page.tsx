@@ -128,6 +128,7 @@ function AnimalTab() {
   const [success,      setSuccess]      = useState(false)
   const [saveError,    setSaveError]    = useState('')
   const [speciesFilter, setSpeciesFilter] = useState('')
+  const [dateFilter,    setDateFilter]    = useState('')
 
   const [shared, setShared] = useState({
     received_at:    new Date().toISOString().slice(0, 16),
@@ -154,8 +155,12 @@ function AnimalTab() {
 
   // All loaded appointments are pending check-in
   const allPending     = appointments
-  const pending        = speciesFilter ? allPending.filter(a => a.species === speciesFilter) : allPending
+  const pending        = allPending.filter(a =>
+    (!speciesFilter || a.species === speciesFilter) &&
+    (!dateFilter    || a.harvest_date === dateFilter)
+  )
   const pendingSpecies = [...new Set(allPending.map(a => a.species))].sort()
+  const pendingDates   = [...new Set(allPending.map(a => a.harvest_date))].sort()
 
   function selectAppt(a: HarvestAppointment) {
     setSelected(a)
@@ -240,21 +245,35 @@ function AnimalTab() {
       {/* Left — appointment list */}
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '0.75rem 1.1rem', borderBottom: '1px solid rgba(166,120,90,0.2)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: pendingSpecies.length > 1 ? '0.55rem' : 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.55rem' }}>
             <span style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.12em' }}>
-              Pending Check-In ({allPending.length})
+              Pending Check-In ({pending.length}{pending.length !== allPending.length ? ` of ${allPending.length}` : ''})
             </span>
+            {(dateFilter || speciesFilter) && (
+              <button onClick={() => { setDateFilter(''); setSpeciesFilter('') }}
+                style={{ background: 'none', border: 'none', color: C.lightBrown, fontSize: '0.72rem', cursor: 'pointer', textDecoration: 'underline' }}>
+                clear
+              </button>
+            )}
           </div>
-          {pendingSpecies.length > 1 && (
-            <select
-              value={speciesFilter}
-              onChange={e => setSpeciesFilter(e.target.value)}
-              style={{ ...INPUT, fontSize: '0.8rem', padding: '0.35rem 0.6rem' }}
-            >
-              <option value="">All species</option>
-              {pendingSpecies.map(s => <option key={s} value={s}>{s}</option>)}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+            <select value={dateFilter} onChange={e => setDateFilter(e.target.value)}
+              style={{ ...INPUT, fontSize: '0.8rem', padding: '0.35rem 0.6rem' }}>
+              <option value="">All dates</option>
+              {pendingDates.map(d => (
+                <option key={d} value={d}>
+                  {new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                </option>
+              ))}
             </select>
-          )}
+            {pendingSpecies.length > 1 && (
+              <select value={speciesFilter} onChange={e => setSpeciesFilter(e.target.value)}
+                style={{ ...INPUT, fontSize: '0.8rem', padding: '0.35rem 0.6rem' }}>
+                <option value="">All species</option>
+                {pendingSpecies.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            )}
+          </div>
         </div>
         <div style={{ overflowY: 'auto', flex: 1 }}>
           {pending.length === 0 && (
@@ -539,9 +558,11 @@ function AnimalCard({ index, total, species, slot, onChange, onPhotoChange, appo
 // BOX PRODUCT TAB
 // ══════════════════════════════════════════════════════════════════════════════
 function BoxTab() {
-  const [logs,    setLogs]    = useState<BoxReceivingLog[]>([])
-  const [saving,  setSaving]  = useState(false)
-  const [success, setSuccess] = useState(false)
+  const [logs,       setLogs]       = useState<BoxReceivingLog[]>([])
+  const [saving,     setSaving]     = useState(false)
+  const [success,    setSuccess]    = useState(false)
+  const [dateFilter, setDateFilter] = useState('')
+  const [search,     setSearch]     = useState('')
 
   const empty = {
     received_at: new Date().toISOString().slice(0, 10),
@@ -586,6 +607,16 @@ function BoxTab() {
     // Auto-print the CMC box label immediately
     if (saved?.id) printReceivingLabel(saved)
   }
+
+  const logDates    = [...new Set(logs.map(l => l.received_at.slice(0, 10)))].sort().reverse()
+  const filteredLogs = logs.filter(l => {
+    if (dateFilter && !l.received_at.startsWith(dateFilter)) return false
+    if (search) {
+      const q = search.toLowerCase()
+      if (!l.product.toLowerCase().includes(q) && !l.vendor.toLowerCase().includes(q)) return false
+    }
+    return true
+  })
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '380px 1fr', gap: '1.5rem', height: '100%' }}>
@@ -647,14 +678,43 @@ function BoxTab() {
 
       {/* Right — recent log */}
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.2)', fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.12em' }}>
-          Recent Entries
+        <div style={{ padding: '0.75rem 1.1rem', borderBottom: '1px solid rgba(166,120,90,0.2)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.55rem' }}>
+            <span style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.12em' }}>
+              Received ({filteredLogs.length}{filteredLogs.length !== logs.length ? ` of ${logs.length}` : ''})
+            </span>
+            {(dateFilter || search) && (
+              <button onClick={() => { setDateFilter(''); setSearch('') }}
+                style={{ background: 'none', border: 'none', color: C.lightBrown, fontSize: '0.72rem', cursor: 'pointer', textDecoration: 'underline' }}>
+                clear
+              </button>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <select value={dateFilter} onChange={e => setDateFilter(e.target.value)}
+              style={{ ...INPUT, fontSize: '0.8rem', padding: '0.35rem 0.6rem', flex: '0 0 auto', width: 'auto' }}>
+              <option value="">All dates</option>
+              {logDates.map(d => (
+                <option key={d} value={d}>
+                  {new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                </option>
+              ))}
+            </select>
+            <input
+              placeholder="Search product or vendor…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              style={{ ...INPUT, fontSize: '0.8rem', padding: '0.35rem 0.6rem' }}
+            />
+          </div>
         </div>
         <div style={{ overflowY: 'auto', flex: 1 }}>
-          {logs.length === 0 && (
-            <p style={{ color: C.lightBrown, fontSize: '0.85rem', padding: '1.5rem', textAlign: 'center' }}>No box product entries yet</p>
+          {filteredLogs.length === 0 && (
+            <p style={{ color: C.lightBrown, fontSize: '0.85rem', padding: '1.5rem', textAlign: 'center' }}>
+              {logs.length === 0 ? 'No box product entries yet' : 'No entries match filters'}
+            </p>
           )}
-          {logs.map(log => (
+          {filteredLogs.map(log => (
             <div key={log.id} style={{ padding: '0.9rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.1)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.2rem' }}>
                 <span style={{ color: C.cream, fontWeight: 600, fontSize: '0.9rem' }}>{log.product}</span>
