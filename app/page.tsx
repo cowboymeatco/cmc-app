@@ -206,6 +206,7 @@ export default function Dashboard() {
             { href: '/harvest',             icon: '🐄', label: 'Harvest'             },
             { href: '/cutting-instructions',icon: '📋', label: 'Cutting Instructions'},
             { href: '/processing',          icon: '🔪', label: 'Processing'          },
+            { href: '/scanner',             icon: '🔍', label: 'Floor Scanner'       },
             { href: '/delivery',            icon: '🚚', label: 'Delivery'            },
           ].map(q => (
             <Link key={q.href} href={q.href} style={{ textDecoration: 'none' }}>

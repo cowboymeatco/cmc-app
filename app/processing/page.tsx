@@ -60,13 +60,19 @@ const BTN = (bg: string, color = C.dark): React.CSSProperties => ({
 const SPECIES_LIST = ['', 'Beef', 'Pork', 'Lamb', 'Goat', 'Processed', 'Wild Game', 'Cheese', 'Wholesale', 'Other']
 
 // ── EAN-13 weight-embedded barcode parser ─────────────────────────────────────
-// Format: 2 NNNNN WWWWW C  (prefix=2, PLU=digits 1-5, weight=digits 6-10 ÷1000 lbs, check=digit 12)
+// Hobart format: 2 NNNNN F WWWWW C
+//   [0]    = '2' (weight-embedded prefix)
+//   [1–5]  = PLU number (5 digits, zero-padded)
+//   [6]    = flag digit (always '0' on Hobart lb config)
+//   [7–11] = weight in hundredths of a pound  (÷ 100)
+//   [12]   = EAN-13 check digit (ignored)
+// Example: 2 00114 0 00069 9  →  PLU=114, Weight=0.69 lbs
 function parseEAN13(barcode: string): { plu: string; weight_lbs: number } | null {
   if (barcode.length !== 13 || !barcode.startsWith('2')) return null
   if (!/^\d{13}$/.test(barcode)) return null
-  const plu        = String(parseInt(barcode.slice(1, 6), 10))   // "00114" → "114"
-  const weight_lbs = parseInt(barcode.slice(6, 11), 10) / 1000   // "40006" → 40.006
-  if (isNaN(parseInt(plu)) || isNaN(weight_lbs) || weight_lbs <= 0) return null
+  const plu        = String(parseInt(barcode.substring(1, 6), 10))   // "00114" → "114"
+  const weight_lbs = parseInt(barcode.substring(7, 12), 10) / 100    // "00069" → 0.69
+  if (!plu || isNaN(weight_lbs) || weight_lbs <= 0) return null
   return { plu, weight_lbs }
 }
 
@@ -1551,6 +1557,8 @@ export default function ProcessingPage() {
           <Link href="/" style={{ color: C.lightBrown, textDecoration: 'none', fontSize: '0.82rem' }}>← Dashboard</Link>
           <span style={{ color: 'rgba(166,120,90,0.4)' }}>|</span>
           <h1 style={{ fontFamily: 'Georgia, serif', fontSize: '1.1rem', fontWeight: 700, color: C.cream, letterSpacing: '0.08em', textTransform: 'uppercase', margin: 0 }}>Processing</h1>
+          <span style={{ color: 'rgba(166,120,90,0.4)' }}>|</span>
+          <Link href="/scanner" style={{ background: C.green, color: C.dark, textDecoration: 'none', fontSize: '0.78rem', fontWeight: 700, padding: '0.3rem 0.75rem', borderRadius: 3, letterSpacing: '0.04em' }}>🔍 Floor Scanner ↗</Link>
         </div>
         <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden' }}>
           {tabs.map(t => (
