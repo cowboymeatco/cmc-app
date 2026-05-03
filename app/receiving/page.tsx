@@ -126,6 +126,7 @@ function AnimalTab() {
   const [selected,     setSelected]     = useState<HarvestAppointment | null>(null)
   const [saving,       setSaving]       = useState(false)
   const [success,      setSuccess]      = useState(false)
+  const [saveError,    setSaveError]    = useState('')
   const [speciesFilter, setSpeciesFilter] = useState('')
 
   const [shared, setShared] = useState({
@@ -187,6 +188,7 @@ function AnimalTab() {
   async function handleCheckIn() {
     if (!selected) return
     setSaving(true)
+    setSaveError('')
     const animals = slots.map((s, i) => ({
       animal_index:   i + 1,
       ear_tag:        s.ear_tag,
@@ -196,25 +198,36 @@ function AnimalTab() {
       photo_url:      s.photo_url,
       status:         s.no_show ? 'no_show' : 'received',
     }))
-    await fetch('/api/receiving', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type:           'animal',
-        appointment_id: selected.id,
-        received_at:    shared.received_at,
-        received_by:    shared.received_by,
-        health_cert_no: shared.health_cert_no,
-        brand_insp_no:  shared.brand_insp_no,
-        notes:          shared.notes,
-        animals,
-      }),
-    })
-    setSaving(false)
-    setSuccess(true)
-    setSelected(null)
-    setSlots([])
-    load()
+    try {
+      const res = await fetch('/api/receiving', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type:           'animal',
+          appointment_id: selected.id,
+          received_at:    shared.received_at,
+          received_by:    shared.received_by,
+          health_cert_no: shared.health_cert_no,
+          brand_insp_no:  shared.brand_insp_no,
+          notes:          shared.notes,
+          animals,
+        }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        setSaveError(body.error ?? `Save failed (HTTP ${res.status}) — check Supabase logs`)
+        setSaving(false)
+        return   // keep form intact so data isn't lost
+      }
+      setSaving(false)
+      setSuccess(true)
+      setSelected(null)
+      setSlots([])
+      load()
+    } catch (err) {
+      setSaveError(`Network error — ${err instanceof Error ? err.message : 'check connection and retry'}`)
+      setSaving(false)
+    }
   }
 
   const over30Count  = slots.filter(s => s.over_30_months && !s.no_show).length
@@ -281,7 +294,13 @@ function AnimalTab() {
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflowY: 'auto' }}>
         {success && (
           <div style={{ background: 'rgba(76,175,80,0.15)', border: '1px solid rgba(76,175,80,0.4)', borderRadius: 4, padding: '0.85rem 1.25rem', margin: '1.25rem 1.5rem 0', color: C.green, fontSize: '0.9rem' }}>
-            ✓ Animals checked in successfully
+            ✓ Animals checked in successfully — they now appear in the Harvest log
+          </div>
+        )}
+        {saveError && (
+          <div style={{ background: 'rgba(229,62,62,0.15)', border: '1px solid rgba(229,62,62,0.4)', borderRadius: 4, padding: '0.85rem 1.25rem', margin: '1.25rem 1.5rem 0', color: C.red, fontSize: '0.88rem' }}>
+            <strong>⚠ Check-in failed — your data is still here, try again</strong>
+            <div style={{ marginTop: '0.35rem', fontFamily: 'monospace', fontSize: '0.8rem', opacity: 0.85 }}>{saveError}</div>
           </div>
         )}
 
