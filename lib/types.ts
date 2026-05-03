@@ -125,6 +125,9 @@ export interface HarvestLog {
   is_verification:        boolean
   direct_observation:     boolean
   over_30_months:         boolean
+  producer:               string
+  ear_tag:                string
+  breed:                  string
 }
 
 export interface ChillLog {

@@ -56,16 +56,32 @@ function printCarcassLabel(h: HarvestLog) {
   const barcodeVal  = `CT-${h.id}`
   const dateStr     = new Date(h.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
   const perHalf     = h.hot_carcass_weight_lbs != null ? (h.hot_carcass_weight_lbs / 2).toFixed(1) : null
-  const otmHtml     = h.over_30_months
+
+  // Identifier line: Tag # · Ear Tag · Sex · Breed  (concat whatever we have)
+  const identParts  = [
+    h.carcass_tag  ? `#${h.carcass_tag}`  : null,
+    h.ear_tag      ? `ET: ${h.ear_tag}`   : null,
+    h.sex          || null,
+    h.breed        || null,
+  ].filter(Boolean)
+  const identLine   = identParts.join(' · ')
+
+  const producerHtml = h.producer
+    ? `<div class="producer">${h.producer}</div>`
+    : ''
+  const identHtml    = identLine
+    ? `<div class="ident">${identLine}</div>`
+    : ''
+  const otmHtml      = h.over_30_months
     ? `<div class="otm">&#9888; OVER 30 MONTHS</div>`
     : ''
-  const hcwHtml     = perHalf != null
+  const hcwHtml      = perHalf != null
     ? `<div class="row"><span class="lbl">HCW / half</span><span class="val">${perHalf} lbs</span></div>`
     : ''
-  const yieldHtml   = h.yield_pct != null
+  const yieldHtml    = h.yield_pct != null
     ? `<div class="row"><span class="lbl">Yield</span><span class="val">${h.yield_pct}%</span></div>`
     : ''
-  const inspHtml    = h.inspector_initials
+  const inspHtml     = h.inspector_initials
     ? `<div class="row"><span class="lbl">Inspector</span><span class="val">${h.inspector_initials}</span></div>`
     : ''
 
@@ -86,24 +102,28 @@ function printCarcassLabel(h: HarvestLog) {
                line-height: 1.05; margin: 0; letter-spacing: 0.03em; }
     .bc-wrap { text-align: center; margin: 4pt 0 2pt; }
     .bc-wrap svg { max-width: 100%; }
-    .row     { display: flex; justify-content: space-between; align-items: baseline;
-               font-size: 7.5pt; margin: 2pt 0; }
-    .lbl     { color: #555; }
-    .val     { font-weight: 600; }
-    .otm     { margin-top: 5pt; text-align: center; font-size: 8pt; font-weight: bold;
-               color: #bb0000; border: 1.5pt solid #bb0000; padding: 2pt 0;
-               letter-spacing: 0.14em; }
+    .row      { display: flex; justify-content: space-between; align-items: baseline;
+                font-size: 7.5pt; margin: 2pt 0; }
+    .lbl      { color: #555; }
+    .val      { font-weight: 600; }
+    .producer { text-align: center; font-size: 9pt; font-weight: bold; margin-bottom: 1pt; }
+    .ident    { text-align: center; font-size: 7pt; color: #444; letter-spacing: 0.04em;
+                margin-bottom: 3pt; }
+    .otm      { margin-top: 5pt; text-align: center; font-size: 8pt; font-weight: bold;
+                color: #bb0000; border: 1.5pt solid #bb0000; padding: 2pt 0;
+                letter-spacing: 0.14em; }
   </style>
   </head><body>
   <div class="co">Cowboy Meat Co.</div>
   <div class="sub">&middot; Carcass Tag &middot;</div>
   <hr/>
+  ${producerHtml}
   <div class="species">${h.species}</div>
   <div class="tagnum">${h.carcass_tag || '—'}</div>
+  ${identHtml}
   <div class="bc-wrap"><svg id="bc"></svg></div>
   <hr/>
   <div class="row"><span class="lbl">Date</span><span class="val">${dateStr}</span></div>
-  <div class="row"><span class="lbl">Sex</span><span class="val">${h.sex || '—'}</span></div>
   ${hcwHtml}${yieldHtml}${inspHtml}${otmHtml}
   <script>
     window.onload = function() {
@@ -132,6 +152,8 @@ function tempColor(t: number | null) {
 // ══════════════════════════════════════════════════════════════════════════════
 interface CarcassRow {
   carcass_tag:          string
+  ear_tag:              string
+  breed:                string
   sex:                  string
   live_weight_lbs:      string
   half_1_weight:        string   // each half weighed separately
@@ -148,7 +170,7 @@ interface CarcassRow {
 
 function emptyCarcass(): CarcassRow {
   return {
-    carcass_tag: '', sex: '', live_weight_lbs: '',
+    carcass_tag: '', ear_tag: '', breed: '', sex: '', live_weight_lbs: '',
     half_1_weight: '', half_2_weight: '',
     intervention_applied: true, intervention_temp_f: '',
     final_carcass_temp_f: '', ccp_pass: true,
@@ -251,6 +273,11 @@ function CarcassForm({
           <label style={LABEL}>Carcass Tag #</label>
           <input style={INPUT} value={row.carcass_tag} onChange={f('carcass_tag')} placeholder="e.g. 001" />
         </div>
+        {/* Ear Tag */}
+        <div style={{ marginBottom: '0.85rem' }}>
+          <label style={LABEL}>Ear Tag / ID</label>
+          <input style={INPUT} value={row.ear_tag} onChange={f('ear_tag')} placeholder="e.g. 987" />
+        </div>
         {/* Sex */}
         <div style={{ marginBottom: '0.85rem' }}>
           <label style={LABEL}>Sex</label>
@@ -258,6 +285,11 @@ function CarcassForm({
             <option value="">Select…</option>
             {sexOpts.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
+        </div>
+        {/* Breed */}
+        <div style={{ marginBottom: '0.85rem' }}>
+          <label style={LABEL}>Breed</label>
+          <input style={INPUT} value={row.breed} onChange={f('breed')} placeholder="e.g. Angus" />
         </div>
         {/* Live weight */}
         <div style={{ marginBottom: '0.85rem' }}>
@@ -380,7 +412,7 @@ function HarvestTab() {
     const existingForDate = harvestLogs.filter(h => h.harvest_date === a.harvest_date).length
 
     // Fetch receiving records for this appointment (sorted by animal_index)
-    let receivingAnimals: { animal_index: number; sex: string; over_30_months: boolean }[] = []
+    let receivingAnimals: { animal_index: number; sex: string; over_30_months: boolean; ear_tag: string; breed: string }[] = []
     try {
       const res = await fetch(`/api/receiving?type=animal&appointment_id=${encodeURIComponent(a.id)}`)
       if (res.ok) receivingAnimals = await res.json().catch(() => [])
@@ -392,6 +424,8 @@ function HarvestTab() {
       return {
         ...emptyCarcass(),
         carcass_tag:    tagNum,
+        ear_tag:        animal?.ear_tag        ?? '',
+        breed:          animal?.breed          ?? '',
         sex:            animal?.sex            ?? '',
         over_30_months: animal?.over_30_months ?? false,
       }
@@ -420,6 +454,7 @@ function HarvestTab() {
         inspector_initials: header.inspector_initials,
         performed_by:       header.performed_by,
         intervention_type:  header.intervention_type,
+        producer:           selected.source || (selected.customers?.[0]?.customer_name ?? ''),
         carcasses: carcasses.map(c => {
           const h1  = parseFloat(c.half_1_weight)
           const h2  = parseFloat(c.half_2_weight)
@@ -431,6 +466,8 @@ function HarvestTab() {
             : header.default_solution_temp ? parseFloat(header.default_solution_temp) : null
           return {
             carcass_tag:            c.carcass_tag,
+            ear_tag:                c.ear_tag,
+            breed:                  c.breed,
             sex:                    c.sex,
             live_weight_lbs:        c.live_weight_lbs ? parseFloat(c.live_weight_lbs) : null,
             hot_carcass_weight_lbs: hcw,
@@ -476,15 +513,19 @@ function HarvestTab() {
                 transition: 'background 0.15s',
               }}
             >
-              <div style={{ color: C.cream, fontWeight: 600, fontSize: '0.9rem', marginBottom: '0.2rem' }}>
+              <div style={{ color: C.cream, fontWeight: 600, fontSize: '0.9rem', marginBottom: '0.15rem' }}>
                 {a.species} — {a.head_count} head
               </div>
-              <div style={{ fontSize: '0.78rem', color: C.tan }}>
+              {a.source && (
+                <div style={{ fontSize: '0.85rem', color: C.tan, fontWeight: 600, marginBottom: '0.1rem' }}>
+                  {a.source}
+                </div>
+              )}
+              <div style={{ fontSize: '0.76rem', color: C.lightBrown }}>
                 {new Date(a.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
-                {a.source ? ` · ${a.source}` : ''}
               </div>
               {a.customers?.length > 0 && (
-                <div style={{ fontSize: '0.75rem', color: C.lightBrown, marginTop: '0.2rem' }}>
+                <div style={{ fontSize: '0.74rem', color: C.lightBrown, marginTop: '0.1rem' }}>
                   {a.customers.map(c => c.customer_name).join(', ')}
                 </div>
               )}
@@ -504,8 +545,12 @@ function HarvestTab() {
                   <div>
                     <div style={{ color: C.cream, fontSize: '0.85rem' }}>
                       {h.species} — Tag {h.carcass_tag || '—'}
+                      {h.ear_tag ? <span style={{ color: C.lightBrown, fontWeight: 400 }}> · {h.ear_tag}</span> : null}
                     </div>
-                    <div style={{ fontSize: '0.75rem', color: C.tan }}>
+                    {h.producer && (
+                      <div style={{ fontSize: '0.76rem', color: C.tan, fontWeight: 600 }}>{h.producer}</div>
+                    )}
+                    <div style={{ fontSize: '0.74rem', color: C.lightBrown }}>
                       {new Date(h.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                       {h.hot_carcass_weight_lbs ? ` · ${h.hot_carcass_weight_lbs} lbs HCW` : ''}
                       {h.yield_pct ? ` · ${h.yield_pct}%` : ''}

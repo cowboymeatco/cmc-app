@@ -71,6 +71,9 @@ export async function POST(req: NextRequest) {
     is_verification:        c.is_verification ?? false,
     direct_observation:     c.direct_observation ?? false,
     over_30_months:         c.over_30_months ?? false,
+    producer:               fields.producer ?? '',
+    ear_tag:                c.ear_tag ?? '',
+    breed:                  c.breed ?? '',
   }))
 
   const { data, error } = await supabase
