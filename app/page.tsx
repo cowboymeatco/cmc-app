@@ -31,18 +31,27 @@ export default function Dashboard() {
   const [processing, setProcessing] = useState<number | null>(null)
   const [delivery,   setDelivery]   = useState<number | null>(null)
   const [cutInstr,   setCutInstr]   = useState<number | null>(null)
+  const [orders,     setOrders]     = useState<number | null>(null)
+  const [valueAdd,   setValueAdd]   = useState<number | null>(null)
 
   useEffect(() => {
     Promise.allSettled([
       fetch('/api/appointments').then(r => r.json()),
       fetch(`/api/processing/records?date=${todayISO}`).then(r => r.json()),
       fetch(`/api/delivery?date=${todayISO}`).then(r => r.json()),
-    ]).then(([apptRes, procRes, delivRes]) => {
-      const appts = apptRes.status === 'fulfilled' && Array.isArray(apptRes.value) ? apptRes.value : []
-      const procs = procRes.status  === 'fulfilled' && Array.isArray(procRes.value)  ? procRes.value  : []
-      const deliv = delivRes.status === 'fulfilled' && Array.isArray(delivRes.value) ? delivRes.value : []
+      fetch('/api/orders').then(r => r.json()),
+      fetch('/api/value-add').then(r => r.json()),
+    ]).then(([apptRes, procRes, delivRes, ordersRes, vaRes]) => {
+      const appts  = apptRes.status    === 'fulfilled' && Array.isArray(apptRes.value)    ? apptRes.value    : []
+      const procs  = procRes.status    === 'fulfilled' && Array.isArray(procRes.value)    ? procRes.value    : []
+      const deliv  = delivRes.status   === 'fulfilled' && Array.isArray(delivRes.value)   ? delivRes.value   : []
+      const ords   = ordersRes.status  === 'fulfilled' && Array.isArray(ordersRes.value)  ? ordersRes.value  : []
+      const vaJobs = vaRes.status      === 'fulfilled' && Array.isArray(vaRes.value)      ? vaRes.value      : []
 
-      type Appt = { status: string; harvest_date: string; customers?: { linked_cutting_instruction_id: string }[] }
+      type Appt  = { status: string; harvest_date: string; customers?: { linked_cutting_instruction_id: string }[] }
+      type Order = { status: string }
+      type VAJob = { status: string }
+
       const upcoming      = appts.filter((a: Appt) => a.status !== 'Complete').length
       const todayHarvest  = appts.filter((a: Appt) => a.harvest_date === todayISO && a.status !== 'Complete').length
       const missingCut    = appts.filter((a: Appt) =>
@@ -55,6 +64,8 @@ export default function Dashboard() {
       setProcessing(procs.length)
       setDelivery(deliv.length)
       setCutInstr(missingCut)
+      setOrders(ords.filter((o: Order) => o.status !== 'fulfilled').length)
+      setValueAdd(vaJobs.filter((j: VAJob) => j.status !== 'complete').length)
     })
   }, [todayISO])
 
@@ -101,6 +112,20 @@ export default function Dashboard() {
       when:  'Pickup or delivery day',
       count: delivery,
     },
+    {
+      href: '/orders',    icon: '🛒', color: '#06B6D4',
+      title: 'Retail Orders',
+      desc:  'Customer call-in & walk-in orders',
+      when:  'When a customer orders meat to fill',
+      count: orders,
+    },
+    {
+      href: '/value-add', icon: '🔥', color: '#F97316',
+      title: 'Value Add',
+      desc:  'Smokehouse · Patties · Sausage',
+      when:  'Custom processing or shelf stock jobs',
+      count: valueAdd,
+    },
   ]
 
   return (
@@ -123,10 +148,10 @@ export default function Dashboard() {
         <span style={{ fontSize: '0.8rem', color: 'var(--tan)' }}>{today}</span>
       </header>
 
-      <main style={{ flex: 1, padding: '2rem 2rem 5rem', maxWidth: '1100px', width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
+      <main style={{ flex: 1, padding: '2rem 2rem 5rem', maxWidth: '1400px', width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
 
         {/* Module grid */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem' }}>
           {modules.map(mod => (
             <Link key={mod.href} href={mod.href} style={{ textDecoration: 'none' }}>
               <ModuleCard mod={mod} />
