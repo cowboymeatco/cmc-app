@@ -51,6 +51,50 @@ const SEX_OPTIONS: Record<string, string[]> = {
   Goat:  ['Wether', 'Doe', 'Buck'],
 }
 
+// ── Carcass tag label — 2.4" Brother DK, Code 128 barcode ───────────────────
+function printCarcassLabel(h: HarvestLog) {
+  const barcodeVal = `CT-${h.id}`
+  const dateStr    = new Date(h.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  const html = `<!DOCTYPE html><html><head>
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
+  <style>
+    @page { size: 2.4in auto; margin: 0.08in 0.1in; }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; font-size: 8pt; color: #000; margin: 0; padding: 0; width: 2.2in; }
+    .header { text-align: center; font-size: 6pt; letter-spacing: 0.14em; text-transform: uppercase; color: #555; margin-bottom: 1px; }
+    .divider { border: none; border-top: 0.5pt solid #000; margin: 3px 0; }
+    .tag { text-align: center; font-size: 22pt; font-weight: bold; margin: 3px 0; }
+    .species { text-align: center; font-size: 10pt; font-weight: bold; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 2px; }
+    .barcode-wrap { text-align: center; margin: 3px 0; }
+    .barcode-wrap svg { max-width: 100%; }
+    .row { display: flex; justify-content: space-between; font-size: 7.5pt; margin: 1px 0; }
+    .lbl { color: #666; }
+  </style>
+  </head><body>
+  <div class="header">Cowboy Meat Co. · Carcass Tag</div>
+  <hr class="divider"/>
+  <div class="species">${h.species}</div>
+  <div class="tag">Tag #${h.carcass_tag || '—'}</div>
+  <div class="barcode-wrap"><svg id="bc"></svg></div>
+  <hr class="divider"/>
+  <div class="row"><span class="lbl">Date:</span><span>${dateStr}</span></div>
+  <div class="row"><span class="lbl">Sex:</span><span>${h.sex || '—'}</span></div>
+  ${h.hot_carcass_weight_lbs != null ? `<div class="row"><span class="lbl">HCW:</span><span>${h.hot_carcass_weight_lbs} lbs</span></div>` : ''}
+  ${h.yield_pct != null ? `<div class="row"><span class="lbl">Yield:</span><span>${h.yield_pct}%</span></div>` : ''}
+  <script>
+    window.onload = function() {
+      JsBarcode("#bc", "${barcodeVal}", {
+        format: "CODE128", width: 1.5, height: 38,
+        displayValue: true, fontSize: 8, margin: 2, textMargin: 2,
+      });
+      window.print();
+    };
+  <\/script>
+  </body></html>`
+  const w = window.open('', '_blank', 'width=320,height=460')
+  if (w) { w.document.write(html); w.document.close() }
+}
+
 // ── Temp colour helper ────────────────────────────────────────────────────────
 function tempColor(t: number | null) {
   if (t === null) return C.lightBrown
@@ -225,10 +269,10 @@ function HarvestTab() {
       fetch('/api/appointments'),
       fetch('/api/harvest?type=log'),
     ])
-    const appts: HarvestAppointment[] = await aRes.json()
-    const logs: HarvestLog[] = await hRes.json()
-    setAppointments(appts.filter(a => a.status === 'AnimalIn'))
-    setHarvestLogs(logs)
+    const appts: HarvestAppointment[] = await aRes.json().catch(() => [])
+    const logs: HarvestLog[]          = await hRes.json().catch(() => [])
+    setAppointments(Array.isArray(appts) ? appts.filter(a => a.status === 'AnimalIn') : [])
+    setHarvestLogs(Array.isArray(logs) ? logs : [])
   }, [])
 
   useEffect(() => { load() }, [load])
@@ -322,15 +366,26 @@ function HarvestTab() {
             <div style={{ padding: '0.65rem 1.25rem', borderTop: '1px solid rgba(166,120,90,0.2)', fontSize: '0.7rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
               Recent ({harvestLogs.slice(0, 5).length})
             </div>
-            {harvestLogs.slice(0, 5).map(h => (
-              <div key={h.id} style={{ padding: '0.75rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.08)', opacity: 0.7 }}>
-                <div style={{ color: C.cream, fontSize: '0.85rem' }}>
-                  {h.species} — Tag {h.carcass_tag || '—'}
-                </div>
-                <div style={{ fontSize: '0.75rem', color: C.tan }}>
-                  {new Date(h.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                  {h.hot_carcass_weight_lbs ? ` · HCW ${h.hot_carcass_weight_lbs} lbs` : ''}
-                  {h.yield_pct ? ` · ${h.yield_pct}%` : ''}
+            {harvestLogs.slice(0, 8).map(h => (
+              <div key={h.id} style={{ padding: '0.65rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.08)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ color: C.cream, fontSize: '0.85rem' }}>
+                      {h.species} — Tag {h.carcass_tag || '—'}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: C.tan }}>
+                      {new Date(h.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                      {h.hot_carcass_weight_lbs ? ` · ${h.hot_carcass_weight_lbs} lbs HCW` : ''}
+                      {h.yield_pct ? ` · ${h.yield_pct}%` : ''}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => printCarcassLabel(h)}
+                    title="Print carcass tag"
+                    style={{ background: 'rgba(166,120,90,0.15)', border: '1px solid rgba(166,120,90,0.3)', color: C.tan, borderRadius: 3, padding: '2px 7px', fontSize: '0.7rem', cursor: 'pointer', flexShrink: 0, marginLeft: '0.4rem' }}
+                  >
+                    🏷 Tag
+                  </button>
                 </div>
               </div>
             ))}

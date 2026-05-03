@@ -97,6 +97,9 @@ export default function ScannerPage() {
   const [newInputType, setNewInputType] = useState<'raw' | 'premade' | 'carcass'>('raw')
   const [addingInput,  setAddingInput]  = useState(false)
 
+  // ── Recent sessions (for setup screen) ───────────────────────────────────────
+  const [recentSessions, setRecentSessions] = useState<{ customer: string; date: string; boxCount: number; closed: number }[]>([])
+
   const scanRef       = useRef<HTMLInputElement>(null)
   // Stable refs so event listeners don't go stale
   const activeBoxRef  = useRef<BoxRecord | null>(null)
@@ -113,7 +116,27 @@ export default function ScannerPage() {
   startedRef.current    = started
   inputsRef.current     = inputs
 
-  // ── Load PLU database once ───────────────────────────────────────────────────
+  // ── Load PLU database + recent sessions once ────────────────────────────────
+  useEffect(() => {
+    fetch('/api/boxes?recent=1')
+      .then(r => r.json())
+      .then((data: unknown) => {
+        if (!Array.isArray(data)) return
+        const boxes = data as BoxRecord[]
+        // Group by customer_name + pack_date, most recent first
+        const map = new Map<string, { customer: string; date: string; boxCount: number; closed: number }>()
+        for (const b of boxes) {
+          const key = `${b.customer_name}|${b.pack_date}`
+          if (!map.has(key)) map.set(key, { customer: b.customer_name, date: b.pack_date, boxCount: 0, closed: 0 })
+          const s = map.get(key)!
+          s.boxCount++
+          if (b.is_closed) s.closed++
+        }
+        setRecentSessions([...map.values()].slice(0, 8))
+      })
+      .catch(() => {})
+  }, [])
+
   useEffect(() => {
     fetch('/api/processing?active=true')
       .then(r => r.json())
@@ -218,6 +241,30 @@ export default function ScannerPage() {
     fetch(`/api/processing/inputs?customer_name=${encodeURIComponent(customer.trim())}&session_date=${date}`)
       .then(r => r.json())
       .then((data: unknown) => { if (Array.isArray(data)) setInputs(data as ProcessingInput[]) })
+      .catch(() => {})
+  }
+
+  // ── Reopen an existing session ───────────────────────────────────────────────
+  async function startSessionFromExisting(cust: string, dt: string) {
+    if (!pluLoaded) return
+    setCustomer(cust)
+    setDate(dt)
+    setStarted(true)
+    const res = await fetch(`/api/boxes?customer_name=${encodeURIComponent(cust)}&date=${dt}`)
+    const loadedBoxes: BoxRecord[] = await res.json().catch(() => [])
+    const sorted = [...loadedBoxes].sort((a, b) => a.box_number - b.box_number)
+    setBoxes(sorted)
+    // Active box: first open one, else last box
+    const openBox = sorted.find(b => !b.is_closed) ?? sorted[sorted.length - 1] ?? null
+    setActiveBox(openBox)
+    if (openBox) {
+      const scanRes  = await fetch(`/api/boxes/scans?box_id=${openBox.id}`)
+      const scanData = await scanRes.json().catch(() => [])
+      setScans(Array.isArray(scanData) ? ([...scanData] as ScanLine[]).reverse() : [])
+    }
+    fetch(`/api/processing/inputs?customer_name=${encodeURIComponent(cust)}&session_date=${dt}`)
+      .then(r => r.json())
+      .then((d: unknown) => { if (Array.isArray(d)) setInputs(d as ProcessingInput[]) })
       .catch(() => {})
   }
 
@@ -337,23 +384,24 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
     setScans(prev => prev.filter(s => s.id !== id))
   }
 
-  // ── Add input from CMC box scan ───────────────────────────────────────────────
-  async function addInput(boxId: string) {
+  // ── Add input from CMC box scan or carcass tag scan ──────────────────────────
+  async function addInput(identifier: string) {
+    const isCarcass = /^CT-/.test(identifier)
     setScanValue('')
     setFlash('ok')
-    setLastItem(`📦 Box: ${boxId}`)
+    setLastItem(isCarcass ? `🐄 Carcass tag: ${identifier}` : `📦 Box: ${identifier}`)
     setTimeout(() => setFlash(null), 2000)
     try {
       const res = await fetch('/api/processing/inputs', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
-          session_date:  date,
-          customer_name: customer,
-          pack_date:     date,
-          box_identifier: boxId,
-          input_type:    'raw',
-          source_type:   'received_box',
+          session_date:   date,
+          customer_name:  customer,
+          pack_date:      date,
+          box_identifier: identifier,
+          input_type:     isCarcass ? 'carcass' : 'raw',
+          source_type:    isCarcass ? 'general' : 'received_box',
         }),
       })
       const inp: ProcessingInput = await res.json()
@@ -465,6 +513,41 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
             Start Scanning
           </button>
 
+          {/* Recent sessions */}
+          {recentSessions.length > 0 && (
+            <div style={{ marginTop: '1.5rem', borderTop: '1px solid rgba(166,120,90,0.2)', paddingTop: '1.25rem' }}>
+              <div style={{ fontSize: '0.65rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: '0.6rem' }}>
+                Reopen Recent Session
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                {recentSessions.map(s => (
+                  <button
+                    key={`${s.customer}|${s.date}`}
+                    onClick={() => startSessionFromExisting(s.customer, s.date)}
+                    disabled={!pluLoaded}
+                    style={{
+                      background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.22)',
+                      borderRadius: 4, padding: '0.55rem 0.85rem', cursor: 'pointer',
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      opacity: pluLoaded ? 1 : 0.5,
+                    }}
+                  >
+                    <div style={{ textAlign: 'left' }}>
+                      <div style={{ color: C.cream, fontSize: '0.88rem', fontWeight: 600 }}>{s.customer}</div>
+                      <div style={{ color: C.lightBrown, fontSize: '0.72rem' }}>
+                        {new Date(s.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right', fontSize: '0.72rem', color: s.closed === s.boxCount && s.boxCount > 0 ? C.green : C.tan }}>
+                      <div>{s.boxCount} box{s.boxCount !== 1 ? 'es' : ''}</div>
+                      <div>{s.closed}/{s.boxCount} closed</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div style={{ marginTop: '1.5rem', textAlign: 'center' }}>
             <Link href="/processing" style={{ color: C.lightBrown, fontSize: '0.8rem', textDecoration: 'none' }}>
               ← Back to Processing
@@ -556,8 +639,10 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
               const raw = e.target.value
               // CMC box identifier complete (CMC-YYYYMMDD-NNN = 16 chars)
               if (/^CMC-\d{8}-\d{3}$/.test(raw)) { addInput(raw); return }
-              // Partial CMC prefix — let it build up, don't strip
-              if (/^CMC/i.test(raw)) { setScanValue(raw); return }
+              // Carcass tag complete (CT-{uuid} = "CT-" + 36 char UUID = 39 chars)
+              if (/^CT-[0-9a-f-]{36}$/.test(raw)) { addInput(raw); return }
+              // Partial CMC or CT prefix — let it build up, don't strip
+              if (/^(CMC|CT)/i.test(raw)) { setScanValue(raw); return }
               // Hobart EAN-13: digits only
               const v = raw.replace(/\D/g, '')
               setScanValue(v)
@@ -566,6 +651,7 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
             onKeyDown={e => {
               if (e.key === 'Enter' && scanValue.length > 0 && scanValue.length < 13) {
                 if (/^CMC-\d{8}-\d{3}$/.test(scanValue)) addInput(scanValue)
+                else if (/^CT-[0-9a-f-]{36}$/.test(scanValue)) addInput(scanValue)
                 else doScan(scanValue)
               }
             }}

@@ -3,14 +3,18 @@ import { supabase } from '@/lib/supabase'
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
-  const date = searchParams.get('date')
+  const date     = searchParams.get('date')
+  const customer = searchParams.get('customer_name')
+  const recent   = searchParams.get('recent')   // 'sessions' → distinct customer+date pairs
 
   let query = supabase
     .from('boxes')
     .select('*')
     .order('created_at', { ascending: false })
 
-  if (date) query = query.eq('pack_date', date)
+  if (date)     query = query.eq('pack_date', date)
+  if (customer) query = query.eq('customer_name', customer)
+  if (recent)   query = query.limit(200)   // grab enough to find recent sessions
 
   const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

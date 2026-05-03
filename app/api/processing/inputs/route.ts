@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
   let linked_box_id: string | null = body.linked_box_id ?? null
 
   // If a CMC box identifier was scanned, look up the receiving record
-  if (body.box_identifier && !description) {
+  if (body.box_identifier && /^CMC-/.test(body.box_identifier) && !description) {
     const { data: box } = await supabase
       .from('box_receiving_log')
       .select('id, product, vendor, weight_lbs')
@@ -46,6 +46,21 @@ export async function POST(req: NextRequest) {
       description   = box.vendor ? `${box.product} (${box.vendor})` : box.product
       weight_lbs    = box.weight_lbs
       linked_box_id = box.id
+    }
+  }
+
+  // If a carcass tag barcode was scanned (CT-{harvest_log_id}), look up the harvest record
+  if (body.box_identifier && /^CT-/.test(body.box_identifier) && !description) {
+    const harvestId = body.box_identifier.replace(/^CT-/, '')
+    const { data: harvest } = await supabase
+      .from('harvest_log')
+      .select('id, species, carcass_tag, hot_carcass_weight_lbs')
+      .eq('id', harvestId)
+      .single()
+
+    if (harvest) {
+      description = `${harvest.species} Carcass (Tag ${harvest.carcass_tag || 'N/A'})`
+      weight_lbs  = harvest.hot_carcass_weight_lbs
     }
   }
 

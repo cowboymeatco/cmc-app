@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
-import { HarvestAppointment, AnimalReceivingLog, BoxReceivingLog } from '@/lib/types'
+import { HarvestAppointment, BoxReceivingLog } from '@/lib/types'
 
 type Tab = 'animal' | 'box'
 
@@ -123,7 +123,6 @@ function printReceivingLabel(log: BoxReceivingLog) {
 // ══════════════════════════════════════════════════════════════════════════════
 function AnimalTab() {
   const [appointments, setAppointments] = useState<HarvestAppointment[]>([])
-  const [logs,         setLogs]         = useState<AnimalReceivingLog[]>([])
   const [selected,     setSelected]     = useState<HarvestAppointment | null>(null)
   const [saving,       setSaving]       = useState(false)
   const [success,      setSuccess]      = useState(false)
@@ -139,29 +138,22 @@ function AnimalTab() {
   const [slots, setSlots] = useState<AnimalSlot[]>([])
 
   const load = useCallback(async () => {
-    const [apptRes, logRes] = await Promise.all([
+    const [apptRes] = await Promise.all([
       fetch('/api/appointments'),
-      fetch('/api/receiving?type=animal'),
     ])
     const appts: HarvestAppointment[] = await apptRes.json().catch(() => [])
-    const ls: AnimalReceivingLog[] = await logRes.json().catch(() => [])
-    setAppointments(Array.isArray(appts) ? appts.filter(a => a.status !== 'Complete') : [])
-    setLogs(Array.isArray(ls) ? ls : [])
+    // Only show appointments still waiting to be checked in
+    setAppointments(Array.isArray(appts)
+      ? appts.filter(a => a.status === 'Booked' || a.status === 'InstructionsReceived')
+      : [])
+    // checked-in animals (AnimalIn/Processing) now live in harvest log only
   }, [])
 
   useEffect(() => { load() }, [load])
 
-  // Group logs by appointment_id
-  const logsByAppt: Record<string, AnimalReceivingLog[]> = {}
-  for (const l of logs) {
-    if (!logsByAppt[l.appointment_id]) logsByAppt[l.appointment_id] = []
-    logsByAppt[l.appointment_id].push(l)
-  }
-
-  const checkedInIds = new Set(logs.map(l => l.appointment_id))
-  const allPending   = appointments.filter(a => !checkedInIds.has(a.id))
-  const pending      = speciesFilter ? allPending.filter(a => a.species === speciesFilter) : allPending
-  const done         = appointments.filter(a =>  checkedInIds.has(a.id))
+  // All loaded appointments are pending check-in
+  const allPending     = appointments
+  const pending        = speciesFilter ? allPending.filter(a => a.species === speciesFilter) : allPending
   const pendingSpecies = [...new Set(allPending.map(a => a.species))].sort()
 
   function selectAppt(a: HarvestAppointment) {
@@ -281,31 +273,7 @@ function AnimalTab() {
             </div>
           ))}
 
-          {done.length > 0 && (
-            <>
-              <div style={{ padding: '0.6rem 1.1rem', fontSize: '0.68rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', borderTop: '1px solid rgba(166,120,90,0.2)', marginTop: '0.25rem' }}>
-                Checked In ({done.length})
-              </div>
-              {done.map(a => {
-                const aLogs = logsByAppt[a.id] ?? []
-                const tags  = aLogs.map(l => l.ear_tag).filter(Boolean).join(', ')
-                return (
-                  <div key={a.id} style={{ padding: '0.75rem 1.1rem', borderBottom: '1px solid rgba(166,120,90,0.08)', opacity: 0.7 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ color: C.cream, fontSize: '0.85rem' }}>{a.species} · {a.head_count} head</span>
-                      <span style={{ color: C.green, fontSize: '0.73rem', fontWeight: 600 }}>✓ In</span>
-                    </div>
-                    {tags && <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.1rem' }}>Tags: {tags}</div>}
-                    {aLogs.some(l => l.over_30_months) && (
-                      <div style={{ fontSize: '0.7rem', color: '#fca5a5', marginTop: '0.1rem' }}>
-                        ⚠ {aLogs.filter(l => l.over_30_months).length} over 30 mo
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </>
-          )}
+          {/* Checked-in animals live in the Harvest log */}
         </div>
       </div>
 
