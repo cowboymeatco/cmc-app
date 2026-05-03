@@ -338,7 +338,7 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
           <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
             <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>🔍</div>
             <h1 style={{ fontFamily: 'Georgia, serif', color: C.cream, fontSize: '1.4rem', textTransform: 'uppercase', letterSpacing: '0.1em', margin: '0 0 0.5rem' }}>
-              Floor Scanner
+              Processing Scanner
             </h1>
             <div style={{ fontSize: '0.78rem', color: pluLoaded ? C.green : C.yellow, fontWeight: 600 }}>
               {pluLoaded

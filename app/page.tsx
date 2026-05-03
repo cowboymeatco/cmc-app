@@ -146,7 +146,7 @@ export default function Dashboard() {
             }}>
               <span style={{ fontSize: '1.1rem' }}>🔍</span>
               <div>
-                <span style={{ color: C.cream, fontWeight: 600, fontSize: '0.88rem' }}>Floor Scanner</span>
+                <span style={{ color: C.cream, fontWeight: 600, fontSize: '0.88rem' }}>Processing Scanner</span>
                 <span style={{ color: C.lightBrown, fontSize: '0.78rem', marginLeft: '0.75rem' }}>Full-screen barcode scanning for the cutting floor</span>
               </div>
               <span style={{ marginLeft: 'auto', color: C.lightBrown, fontSize: '0.8rem' }}>Open ›</span>
