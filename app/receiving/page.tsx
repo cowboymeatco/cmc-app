@@ -58,11 +58,12 @@ interface AnimalSlot {
   over_30_months: boolean
   photo_url:      string
   uploading:      boolean
+  no_show:        boolean
 }
 
 function blankSlot(species: string): AnimalSlot {
   const sexOpts = SEX_BY_SPECIES[species] ?? ['Male', 'Female']
-  return { ear_tag: '', sex: sexOpts[0], breed: '', over_30_months: false, photo_url: '', uploading: false }
+  return { ear_tag: '', sex: sexOpts[0], breed: '', over_30_months: false, photo_url: '', uploading: false, no_show: false }
 }
 
 // ── Box receiving label printer ───────────────────────────────────────────────
@@ -110,6 +111,7 @@ function AnimalTab() {
   const [selected,     setSelected]     = useState<HarvestAppointment | null>(null)
   const [saving,       setSaving]       = useState(false)
   const [success,      setSuccess]      = useState(false)
+  const [speciesFilter, setSpeciesFilter] = useState('')
 
   const [shared, setShared] = useState({
     received_at:    new Date().toISOString().slice(0, 16),
@@ -141,8 +143,10 @@ function AnimalTab() {
   }
 
   const checkedInIds = new Set(logs.map(l => l.appointment_id))
-  const pending = appointments.filter(a => !checkedInIds.has(a.id))
-  const done    = appointments.filter(a =>  checkedInIds.has(a.id))
+  const allPending   = appointments.filter(a => !checkedInIds.has(a.id))
+  const pending      = speciesFilter ? allPending.filter(a => a.species === speciesFilter) : allPending
+  const done         = appointments.filter(a =>  checkedInIds.has(a.id))
+  const pendingSpecies = [...new Set(allPending.map(a => a.species))].sort()
 
   function selectAppt(a: HarvestAppointment) {
     setSelected(a)
@@ -182,6 +186,7 @@ function AnimalTab() {
       breed:          s.breed,
       over_30_months: s.over_30_months,
       photo_url:      s.photo_url,
+      status:         s.no_show ? 'no_show' : 'received',
     }))
     await fetch('/api/receiving', {
       method: 'POST',
@@ -204,15 +209,31 @@ function AnimalTab() {
     load()
   }
 
-  const over30Count = slots.filter(s => s.over_30_months).length
+  const over30Count  = slots.filter(s => s.over_30_months && !s.no_show).length
+  const noShowCount  = slots.filter(s => s.no_show).length
+  const arrivedCount = slots.length - noShowCount
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: '1.5rem', height: '100%' }}>
 
       {/* Left — appointment list */}
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '0.85rem 1.1rem', borderBottom: '1px solid rgba(166,120,90,0.2)', fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.12em' }}>
-          Pending Check-In ({pending.length})
+        <div style={{ padding: '0.75rem 1.1rem', borderBottom: '1px solid rgba(166,120,90,0.2)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: pendingSpecies.length > 1 ? '0.55rem' : 0 }}>
+            <span style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.12em' }}>
+              Pending Check-In ({allPending.length})
+            </span>
+          </div>
+          {pendingSpecies.length > 1 && (
+            <select
+              value={speciesFilter}
+              onChange={e => setSpeciesFilter(e.target.value)}
+              style={{ ...INPUT, fontSize: '0.8rem', padding: '0.35rem 0.6rem' }}
+            >
+              <option value="">All species</option>
+              {pendingSpecies.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          )}
         </div>
         <div style={{ overflowY: 'auto', flex: 1 }}>
           {pending.length === 0 && (
@@ -352,8 +373,11 @@ function AnimalTab() {
 
             {/* Actions */}
             <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem' }}>
-              <button style={BTN(C.green, C.dark)} onClick={handleCheckIn} disabled={saving}>
-                {saving ? 'Saving…' : `✓ Check In ${slots.length} Animal${slots.length !== 1 ? 's' : ''}`}
+              <button style={BTN(arrivedCount > 0 ? C.green : C.medBrown, C.dark)} onClick={handleCheckIn} disabled={saving || arrivedCount === 0}>
+                {saving ? 'Saving…' : noShowCount > 0
+                  ? `✓ Check In ${arrivedCount} of ${slots.length} (${noShowCount} No-Show)`
+                  : `✓ Check In ${slots.length} Animal${slots.length !== 1 ? 's' : ''}`
+                }
               </button>
               <button style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.3)' }} onClick={() => { setSelected(null); setSlots([]) }}>
                 Cancel
@@ -378,94 +402,132 @@ function AnimalCard({ index, total, species, slot, onChange, onPhotoChange, appo
 }) {
   const fileRef = useRef<HTMLInputElement>(null)
   const sexOpts = SEX_BY_SPECIES[species] ?? ['Male', 'Female']
+  void appointmentId  // used by parent for photo upload
+
+  const borderColor = slot.no_show
+    ? 'rgba(166,120,90,0.15)'
+    : slot.over_30_months
+      ? 'rgba(200,50,50,0.4)'
+      : 'rgba(166,120,90,0.2)'
 
   return (
     <div style={{
-      background: 'rgba(255,255,255,0.04)', border: `1px solid ${slot.over_30_months ? 'rgba(200,50,50,0.4)' : 'rgba(166,120,90,0.2)'}`,
+      background: slot.no_show ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.04)',
+      border: `1px solid ${borderColor}`,
       borderRadius: 4, padding: '1rem 1.25rem',
+      opacity: slot.no_show ? 0.55 : 1,
+      transition: 'opacity 0.2s',
     }}>
       {/* Card header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem' }}>
         <span style={{ color: C.tan, fontWeight: 700, fontSize: '0.82rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
           Animal {index} of {total}
-          {slot.ear_tag ? <span style={{ color: C.cream, marginLeft: '0.5rem', fontWeight: 400 }}>· Tag #{slot.ear_tag}</span> : ''}
+          {slot.ear_tag && !slot.no_show ? <span style={{ color: C.cream, marginLeft: '0.5rem', fontWeight: 400 }}>· Tag #{slot.ear_tag}</span> : ''}
         </span>
-        {slot.over_30_months && (
-          <span style={{ fontSize: '0.72rem', color: '#fca5a5', background: 'rgba(200,50,50,0.2)', borderRadius: 3, padding: '2px 8px' }}>
-            ⚠ Over 30 mo
-          </span>
-        )}
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0 1rem' }}>
-        {/* Ear Tag */}
-        <div style={{ marginBottom: '0.75rem' }}>
-          <label style={LABEL}>Ear Tag #</label>
-          <input type="text" placeholder="e.g. 3271" style={INPUT}
-            value={slot.ear_tag} onChange={e => onChange({ ear_tag: e.target.value })} />
-        </div>
-        {/* Sex */}
-        <div style={{ marginBottom: '0.75rem' }}>
-          <label style={LABEL}>Sex</label>
-          <select style={INPUT} value={slot.sex} onChange={e => onChange({ sex: e.target.value })}>
-            {sexOpts.map(s => <option key={s}>{s}</option>)}
-          </select>
-        </div>
-        {/* Breed */}
-        <div style={{ marginBottom: '0.75rem' }}>
-          <label style={LABEL}>Breed</label>
-          <input type="text" placeholder="e.g. Angus" style={INPUT}
-            value={slot.breed} onChange={e => onChange({ breed: e.target.value })} />
-        </div>
-      </div>
-
-      {/* Over/Under 30 months + Photo */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-        <div>
-          <label style={LABEL}>Age at Slaughter</label>
-          <div style={{ display: 'flex', gap: '0.4rem' }}>
-            <button
-              onClick={() => onChange({ over_30_months: false })}
-              style={{
-                ...BTN(!slot.over_30_months ? 'rgba(76,175,80,0.25)' : 'rgba(255,255,255,0.05)', !slot.over_30_months ? C.green : C.lightBrown),
-                border: `1px solid ${!slot.over_30_months ? 'rgba(76,175,80,0.5)' : 'rgba(166,120,90,0.2)'}`,
-                padding: '0.4rem 0.9rem', fontSize: '0.8rem',
-              }}
-            >
-              Under 30 mo
-            </button>
-            <button
-              onClick={() => onChange({ over_30_months: true })}
-              style={{
-                ...BTN(slot.over_30_months ? 'rgba(200,50,50,0.25)' : 'rgba(255,255,255,0.05)', slot.over_30_months ? '#fca5a5' : C.lightBrown),
-                border: `1px solid ${slot.over_30_months ? 'rgba(200,50,50,0.5)' : 'rgba(166,120,90,0.2)'}`,
-                padding: '0.4rem 0.9rem', fontSize: '0.8rem',
-              }}
-            >
-              Over 30 mo ⚠
-            </button>
-          </div>
-        </div>
-
-        {/* Photo */}
-        <div style={{ marginLeft: 'auto' }}>
-          <label style={LABEL}>Photo</label>
-          {slot.photo_url ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <img src={slot.photo_url} alt="animal" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 4, border: '1px solid rgba(166,120,90,0.3)' }} />
-              <button onClick={() => onChange({ photo_url: '' })} style={{ ...BTN('rgba(200,50,50,0.2)', '#fca5a5'), fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}>✕</button>
-            </div>
-          ) : (
-            <label style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
-              background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3,
-              padding: '0.4rem 0.85rem', fontSize: '0.8rem', color: C.tan }}>
-              {slot.uploading ? '⏳ Uploading…' : '📷 Add Photo'}
-              <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
-                onChange={e => { const f = e.target.files?.[0]; if (f) onPhotoChange(f) }} />
-            </label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          {slot.over_30_months && !slot.no_show && (
+            <span style={{ fontSize: '0.72rem', color: '#fca5a5', background: 'rgba(200,50,50,0.2)', borderRadius: 3, padding: '2px 8px' }}>
+              ⚠ Over 30 mo
+            </span>
           )}
+          {/* No-show toggle */}
+          <button
+            onClick={() => onChange({ no_show: !slot.no_show })}
+            style={{
+              ...BTN(slot.no_show ? 'rgba(166,120,90,0.3)' : 'rgba(255,255,255,0.04)',
+                     slot.no_show ? C.tan : C.lightBrown),
+              border: `1px solid ${slot.no_show ? 'rgba(166,120,90,0.5)' : 'rgba(166,120,90,0.2)'}`,
+              padding: '0.25rem 0.7rem', fontSize: '0.75rem',
+            }}
+          >
+            {slot.no_show ? '✓ No-Show' : 'No-Show'}
+          </button>
         </div>
       </div>
+
+      {/* Hide fields when marked no-show */}
+      {!slot.no_show && (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0 1rem' }}>
+            {/* Ear Tag */}
+            <div style={{ marginBottom: '0.75rem' }}>
+              <label style={LABEL}>Ear Tag #</label>
+              <input type="text" placeholder="e.g. 3271" style={INPUT}
+                value={slot.ear_tag} onChange={e => onChange({ ear_tag: e.target.value })} />
+            </div>
+            {/* Sex */}
+            <div style={{ marginBottom: '0.75rem' }}>
+              <label style={LABEL}>Sex</label>
+              <select style={INPUT} value={slot.sex} onChange={e => onChange({ sex: e.target.value })}>
+                {sexOpts.map(s => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+            {/* Breed */}
+            <div style={{ marginBottom: '0.75rem' }}>
+              <label style={LABEL}>Breed</label>
+              <input type="text" placeholder="e.g. Angus" style={INPUT}
+                value={slot.breed} onChange={e => onChange({ breed: e.target.value })} />
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            {/* Over/Under 30 months — Beef only */}
+            {species === 'Beef' && (
+              <div>
+                <label style={LABEL}>Age at Slaughter</label>
+                <div style={{ display: 'flex', gap: '0.4rem' }}>
+                  <button
+                    onClick={() => onChange({ over_30_months: false })}
+                    style={{
+                      ...BTN(!slot.over_30_months ? 'rgba(76,175,80,0.25)' : 'rgba(255,255,255,0.05)', !slot.over_30_months ? C.green : C.lightBrown),
+                      border: `1px solid ${!slot.over_30_months ? 'rgba(76,175,80,0.5)' : 'rgba(166,120,90,0.2)'}`,
+                      padding: '0.4rem 0.9rem', fontSize: '0.8rem',
+                    }}
+                  >
+                    Under 30 mo
+                  </button>
+                  <button
+                    onClick={() => onChange({ over_30_months: true })}
+                    style={{
+                      ...BTN(slot.over_30_months ? 'rgba(200,50,50,0.25)' : 'rgba(255,255,255,0.05)', slot.over_30_months ? '#fca5a5' : C.lightBrown),
+                      border: `1px solid ${slot.over_30_months ? 'rgba(200,50,50,0.5)' : 'rgba(166,120,90,0.2)'}`,
+                      padding: '0.4rem 0.9rem', fontSize: '0.8rem',
+                    }}
+                  >
+                    Over 30 mo ⚠
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Photo */}
+            <div style={{ marginLeft: species === 'Beef' ? 'auto' : 0 }}>
+              <label style={LABEL}>Photo</label>
+              {slot.photo_url ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <img src={slot.photo_url} alt="animal" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 4, border: '1px solid rgba(166,120,90,0.3)' }} />
+                  <button onClick={() => onChange({ photo_url: '' })} style={{ ...BTN('rgba(200,50,50,0.2)', '#fca5a5'), fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}>✕</button>
+                </div>
+              ) : (
+                <label style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+                  background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3,
+                  padding: '0.4rem 0.85rem', fontSize: '0.8rem', color: C.tan }}>
+                  {slot.uploading ? '⏳ Uploading…' : '📷 Add Photo'}
+                  <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
+                    onChange={e => { const f = e.target.files?.[0]; if (f) onPhotoChange(f) }} />
+                </label>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* No-show message */}
+      {slot.no_show && (
+        <div style={{ color: C.lightBrown, fontSize: '0.82rem', fontStyle: 'italic' }}>
+          Marked as no-show — will be recorded for metrics but excluded from harvest log.
+        </div>
+      )}
     </div>
   )
 }
