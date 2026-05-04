@@ -73,19 +73,19 @@ function printReceivingLabel(log: BoxReceivingLog) {
   const html = `<!DOCTYPE html><html><head>
   <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
   <style>
-    @page { size: 62mm auto; margin: 2mm 3mm; }
-    * { box-sizing: border-box; }
-    body { font-family: Arial, sans-serif; font-size: 8pt; color: #000; margin: 0; padding: 0; width: 56mm; }
-    .header { text-align: center; font-size: 6pt; letter-spacing: 0.14em; text-transform: uppercase; color: #555; margin-bottom: 1px; }
-    .divider { border: none; border-top: 0.5pt solid #000; margin: 3px 0; }
-    .id { text-align: center; font-size: 8pt; font-weight: bold; letter-spacing: 0.06em; font-family: monospace; margin: 2px 0; }
-    .barcode-wrap { text-align: center; margin: 3px 0; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: auto; }
+    body { font-family: Arial, sans-serif; font-size: 11pt; color: #000; width: 56mm; display: inline-block; }
+    .header { text-align: center; font-size: 8pt; letter-spacing: 0.12em; text-transform: uppercase; color: #555; margin-bottom: 2px; }
+    .divider { border: none; border-top: 0.5pt solid #000; margin: 4px 0; }
+    .id { text-align: center; font-size: 10pt; font-weight: bold; letter-spacing: 0.06em; font-family: monospace; margin: 3px 0; }
+    .barcode-wrap { text-align: center; margin: 4px 0; }
     .barcode-wrap svg { max-width: 100%; }
-    .product { font-size: 11pt; font-weight: bold; text-align: center; margin: 3px 0; line-height: 1.2; }
-    .vendor { text-align: center; font-size: 7.5pt; color: #444; margin-bottom: 3px; }
-    .row { display: flex; justify-content: space-between; font-size: 7.5pt; margin: 1px 0; }
-    .lbl { color: #666; }
-    .footer { text-align: center; font-size: 6pt; color: #777; margin-top: 3px; }
+    .product { font-size: 16pt; font-weight: bold; text-align: center; margin: 4px 0; line-height: 1.2; }
+    .vendor { text-align: center; font-size: 11pt; color: #333; margin-bottom: 4px; }
+    .row { display: flex; justify-content: space-between; font-size: 11pt; margin: 2px 0; }
+    .lbl { color: #555; }
+    .footer { text-align: center; font-size: 8pt; color: #777; margin-top: 4px; }
   </style>
   </head><body>
   <div class="header">Cowboy Meat Co. · Forsyth MT</div>
@@ -107,14 +107,21 @@ function printReceivingLabel(log: BoxReceivingLog) {
   <script>
     window.onload = function() {
       JsBarcode("#bc", "${boxId}", {
-        format: "CODE128", width: 1.6, height: 42,
-        displayValue: true, fontSize: 9, margin: 2, textMargin: 2,
+        format: "CODE128", width: 2.2, height: 55,
+        displayValue: true, fontSize: 11, margin: 3, textMargin: 3,
       });
-      window.print();
+      // Measure actual content height after barcode renders, then set exact page size
+      setTimeout(function() {
+        var h = document.body.offsetHeight + 6;
+        var style = document.createElement('style');
+        style.textContent = '@page { size: 62mm ' + h + 'px; margin: 2mm 3mm; }';
+        document.head.appendChild(style);
+        window.print();
+      }, 150);
     };
   <\/script>
   </body></html>`
-  const w = window.open('', '_blank', 'width=240,height=600')
+  const w = window.open('', '_blank', 'width=240,height=400')
   if (w) { w.document.write(html); w.document.close() }
 }
 
