@@ -580,6 +580,23 @@ function BoxTab() {
     invoice_no: '', lot_no: '', temp_f: '', received_by: '', notes: '',
   }
   const [form, setForm] = useState(empty)
+  const formPanelRef = useRef<HTMLDivElement>(null)
+
+  function duplicateEntry(log: BoxReceivingLog) {
+    setForm({
+      received_at: new Date().toISOString().slice(0, 10),
+      vendor:      log.vendor      ?? '',
+      product:     log.product     ?? '',
+      quantity:    String(log.quantity ?? 1),
+      weight_lbs:  log.weight_lbs  != null ? String(log.weight_lbs)  : '',
+      invoice_no:  log.invoice_no  ?? '',
+      lot_no:      log.lot_no      ?? '',
+      temp_f:      log.temp_f      != null ? String(log.temp_f)      : '',
+      received_by: log.received_by ?? '',
+      notes:       log.notes       ?? '',
+    })
+    formPanelRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+  }
 
   const load = useCallback(async () => {
     const res = await fetch('/api/receiving?type=box')
@@ -631,7 +648,7 @@ function BoxTab() {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '380px 1fr', gap: '1.5rem', height: '100%' }}>
       {/* Left — entry form */}
-      <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1.5rem', overflowY: 'auto' }}>
+      <div ref={formPanelRef} style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1.5rem', overflowY: 'auto' }}>
         <h3 style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 1.25rem' }}>
           Log Box Product
         </h3>
@@ -732,6 +749,13 @@ function BoxTab() {
                   <span style={{ color: C.lightBrown, fontSize: '0.76rem' }}>
                     {new Date(log.received_at + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                   </span>
+                  <button
+                    onClick={() => duplicateEntry(log)}
+                    title="Duplicate this entry"
+                    style={{ background: 'rgba(201,168,130,0.15)', border: '1px solid rgba(201,168,130,0.35)', color: C.cream, borderRadius: 3, padding: '2px 8px', fontSize: '0.72rem', cursor: 'pointer', fontWeight: 600 }}
+                  >
+                    ⧉ Dupe
+                  </button>
                   <button
                     onClick={() => printReceivingLabel(log)}
                     title="Print receiving label"
