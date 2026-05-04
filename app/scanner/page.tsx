@@ -562,6 +562,45 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
     setInputs(prev => prev.filter(i => i.id !== id))
   }
 
+  // ── Split / chub tool ─────────────────────────────────────────────────────────
+  const [splitModal, setSplitModal] = useState<{ scan: ScanLine } | null>(null)
+  const [splitCount, setSplitCount] = useState(2)
+  const [splitting,  setSplitting]  = useState(false)
+
+  async function doSplit(scan: ScanLine, count: number) {
+    if (count < 2) return
+    setSplitting(true)
+    const baseWeight = Math.round((scan.weight_lbs / count) * 100) / 100
+    const lastWeight = Math.round((scan.weight_lbs - baseWeight * (count - 1)) * 100) / 100
+
+    // Remove the original case scan
+    await fetch(`/api/boxes/scans?id=${scan.id}`, { method: 'DELETE' })
+
+    // Insert N individual package scans
+    for (let i = 0; i < count; i++) {
+      const w = i === count - 1 ? lastWeight : baseWeight
+      await fetch('/api/boxes/scans', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ box_id: scan.box_id, plu_number: scan.plu_number, item_name: scan.item_name, weight_lbs: w, quantity: 1 }),
+      })
+    }
+
+    // Re-fetch to get proper order from DB
+    if (activeBoxRef.current) {
+      const res  = await fetch(`/api/boxes/scans?box_id=${activeBoxRef.current.id}`)
+      const data = await res.json().catch(() => [])
+      setScans(Array.isArray(data) ? ([...data] as ScanLine[]).reverse() : [])
+    }
+    setLastItem(`Split ${scan.item_name} into ${count} × ${baseWeight.toFixed(2)} lb`)
+    setFlash('ok')
+    setTimeout(() => setFlash(null), 2500)
+    setSplitting(false)
+    setSplitModal(null)
+    setSplitCount(2)
+    scanRef.current?.focus()
+  }
+
   // ── Cut-Out Report ────────────────────────────────────────────────────────────
   const [reportLoading, setReportLoading] = useState(false)
 
@@ -1200,11 +1239,18 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
                   {Number(scan.weight_lbs).toFixed(2)} lb
                 </span>
                 {!activeBox?.is_closed && (
-                  <button
-                    onClick={() => removeScan(scan.id)}
-                    style={{ background: 'none', border: 'none', color: 'rgba(166,120,90,0.4)', cursor: 'pointer', fontSize: '1rem', lineHeight: 1, padding: '0 0.2rem' }}
-                    title="Remove"
-                  >×</button>
+                  <>
+                    <button
+                      onClick={() => { setSplitModal({ scan }); setSplitCount(2) }}
+                      title="Split into packages"
+                      style={{ background: 'none', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 3, color: C.lightBrown, cursor: 'pointer', fontSize: '0.78rem', lineHeight: 1, padding: '0.15rem 0.4rem', fontWeight: 700 }}
+                    >÷</button>
+                    <button
+                      onClick={() => removeScan(scan.id)}
+                      style={{ background: 'none', border: 'none', color: 'rgba(166,120,90,0.4)', cursor: 'pointer', fontSize: '1rem', lineHeight: 1, padding: '0 0.2rem' }}
+                      title="Remove"
+                    >×</button>
+                  </>
                 )}
               </div>
             </div>
@@ -1222,6 +1268,78 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
         </div>
 
       </div>
+
+      {/* ── Split / chub modal ── */}
+      {splitModal && (() => {
+        const { scan } = splitModal
+        const each     = splitCount > 0 ? Math.round((scan.weight_lbs / splitCount) * 100) / 100 : 0
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}>
+            <div style={{ background: C.darkBrown, border: '1px solid rgba(166,120,90,0.4)', borderRadius: 8, padding: '2rem', width: '100%', maxWidth: 340 }}>
+
+              {/* Title */}
+              <div style={{ fontFamily: 'Georgia, serif', color: C.cream, fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '1.25rem' }}>
+                Split Into Packages
+              </div>
+
+              {/* Item info */}
+              <div style={{ color: C.cream, fontWeight: 700, fontSize: '1rem', marginBottom: '0.3rem' }}>
+                {scan.item_name || `PLU ${scan.plu_number}`}
+              </div>
+              <div style={{ color: C.lightBrown, fontSize: '0.85rem', marginBottom: '1.5rem', fontFamily: 'monospace' }}>
+                Total case weight: {Number(scan.weight_lbs).toFixed(2)} lbs
+              </div>
+
+              {/* Count label */}
+              <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.65rem' }}>
+                Number of packages / chubs in case
+              </div>
+
+              {/* +/- counter */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.25rem' }}>
+                <button
+                  onClick={() => setSplitCount(n => Math.max(2, n - 1))}
+                  style={{ width: 44, height: 44, borderRadius: 4, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.35)', color: C.cream, fontSize: '1.4rem', fontWeight: 700, cursor: 'pointer', lineHeight: 1 }}
+                >−</button>
+                <input
+                  type="number" min={2}
+                  value={splitCount}
+                  onChange={e => setSplitCount(Math.max(2, parseInt(e.target.value) || 2))}
+                  style={{ width: 72, textAlign: 'center', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(166,120,90,0.4)', borderRadius: 4, padding: '0.5rem', color: C.cream, fontSize: '1.3rem', fontFamily: 'monospace', outline: 'none' }}
+                />
+                <button
+                  onClick={() => setSplitCount(n => n + 1)}
+                  style={{ width: 44, height: 44, borderRadius: 4, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.35)', color: C.cream, fontSize: '1.4rem', fontWeight: 700, cursor: 'pointer', lineHeight: 1 }}
+                >+</button>
+              </div>
+
+              {/* Live preview */}
+              <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 4, padding: '0.75rem 1rem', marginBottom: '1.5rem', fontFamily: 'monospace', fontSize: '1rem', fontWeight: 700, color: C.tan }}>
+                → {splitCount} × {each.toFixed(2)} lbs each
+              </div>
+
+              {/* Buttons */}
+              <div style={{ display: 'flex', gap: '0.6rem' }}>
+                <button
+                  onClick={() => { setSplitModal(null); setSplitCount(2); scanRef.current?.focus() }}
+                  style={{ flex: 1, background: 'transparent', border: '1px solid rgba(166,120,90,0.3)', color: C.lightBrown, borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => doSplit(scan, splitCount)}
+                  disabled={splitting || splitCount < 2}
+                  style={{ flex: 2, background: splitting ? C.medBrown : C.tan, color: C.dark, border: 'none', borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer', opacity: splitting ? 0.7 : 1 }}
+                >
+                  {splitting ? '⟳ Splitting…' : `÷ Split into ${splitCount}`}
+                </button>
+              </div>
+
+            </div>
+          </div>
+        )
+      })()}
+
     </div>
   )
 }
