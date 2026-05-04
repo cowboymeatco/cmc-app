@@ -112,14 +112,15 @@ function printReceivingLabel(log: BoxReceivingLog) {
         format: "CODE128", width: 2.2, height: 55,
         displayValue: true, fontSize: 11, margin: 3, textMargin: 3,
       });
-      // Measure the label container (not body) for exact page height
+      // Convert label height from screen px → mm, then set exact @page height
       setTimeout(function() {
-        var h = document.getElementById('label').offsetHeight + 4;
+        var px  = document.getElementById('label').offsetHeight;
+        var mm  = Math.ceil(px * 25.4 / 96) + 6;
         var style = document.createElement('style');
-        style.textContent = '@page { size: 62mm ' + h + 'px; margin: 2mm 3mm; }';
+        style.textContent = '@page { size: 62mm ' + mm + 'mm; margin: 2mm 3mm; }';
         document.head.appendChild(style);
         window.print();
-      }, 150);
+      }, 300);
     };
   <\/script>
   </body></html>`
