@@ -7,6 +7,16 @@ import { DeliveryScan } from '@/lib/types'
 type Tab = 'new' | 'log'
 type LogFilter = 'all' | 'pending' | 'reviewed'
 
+// ── Barcode type detection ────────────────────────────────────────────────────
+type BarcodeType = 'ean13' | 'carcass' | 'cmc_box' | 'unknown'
+
+function identifyBarcode(raw: string): BarcodeType {
+  if (/^\d{13}$/.test(raw) && raw[0] === '2') return 'ean13'
+  if (/^CT-[0-9a-f-]{36}$/i.test(raw))        return 'carcass'
+  if (/^CMC-\d{8}-\d{3}$/.test(raw))          return 'cmc_box'
+  return 'unknown'
+}
+
 // ── EAN-13 weight-embedded decode ─────────────────────────────────────────────
 // [0]='2', [1–5]=PLU, [6]=flag, [7–11]=weight in hundredths lb ÷100, [12]=check
 function decodeBarcode(barcode: string): { plu: string; weightLbs: number } | null {
@@ -16,6 +26,34 @@ function decodeBarcode(barcode: string): { plu: string; weightLbs: number } | nu
   const weight = parseInt(barcode.substring(7, 12), 10) / 100
   if (plu <= 0 || weight <= 0) return null
   return { plu: String(plu), weightLbs: weight }
+}
+
+// ── Human-readable label for any barcode type ─────────────────────────────────
+function barcodeLabel(barcode: string, pluMap: Record<string, string>): { icon: string; primary: string; secondary?: string } {
+  const type = identifyBarcode(barcode)
+  if (type === 'ean13') {
+    const dec = decodeBarcode(barcode)
+    if (dec) {
+      const name = pluMap[dec.plu] ?? `PLU ${dec.plu}`
+      return { icon: '🥩', primary: name, secondary: `${dec.weightLbs.toFixed(2)} lb` }
+    }
+  }
+  if (type === 'carcass') {
+    // CT-{uuid} — show short tag
+    const short = barcode.slice(0, 11) + '…'
+    return { icon: '🐄', primary: 'Carcass', secondary: short }
+  }
+  if (type === 'cmc_box') {
+    // CMC-20260411-001 → Box #1 · Apr 11
+    const parts = barcode.match(/^CMC-(\d{4})(\d{2})(\d{2})-(\d+)$/)
+    if (parts) {
+      const dt  = new Date(`${parts[1]}-${parts[2]}-${parts[3]}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      const num = parseInt(parts[4], 10)
+      return { icon: '📦', primary: `Box #${num}`, secondary: dt }
+    }
+    return { icon: '📦', primary: 'CMC Box', secondary: barcode }
+  }
+  return { icon: '◻', primary: barcode }
 }
 
 const C = {
@@ -205,20 +243,17 @@ function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Reco
             </p>
           )}
           {[...barcodes].reverse().map((b, ri) => {
-            const idx     = barcodes.length - 1 - ri
-            const decoded = decodeBarcode(b.barcode)
-            const cutName = decoded ? (pluMap[decoded.plu] ?? `PLU ${decoded.plu}`) : null
+            const idx   = barcodes.length - 1 - ri
+            const label = barcodeLabel(b.barcode, pluMap)
             return (
               <div key={b.barcode} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.6rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.08)' }}>
                 <div>
-                  <div style={{ fontFamily: 'monospace', color: C.cream, fontSize: '0.88rem' }}>{b.barcode}</div>
-                  {cutName && (
-                    <div style={{ fontSize: '0.82rem', color: C.tan, fontWeight: 600, marginTop: '0.1rem' }}>
-                      {cutName}
-                      {decoded && <span style={{ color: C.lightBrown, fontWeight: 400, marginLeft: '0.5rem' }}>{decoded.weightLbs.toFixed(2)} lb</span>}
-                    </div>
-                  )}
-                  <div style={{ color: C.lightBrown, fontSize: '0.72rem', marginTop: cutName ? '0.1rem' : 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <span style={{ fontSize: '1rem', lineHeight: 1 }}>{label.icon}</span>
+                    <span style={{ color: C.cream, fontWeight: 600, fontSize: '0.88rem' }}>{label.primary}</span>
+                    {label.secondary && <span style={{ color: C.lightBrown, fontSize: '0.82rem' }}>{label.secondary}</span>}
+                  </div>
+                  <div style={{ color: C.lightBrown, fontSize: '0.72rem', marginTop: '0.15rem' }}>
                     {new Date(b.scannedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}
                   </div>
                 </div>
@@ -313,17 +348,15 @@ function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
             <p style={{ color: C.lightBrown, fontSize: '0.85rem', padding: '1.5rem', textAlign: 'center' }}>No deliveries found</p>
           )}
           {filtered.map(d => {
-            // Build unique cut name list from barcodes
-            const cutNames: string[] = []
+            // Build unique label list from barcodes (cuts, carcasses, boxes)
+            const itemLabels: string[] = []
             for (const b of d.barcodes ?? []) {
-              const dec = decodeBarcode(b.barcode)
-              if (dec) {
-                const name = pluMap[dec.plu] ?? `PLU ${dec.plu}`
-                if (!cutNames.includes(name)) cutNames.push(name)
-              }
+              const lbl     = barcodeLabel(b.barcode, pluMap)
+              const display = `${lbl.icon} ${lbl.primary}`
+              if (!itemLabels.includes(display)) itemLabels.push(display)
             }
-            const shown   = cutNames.slice(0, 3)
-            const overflow = cutNames.length - shown.length
+            const shown    = itemLabels.slice(0, 3)
+            const overflow = itemLabels.length - shown.length
             return (
               <div
                 key={d.id}
@@ -345,9 +378,9 @@ function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
                 {/* Cut names summary */}
                 {shown.length > 0 ? (
                   <div style={{ fontSize: '0.74rem', color: C.lightBrown, marginTop: '0.25rem', lineHeight: 1.5 }}>
-                    {shown.map((name, i) => (
-                      <span key={name}>
-                        <span style={{ color: C.tan }}>{name}</span>
+                    {shown.map((label, i) => (
+                      <span key={label}>
+                        <span style={{ color: C.tan }}>{label}</span>
                         {i < shown.length - 1 && <span style={{ color: 'rgba(166,120,90,0.4)' }}> · </span>}
                       </span>
                     ))}
@@ -417,19 +450,19 @@ function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                   {selected.barcodes.map((b, i) => {
-                    const decoded = decodeBarcode(b.barcode)
-                    const cutName = decoded ? (pluMap[decoded.plu] ?? `PLU ${decoded.plu}`) : null
+                    const label = barcodeLabel(b.barcode, pluMap)
                     return (
                       <div key={i} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: 3, padding: '0.55rem 0.85rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div>
-                          {cutName && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                          <span style={{ fontSize: '1.15rem', lineHeight: 1 }}>{label.icon}</span>
+                          <div>
                             <div style={{ color: C.cream, fontWeight: 600, fontSize: '0.88rem' }}>
-                              {cutName}
-                              {decoded && <span style={{ color: C.tan, fontWeight: 400, marginLeft: '0.5rem', fontSize: '0.82rem' }}>{decoded.weightLbs.toFixed(2)} lb</span>}
+                              {label.primary}
+                              {label.secondary && <span style={{ color: C.tan, fontWeight: 400, marginLeft: '0.5rem', fontSize: '0.82rem' }}>{label.secondary}</span>}
                             </div>
-                          )}
-                          <div style={{ fontFamily: 'monospace', color: cutName ? C.lightBrown : C.cream, fontSize: cutName ? '0.72rem' : '0.88rem', marginTop: cutName ? '0.1rem' : 0 }}>
-                            {b.barcode}
+                            <div style={{ fontFamily: 'monospace', color: C.lightBrown, fontSize: '0.7rem', marginTop: '0.1rem' }}>
+                              {b.barcode}
+                            </div>
                           </div>
                         </div>
                         <div style={{ fontSize: '0.72rem', color: C.lightBrown, flexShrink: 0, marginLeft: '1rem' }}>
