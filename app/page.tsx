@@ -70,12 +70,20 @@ export default function Dashboard() {
   }, [todayISO])
 
   const modules: ModuleDef[] = [
+    // Row 1 — Booking & Kill day
     {
       href: '/schedule',  icon: '📅', color: '#E8883A',
       title: 'Schedule',
       desc:  'Harvest appointments',
       when:  'When a customer calls to book',
       count: schedule,
+    },
+    {
+      href: '/cutting-instructions', icon: '📋', color: '#F59E0B',
+      title: 'Cutting Instructions',
+      desc:  'Customer cut specs',
+      when:  'Collect after booking — before harvest',
+      count: cutInstr,
     },
     {
       href: '/receiving', icon: '📦', color: '#60A5FA',
@@ -91,27 +99,7 @@ export default function Dashboard() {
       when:  'Kill day — weights & temps',
       count: harvest,
     },
-    {
-      href: '/processing', icon: '🔪', color: '#4CAF50',
-      title: 'Processing',
-      desc:  'Cut · Weigh · Label · Box',
-      when:  'After chill clearance',
-      count: processing,
-    },
-    {
-      href: '/cutting-instructions', icon: '📋', color: '#F59E0B',
-      title: 'Cutting Instructions',
-      desc:  'Customer cut specs',
-      when:  'Collect after booking — before harvest',
-      count: cutInstr,
-    },
-    {
-      href: '/delivery',  icon: '🚚', color: '#E879A0',
-      title: 'Delivery',
-      desc:  'Route & deliver',
-      when:  'Pickup or delivery day',
-      count: delivery,
-    },
+    // Row 2 — Processing & Fulfillment
     {
       href: '/orders',    icon: '🛒', color: '#06B6D4',
       title: 'Retail Orders',
@@ -120,11 +108,25 @@ export default function Dashboard() {
       count: orders,
     },
     {
+      href: '/processing', icon: '🔪', color: '#4CAF50',
+      title: 'Processing',
+      desc:  'Cut · Weigh · Label · Box',
+      when:  'After chill clearance',
+      count: processing,
+    },
+    {
       href: '/value-add', icon: '🔥', color: '#F97316',
       title: 'Value Add',
       desc:  'Smokehouse · Patties · Sausage',
       when:  'Custom processing or shelf stock jobs',
       count: valueAdd,
+    },
+    {
+      href: '/delivery',  icon: '🚚', color: '#E879A0',
+      title: 'Delivery',
+      desc:  'Route & deliver',
+      when:  'Pickup or delivery day',
+      count: delivery,
     },
   ]
 
