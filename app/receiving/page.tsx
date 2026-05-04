@@ -73,9 +73,9 @@ function printReceivingLabel(log: BoxReceivingLog) {
   const html = `<!DOCTYPE html><html><head>
   <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
   <style>
-    @page { size: 2.4in auto; margin: 0.08in 0.1in; }
+    @page { size: 62mm auto; margin: 2mm 3mm; }
     * { box-sizing: border-box; }
-    body { font-family: Arial, sans-serif; font-size: 8pt; color: #000; margin: 0; padding: 0; width: 2.2in; }
+    body { font-family: Arial, sans-serif; font-size: 8pt; color: #000; margin: 0; padding: 0; width: 56mm; }
     .header { text-align: center; font-size: 6pt; letter-spacing: 0.14em; text-transform: uppercase; color: #555; margin-bottom: 1px; }
     .divider { border: none; border-top: 0.5pt solid #000; margin: 3px 0; }
     .id { text-align: center; font-size: 8pt; font-weight: bold; letter-spacing: 0.06em; font-family: monospace; margin: 2px 0; }
@@ -114,7 +114,7 @@ function printReceivingLabel(log: BoxReceivingLog) {
     };
   <\/script>
   </body></html>`
-  const w = window.open('', '_blank', 'width=320,height=500')
+  const w = window.open('', '_blank', 'width=240,height=600')
   if (w) { w.document.write(html); w.document.close() }
 }
 
