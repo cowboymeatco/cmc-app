@@ -73,46 +73,48 @@ function printReceivingLabel(log: BoxReceivingLog) {
   const html = `<!DOCTYPE html><html><head>
   <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { height: auto; }
-    body { font-family: Arial, sans-serif; font-size: 11pt; color: #000; width: 56mm; display: inline-block; }
-    .header { text-align: center; font-size: 8pt; letter-spacing: 0.12em; text-transform: uppercase; color: #555; margin-bottom: 2px; }
+    * { box-sizing: border-box; margin: 0; padding: 0; page-break-inside: avoid; break-inside: avoid; }
+    html, body { width: 62mm; background: #fff; }
+    #label { width: 56mm; margin: 0 auto; font-family: Arial, sans-serif; font-size: 11pt; color: #000; }
+    .header  { text-align: center; font-size: 8pt; letter-spacing: 0.12em; text-transform: uppercase; color: #555; margin-bottom: 2px; }
     .divider { border: none; border-top: 0.5pt solid #000; margin: 4px 0; }
-    .id { text-align: center; font-size: 10pt; font-weight: bold; letter-spacing: 0.06em; font-family: monospace; margin: 3px 0; }
+    .id      { text-align: center; font-size: 10pt; font-weight: bold; letter-spacing: 0.06em; font-family: monospace; margin: 3px 0; }
     .barcode-wrap { text-align: center; margin: 4px 0; }
     .barcode-wrap svg { max-width: 100%; }
     .product { font-size: 16pt; font-weight: bold; text-align: center; margin: 4px 0; line-height: 1.2; }
-    .vendor { text-align: center; font-size: 11pt; color: #333; margin-bottom: 4px; }
-    .row { display: flex; justify-content: space-between; font-size: 11pt; margin: 2px 0; }
-    .lbl { color: #555; }
-    .footer { text-align: center; font-size: 8pt; color: #777; margin-top: 4px; }
+    .vendor  { text-align: center; font-size: 11pt; color: #333; margin-bottom: 4px; }
+    .row     { display: flex; justify-content: space-between; font-size: 11pt; margin: 2px 0; }
+    .lbl     { color: #555; }
+    .footer  { text-align: center; font-size: 8pt; color: #777; margin-top: 4px; }
   </style>
   </head><body>
-  <div class="header">Cowboy Meat Co. · Forsyth MT</div>
-  <hr class="divider"/>
-  <div class="id">${boxId}</div>
-  <div class="barcode-wrap"><svg id="bc"></svg></div>
-  <hr class="divider"/>
-  <div class="product">${log.product}</div>
-  ${log.vendor ? `<div class="vendor">${log.vendor}</div>` : ''}
-  <hr class="divider"/>
-  <div class="row"><span class="lbl">Date:</span><span>${date}</span></div>
-  <div class="row"><span class="lbl">Qty:</span><span>${log.quantity}</span></div>
-  ${log.weight_lbs != null ? `<div class="row"><span class="lbl">Weight:</span><span>${log.weight_lbs} lbs</span></div>` : ''}
-  ${log.lot_no    ? `<div class="row"><span class="lbl">Lot #:</span><span>${log.lot_no}</span></div>`    : ''}
-  ${log.invoice_no? `<div class="row"><span class="lbl">Invoice:</span><span>${log.invoice_no}</span></div>` : ''}
-  ${log.temp_f != null ? `<div class="row"><span class="lbl">Temp:</span><span>${log.temp_f}°F</span></div>` : ''}
-  ${log.received_by ? `<div class="row"><span class="lbl">Rcvd by:</span><span>${log.received_by}</span></div>` : ''}
-  <div class="footer">Scan to log as processing input</div>
+  <div id="label">
+    <div class="header">Cowboy Meat Co. · Forsyth MT</div>
+    <hr class="divider"/>
+    <div class="id">${boxId}</div>
+    <div class="barcode-wrap"><svg id="bc"></svg></div>
+    <hr class="divider"/>
+    <div class="product">${log.product}</div>
+    ${log.vendor ? `<div class="vendor">${log.vendor}</div>` : ''}
+    <hr class="divider"/>
+    <div class="row"><span class="lbl">Date:</span><span>${date}</span></div>
+    <div class="row"><span class="lbl">Qty:</span><span>${log.quantity}</span></div>
+    ${log.weight_lbs != null ? `<div class="row"><span class="lbl">Weight:</span><span>${log.weight_lbs} lbs</span></div>` : ''}
+    ${log.lot_no     ? `<div class="row"><span class="lbl">Lot #:</span><span>${log.lot_no}</span></div>`    : ''}
+    ${log.invoice_no ? `<div class="row"><span class="lbl">Invoice:</span><span>${log.invoice_no}</span></div>` : ''}
+    ${log.temp_f != null ? `<div class="row"><span class="lbl">Temp:</span><span>${log.temp_f}°F</span></div>` : ''}
+    ${log.received_by ? `<div class="row"><span class="lbl">Rcvd by:</span><span>${log.received_by}</span></div>` : ''}
+    <div class="footer">Scan to log as processing input</div>
+  </div>
   <script>
     window.onload = function() {
       JsBarcode("#bc", "${boxId}", {
         format: "CODE128", width: 2.2, height: 55,
         displayValue: true, fontSize: 11, margin: 3, textMargin: 3,
       });
-      // Measure actual content height after barcode renders, then set exact page size
+      // Measure the label container (not body) for exact page height
       setTimeout(function() {
-        var h = document.body.offsetHeight + 6;
+        var h = document.getElementById('label').offsetHeight + 4;
         var style = document.createElement('style');
         style.textContent = '@page { size: 62mm ' + h + 'px; margin: 2mm 3mm; }';
         document.head.appendChild(style);
