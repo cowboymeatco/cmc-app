@@ -444,10 +444,59 @@ function NewOrderTab({ onSaved, pluList }: { onSaved: () => void; pluList: PluIt
 // ══════════════════════════════════════════════════════════════════════════════
 // ORDER DETAIL PANEL
 // ══════════════════════════════════════════════════════════════════════════════
-function OrderDetail({ order, onUpdated }: { order: RetailOrder; onUpdated: (o: RetailOrder) => void }) {
+function OrderDetail({ order, onUpdated, pluList }: { order: RetailOrder; onUpdated: (o: RetailOrder) => void; pluList: PluItem[] }) {
   const [advancing, setAdvancing] = useState(false)
   const [editingItem, setEditingItem] = useState<string | null>(null)
   const [filledVal, setFilledVal] = useState('')
+
+  // Add item state
+  const [showAddItem, setShowAddItem]       = useState(false)
+  const [addPluSearch, setAddPluSearch]     = useState('')
+  const [addPluDropdown, setAddPluDropdown] = useState<PluItem[]>([])
+  const [addNewItem, setAddNewItem]         = useState({ plu_number: '', item_name: '', unit: 'LB', qty_ordered: '' })
+  const [addingSaving, setAddingSaving]     = useState(false)
+
+  function searchAddPlu(q: string) {
+    setAddPluSearch(q)
+    if (q.length < 1) { setAddPluDropdown([]); return }
+    const lower = q.toLowerCase()
+    setAddPluDropdown(pluList.filter(p =>
+      p.plu_number.includes(q) || p.item_name.toLowerCase().includes(lower)
+    ).slice(0, 8))
+  }
+
+  function selectAddPlu(p: PluItem) {
+    setAddNewItem(prev => ({ ...prev, plu_number: p.plu_number, item_name: p.item_name, unit: p.unit || 'LB' }))
+    setAddPluSearch(`${p.plu_number} — ${p.item_name}`)
+    setAddPluDropdown([])
+  }
+
+  async function saveAddItem() {
+    if (!addNewItem.item_name || !addNewItem.qty_ordered) return
+    setAddingSaving(true)
+    const res = await fetch('/api/orders/items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        order_id:    order.id,
+        plu_number:  addNewItem.plu_number || null,
+        item_name:   addNewItem.item_name,
+        unit:        addNewItem.unit,
+        qty_ordered: parseFloat(addNewItem.qty_ordered) || 0,
+      }),
+    })
+    const created = await res.json()
+    onUpdated({ ...order, retail_order_items: [...order.retail_order_items, created] })
+    setAddNewItem({ plu_number: '', item_name: '', unit: 'LB', qty_ordered: '' })
+    setAddPluSearch('')
+    setAddingSaving(false)
+    setShowAddItem(false)
+  }
+
+  async function deleteItem(itemId: string) {
+    await fetch(`/api/orders/items?id=${itemId}`, { method: 'DELETE' })
+    onUpdated({ ...order, retail_order_items: order.retail_order_items.filter(i => i.id !== itemId) })
+  }
 
   const nextStatus = NEXT_STATUS[order.status]
 
@@ -577,9 +626,77 @@ function OrderDetail({ order, onUpdated }: { order: RetailOrder; onUpdated: (o: 
 
       {/* Line items */}
       <div>
-        <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.6rem' }}>
-          Items
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
+          <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Items</div>
+          <button
+            onClick={() => setShowAddItem(s => !s)}
+            style={{ background: showAddItem ? 'rgba(166,120,90,0.15)' : 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.35)', borderRadius: 3, color: C.tan, fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer', padding: '0.25rem 0.7rem' }}
+          >
+            {showAddItem ? '✕ Cancel' : '+ Add Item'}
+          </button>
         </div>
+
+        {/* Add item form */}
+        {showAddItem && (
+          <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '0.85rem', marginBottom: '0.75rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 70px 90px auto', gap: '0.5rem', alignItems: 'end' }}>
+              {/* PLU search */}
+              <div style={{ position: 'relative' }}>
+                <label style={LABEL}>PLU / Item Name</label>
+                <input
+                  style={INPUT}
+                  value={addPluSearch}
+                  onChange={e => searchAddPlu(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && addPluDropdown.length > 0) selectAddPlu(addPluDropdown[0]) }}
+                  placeholder="Search PLU # or name…"
+                  autoFocus
+                />
+                {addPluDropdown.length > 0 && (
+                  <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: C.darkBrown, border: '1px solid rgba(166,120,90,0.4)', borderRadius: 3, boxShadow: '0 4px 16px rgba(0,0,0,0.4)', maxHeight: 200, overflowY: 'auto' }}>
+                    {addPluDropdown.map(p => (
+                      <div
+                        key={p.plu_number}
+                        onClick={() => selectAddPlu(p)}
+                        style={{ padding: '0.5rem 0.85rem', cursor: 'pointer', borderBottom: '1px solid rgba(166,120,90,0.1)' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(166,120,90,0.12)')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                      >
+                        <span style={{ fontFamily: 'monospace', color: C.lightBrown, fontSize: '0.78rem' }}>PLU {p.plu_number}</span>
+                        <span style={{ color: C.cream, marginLeft: '0.6rem', fontSize: '0.85rem' }}>{p.item_name}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div>
+                <label style={LABEL}>Unit</label>
+                <select style={INPUT} value={addNewItem.unit} onChange={e => setAddNewItem(p => ({ ...p, unit: e.target.value }))}>
+                  <option value="LB">LB</option>
+                  <option value="EA">EA</option>
+                </select>
+              </div>
+              <div>
+                <label style={LABEL}>Qty</label>
+                <input
+                  type="number" step="0.1" min="0"
+                  style={INPUT}
+                  value={addNewItem.qty_ordered}
+                  onChange={e => setAddNewItem(p => ({ ...p, qty_ordered: e.target.value }))}
+                  onKeyDown={e => { if (e.key === 'Enter') saveAddItem() }}
+                  placeholder="0"
+                />
+              </div>
+              <button
+                style={{ ...BTN(C.tan), alignSelf: 'flex-end', whiteSpace: 'nowrap', opacity: addNewItem.item_name && addNewItem.qty_ordered ? 1 : 0.5 }}
+                onClick={saveAddItem}
+                disabled={addingSaving || !addNewItem.item_name || !addNewItem.qty_ordered}
+              >
+                {addingSaving ? '…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        )}
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
           {order.retail_order_items.length === 0 && (
             <div style={{ color: C.lightBrown, fontSize: '0.85rem', fontStyle: 'italic' }}>No items on this order.</div>
@@ -632,6 +749,13 @@ function OrderDetail({ order, onUpdated }: { order: RetailOrder; onUpdated: (o: 
                         {Number(item.qty_filled).toFixed(item.unit === 'LB' ? 1 : 0)} filled
                       </button>
                     )}
+                    <button
+                      onClick={() => deleteItem(item.id)}
+                      title="Remove item"
+                      style={{ background: 'none', border: 'none', color: 'rgba(166,120,90,0.4)', cursor: 'pointer', fontSize: '0.95rem', lineHeight: 1, padding: '0 0.1rem' }}
+                      onMouseEnter={e => (e.currentTarget.style.color = C.red)}
+                      onMouseLeave={e => (e.currentTarget.style.color = 'rgba(166,120,90,0.4)')}
+                    >×</button>
                   </div>
                 </div>
                 {item.unit === 'LB' && (
@@ -651,7 +775,7 @@ function OrderDetail({ order, onUpdated }: { order: RetailOrder; onUpdated: (o: 
 // ══════════════════════════════════════════════════════════════════════════════
 // ORDER LIST TAB (open or fulfilled)
 // ══════════════════════════════════════════════════════════════════════════════
-function OrderListTab({ fulfilled }: { fulfilled: boolean }) {
+function OrderListTab({ fulfilled, pluList }: { fulfilled: boolean; pluList: PluItem[] }) {
   const [orders, setOrders]     = useState<RetailOrder[]>([])
   const [selected, setSelected] = useState<RetailOrder | null>(null)
   const [loading, setLoading]   = useState(true)
@@ -724,7 +848,7 @@ function OrderListTab({ fulfilled }: { fulfilled: boolean }) {
             ← Select an order to view
           </div>
         ) : (
-          <OrderDetail order={selected} onUpdated={handleUpdated} />
+          <OrderDetail order={selected} onUpdated={handleUpdated} pluList={pluList} />
         )}
       </div>
     </div>
@@ -781,8 +905,8 @@ export default function OrdersPage() {
 
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1400px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
         {tab === 'new'       && <NewOrderTab key={newKey} onSaved={() => { setNewKey(k => k + 1); setTab('open') }} pluList={pluList} />}
-        {tab === 'open'      && <OrderListTab key="open"      fulfilled={false} />}
-        {tab === 'fulfilled' && <OrderListTab key="fulfilled" fulfilled={true}  />}
+        {tab === 'open'      && <OrderListTab key="open"      fulfilled={false} pluList={pluList} />}
+        {tab === 'fulfilled' && <OrderListTab key="fulfilled" fulfilled={true}  pluList={pluList} />}
       </main>
 
       <footer style={{ background: 'var(--dark)', borderTop: '1px solid rgba(166,120,90,0.2)', padding: '0.5rem 2rem', textAlign: 'center', fontSize: '0.72rem', color: C.lightBrown, flexShrink: 0 }}>
