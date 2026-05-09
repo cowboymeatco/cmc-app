@@ -142,6 +142,23 @@ export interface ChillLog {
   notes:          string
 }
 
+// ── Cold Storage Temperature Log ─────────────────────────────────────────────
+
+export interface ColdStorageLog {
+  id:                   string
+  created_at:           string
+  recorded_date:        string        // ISO date
+  recorded_time:        string | null // HH:MM:SS
+  showcase_freezer_f:   number | null
+  showcase_cooler_f:    number | null
+  retail_freezer_f:     number | null
+  custom_freezer_f:     number | null
+  new_carcass_cooler_f: number | null
+  old_carcass_cooler_f: number | null
+  initials:             string
+  notes:                string
+}
+
 // ── Delivery Scans ────────────────────────────────────────────────────────────
 
 export interface DeliveryScan {

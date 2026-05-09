@@ -494,8 +494,31 @@ export default function HACCPPage() {
           </p>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', marginBottom: '2rem' }}>
+          {/* Form 6c — Live */}
+          <Link href="/haccp/cold-storage" style={{ textDecoration: 'none' }}>
+            <div style={{
+              background: C.dark, border: '1px solid rgba(166,120,90,0.2)',
+              borderLeft: `4px solid ${C.amber}`, borderRadius: 4,
+              padding: '1.1rem 1.25rem', cursor: 'pointer', height: '100%', boxSizing: 'border-box',
+            }}>
+              <div style={{ fontSize: '0.65rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.25rem' }}>
+                Form 6c &nbsp;·&nbsp; Daily
+              </div>
+              <div style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '0.9rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.35rem' }}>
+                Cold Storage Temp Log
+              </div>
+              <div style={{ fontSize: '0.77rem', color: C.tan, marginBottom: '0.35rem' }}>
+                Showcase · Retail · Custom · Carcass coolers
+              </div>
+              <div style={{ fontSize: '0.75rem', color: C.lightBrown, lineHeight: 1.4 }}>
+                Daily temps for all 6 storage units. Out-of-spec readings flagged in red. Generates HACCP-format PDF for any date range.
+              </div>
+              <div style={{ marginTop: '0.85rem', fontSize: '0.78rem', color: C.amber, fontWeight: 600 }}>Open →</div>
+            </div>
+          </Link>
+
+          {/* Form 3 — Coming soon */}
           {[
-            { num: '6c', title: 'Cold Storage Temp Log', desc: 'Daily temps for all 6 units', freq: 'Daily' },
             { num: '3',  title: 'Humane Handling',        desc: '17-item kill day checklist',   freq: 'Each kill day' },
             { num: '6a', title: 'SSOP Monitoring',        desc: 'Pre-Op / Op sanitation check', freq: 'Daily' },
           ].map(f => (
