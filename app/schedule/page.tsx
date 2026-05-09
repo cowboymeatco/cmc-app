@@ -146,6 +146,11 @@ export default function SchedulePage() {
   const [calYear,      setCalYear]      = useState(new Date().getFullYear())
   const [calMonth,     setCalMonth]     = useState(new Date().getMonth())
   const [selectedDay,  setSelectedDay]  = useState<string | null>(null)
+  const [capacity,     setCapacity]     = useState<{ days_on_hand: number; max_cooler_days: number; available_eq: number; settings: { hogs_per_beef: number; lambs_per_beef: number } } | null>(null)
+
+  useEffect(() => {
+    fetch('/api/capacity').then(r => r.json()).then(d => setCapacity(d)).catch(() => {})
+  }, [])
 
   async function load() {
     setLoading(true)
@@ -254,6 +259,36 @@ export default function SchedulePage() {
       </div>
 
       <div style={{ maxWidth: '1300px', margin: '0 auto', padding: '1.25rem 1.5rem' }}>
+
+        {/* Capacity mini-banner */}
+        {capacity && (() => {
+          const ratio = capacity.days_on_hand / capacity.max_cooler_days
+          const clr   = ratio >= 1 ? '#EF4444' : ratio >= 0.75 ? '#F59E0B' : '#4CAF50'
+          const pct   = Math.min(100, ratio * 100)
+          const avail = capacity.available_eq
+          return (
+            <Link href="/capacity" style={{ textDecoration: 'none', display: 'block', marginBottom: '1rem' }}>
+              <div style={{ background: 'var(--dark)', border: `1px solid ${clr}33`, borderRadius: 4, padding: '0.65rem 1.1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                <span style={{ fontSize: '0.7rem', color: 'rgba(166,120,90,0.6)', textTransform: 'uppercase', letterSpacing: '0.1em', flexShrink: 0 }}>Cooler Load</span>
+                {/* Mini gauge */}
+                <div style={{ flex: '0 0 140px', height: 10, background: 'rgba(255,255,255,0.06)', borderRadius: 99, overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${pct}%`, background: clr, borderRadius: 99, transition: 'width 0.4s' }} />
+                </div>
+                <span style={{ fontSize: '0.85rem', fontWeight: 700, color: clr, flexShrink: 0 }}>
+                  {capacity.days_on_hand.toFixed(1)} / {capacity.max_cooler_days} days
+                </span>
+                {avail > 0 ? (
+                  <span style={{ fontSize: '0.78rem', color: 'rgba(166,120,90,0.6)', marginLeft: '0.25rem' }}>
+                    · Can book: {Math.floor(avail)} more Beef · {Math.floor(avail * capacity.settings.hogs_per_beef)} Hog · {Math.floor(avail * capacity.settings.lambs_per_beef)} Lamb
+                  </span>
+                ) : (
+                  <span style={{ fontSize: '0.78rem', color: '#EF4444', marginLeft: '0.25rem', fontWeight: 600 }}>⚠ At capacity — process before booking more</span>
+                )}
+                <span style={{ marginLeft: 'auto', fontSize: '0.72rem', color: 'rgba(166,120,90,0.45)', flexShrink: 0 }}>View details →</span>
+              </div>
+            </Link>
+          )
+        })()}
 
         <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.25rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <button onClick={() => openNew()} style={btnStyle('var(--med-brown)')}>+ New Appointment</button>
