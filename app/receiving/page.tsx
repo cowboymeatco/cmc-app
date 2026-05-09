@@ -70,6 +70,17 @@ function blankSlot(species: string): AnimalSlot {
 function printReceivingLabel(log: BoxReceivingLog) {
   const date    = new Date(log.received_at + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
   const boxId   = log.box_identifier ?? 'NO-ID'
+
+  // Julian date: YYDDDXXX  (YY=year, DDD=day-of-year, XXX=box sequence)
+  const d          = new Date(log.received_at + 'T12:00:00')
+  const yearStart  = new Date(d.getFullYear(), 0, 0)
+  const dayOfYear  = Math.round((d.getTime() - yearStart.getTime()) / 86400000)
+  const yy         = String(d.getFullYear()).slice(-2)
+  const ddd        = String(dayOfYear).padStart(3, '0')
+  const seqStr     = boxId.split('-').pop() ?? '0'
+  const xxx        = String(parseInt(seqStr, 10)).padStart(3, '0')
+  const julianCode = `${yy}${ddd}${xxx}`
+
   const html = `<!DOCTYPE html><html><head>
   <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
   <style>
@@ -79,6 +90,7 @@ function printReceivingLabel(log: BoxReceivingLog) {
     .header  { text-align: center; font-size: 8pt; letter-spacing: 0.12em; text-transform: uppercase; color: #555; margin-bottom: 2px; }
     .divider { border: none; border-top: 0.5pt solid #000; margin: 4px 0; }
     .id      { text-align: center; font-size: 10pt; font-weight: bold; letter-spacing: 0.06em; font-family: monospace; margin: 3px 0; }
+    .julian  { text-align: center; font-size: 13pt; font-weight: bold; letter-spacing: 0.12em; font-family: monospace; margin: 2px 0; }
     .barcode-wrap { text-align: center; margin: 4px 0; }
     .barcode-wrap svg { max-width: 100%; }
     .product { font-size: 16pt; font-weight: bold; text-align: center; margin: 4px 0; line-height: 1.2; }
@@ -91,6 +103,7 @@ function printReceivingLabel(log: BoxReceivingLog) {
   <div id="label">
     <div class="header">Cowboy Meat Co. · Forsyth MT</div>
     <hr class="divider"/>
+    <div class="julian">${julianCode}</div>
     <div class="id">${boxId}</div>
     <div class="barcode-wrap"><svg id="bc"></svg></div>
     <hr class="divider"/>
