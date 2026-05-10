@@ -535,10 +535,12 @@ function AnimalTab() {
 
             {/* Actions */}
             <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem' }}>
-              <button style={BTN(arrivedCount > 0 ? C.green : C.medBrown, C.dark)} onClick={handleCheckIn} disabled={saving || arrivedCount === 0}>
-                {saving ? 'Saving…' : noShowCount > 0
-                  ? `✓ Check In ${arrivedCount} of ${slots.length} (${noShowCount} No-Show)`
-                  : `✓ Check In ${slots.length} Animal${slots.length !== 1 ? 's' : ''}`
+              <button style={BTN(arrivedCount > 0 ? C.green : noShowCount > 0 ? C.yellow : C.medBrown, C.dark)} onClick={handleCheckIn} disabled={saving || (arrivedCount === 0 && noShowCount === 0)}>
+                {saving ? 'Saving…' : arrivedCount === 0 && noShowCount > 0
+                  ? `✓ Record ${noShowCount} No-Show${noShowCount !== 1 ? 's' : ''}`
+                  : noShowCount > 0
+                    ? `✓ Check In ${arrivedCount} of ${slots.length} (${noShowCount} No-Show)`
+                    : `✓ Check In ${slots.length} Animal${slots.length !== 1 ? 's' : ''}`
                 }
               </button>
               <button style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.3)' }} onClick={() => { setSelected(null); setSlots([]) }}>
