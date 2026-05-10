@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
       health_cert_no:  fields.health_cert_no ?? '',
       brand_insp_no:   fields.brand_insp_no  ?? '',
       notes:           fields.notes          ?? '',
-      status:          'received',
+      status:          (a.status as string) === 'no_show' ? 'no_show' : 'received',
       animal_index:    a.animal_index   ?? 1,
       ear_tag:         a.ear_tag        ?? '',
       sex:             a.sex            ?? '',
@@ -65,11 +65,13 @@ export async function POST(req: NextRequest) {
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-    // Flip appointment to AnimalIn
+    // If every animal is a no-show, mark appointment NoShow (keeps out of harvest queue).
+    // Otherwise flip to AnimalIn so it appears in the harvest queue.
     if (fields.appointment_id) {
+      const allNoShow = animals.every((a) => (a.status as string) === 'no_show')
       await supabase
         .from('harvest_appointments')
-        .update({ status: 'AnimalIn' })
+        .update({ status: allNoShow ? 'NoShow' : 'AnimalIn' })
         .eq('id', fields.appointment_id)
     }
 
