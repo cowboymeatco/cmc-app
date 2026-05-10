@@ -1,11 +1,14 @@
 // ── Harvest Appointments ──────────────────────────────────────────────────────
 
 export type AppointmentStatus =
+  | 'PendingRequest'
   | 'Booked'
   | 'InstructionsReceived'
   | 'AnimalIn'
+  | 'NoShow'
   | 'Processing'
   | 'Complete'
+  | 'Declined'
 
 export type Species = 'Beef' | 'Hog' | 'Lamb' | 'Goat'
 

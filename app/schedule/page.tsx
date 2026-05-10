@@ -147,6 +147,8 @@ export default function SchedulePage() {
   const [calMonth,     setCalMonth]     = useState(new Date().getMonth())
   const [selectedDay,  setSelectedDay]  = useState<string | null>(null)
   const [capacity,     setCapacity]     = useState<{ days_on_hand: number; max_cooler_days: number; available_eq: number; settings: { hogs_per_beef: number; lambs_per_beef: number } } | null>(null)
+  const [confirmingId, setConfirmingId] = useState<string | null>(null)
+  const [decliningId,  setDecliningId]  = useState<string | null>(null)
 
   useEffect(() => {
     fetch('/api/capacity').then(r => r.json()).then(d => setCapacity(d)).catch(() => {})
@@ -167,16 +169,22 @@ export default function SchedulePage() {
 
   useEffect(() => { load() }, [])
 
+  // Separate pending requests from regular appointments
+  const pendingRequests = appointments
+    .filter(a => a.status === 'PendingRequest')
+    .sort((a, b) => a.harvest_date.localeCompare(b.harvest_date))
+
   const filtered = appointments
     .filter(a => {
+      if (a.status === 'PendingRequest') return false   // handled separately above
       if (filter === 'upcoming') return a.status !== 'Complete'
       if (filter === 'complete') return a.status === 'Complete'
       return true
     })
     .sort((a, b) => a.harvest_date.localeCompare(b.harvest_date))
 
-  const needInstruct = appointments.filter(a => a.status !== 'Complete' && a.customers?.some(c => !c.linked_cutting_instruction_id)).length
-  const readyCount   = appointments.filter(a => a.status !== 'Complete' && a.customers?.every(c => !!c.linked_cutting_instruction_id)).length
+  const needInstruct = appointments.filter(a => a.status !== 'Complete' && a.status !== 'PendingRequest' && a.customers?.some(c => !c.linked_cutting_instruction_id)).length
+  const readyCount   = appointments.filter(a => a.status !== 'Complete' && a.status !== 'PendingRequest' && a.customers?.every(c => !!c.linked_cutting_instruction_id)).length
 
   async function save() {
     if (!editing) return
@@ -189,6 +197,25 @@ export default function SchedulePage() {
   async function deleteAppt(id: string) {
     if (!confirm('Delete this appointment?')) return
     await fetch(`/api/appointments?id=${id}`, { method: 'DELETE' })
+    load()
+  }
+
+  async function confirmRequest(id: string) {
+    setConfirmingId(id)
+    await fetch('/api/appointments', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, status: 'Booked' }),
+    })
+    setConfirmingId(null)
+    load()
+  }
+
+  async function declineRequest(id: string, source: string) {
+    if (!confirm(`Decline the request from ${source || 'this customer'}? This will delete it.`)) return
+    setDecliningId(id)
+    await fetch(`/api/appointments?id=${id}`, { method: 'DELETE' })
+    setDecliningId(null)
     load()
   }
 
@@ -289,6 +316,80 @@ export default function SchedulePage() {
             </Link>
           )
         })()}
+
+        {/* ── Pending Requests Inbox ── */}
+        {pendingRequests.length > 0 && (
+          <div style={{ marginBottom: '1.25rem', background: 'rgba(232,136,58,0.06)', border: '1px solid rgba(232,136,58,0.3)', borderRadius: 6, overflow: 'hidden' }}>
+            <div style={{ background: 'rgba(232,136,58,0.12)', borderBottom: '1px solid rgba(232,136,58,0.25)', padding: '0.6rem 1.1rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              <span style={{ fontSize: '1rem' }}>📬</span>
+              <span style={{ color: '#E8883A', fontWeight: 700, fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                Booking Requests
+              </span>
+              <span style={{ background: '#E8883A', color: '#1A0A04', borderRadius: 99, fontSize: '0.72rem', fontWeight: 700, padding: '1px 8px' }}>
+                {pendingRequests.length}
+              </span>
+              <span style={{ marginLeft: 'auto', fontSize: '0.72rem', color: 'rgba(166,120,90,0.6)' }}>
+                Confirm to add to schedule · Decline to remove
+              </span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+              {pendingRequests.map((req, idx) => {
+                const d = new Date(req.harvest_date + 'T12:00:00')
+                const weekLabel = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                const isConfirming = confirmingId === req.id
+                const isDeclining  = decliningId  === req.id
+                // Parse contact info from notes
+                const lines   = (req.notes ?? '').split('\n')
+                const phone   = lines.find(l => l.startsWith('Phone:'))?.replace('Phone:', '').trim() ?? ''
+                const email   = lines.find(l => l.startsWith('Email:'))?.replace('Email:', '').trim() ?? ''
+                const noteText = lines.filter(l => !l.startsWith('Phone:') && !l.startsWith('Email:')).join(' ').trim()
+                return (
+                  <div key={req.id} style={{
+                    display: 'flex', alignItems: 'center', gap: '1rem',
+                    padding: '0.75rem 1.1rem',
+                    borderTop: idx > 0 ? '1px solid rgba(166,120,90,0.12)' : 'none',
+                    flexWrap: 'wrap',
+                  }}>
+                    <span style={{ fontSize: '1.1rem' }}>
+                      {SPECIES_EMOJI[req.species] ?? '🐄'}
+                    </span>
+                    <div style={{ flex: 1, minWidth: 200 }}>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <span style={{ color: 'var(--cream)', fontWeight: 600, fontSize: '0.9rem' }}>
+                          {req.source || 'Unknown'}
+                        </span>
+                        <span style={{ color: 'var(--tan)', fontSize: '0.82rem' }}>
+                          {req.head_count} {req.species} · week of {weekLabel}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '0.78rem', color: 'rgba(166,120,90,0.7)', marginTop: '0.15rem', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                        {phone && <span>📞 {phone}</span>}
+                        {email && <span>✉ {email}</span>}
+                        {noteText && <span>💬 {noteText}</span>}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
+                      <button
+                        onClick={() => confirmRequest(req.id)}
+                        disabled={isConfirming || isDeclining}
+                        style={{ background: '#4CAF50', color: '#1A0A04', border: 'none', borderRadius: 3, padding: '0.4rem 0.9rem', fontSize: '0.82rem', fontWeight: 700, cursor: 'pointer' }}
+                      >
+                        {isConfirming ? '…' : '✓ Confirm'}
+                      </button>
+                      <button
+                        onClick={() => declineRequest(req.id, req.source ?? '')}
+                        disabled={isConfirming || isDeclining}
+                        style={{ background: 'rgba(239,68,68,0.15)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 3, padding: '0.4rem 0.9rem', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer' }}
+                      >
+                        {isDeclining ? '…' : 'Decline'}
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.25rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <button onClick={() => openNew()} style={btnStyle('var(--med-brown)')}>+ New Appointment</button>
