@@ -1,7 +1,7 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import Link from 'next/link'
-import type { HarvestAppointment } from '@/lib/types'
+import type { HarvestAppointment, AppointmentCustomer, Customer } from '@/lib/types'
 
 const SPECIES  = ['Beef', 'Hog', 'Lamb', 'Goat']
 const PORTIONS = ['Whole', 'Half', 'Quarter']
@@ -861,7 +861,10 @@ function Modal({ editing, saving, onChange, onSave, onClose }: {
             <div key={c.id} style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(166,120,90,0.15)', borderRadius:'4px', padding:'1rem', marginBottom:'0.75rem' }}>
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'0.75rem' }}>
                 <Field label="Name">
-                  <input value={c.customer_name} onChange={e=>{const cs=[...(editing.customers??[])];cs[idx]={...c,customer_name:e.target.value};onChange({...editing,customers:cs})}} style={inputStyle()} />
+                  <CustomerNameInput
+                    customer={c}
+                    onChange={updates=>{const cs=[...(editing.customers??[])];cs[idx]={...c,...updates};onChange({...editing,customers:cs})}}
+                  />
                 </Field>
                 <Field label="Portion">
                   <select value={c.portion} onChange={e=>{const cs=[...(editing.customers??[])];cs[idx]={...c,portion:e.target.value};onChange({...editing,customers:cs})}} style={inputStyle()}>
@@ -889,6 +892,88 @@ function Modal({ editing, saving, onChange, onSave, onClose }: {
           <button onClick={onSave} disabled={saving} style={btnStyle('var(--med-brown)')}>{saving?'Saving…':'Save Appointment'}</button>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Customer name autocomplete ────────────────────────────────────────────────
+function CustomerNameInput({
+  customer, onChange,
+}: {
+  customer: AppointmentCustomer
+  onChange: (updated: Partial<AppointmentCustomer>) => void
+}) {
+  const [suggestions, setSuggestions] = useState<Customer[]>([])
+  const [open,        setOpen]        = useState(false)
+  const [timer,       setTimer]       = useState<ReturnType<typeof setTimeout> | null>(null)
+  const wrapRef = useRef<HTMLDivElement>(null)
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [])
+
+  function handleInput(val: string) {
+    onChange({ customer_name: val, customer_id: null })  // clear link when typing
+    if (timer) clearTimeout(timer)
+    if (val.trim().length < 2) { setSuggestions([]); setOpen(false); return }
+    const t = setTimeout(async () => {
+      const data = await fetch(`/api/customers?search=${encodeURIComponent(val)}`).then(r => r.json()).catch(() => [])
+      setSuggestions(Array.isArray(data) ? data.slice(0, 6) : [])
+      setOpen(true)
+    }, 220)
+    setTimer(t)
+  }
+
+  function selectCustomer(c: Customer) {
+    onChange({
+      customer_id:        c.id,
+      customer_name:      c.name,
+      contact_preference: c.preferred_contact || 'Phone Call',
+      contact_value:      c.phone || c.email || '',
+    })
+    setOpen(false)
+    setSuggestions([])
+  }
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative' }}>
+      <div style={{ position: 'relative' }}>
+        <input
+          value={customer.customer_name}
+          onChange={e => handleInput(e.target.value)}
+          onFocus={() => { if (suggestions.length) setOpen(true) }}
+          style={inputStyle()}
+          placeholder="Customer name"
+        />
+        {customer.customer_id && (
+          <span style={{ position: 'absolute', right: '0.5rem', top: '50%', transform: 'translateY(-50%)', fontSize: '0.7rem', color: '#4CAF50', pointerEvents: 'none' }}>
+            ✓ linked
+          </span>
+        )}
+      </div>
+      {open && suggestions.length > 0 && (
+        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100, background: '#2A1408', border: '1px solid rgba(166,120,90,0.4)', borderRadius: '0 0 4px 4px', boxShadow: '0 4px 16px rgba(0,0,0,0.5)', maxHeight: 220, overflowY: 'auto' }}>
+          {suggestions.map(c => (
+            <div
+              key={c.id}
+              onMouseDown={() => selectCustomer(c)}
+              style={{ padding: '0.55rem 0.85rem', cursor: 'pointer', borderBottom: '1px solid rgba(166,120,90,0.1)' }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(232,136,58,0.1)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+            >
+              <div style={{ color: 'var(--cream)', fontSize: '0.85rem', fontWeight: 600 }}>{c.name}</div>
+              <div style={{ color: 'var(--light-brown)', fontSize: '0.75rem' }}>
+                {[c.ranch_name, c.phone, c.email].filter(Boolean).join(' · ')}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

@@ -1,3 +1,17 @@
+// ── Customers ─────────────────────────────────────────────────────────────────
+
+export interface Customer {
+  id:                string
+  created_at:        string
+  name:              string
+  ranch_name:        string
+  phone:             string
+  email:             string
+  preferred_contact: string   // 'Phone Call' | 'Text Message' | 'Email'
+  notes:             string
+  auth_user_id?:     string | null   // reserved for portal login
+}
+
 // ── Harvest Appointments ──────────────────────────────────────────────────────
 
 export type AppointmentStatus =
@@ -14,6 +28,7 @@ export type Species = 'Beef' | 'Hog' | 'Lamb' | 'Goat'
 
 export interface AppointmentCustomer {
   id:                          string
+  customer_id?:                string | null   // FK to customers table (optional — backward compat)
   customer_name:               string
   portion:                     string   // 'Whole' | 'Half' | 'Quarter'
   contact_preference:          string   // 'Email' | 'Text Message' | 'Phone Call'
