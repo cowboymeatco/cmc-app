@@ -102,6 +102,58 @@ export default function CapacityPage() {
     hogs_per_beef: 4, lambs_per_beef: 6, goats_per_beef: 6, beef_eq_per_day: 3, max_cooler_days: 6,
   })
 
+  // Quick-add to cooler
+  const today = new Date().toISOString().slice(0, 10)
+  const emptyEntry = () => ({ species: 'Beef', carcass_tag: '', producer: '', harvest_date: today, sex: 'Steer', ear_tag: '', hot_carcass_weight_lbs: '', over_30_months: false })
+  const [addModal,   setAddModal]   = useState(false)
+  const [addEntries, setAddEntries] = useState([emptyEntry()])
+  const [addSaving,  setAddSaving]  = useState(false)
+
+  async function saveAddEntries() {
+    setAddSaving(true)
+    for (const e of addEntries) {
+      if (!e.carcass_tag || !e.harvest_date) continue
+      await fetch('/api/harvest', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          harvest_date:           e.harvest_date,
+          species:                e.species,
+          carcass_tag:            e.carcass_tag,
+          producer:               e.producer,
+          sex:                    e.sex,
+          ear_tag:                e.ear_tag,
+          hot_carcass_weight_lbs: e.hot_carcass_weight_lbs ? parseFloat(e.hot_carcass_weight_lbs) : null,
+          over_30_months:         e.over_30_months,
+          status:                 'chilling',
+          carcasses: [{
+            carcass_tag:            e.carcass_tag,
+            sex:                    e.sex,
+            ear_tag:                e.ear_tag,
+            hot_carcass_weight_lbs: e.hot_carcass_weight_lbs ? parseFloat(e.hot_carcass_weight_lbs) : null,
+            over_30_months:         e.over_30_months,
+            intervention_applied:   false,
+            ccp_pass:               true,
+            is_verification:        false,
+            direct_observation:     false,
+          }],
+        }),
+      })
+    }
+    setAddSaving(false)
+    setAddModal(false)
+    setAddEntries([emptyEntry()])
+    load()
+  }
+
+  async function removeCarcass(id: string) {
+    if (!confirm('Remove this carcass from the cooler? (Marks it complete — it will no longer count toward capacity.)')) return
+    await fetch('/api/harvest', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, status: 'complete' }),
+    })
+    load()
+  }
+
   const load = useCallback(async () => {
     setLoading(true)
     const res = await fetch('/api/capacity')
@@ -278,10 +330,18 @@ export default function CapacityPage() {
 
             {/* Cooler inventory — age detail */}
             <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.2)', borderRadius: 4, overflow: 'hidden' }}>
-              <div style={{ padding: '0.75rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.15)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
-                  Carcasses in Cooler
-                </span>
+              <div style={{ padding: '0.65rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.15)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                  <span style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                    Carcasses in Cooler
+                  </span>
+                  <button
+                    onClick={() => setAddModal(true)}
+                    style={{ ...BTN('rgba(201,168,130,0.15)', C.tan), border: '1px solid rgba(201,168,130,0.3)', fontSize: '0.75rem', padding: '0.3rem 0.8rem' }}
+                  >
+                    + Add to Cooler
+                  </button>
+                </div>
                 <span style={{ fontSize: '0.72rem', color: 'rgba(166,120,90,0.5)' }}>
                   ≤3 days: safe &nbsp;·&nbsp; 4–5: monitor &nbsp;·&nbsp; 6+: priority cut
                 </span>
@@ -296,8 +356,8 @@ export default function CapacityPage() {
                   const ageColor = c.days_in_cooler >= 6 ? C.red : c.days_in_cooler >= 4 ? C.yellow : C.green
                   return (
                     <div key={c.id} style={{
-                      display: 'grid', gridTemplateColumns: '36px 140px 1fr 110px 80px 70px',
-                      gap: '0 0.75rem', padding: '0.6rem 1.25rem',
+                      display: 'grid', gridTemplateColumns: '36px 140px 1fr 110px 72px 60px 28px',
+                      gap: '0 0.75rem', padding: '0.55rem 1.25rem',
                       borderBottom: '1px solid rgba(166,120,90,0.07)',
                       alignItems: 'center',
                       background: c.days_in_cooler >= 6 ? 'rgba(239,68,68,0.04)' : undefined,
@@ -312,6 +372,11 @@ export default function CapacityPage() {
                       <span style={{ fontSize: '0.72rem', color: 'rgba(166,120,90,0.45)', textAlign: 'right' }}>
                         {c.beef_eq.toFixed(2)} BE
                       </span>
+                      <button
+                        onClick={() => removeCarcass(c.id)}
+                        title="Mark as processed — removes from cooler load"
+                        style={{ background: 'none', border: 'none', color: 'rgba(76,175,80,0.4)', cursor: 'pointer', fontSize: '0.9rem', padding: 0, textAlign: 'center' }}
+                      >✓</button>
                     </div>
                   )
                 })
@@ -477,6 +542,88 @@ export default function CapacityPage() {
       <footer style={{ background: 'var(--dark)', borderTop: '1px solid rgba(166,120,90,0.2)', padding: '0.5rem 2rem', textAlign: 'center', fontSize: '0.72rem', color: 'var(--light-brown)' }}>
         Cowboy Meat Company · 1109 Front St, Forsyth MT · (406) 346-7660 · info@cowboymeats.com
       </footer>
+
+      {/* ── Add to Cooler Modal ────────────────────────────────────────── */}
+      {addModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' }}
+          onClick={() => setAddModal(false)}>
+          <div style={{ background: C.darkBrown, border: '1px solid rgba(166,120,90,0.4)', borderRadius: 6, padding: '1.75rem 2rem', width: '100%', maxWidth: 680, maxHeight: '90vh', overflowY: 'auto' }}
+            onClick={e => e.stopPropagation()}>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.3rem' }}>
+              <h3 style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.07em', margin: 0 }}>
+                Add Carcasses to Cooler
+              </h3>
+              <button onClick={() => setAddModal(false)} style={{ background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '1.1rem' }}>×</button>
+            </div>
+            <p style={{ color: C.lightBrown, fontSize: '0.78rem', margin: '0 0 1.25rem', lineHeight: 1.5 }}>
+              Use this to load existing carcasses or catch up historical inventory. Each row becomes one carcass in the cooler. Only Tag and Date are required.
+            </p>
+
+            {/* Column headers */}
+            <div style={{ display: 'grid', gridTemplateColumns: '90px 100px 1fr 90px 80px 110px 28px', gap: '0 0.6rem', marginBottom: '0.4rem' }}>
+              {['Species', 'Tag #*', 'Producer', 'Sex', 'HCW (lbs)', 'Kill Date*', ''].map((h, i) => (
+                <span key={i} style={{ fontSize: '0.65rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{h}</span>
+              ))}
+            </div>
+
+            {addEntries.map((e, i) => (
+              <div key={i} style={{ display: 'grid', gridTemplateColumns: '90px 100px 1fr 90px 80px 110px 28px', gap: '0.5rem 0.6rem', marginBottom: '0.5rem', alignItems: 'center' }}>
+                <select
+                  value={e.species}
+                  onChange={ev => setAddEntries(p => p.map((r, ri) => ri === i ? { ...r, species: ev.target.value, sex: ev.target.value === 'Beef' ? 'Steer' : ev.target.value === 'Hog' ? 'Barrow' : 'Wether' } : r))}
+                  style={{ ...INPUT, fontSize: '0.83rem' }}
+                >
+                  {['Beef','Hog','Lamb','Goat'].map(s => <option key={s}>{s}</option>)}
+                </select>
+                <input placeholder="e.g. CT-001" style={{ ...INPUT, fontSize: '0.83rem' }}
+                  value={e.carcass_tag}
+                  onChange={ev => setAddEntries(p => p.map((r, ri) => ri === i ? { ...r, carcass_tag: ev.target.value } : r))} />
+                <input placeholder="Owner name" style={{ ...INPUT, fontSize: '0.83rem' }}
+                  value={e.producer}
+                  onChange={ev => setAddEntries(p => p.map((r, ri) => ri === i ? { ...r, producer: ev.target.value } : r))} />
+                <select
+                  value={e.sex}
+                  onChange={ev => setAddEntries(p => p.map((r, ri) => ri === i ? { ...r, sex: ev.target.value } : r))}
+                  style={{ ...INPUT, fontSize: '0.83rem' }}
+                >
+                  {(e.species === 'Beef' ? ['Steer','Heifer','Cow','Bull'] : e.species === 'Hog' ? ['Barrow','Gilt','Sow','Boar'] : ['Wether','Ewe','Ram']).map(s => <option key={s}>{s}</option>)}
+                </select>
+                <input type="number" step="1" placeholder="—" style={{ ...INPUT, fontSize: '0.83rem' }}
+                  value={e.hot_carcass_weight_lbs}
+                  onChange={ev => setAddEntries(p => p.map((r, ri) => ri === i ? { ...r, hot_carcass_weight_lbs: ev.target.value } : r))} />
+                <input type="date" style={{ ...INPUT, fontSize: '0.83rem' }}
+                  value={e.harvest_date}
+                  onChange={ev => setAddEntries(p => p.map((r, ri) => ri === i ? { ...r, harvest_date: ev.target.value } : r))} />
+                <button
+                  onClick={() => setAddEntries(p => p.length > 1 ? p.filter((_, ri) => ri !== i) : p)}
+                  style={{ background: 'none', border: 'none', color: 'rgba(166,120,90,0.35)', cursor: 'pointer', fontSize: '1rem', textAlign: 'center' }}
+                >×</button>
+              </div>
+            ))}
+
+            <button
+              onClick={() => setAddEntries(p => [...p, emptyEntry()])}
+              style={{ ...BTN('rgba(255,255,255,0.05)', C.lightBrown), border: '1px dashed rgba(166,120,90,0.3)', width: '100%', marginBottom: '1.25rem', fontSize: '0.82rem' }}
+            >
+              + Add another row
+            </button>
+
+            <div style={{ display: 'flex', gap: '0.75rem' }}>
+              <button
+                onClick={saveAddEntries}
+                disabled={addSaving || addEntries.every(e => !e.carcass_tag)}
+                style={{ ...BTN(C.tan), flex: 1, opacity: addEntries.every(e => !e.carcass_tag) ? 0.5 : 1 }}
+              >
+                {addSaving ? 'Saving…' : `Save ${addEntries.filter(e => e.carcass_tag).length} Carcass${addEntries.filter(e => e.carcass_tag).length !== 1 ? 'es' : ''}`}
+              </button>
+              <button onClick={() => setAddModal(false)} style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.3)' }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
