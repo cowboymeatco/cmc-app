@@ -517,6 +517,29 @@ export default function HACCPPage() {
             </div>
           </Link>
 
+          {/* HTSS Wet Bulb Calculator — Live */}
+          <Link href="/haccp/htss" style={{ textDecoration: 'none' }}>
+            <div style={{
+              background: C.dark, border: '1px solid rgba(166,120,90,0.2)',
+              borderLeft: `4px solid #F87171`, borderRadius: 4,
+              padding: '1.1rem 1.25rem', cursor: 'pointer', height: '100%', boxSizing: 'border-box',
+            }}>
+              <div style={{ fontSize: '0.65rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.25rem' }}>
+                Form 14a &nbsp;·&nbsp; Weekly DO
+              </div>
+              <div style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '0.9rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.35rem' }}>
+                HTSS Wet Bulb Calc
+              </div>
+              <div style={{ fontSize: '0.77rem', color: C.tan, marginBottom: '0.35rem' }}>
+                CCP 2B · Alt-3 · Beef Jerky
+              </div>
+              <div style={{ fontSize: '0.75rem', color: C.lightBrown, lineHeight: 1.4 }}>
+                Calculate wet bulb from dry bulb + RH. Check WB ≥ 125°F and RH ≥ 30% critical limits. Upload smokehouse CSV for full phase-by-phase compliance analysis.
+              </div>
+              <div style={{ marginTop: '0.85rem', fontSize: '0.78rem', color: '#F87171', fontWeight: 600 }}>Open →</div>
+            </div>
+          </Link>
+
           {/* Form 3 — Coming soon */}
           {[
             { num: '3',  title: 'Humane Handling',        desc: '17-item kill day checklist',   freq: 'Each kill day' },
