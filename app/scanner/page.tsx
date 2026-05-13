@@ -48,6 +48,13 @@ function decodeBarcode(barcode: string): { plu: string; weightLbs: number } | nu
   return { plu: String(plu), weightLbs: weight }
 }
 
+// Returns PLU from a Hobart-format barcode even when weight is 0 (box/each products)
+function decodePluFromBarcode(barcode: string): string | null {
+  if (barcode.length !== 13 || !/^\d{13}$/.test(barcode) || barcode[0] !== '2') return null
+  const plu = parseInt(barcode.substring(1, 6), 10)
+  return plu > 0 ? String(plu) : null
+}
+
 interface SessionWithStats {
   id:             string | null
   customer_name:  string
@@ -123,6 +130,11 @@ export default function ScannerPage() {
   const [newInputWt,   setNewInputWt]   = useState('')
   const [newInputType, setNewInputType] = useState<'raw' | 'premade' | 'carcass'>('raw')
   const [addingInput,  setAddingInput]  = useState(false)
+
+  // ── Weight entry modal (box products with no embedded weight) ────────────────
+  const [weightModal, setWeightModal] = useState<{ plu: string; itemName: string } | null>(null)
+  const [weightEntry, setWeightEntry] = useState('')
+  const weightInputRef = useRef<HTMLInputElement>(null)
 
   // ── Session management ─────────────────────────────────��──────────────────────
   const [sessions,         setSessions]         = useState<SessionWithStats[]>([])
@@ -214,10 +226,19 @@ export default function ScannerPage() {
 
     const decoded = decodeBarcode(raw)
     if (!decoded) {
-      setFlash('bad')
-      setLastItem('Not a weight barcode')
-      setTimeout(() => setFlash(null), 1800)
-      scanRef.current?.focus()
+      // Check if it's a Hobart-format barcode with a valid PLU but no weight (box/each product)
+      const plu = decodePluFromBarcode(raw)
+      if (plu) {
+        const itemName = pluMapRef.current[plu] ?? `PLU ${plu}`
+        setWeightModal({ plu, itemName })
+        setWeightEntry('')
+        setTimeout(() => weightInputRef.current?.focus(), 80)
+      } else {
+        setFlash('bad')
+        setLastItem('Not a weight barcode')
+        setTimeout(() => setFlash(null), 1800)
+        scanRef.current?.focus()
+      }
       return
     }
 
@@ -233,6 +254,7 @@ export default function ScannerPage() {
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ box_id: box.id, plu_number: plu, item_name: itemName, weight_lbs: weightLbs, quantity: 1 }),
       })
+      if (!res.ok) throw new Error(await res.text())
       const scan: ScanLine = await res.json()
       setScans(prev => [scan, ...prev])
       setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb`)
@@ -497,6 +519,42 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
   async function removeScan(id: string) {
     await fetch(`/api/boxes/scans?id=${id}`, { method: 'DELETE' })
     setScans(prev => prev.filter(s => s.id !== id))
+  }
+
+  // ── Submit weight for a box product (no weight-embedded barcode) ─────────────
+  async function submitWeightEntry() {
+    if (!weightModal) return
+    const box = activeBoxRef.current
+    if (!box || box.is_closed) return
+    const weightLbs = parseFloat(weightEntry)
+    if (!weightLbs || weightLbs <= 0) return
+
+    const { plu, itemName } = weightModal
+    setWeightModal(null)
+    setWeightEntry('')
+    processingRef.current = true
+    setProcessing(true)
+
+    try {
+      const res = await fetch('/api/boxes/scans', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ box_id: box.id, plu_number: plu, item_name: itemName, weight_lbs: weightLbs, quantity: 1 }),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      const scan: ScanLine = await res.json()
+      setScans(prev => [scan, ...prev])
+      setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb`)
+      setFlash('ok')
+      setTimeout(() => setFlash(null), 2000)
+    } catch {
+      setFlash('bad')
+      setLastItem('Save failed — retry')
+    } finally {
+      setProcessing(false)
+      processingRef.current = false
+      scanRef.current?.focus()
+    }
   }
 
   // ── Add input from CMC box scan or carcass tag scan ──────────────────────────
@@ -1246,9 +1304,13 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
                       style={{ background: 'none', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 3, color: C.lightBrown, cursor: 'pointer', fontSize: '0.78rem', lineHeight: 1, padding: '0.15rem 0.4rem', fontWeight: 700 }}
                     >÷</button>
                     <button
-                      onClick={() => removeScan(scan.id)}
-                      style={{ background: 'none', border: 'none', color: 'rgba(166,120,90,0.4)', cursor: 'pointer', fontSize: '1rem', lineHeight: 1, padding: '0 0.2rem' }}
-                      title="Remove"
+                      onClick={() => {
+                        if (window.confirm(`Remove ${scan.item_name} (${Number(scan.weight_lbs).toFixed(2)} lb)?`)) {
+                          removeScan(scan.id)
+                        }
+                      }}
+                      style={{ background: 'rgba(180,40,40,0.15)', border: '1px solid rgba(180,40,40,0.5)', borderRadius: 4, color: '#e05555', cursor: 'pointer', fontSize: '1rem', lineHeight: 1, padding: '0.25rem 0.55rem', fontWeight: 700 }}
+                      title="Remove this scan"
                     >×</button>
                   </>
                 )}
@@ -1268,6 +1330,52 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
         </div>
 
       </div>
+
+      {/* ── Weight entry modal (box / each products) ── */}
+      {weightModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}>
+          <div style={{ background: C.darkBrown, border: '1px solid rgba(166,120,90,0.4)', borderRadius: 8, padding: '2rem', width: '100%', maxWidth: 340 }}>
+            <div style={{ fontFamily: 'Georgia, serif', color: C.cream, fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '1.25rem' }}>
+              Enter Box Weight
+            </div>
+            <div style={{ color: C.cream, fontWeight: 700, fontSize: '1rem', marginBottom: '0.3rem' }}>
+              {weightModal.itemName}
+            </div>
+            <div style={{ color: C.lightBrown, fontSize: '0.82rem', marginBottom: '1.5rem', fontFamily: 'monospace' }}>
+              PLU {weightModal.plu}
+            </div>
+            <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.65rem' }}>
+              Weight (lbs)
+            </div>
+            <input
+              ref={weightInputRef}
+              type="number"
+              step="0.01"
+              min="0.01"
+              value={weightEntry}
+              onChange={e => setWeightEntry(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') submitWeightEntry() }}
+              style={{ width: '100%', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(166,120,90,0.4)', borderRadius: 4, padding: '0.75rem', color: C.cream, fontSize: '1.6rem', fontFamily: 'monospace', outline: 'none', marginBottom: '1.5rem', boxSizing: 'border-box' }}
+              autoFocus
+            />
+            <div style={{ display: 'flex', gap: '0.6rem' }}>
+              <button
+                onClick={() => { setWeightModal(null); setWeightEntry(''); scanRef.current?.focus() }}
+                style={{ flex: 1, background: 'transparent', border: '1px solid rgba(166,120,90,0.3)', color: C.lightBrown, borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitWeightEntry}
+                disabled={!weightEntry || parseFloat(weightEntry) <= 0}
+                style={{ flex: 2, background: C.tan, color: C.dark, border: 'none', borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer' }}
+              >
+                ✓ Record
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Split / chub modal ── */}
       {splitModal && (() => {
