@@ -424,6 +424,18 @@ function HarvestTab() {
   const hf = (k: keyof typeof header) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setHeader(p => ({ ...p, [k]: e.target.value }))
 
+  async function markNoShow(a: HarvestAppointment) {
+    const label = a.source || a.customers?.[0]?.customer_name || 'this appointment'
+    if (!window.confirm(`Mark ${label} as No Show? This will remove them from the Ready to Harvest list.`)) return
+    await fetch('/api/appointments', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: a.id, status: 'NoShow' }),
+    })
+    if (selected?.id === a.id) setSelected(null)
+    setAppointments(prev => prev.filter(x => x.id !== a.id))
+  }
+
   async function handleSubmit() {
     if (!selected) return
     setSaving(true)
@@ -497,8 +509,15 @@ function HarvestTab() {
                 transition: 'background 0.15s',
               }}
             >
-              <div style={{ color: C.cream, fontWeight: 600, fontSize: '0.9rem', marginBottom: '0.15rem' }}>
-                {a.species} — {a.head_count} head
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div style={{ color: C.cream, fontWeight: 600, fontSize: '0.9rem', marginBottom: '0.15rem' }}>
+                  {a.species} — {a.head_count} head
+                </div>
+                <button
+                  onClick={e => { e.stopPropagation(); markNoShow(a) }}
+                  title="Mark as No Show"
+                  style={{ background: 'rgba(180,40,40,0.15)', border: '1px solid rgba(180,40,40,0.5)', borderRadius: 4, color: '#e05555', cursor: 'pointer', fontSize: '0.7rem', padding: '0.15rem 0.45rem', fontWeight: 700, flexShrink: 0, marginLeft: '0.5rem' }}
+                >No Show</button>
               </div>
               {a.source && (
                 <div style={{ fontSize: '0.85rem', color: C.tan, fontWeight: 600, marginBottom: '0.1rem' }}>
