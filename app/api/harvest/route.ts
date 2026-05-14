@@ -1,3 +1,4 @@
+﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
@@ -16,15 +17,22 @@ export async function GET(req: NextRequest) {
   }
 
   // harvest log
-  const { data, error } = await supabase
+  const status = searchParams.get('status')
+  const date   = searchParams.get('date')
+  let query = supabase
     .from('harvest_log')
     .select('*')
-    .order('harvest_date', { ascending: false })
+    .order('harvest_date', { ascending: true })
+    .order('carcass_tag',  { ascending: true })
+  if (status) query = query.eq('status', status)
+  if (date)   query = query.eq('harvest_date', date)
+
+  const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json(data)
 }
 
-// POST /api/harvest — create record(s)
+// POST /api/harvest â€” create record(s)
 export async function POST(req: NextRequest) {
   const body = await req.json()
   const { type, ...fields } = body
@@ -47,7 +55,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(data)
   }
 
-  // harvest log — may be array of carcasses
+  // harvest log â€” may be array of carcasses
   const rows: object[] = (fields.carcasses ?? [fields]).map((c: Record<string, unknown>) => ({
     appointment_id:         fields.appointment_id,
     harvest_date:           fields.harvest_date,
@@ -94,7 +102,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json(data)
 }
 
-// PATCH /api/harvest — update status
+// PATCH /api/harvest â€” update status
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
   const { type, id, ...updates } = body

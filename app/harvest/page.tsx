@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { HarvestAppointment, HarvestLog, ChillLog } from '@/lib/types'
 
-type Tab = 'harvest' | 'chill'
+type Tab = 'harvest' | 'chill' | 'killsheet'
 
 const C = {
   dark:       '#1A0A04',
@@ -928,6 +928,217 @@ function ChillTab() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// KILL SHEET TAB
+// ══════════════════════════════════════════════════════════════════════════════
+
+const TD: React.CSSProperties = {
+  padding: '0.6rem 0.85rem',
+  color: C.cream,
+  verticalAlign: 'middle',
+  whiteSpace: 'nowrap',
+}
+
+function StatBlock({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div>
+      <div style={{ fontSize: '0.69rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.09em', marginBottom: '0.15rem' }}>{label}</div>
+      <div style={{ fontSize: '1.15rem', fontWeight: 700, color: C.cream }}>{value}</div>
+    </div>
+  )
+}
+
+function KillSheetTab() {
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const [date, setDate]           = useState(todayStr)
+  const [logs, setLogs]           = useState<HarvestLog[]>([])
+  const [pending, setPending]     = useState<HarvestAppointment[]>([])
+  const [loading, setLoading]     = useState(false)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const [hRes, aRes] = await Promise.all([
+      fetch(`/api/harvest?type=log&date=${date}`),
+      fetch('/api/appointments'),
+    ])
+    const allLogs: HarvestLog[]             = await hRes.json().catch(() => [])
+    const allAppts: HarvestAppointment[]    = await aRes.json().catch(() => [])
+    setLogs(Array.isArray(allLogs) ? allLogs : [])
+    setPending(Array.isArray(allAppts) ? allAppts.filter(a => a.harvest_date === date && a.status === 'AnimalIn') : [])
+    setLoading(false)
+  }, [date])
+
+  useEffect(() => { load() }, [load])
+
+  const shiftDate = (days: number) => {
+    const d = new Date(date + 'T12:00:00')
+    d.setDate(d.getDate() + days)
+    setDate(d.toISOString().slice(0, 10))
+  }
+
+  const totalHead   = logs.length
+  const totalHCW    = logs.reduce((s, l) => s + (l.hot_carcass_weight_lbs ?? 0), 0)
+  const totalLW     = logs.reduce((s, l) => s + (l.live_weight_lbs ?? 0), 0)
+  const yieldLogs   = logs.filter(l => l.yield_pct != null)
+  const avgDress    = yieldLogs.length > 0 ? yieldLogs.reduce((s, l) => s + (l.yield_pct ?? 0), 0) / yieldLogs.length : null
+
+  const bySpecies = logs.reduce<Record<string, Record<string, number>>>((acc, l) => {
+    if (!acc[l.species]) acc[l.species] = {}
+    const sex = l.sex || 'Unknown'
+    acc[l.species][sex] = (acc[l.species][sex] ?? 0) + 1
+    return acc
+  }, {})
+
+  const formattedDate = new Date(date + 'T12:00:00').toLocaleDateString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+  })
+
+  const NAV_BTN: React.CSSProperties = {
+    background: 'rgba(166,120,90,0.12)', border: '1px solid rgba(166,120,90,0.3)',
+    color: C.tan, borderRadius: 3, padding: '0.4rem 0.75rem',
+    fontSize: '1rem', cursor: 'pointer', lineHeight: 1,
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
+
+      {/* Date nav */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+          <button onClick={() => shiftDate(-1)} style={NAV_BTN}>‹</button>
+          <input
+            type="date"
+            value={date}
+            onChange={e => setDate(e.target.value)}
+            style={{ ...INPUT, width: 'auto', padding: '0.4rem 0.75rem' }}
+          />
+          <button onClick={() => shiftDate(1)} style={NAV_BTN}>›</button>
+          <span style={{ color: C.tan, fontSize: '0.9rem', fontWeight: 600, marginLeft: '0.25rem' }}>
+            {formattedDate}
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          {date !== todayStr && (
+            <button onClick={() => setDate(todayStr)} style={{ ...BTN('rgba(166,120,90,0.12)', C.tan), border: '1px solid rgba(166,120,90,0.3)' }}>
+              Today
+            </button>
+          )}
+          <button onClick={() => window.print()} style={{ ...BTN('rgba(166,120,90,0.12)', C.tan), border: '1px solid rgba(166,120,90,0.3)' }}>
+            Print
+          </button>
+        </div>
+      </div>
+
+      {/* Summary bar */}
+      {logs.length > 0 && (
+        <div style={{
+          display: 'flex', gap: '1.5rem', padding: '0.85rem 1.25rem', flexWrap: 'wrap', alignItems: 'center',
+          background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4,
+        }}>
+          <StatBlock label="Head Harvested" value={totalHead} />
+          <div style={{ width: 1, alignSelf: 'stretch', background: 'rgba(166,120,90,0.2)' }} />
+          <StatBlock label="Total Live Wt" value={totalLW > 0 ? `${totalLW.toLocaleString()} lbs` : '—'} />
+          <div style={{ width: 1, alignSelf: 'stretch', background: 'rgba(166,120,90,0.2)' }} />
+          <StatBlock label="Total HCW" value={totalHCW > 0 ? `${totalHCW.toLocaleString()} lbs` : '—'} />
+          {avgDress !== null && (
+            <>
+              <div style={{ width: 1, alignSelf: 'stretch', background: 'rgba(166,120,90,0.2)' }} />
+              <StatBlock label="Avg Dress %" value={`${avgDress.toFixed(1)}%`} />
+            </>
+          )}
+          {Object.entries(bySpecies).map(([sp, sexMap]) => (
+            <div key={sp} style={{ marginLeft: '0.5rem' }}>
+              <div style={{ fontSize: '0.69rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.09em', marginBottom: '0.15rem' }}>{sp}</div>
+              <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                {Object.entries(sexMap).map(([sex, n]) => (
+                  <span key={sex} style={{ fontSize: '0.82rem', color: C.tan, fontWeight: 600 }}>{sex} {n}</span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Kill sheet table */}
+      {loading ? (
+        <p style={{ color: C.lightBrown, textAlign: 'center', padding: '2.5rem', fontSize: '0.9rem' }}>Loading…</p>
+      ) : logs.length === 0 && pending.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '3.5rem', color: C.lightBrown, fontSize: '0.9rem', background: C.dark, border: '1px solid rgba(166,120,90,0.2)', borderRadius: 4 }}>
+          No harvest activity for this date.
+        </div>
+      ) : (
+        <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+            <thead>
+              <tr style={{ background: 'rgba(166,120,90,0.12)', borderBottom: '1px solid rgba(166,120,90,0.3)' }}>
+                {['#', 'Producer', 'Species', 'Ear Tag', 'Sex', 'Breed', 'Live Wt', 'HCW', 'Dress %', 'CCP', 'Tag #'].map(h => (
+                  <th key={h} style={{ padding: '0.65rem 0.85rem', textAlign: h === 'Live Wt' || h === 'HCW' || h === 'Dress %' ? 'right' : 'left', color: C.lightBrown, fontSize: '0.69rem', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {logs.map((l, i) => {
+                const dressColor = l.yield_pct == null ? C.lightBrown
+                  : l.yield_pct >= 58 ? C.green
+                  : l.yield_pct >= 54 ? C.yellow
+                  : C.red
+                return (
+                  <tr key={l.id} style={{ borderBottom: '1px solid rgba(166,120,90,0.08)', background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)' }}>
+                    <td style={{ ...TD, color: C.lightBrown, width: 36 }}>{i + 1}</td>
+                    <td style={{ ...TD, color: C.tan, fontWeight: 600 }}>{l.producer || '—'}</td>
+                    <td style={TD}>{l.species}</td>
+                    <td style={{ ...TD, fontFamily: 'monospace' }}>{l.ear_tag || '—'}</td>
+                    <td style={TD}>{l.sex || '—'}</td>
+                    <td style={{ ...TD, color: C.lightBrown }}>{l.breed || '—'}</td>
+                    <td style={{ ...TD, textAlign: 'right', color: C.lightBrown }}>{l.live_weight_lbs != null ? l.live_weight_lbs.toLocaleString() : '—'}</td>
+                    <td style={{ ...TD, textAlign: 'right', fontWeight: 700 }}>{l.hot_carcass_weight_lbs != null ? l.hot_carcass_weight_lbs.toLocaleString() : '—'}</td>
+                    <td style={{ ...TD, textAlign: 'right', fontWeight: 600, color: dressColor }}>{l.yield_pct != null ? `${l.yield_pct}%` : '—'}</td>
+                    <td style={{ ...TD, textAlign: 'center' }}>{l.ccp_pass ? <span style={{ color: C.green, fontSize: '0.9rem' }}>✓</span> : <span style={{ color: C.red, fontSize: '0.9rem' }}>✗</span>}</td>
+                    <td style={{ ...TD, fontFamily: 'monospace', fontWeight: 700 }}>{l.carcass_tag || '—'}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+            {logs.length > 1 && (
+              <tfoot>
+                <tr style={{ borderTop: '2px solid rgba(166,120,90,0.35)', background: 'rgba(166,120,90,0.08)' }}>
+                  <td colSpan={6} style={{ ...TD, fontWeight: 700, color: C.tan, fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                    Totals — {totalHead} head
+                  </td>
+                  <td style={{ ...TD, textAlign: 'right', fontWeight: 700 }}>{totalLW > 0 ? totalLW.toLocaleString() : '—'}</td>
+                  <td style={{ ...TD, textAlign: 'right', fontWeight: 700 }}>{totalHCW > 0 ? totalHCW.toLocaleString() : '—'}</td>
+                  <td style={{ ...TD, textAlign: 'right', fontWeight: 700, color: avgDress != null ? (avgDress >= 58 ? C.green : avgDress >= 54 ? C.yellow : C.red) : C.lightBrown }}>
+                    {avgDress != null ? `${avgDress.toFixed(1)}%` : '—'}
+                  </td>
+                  <td colSpan={2} style={TD} />
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      )}
+
+      {/* Pending — not yet harvested */}
+      {pending.length > 0 && (
+        <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.2)', borderRadius: 4, padding: '0.85rem 1.25rem' }}>
+          <div style={{ fontSize: '0.69rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.6rem' }}>
+            Pending — Not Yet Harvested &nbsp;({pending.reduce((s, a) => s + a.head_count, 0)} head)
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+            {pending.map(a => (
+              <span key={a.id} style={{ background: 'rgba(166,120,90,0.1)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 3, padding: '0.3rem 0.8rem', fontSize: '0.82rem', color: C.tan }}>
+                {a.source || a.customers?.[0]?.customer_name || 'Unknown'} · {a.head_count} {a.species}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // PAGE
 // ══════════════════════════════════════════════════════════════════════════════
 export default function HarvestPage() {
@@ -945,7 +1156,7 @@ export default function HarvestPage() {
         </div>
 
         <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden' }}>
-          {(['harvest', 'chill'] as Tab[]).map(t => (
+          {(['harvest', 'chill', 'killsheet'] as Tab[]).map(t => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -957,14 +1168,14 @@ export default function HarvestPage() {
                 transition: 'background 0.15s',
               }}
             >
-              {t === 'harvest' ? '🐄 Harvest Log' : '🌡️ Chill Log'}
+              {t === 'harvest' ? '🐄 Harvest Log' : t === 'chill' ? '🌡️ Chill Log' : '📋 Kill Sheet'}
             </button>
           ))}
         </div>
       </header>
 
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1300px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
-        {tab === 'harvest' ? <HarvestTab /> : <ChillTab />}
+        {tab === 'harvest' ? <HarvestTab /> : tab === 'chill' ? <ChillTab /> : <KillSheetTab />}
       </main>
 
       <footer style={{ background: 'var(--dark)', borderTop: '1px solid rgba(166,120,90,0.2)', padding: '0.5rem 2rem', textAlign: 'center', fontSize: '0.72rem', color: C.lightBrown, flexShrink: 0 }}>
