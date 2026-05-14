@@ -1,3 +1,4 @@
+﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
@@ -49,18 +50,42 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // If a carcass tag barcode was scanned (CT-{harvest_log_id}), look up the harvest record
+  // Legacy format: CT-{harvest_log_id}
   if (body.box_identifier && /^CT-/.test(body.box_identifier) && !description) {
-    const harvestId = body.box_identifier.replace(/^CT-/, '')
+    const harvestId = body.box_identifier.replace(/^CT-/, '').replace(/-[LR]$/, '')
     const { data: harvest } = await supabase
       .from('harvest_log')
-      .select('id, species, carcass_tag, hot_carcass_weight_lbs')
+      .select('id, species, carcass_tag, hot_carcass_weight_lbs, producer, appointment_id')
       .eq('id', harvestId)
       .single()
 
     if (harvest) {
-      description = `${harvest.species} Carcass (Tag ${harvest.carcass_tag || 'N/A'})`
+      description = `${harvest.species} Carcass — Tag ${harvest.carcass_tag || 'N/A'}${harvest.producer ? ` (${harvest.producer})` : ''}`
       weight_lbs  = harvest.hot_carcass_weight_lbs
+    }
+  }
+
+  // New format: YYMMDD-TAG-SIDE  (e.g. 260514-001-R)
+  const shortTagMatch = !description && body.box_identifier
+    ? (body.box_identifier as string).match(/^(\d{2})(\d{2})(\d{2})-(\w+)-([LR])$/)
+    : null
+  if (shortTagMatch) {
+    const [, yy, mm, dd, tag, side] = shortTagMatch
+    const harvestDate = `20${yy}-${mm}-${dd}`
+    const { data: harvest } = await supabase
+      .from('harvest_log')
+      .select('id, species, carcass_tag, hot_carcass_weight_lbs, producer, appointment_id')
+      .eq('harvest_date', harvestDate)
+      .eq('carcass_tag', tag)
+      .maybeSingle()
+
+    if (harvest) {
+      const halfWt = harvest.hot_carcass_weight_lbs != null ? harvest.hot_carcass_weight_lbs / 2 : null
+      description = `${harvest.species} — Tag ${harvest.carcass_tag} ${side} Half${harvest.producer ? ` (${harvest.producer})` : ''}`
+      weight_lbs  = halfWt
+      if (harvest.appointment_id && !body.linked_appointment_id) {
+        body.linked_appointment_id = harvest.appointment_id
+      }
     }
   }
 
