@@ -53,78 +53,97 @@ const SEX_OPTIONS: Record<string, string[]> = {
 
 // ── Carcass tag label — 2.4" × max 5" Brother DK continuous, Code 128 ───────
 function printCarcassTags(h: HarvestLog) {
-  const dateStr  = new Date(h.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-  const totalHCW = h.hot_carcass_weight_lbs
-
-  // Half weights — use stored values, fall back to splitting total
-  const h1w = h.half_1_weight_lbs ?? (totalHCW != null ? totalHCW / 2 : null)
-  const h2w = h.half_2_weight_lbs ?? (totalHCW != null ? totalHCW / 2 : null)
-  const h1Estimated = h.half_1_weight_lbs == null && h1w != null
-  const h2Estimated = h.half_2_weight_lbs == null && h2w != null
+  const dateStr    = new Date(h.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  const totalHCW   = h.hot_carcass_weight_lbs
+  // Average half weight — same number on both tags
+  const avgHalfWt  = totalHCW != null ? (totalHCW / 2) : null
 
   const identParts = [
     h.ear_tag ? `ET: ${h.ear_tag}` : null,
     h.sex     || null,
     h.breed   || null,
   ].filter(Boolean)
-  const identLine = identParts.join(' · ')
+  const identLine = identParts.join('  ·  ')
 
-  const sharedStyle = `
-    @page { size: 2.4in 5in; margin: 0.07in 0.12in; }
-    * { box-sizing: border-box; }
-    body { font-family: Arial, sans-serif; color: #000; margin: 0; padding: 0; width: 2.16in; }
-    .label      { page-break-after: always; }
+  const css = `
+    @page { size: 2.4in 5in; margin: 0.18in 0.14in 0.1in; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; color: #000; width: 2.12in; }
+
+    .label           { page-break-after: always; }
     .label:last-child { page-break-after: auto; }
-    .co         { text-align: center; font-size: 7pt; font-weight: bold; letter-spacing: 0.16em;
-                  text-transform: uppercase; margin-bottom: 1pt; }
-    .sub        { text-align: center; font-size: 5.5pt; letter-spacing: 0.22em;
-                  text-transform: uppercase; color: #555; margin-bottom: 3pt; }
-    hr          { border: none; border-top: 0.6pt solid #000; margin: 3pt 0; }
-    .half-badge { text-align: center; font-size: 8pt; font-weight: bold; letter-spacing: 0.18em;
-                  text-transform: uppercase; border: 1.5pt solid #000; padding: 1.5pt 0;
-                  margin-bottom: 2pt; }
-    .species    { text-align: center; font-size: 10pt; font-weight: bold;
-                  text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0; }
-    .tagnum     { text-align: center; font-size: 38pt; font-weight: bold;
-                  line-height: 1.05; margin: 0; letter-spacing: 0.03em; }
-    .bc-wrap    { text-align: center; margin: 4pt 0 2pt; }
+
+    /* ── Header ── */
+    .header   { text-align: center; margin-bottom: 4pt; }
+    .co       { font-size: 10pt; font-weight: 900; letter-spacing: 0.18em;
+                text-transform: uppercase; line-height: 1.1; }
+    .co-sub   { font-size: 6.5pt; letter-spacing: 0.2em; text-transform: uppercase;
+                color: #444; margin-top: 1pt; }
+
+    hr        { border: none; border-top: 0.75pt solid #000; margin: 4pt 0; }
+    hr.thin   { border-top: 0.4pt solid #bbb; margin: 3pt 0; }
+
+    /* ── Half badge ── */
+    .half-badge { text-align: center; font-size: 11pt; font-weight: 900;
+                  letter-spacing: 0.22em; text-transform: uppercase;
+                  border: 2pt solid #000; padding: 3pt 0; margin: 3pt 0; }
+
+    /* ── Animal identity ── */
+    .producer { text-align: center; font-size: 10.5pt; font-weight: 700;
+                line-height: 1.15; margin-bottom: 1pt; }
+    .species  { text-align: center; font-size: 9pt; font-weight: 600;
+                text-transform: uppercase; letter-spacing: 0.1em; color: #333; }
+    .tagnum   { text-align: center; font-size: 52pt; font-weight: 900;
+                line-height: 1.0; letter-spacing: 0.02em; margin: 2pt 0; }
+    .ident    { text-align: center; font-size: 7.5pt; color: #333;
+                letter-spacing: 0.03em; margin-bottom: 2pt; }
+
+    /* ── Barcode ── */
+    .bc-wrap     { text-align: center; margin: 3pt 0; }
     .bc-wrap svg { max-width: 100%; }
-    .row        { display: flex; justify-content: space-between; align-items: baseline;
-                  font-size: 7.5pt; margin: 2pt 0; }
-    .row.big    { font-size: 9pt; font-weight: 700; }
-    .lbl        { color: #555; }
-    .val        { font-weight: 600; }
-    .est        { font-size: 6pt; color: #888; }
-    .producer   { text-align: center; font-size: 9pt; font-weight: bold; margin-bottom: 1pt; }
-    .ident      { text-align: center; font-size: 7pt; color: #444; letter-spacing: 0.04em;
-                  margin-bottom: 3pt; }
-    .otm        { margin-top: 4pt; text-align: center; font-size: 8pt; font-weight: bold;
-                  color: #bb0000; border: 1.5pt solid #bb0000; padding: 2pt 0;
-                  letter-spacing: 0.14em; }
+
+    /* ── Data rows ── */
+    .row      { display: flex; justify-content: space-between; align-items: baseline;
+                font-size: 8.5pt; padding: 2pt 0; border-bottom: 0.3pt solid #eee; }
+    .row:last-child { border-bottom: none; }
+    .row.hl   { font-size: 10.5pt; font-weight: 700; padding: 3pt 0; }
+    .lbl      { color: #555; }
+    .val      { font-weight: 600; color: #000; }
+    .val.big  { font-size: 12pt; }
+
+    /* ── OTM warning ── */
+    .otm { margin-top: 5pt; text-align: center; font-size: 8.5pt; font-weight: 700;
+           color: #bb0000; border: 2pt solid #bb0000; padding: 3pt 0;
+           letter-spacing: 0.14em; text-transform: uppercase; }
   `
 
-  function makeLabel(side: 'L' | 'R', halfWt: number | null, estimated: boolean, bcId: string) {
-    const halfLabel  = side === 'L' ? 'L HALF' : 'R HALF'
+  function makeLabel(side: 'L' | 'R', bcId: string) {
+    const halfLabel  = side === 'L' ? '◀  L HALF' : 'R HALF  ▶'
     const barcodeVal = `CT-${h.id}-${side}`
-    const producerHtml = h.producer ? `<div class="producer">${h.producer}</div>` : ''
-    const identHtml    = identLine  ? `<div class="ident">${identLine}</div>`      : ''
-    const otmHtml      = h.over_30_months ? `<div class="otm">&#9888; OVER 30 MONTHS</div>` : ''
-    const halfWtHtml   = halfWt != null
-      ? `<div class="row big"><span class="lbl">Half Wt</span><span class="val">${halfWt.toFixed(1)} lbs${estimated ? ' <span class="est">(est)</span>' : ''}</span></div>`
+    const producerHtml = h.producer   ? `<div class="producer">${h.producer}</div>` : ''
+    const identHtml    = identLine    ? `<div class="ident">${identLine}</div>`      : ''
+    const otmHtml      = h.over_30_months ? `<div class="otm">&#9888; Over 30 Months</div>` : ''
+
+    const avgHtHtml  = avgHalfWt != null
+      ? `<div class="row hl"><span class="lbl">Avg Half Wt</span><span class="val big">${avgHalfWt.toFixed(1)} lbs</span></div>`
       : ''
-    const totalHtml    = totalHCW != null
+    const totalHtml  = totalHCW != null
       ? `<div class="row"><span class="lbl">Total HCW</span><span class="val">${totalHCW} lbs</span></div>`
       : ''
-    const yieldHtml    = h.yield_pct != null
+    const yieldHtml  = h.yield_pct != null
       ? `<div class="row"><span class="lbl">Yield</span><span class="val">${h.yield_pct}%</span></div>`
       : ''
-    const inspHtml     = h.inspector_initials
+    const inspHtml   = h.inspector_initials
       ? `<div class="row"><span class="lbl">Inspector</span><span class="val">${h.inspector_initials}</span></div>`
       : ''
+    const dateHtml   = `<div class="row"><span class="lbl">Date</span><span class="val">${dateStr}</span></div>`
+
     return `
     <div class="label">
-      <div class="co">Cowboy Meat Co.</div>
-      <div class="sub">&middot; Carcass Tag &middot;</div>
+      <div class="header">
+        <div class="co">Cowboy Meat Co.</div>
+        <div class="co-sub">Forsyth, Montana &nbsp;&middot;&nbsp; Carcass Tag</div>
+      </div>
       <div class="half-badge">${halfLabel}</div>
       <hr/>
       ${producerHtml}
@@ -133,12 +152,12 @@ function printCarcassTags(h: HarvestLog) {
       ${identHtml}
       <div class="bc-wrap"><svg id="${bcId}"></svg></div>
       <hr/>
-      <div class="row"><span class="lbl">Date</span><span class="val">${dateStr}</span></div>
-      ${halfWtHtml}${totalHtml}${yieldHtml}${inspHtml}${otmHtml}
+      ${dateHtml}${avgHtHtml}${totalHtml}${yieldHtml}${inspHtml}
+      ${otmHtml}
       <script>
         JsBarcode("#${bcId}", "${barcodeVal}", {
-          format: "CODE128", width: 1.4, height: 44,
-          displayValue: true, fontSize: 7, margin: 2, textMargin: 1,
+          format: "CODE128", width: 1.6, height: 52,
+          displayValue: true, fontSize: 8, margin: 2, textMargin: 1,
         });
       <\/script>
     </div>`
@@ -146,14 +165,14 @@ function printCarcassTags(h: HarvestLog) {
 
   const html = `<!DOCTYPE html><html><head>
   <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
-  <style>${sharedStyle}</style>
+  <style>${css}</style>
   </head><body>
-  ${makeLabel('L', h1w, h1Estimated, 'bc-l')}
-  ${makeLabel('R', h2w, h2Estimated, 'bc-r')}
+  ${makeLabel('L', 'bc-l')}
+  ${makeLabel('R', 'bc-r')}
   <script>window.onload = function() { window.print(); };<\/script>
   </body></html>`
 
-  const w = window.open('', '_blank', 'width=290,height=530')
+  const w = window.open('', '_blank', 'width=300,height=580')
   if (w) { w.document.write(html); w.document.close() }
 }
 
