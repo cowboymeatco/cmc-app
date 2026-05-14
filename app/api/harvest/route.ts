@@ -63,6 +63,8 @@ export async function POST(req: NextRequest) {
     carcass_tag:            c.carcass_tag ?? '',
     sex:                    c.sex ?? '',
     live_weight_lbs:        c.live_weight_lbs ?? null,
+    half_1_weight_lbs:      c.half_1_weight_lbs ?? null,
+    half_2_weight_lbs:      c.half_2_weight_lbs ?? null,
     hot_carcass_weight_lbs: c.hot_carcass_weight_lbs ?? null,
     yield_pct:              (c.live_weight_lbs && c.hot_carcass_weight_lbs)
                               ? Math.round(((c.hot_carcass_weight_lbs as number) / (c.live_weight_lbs as number)) * 1000) / 10

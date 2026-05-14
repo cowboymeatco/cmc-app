@@ -52,89 +52,107 @@ const SEX_OPTIONS: Record<string, string[]> = {
 }
 
 // ── Carcass tag label — 2.4" × max 5" Brother DK continuous, Code 128 ───────
-function printCarcassLabel(h: HarvestLog) {
-  const barcodeVal  = `CT-${h.id}`
-  const dateStr     = new Date(h.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-  const perHalf     = h.hot_carcass_weight_lbs != null ? (h.hot_carcass_weight_lbs / 2).toFixed(1) : null
+function printCarcassTags(h: HarvestLog) {
+  const dateStr  = new Date(h.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  const totalHCW = h.hot_carcass_weight_lbs
 
-  // Identifier line: Tag # · Ear Tag · Sex · Breed  (concat whatever we have)
-  const identParts  = [
-    h.carcass_tag  ? `#${h.carcass_tag}`  : null,
-    h.ear_tag      ? `ET: ${h.ear_tag}`   : null,
-    h.sex          || null,
-    h.breed        || null,
+  // Half weights — use stored values, fall back to splitting total
+  const h1w = h.half_1_weight_lbs ?? (totalHCW != null ? totalHCW / 2 : null)
+  const h2w = h.half_2_weight_lbs ?? (totalHCW != null ? totalHCW / 2 : null)
+  const h1Estimated = h.half_1_weight_lbs == null && h1w != null
+  const h2Estimated = h.half_2_weight_lbs == null && h2w != null
+
+  const identParts = [
+    h.ear_tag ? `ET: ${h.ear_tag}` : null,
+    h.sex     || null,
+    h.breed   || null,
   ].filter(Boolean)
-  const identLine   = identParts.join(' · ')
+  const identLine = identParts.join(' · ')
 
-  const producerHtml = h.producer
-    ? `<div class="producer">${h.producer}</div>`
-    : ''
-  const identHtml    = identLine
-    ? `<div class="ident">${identLine}</div>`
-    : ''
-  const otmHtml      = h.over_30_months
-    ? `<div class="otm">&#9888; OVER 30 MONTHS</div>`
-    : ''
-  const hcwHtml      = perHalf != null
-    ? `<div class="row"><span class="lbl">HCW / half</span><span class="val">${perHalf} lbs</span></div>`
-    : ''
-  const yieldHtml    = h.yield_pct != null
-    ? `<div class="row"><span class="lbl">Yield</span><span class="val">${h.yield_pct}%</span></div>`
-    : ''
-  const inspHtml     = h.inspector_initials
-    ? `<div class="row"><span class="lbl">Inspector</span><span class="val">${h.inspector_initials}</span></div>`
-    : ''
-
-  const html = `<!DOCTYPE html><html><head>
-  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
-  <style>
+  const sharedStyle = `
     @page { size: 2.4in 5in; margin: 0.07in 0.12in; }
     * { box-sizing: border-box; }
     body { font-family: Arial, sans-serif; color: #000; margin: 0; padding: 0; width: 2.16in; }
-    .co      { text-align: center; font-size: 7pt; font-weight: bold; letter-spacing: 0.16em;
-               text-transform: uppercase; margin-bottom: 1pt; }
-    .sub     { text-align: center; font-size: 5.5pt; letter-spacing: 0.22em;
-               text-transform: uppercase; color: #555; margin-bottom: 4pt; }
-    hr       { border: none; border-top: 0.6pt solid #000; margin: 3pt 0; }
-    .species { text-align: center; font-size: 10pt; font-weight: bold;
-               text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0; }
-    .tagnum  { text-align: center; font-size: 38pt; font-weight: bold;
-               line-height: 1.05; margin: 0; letter-spacing: 0.03em; }
-    .bc-wrap { text-align: center; margin: 4pt 0 2pt; }
+    .label      { page-break-after: always; }
+    .label:last-child { page-break-after: auto; }
+    .co         { text-align: center; font-size: 7pt; font-weight: bold; letter-spacing: 0.16em;
+                  text-transform: uppercase; margin-bottom: 1pt; }
+    .sub        { text-align: center; font-size: 5.5pt; letter-spacing: 0.22em;
+                  text-transform: uppercase; color: #555; margin-bottom: 3pt; }
+    hr          { border: none; border-top: 0.6pt solid #000; margin: 3pt 0; }
+    .half-badge { text-align: center; font-size: 8pt; font-weight: bold; letter-spacing: 0.18em;
+                  text-transform: uppercase; border: 1.5pt solid #000; padding: 1.5pt 0;
+                  margin-bottom: 2pt; }
+    .species    { text-align: center; font-size: 10pt; font-weight: bold;
+                  text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0; }
+    .tagnum     { text-align: center; font-size: 38pt; font-weight: bold;
+                  line-height: 1.05; margin: 0; letter-spacing: 0.03em; }
+    .bc-wrap    { text-align: center; margin: 4pt 0 2pt; }
     .bc-wrap svg { max-width: 100%; }
-    .row      { display: flex; justify-content: space-between; align-items: baseline;
-                font-size: 7.5pt; margin: 2pt 0; }
-    .lbl      { color: #555; }
-    .val      { font-weight: 600; }
-    .producer { text-align: center; font-size: 9pt; font-weight: bold; margin-bottom: 1pt; }
-    .ident    { text-align: center; font-size: 7pt; color: #444; letter-spacing: 0.04em;
-                margin-bottom: 3pt; }
-    .otm      { margin-top: 5pt; text-align: center; font-size: 8pt; font-weight: bold;
-                color: #bb0000; border: 1.5pt solid #bb0000; padding: 2pt 0;
-                letter-spacing: 0.14em; }
-  </style>
+    .row        { display: flex; justify-content: space-between; align-items: baseline;
+                  font-size: 7.5pt; margin: 2pt 0; }
+    .row.big    { font-size: 9pt; font-weight: 700; }
+    .lbl        { color: #555; }
+    .val        { font-weight: 600; }
+    .est        { font-size: 6pt; color: #888; }
+    .producer   { text-align: center; font-size: 9pt; font-weight: bold; margin-bottom: 1pt; }
+    .ident      { text-align: center; font-size: 7pt; color: #444; letter-spacing: 0.04em;
+                  margin-bottom: 3pt; }
+    .otm        { margin-top: 4pt; text-align: center; font-size: 8pt; font-weight: bold;
+                  color: #bb0000; border: 1.5pt solid #bb0000; padding: 2pt 0;
+                  letter-spacing: 0.14em; }
+  `
+
+  function makeLabel(side: 'L' | 'R', halfWt: number | null, estimated: boolean, bcId: string) {
+    const halfLabel  = side === 'L' ? 'L HALF' : 'R HALF'
+    const barcodeVal = `CT-${h.id}-${side}`
+    const producerHtml = h.producer ? `<div class="producer">${h.producer}</div>` : ''
+    const identHtml    = identLine  ? `<div class="ident">${identLine}</div>`      : ''
+    const otmHtml      = h.over_30_months ? `<div class="otm">&#9888; OVER 30 MONTHS</div>` : ''
+    const halfWtHtml   = halfWt != null
+      ? `<div class="row big"><span class="lbl">Half Wt</span><span class="val">${halfWt.toFixed(1)} lbs${estimated ? ' <span class="est">(est)</span>' : ''}</span></div>`
+      : ''
+    const totalHtml    = totalHCW != null
+      ? `<div class="row"><span class="lbl">Total HCW</span><span class="val">${totalHCW} lbs</span></div>`
+      : ''
+    const yieldHtml    = h.yield_pct != null
+      ? `<div class="row"><span class="lbl">Yield</span><span class="val">${h.yield_pct}%</span></div>`
+      : ''
+    const inspHtml     = h.inspector_initials
+      ? `<div class="row"><span class="lbl">Inspector</span><span class="val">${h.inspector_initials}</span></div>`
+      : ''
+    return `
+    <div class="label">
+      <div class="co">Cowboy Meat Co.</div>
+      <div class="sub">&middot; Carcass Tag &middot;</div>
+      <div class="half-badge">${halfLabel}</div>
+      <hr/>
+      ${producerHtml}
+      <div class="species">${h.species}</div>
+      <div class="tagnum">${h.carcass_tag || '—'}</div>
+      ${identHtml}
+      <div class="bc-wrap"><svg id="${bcId}"></svg></div>
+      <hr/>
+      <div class="row"><span class="lbl">Date</span><span class="val">${dateStr}</span></div>
+      ${halfWtHtml}${totalHtml}${yieldHtml}${inspHtml}${otmHtml}
+      <script>
+        JsBarcode("#${bcId}", "${barcodeVal}", {
+          format: "CODE128", width: 1.4, height: 44,
+          displayValue: true, fontSize: 7, margin: 2, textMargin: 1,
+        });
+      <\/script>
+    </div>`
+  }
+
+  const html = `<!DOCTYPE html><html><head>
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
+  <style>${sharedStyle}</style>
   </head><body>
-  <div class="co">Cowboy Meat Co.</div>
-  <div class="sub">&middot; Carcass Tag &middot;</div>
-  <hr/>
-  ${producerHtml}
-  <div class="species">${h.species}</div>
-  <div class="tagnum">${h.carcass_tag || '—'}</div>
-  ${identHtml}
-  <div class="bc-wrap"><svg id="bc"></svg></div>
-  <hr/>
-  <div class="row"><span class="lbl">Date</span><span class="val">${dateStr}</span></div>
-  ${hcwHtml}${yieldHtml}${inspHtml}${otmHtml}
-  <script>
-    window.onload = function() {
-      JsBarcode("#bc", "${barcodeVal}", {
-        format: "CODE128", width: 1.4, height: 44,
-        displayValue: true, fontSize: 7, margin: 2, textMargin: 1,
-      });
-      window.print();
-    };
-  <\/script>
+  ${makeLabel('L', h1w, h1Estimated, 'bc-l')}
+  ${makeLabel('R', h2w, h2Estimated, 'bc-r')}
+  <script>window.onload = function() { window.print(); };<\/script>
   </body></html>`
+
   const w = window.open('', '_blank', 'width=290,height=530')
   if (w) { w.document.write(html); w.document.close() }
 }
@@ -466,6 +484,8 @@ function HarvestTab() {
             breed:                  c.breed,
             sex:                    c.sex,
             live_weight_lbs:        c.live_weight_lbs ? parseFloat(c.live_weight_lbs) : null,
+            half_1_weight_lbs:      !isNaN(h1) ? h1 : null,
+            half_2_weight_lbs:      !isNaN(h2) ? h2 : null,
             hot_carcass_weight_lbs: hcw,
             intervention_applied:   c.intervention_applied,
             intervention_temp_f:    solTemp,
@@ -560,7 +580,7 @@ function HarvestTab() {
                     </div>
                   </div>
                   <button
-                    onClick={() => printCarcassLabel(h)}
+                    onClick={() => printCarcassTags(h)}
                     title="Print carcass tag"
                     style={{ background: 'rgba(166,120,90,0.15)', border: '1px solid rgba(166,120,90,0.3)', color: C.tan, borderRadius: 3, padding: '2px 7px', fontSize: '0.7rem', cursor: 'pointer', flexShrink: 0, marginLeft: '0.4rem' }}
                   >
@@ -948,22 +968,24 @@ function StatBlock({ label, value }: { label: string; value: string | number }) 
 }
 
 type EditVals = {
-  live_weight_lbs:        string
-  hot_carcass_weight_lbs: string
-  ear_tag:                string
-  sex:                    string
-  breed:                  string
-  notes:                  string
+  live_weight_lbs:   string
+  half_1_weight_lbs: string
+  half_2_weight_lbs: string
+  ear_tag:           string
+  sex:               string
+  breed:             string
+  notes:             string
 }
 
 function emptyEdit(l: HarvestLog): EditVals {
   return {
-    live_weight_lbs:        l.live_weight_lbs        != null ? String(l.live_weight_lbs)        : '',
-    hot_carcass_weight_lbs: l.hot_carcass_weight_lbs != null ? String(l.hot_carcass_weight_lbs) : '',
-    ear_tag:                l.ear_tag  ?? '',
-    sex:                    l.sex      ?? '',
-    breed:                  l.breed    ?? '',
-    notes:                  l.notes    ?? '',
+    live_weight_lbs:   l.live_weight_lbs   != null ? String(l.live_weight_lbs)   : '',
+    half_1_weight_lbs: l.half_1_weight_lbs != null ? String(l.half_1_weight_lbs) : '',
+    half_2_weight_lbs: l.half_2_weight_lbs != null ? String(l.half_2_weight_lbs) : '',
+    ear_tag:           l.ear_tag  ?? '',
+    sex:               l.sex      ?? '',
+    breed:             l.breed    ?? '',
+    notes:             l.notes    ?? '',
   }
 }
 
@@ -1005,8 +1027,11 @@ function KillSheetTab() {
   async function saveEdit(id: string) {
     if (!editVals) return
     setSaving(true)
-    const lw  = editVals.live_weight_lbs        !== '' ? parseFloat(editVals.live_weight_lbs)        : null
-    const hcw = editVals.hot_carcass_weight_lbs !== '' ? parseFloat(editVals.hot_carcass_weight_lbs) : null
+    const lw = editVals.live_weight_lbs   !== '' ? parseFloat(editVals.live_weight_lbs)   : null
+    const h1 = editVals.half_1_weight_lbs !== '' ? parseFloat(editVals.half_1_weight_lbs) : null
+    const h2 = editVals.half_2_weight_lbs !== '' ? parseFloat(editVals.half_2_weight_lbs) : null
+    const hcw = (h1 != null && h2 != null) ? h1 + h2
+              : (h1 != null ? h1 : (h2 != null ? h2 : null))
     const yieldPct = lw && hcw ? Math.round((hcw / lw) * 1000) / 10 : null
     await fetch('/api/harvest', {
       method: 'PATCH',
@@ -1014,6 +1039,8 @@ function KillSheetTab() {
       body: JSON.stringify({
         id,
         live_weight_lbs:        lw,
+        half_1_weight_lbs:      h1,
+        half_2_weight_lbs:      h2,
         hot_carcass_weight_lbs: hcw,
         yield_pct:              yieldPct,
         ear_tag:                editVals.ear_tag,
@@ -1129,8 +1156,8 @@ function KillSheetTab() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
             <thead>
               <tr style={{ background: 'rgba(166,120,90,0.12)', borderBottom: '1px solid rgba(166,120,90,0.3)' }}>
-                {['Kill #', 'Producer', 'Species', 'Ear Tag', 'Sex', 'Breed', 'Live Wt', 'HCW', 'Dress %', 'CCP', 'Tag #', ''].map(h => (
-                  <th key={h} style={{ padding: '0.65rem 0.85rem', textAlign: h === 'Live Wt' || h === 'HCW' || h === 'Dress %' ? 'right' : 'left', color: C.lightBrown, fontSize: '0.69rem', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                {['Kill #', 'Producer', 'Species', 'Ear Tag', 'Sex', 'Breed', 'Live Wt', 'L Half', 'R Half', 'Total HCW', 'Dress %', 'CCP', 'Tag #', ''].map(h => (
+                  <th key={h} style={{ padding: '0.65rem 0.85rem', textAlign: ['Live Wt','L Half','R Half','Total HCW','Dress %'].includes(h) ? 'right' : 'left', color: C.lightBrown, fontSize: '0.69rem', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 600, whiteSpace: 'nowrap' }}>
                     {h}
                   </th>
                 ))}
@@ -1149,31 +1176,35 @@ function KillSheetTab() {
                 if (isEditing && editVals) {
                   const ev = editVals
                   const setEv = (k: keyof EditVals, v: string) => setEditVals(prev => prev ? { ...prev, [k]: v } : prev)
-                  const previewDress = ev.live_weight_lbs && ev.hot_carcass_weight_lbs
-                    ? (parseFloat(ev.hot_carcass_weight_lbs) / parseFloat(ev.live_weight_lbs) * 100).toFixed(1)
-                    : null
+                  const h1p = ev.half_1_weight_lbs !== '' ? parseFloat(ev.half_1_weight_lbs) : null
+                  const h2p = ev.half_2_weight_lbs !== '' ? parseFloat(ev.half_2_weight_lbs) : null
+                  const hcwPreview = (h1p != null && h2p != null) ? h1p + h2p
+                                   : (h1p != null ? h1p : (h2p != null ? h2p : null))
+                  const lwp = ev.live_weight_lbs !== '' ? parseFloat(ev.live_weight_lbs) : null
+                  const previewDress = lwp && hcwPreview ? (hcwPreview / lwp * 100).toFixed(1) : null
                   const EINPUT: React.CSSProperties = { ...INPUT, padding: '0.3rem 0.5rem', fontSize: '0.83rem' }
                   return (
                     <tr key={l.id} style={{ borderBottom: '1px solid rgba(166,120,90,0.2)', background: 'rgba(166,120,90,0.07)' }}>
                       <td style={{ ...TD, color: C.lightBrown }}>{killNum}</td>
                       <td style={{ ...TD, color: C.tan, fontWeight: 600 }}>{l.producer || '—'}</td>
                       <td style={TD}>{l.species}</td>
-                      {/* Ear Tag */}
                       <td style={TD}><input value={ev.ear_tag} onChange={e => setEv('ear_tag', e.target.value)} style={{ ...EINPUT, width: 80, fontFamily: 'monospace' }} /></td>
-                      {/* Sex */}
                       <td style={TD}>
                         <select value={ev.sex} onChange={e => setEv('sex', e.target.value)} style={{ ...EINPUT, width: 90 }}>
                           <option value="">—</option>
                           {(SEX_OPTIONS[l.species] ?? ['Steer','Heifer','Bull','Cow']).map(s => <option key={s}>{s}</option>)}
                         </select>
                       </td>
-                      {/* Breed */}
-                      <td style={TD}><input value={ev.breed} onChange={e => setEv('breed', e.target.value)} style={{ ...EINPUT, width: 90 }} /></td>
+                      <td style={TD}><input value={ev.breed} onChange={e => setEv('breed', e.target.value)} style={{ ...EINPUT, width: 80 }} /></td>
                       {/* Live Wt */}
-                      <td style={TD}><input type="number" value={ev.live_weight_lbs} onChange={e => setEv('live_weight_lbs', e.target.value)} placeholder="lbs" style={{ ...EINPUT, width: 80, textAlign: 'right' }} /></td>
-                      {/* HCW */}
-                      <td style={TD}><input type="number" value={ev.hot_carcass_weight_lbs} onChange={e => setEv('hot_carcass_weight_lbs', e.target.value)} placeholder="lbs" style={{ ...EINPUT, width: 80, textAlign: 'right' }} /></td>
-                      {/* Dress preview */}
+                      <td style={TD}><input type="number" value={ev.live_weight_lbs} onChange={e => setEv('live_weight_lbs', e.target.value)} placeholder="lbs" style={{ ...EINPUT, width: 72, textAlign: 'right' }} /></td>
+                      {/* L Half */}
+                      <td style={TD}><input type="number" value={ev.half_1_weight_lbs} onChange={e => setEv('half_1_weight_lbs', e.target.value)} placeholder="lbs" style={{ ...EINPUT, width: 72, textAlign: 'right' }} /></td>
+                      {/* R Half */}
+                      <td style={TD}><input type="number" value={ev.half_2_weight_lbs} onChange={e => setEv('half_2_weight_lbs', e.target.value)} placeholder="lbs" style={{ ...EINPUT, width: 72, textAlign: 'right' }} /></td>
+                      {/* Total (auto) */}
+                      <td style={{ ...TD, textAlign: 'right', color: C.tan, fontWeight: 700 }}>{hcwPreview != null ? hcwPreview.toFixed(0) : '—'}</td>
+                      {/* Dress (auto) */}
                       <td style={{ ...TD, textAlign: 'right', color: C.tan, fontWeight: 600 }}>{previewDress ? `${previewDress}%` : '—'}</td>
                       <td style={{ ...TD, textAlign: 'center' }}>{l.ccp_pass ? <span style={{ color: C.green }}>✓</span> : <span style={{ color: C.red }}>✗</span>}</td>
                       <td style={{ ...TD, fontFamily: 'monospace', fontWeight: 700 }}>{l.carcass_tag}</td>
@@ -1198,13 +1229,18 @@ function KillSheetTab() {
                     <td style={TD}>{l.sex || '—'}</td>
                     <td style={{ ...TD, color: C.lightBrown }}>{l.breed || '—'}</td>
                     <td style={{ ...TD, textAlign: 'right', color: C.lightBrown }}>{l.live_weight_lbs != null ? l.live_weight_lbs.toLocaleString() : '—'}</td>
+                    <td style={{ ...TD, textAlign: 'right' }}>{l.half_1_weight_lbs != null ? l.half_1_weight_lbs.toLocaleString() : '—'}</td>
+                    <td style={{ ...TD, textAlign: 'right' }}>{l.half_2_weight_lbs != null ? l.half_2_weight_lbs.toLocaleString() : '—'}</td>
                     <td style={{ ...TD, textAlign: 'right', fontWeight: 700 }}>{l.hot_carcass_weight_lbs != null ? l.hot_carcass_weight_lbs.toLocaleString() : '—'}</td>
                     <td style={{ ...TD, textAlign: 'right', fontWeight: 600, color: dressColor }}>{l.yield_pct != null ? `${l.yield_pct}%` : '—'}</td>
                     <td style={{ ...TD, textAlign: 'center' }}>{l.ccp_pass ? <span style={{ color: C.green, fontSize: '0.9rem' }}>✓</span> : <span style={{ color: C.red, fontSize: '0.9rem' }}>✗</span>}</td>
                     <td style={{ ...TD, fontFamily: 'monospace', fontWeight: 700 }}>{l.carcass_tag || '—'}</td>
-                    <td style={TD}>
-                      <button onClick={() => startEdit(l)} style={{ background: 'rgba(166,120,90,0.1)', border: '1px solid rgba(166,120,90,0.25)', color: C.tan, borderRadius: 3, padding: '0.2rem 0.6rem', fontSize: '0.72rem', cursor: 'pointer' }}>
+                    <td style={{ ...TD, whiteSpace: 'nowrap' }}>
+                      <button onClick={() => startEdit(l)} style={{ background: 'rgba(166,120,90,0.1)', border: '1px solid rgba(166,120,90,0.25)', color: C.tan, borderRadius: 3, padding: '0.2rem 0.55rem', fontSize: '0.72rem', cursor: 'pointer', marginRight: '0.3rem' }}>
                         Edit
+                      </button>
+                      <button onClick={() => printCarcassTags(l)} title="Print both carcass tags" style={{ background: 'rgba(166,120,90,0.1)', border: '1px solid rgba(166,120,90,0.25)', color: C.tan, borderRadius: 3, padding: '0.2rem 0.55rem', fontSize: '0.72rem', cursor: 'pointer' }}>
+                        🏷×2
                       </button>
                     </td>
                   </tr>
@@ -1218,6 +1254,14 @@ function KillSheetTab() {
                     Totals — {totalHead} head
                   </td>
                   <td style={{ ...TD, textAlign: 'right', fontWeight: 700 }}>{totalLW > 0 ? totalLW.toLocaleString() : '—'}</td>
+                  <td style={{ ...TD, textAlign: 'right', fontWeight: 700 }}>
+                    {logs.reduce((s, l) => s + (l.half_1_weight_lbs ?? 0), 0) > 0
+                      ? logs.reduce((s, l) => s + (l.half_1_weight_lbs ?? 0), 0).toLocaleString() : '—'}
+                  </td>
+                  <td style={{ ...TD, textAlign: 'right', fontWeight: 700 }}>
+                    {logs.reduce((s, l) => s + (l.half_2_weight_lbs ?? 0), 0) > 0
+                      ? logs.reduce((s, l) => s + (l.half_2_weight_lbs ?? 0), 0).toLocaleString() : '—'}
+                  </td>
                   <td style={{ ...TD, textAlign: 'right', fontWeight: 700 }}>{totalHCW > 0 ? totalHCW.toLocaleString() : '—'}</td>
                   <td style={{ ...TD, textAlign: 'right', fontWeight: 700, color: avgDress != null ? (avgDress >= 58 ? C.green : avgDress >= 54 ? C.yellow : C.red) : C.lightBrown }}>
                     {avgDress != null ? `${avgDress.toFixed(1)}%` : '—'}

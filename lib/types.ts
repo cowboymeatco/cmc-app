@@ -129,6 +129,8 @@ export interface HarvestLog {
   carcass_tag:            string
   sex:                    string
   live_weight_lbs:        number | null
+  half_1_weight_lbs:      number | null
+  half_2_weight_lbs:      number | null
   hot_carcass_weight_lbs: number | null
   yield_pct:              number | null
   inspector_initials:     string
@@ -175,6 +177,46 @@ export interface ColdStorageLog {
   old_carcass_cooler_f: number | null
   initials:             string
   notes:                string
+  source:               string | null  // 'manual' | 'TW-AUTO'
+}
+
+// ── Cook Sessions & Readings (ThermoWorks) ────────────────────────────────────
+
+export interface CookSession {
+  id:            string
+  created_at:    string
+  session_name:  string
+  device_serial: string | null
+  started_at:    string
+  ended_at:      string | null
+  target_temp_f: number | null
+  product:       string | null
+  notes:         string | null
+  status:        'active' | 'complete'
+}
+
+export interface CookReading {
+  id:            string
+  created_at:    string
+  session_id:    string | null
+  device_serial: string | null
+  read_at:       string
+  channel:       number
+  channel_label: string | null
+  temp_f:        number | null
+}
+
+// ── Cut Schedule ─────────────────────────────────────────────────────────────
+
+export interface CutScheduleItem {
+  id:                      string
+  schedule_date:           string   // ISO date
+  appointment_id:          string
+  appointment_customer_id: string
+  manual_rank:             number
+  locked:                  boolean
+  notes:                   string
+  created_at:              string
 }
 
 // ── Delivery Scans ────────────────────────────────────────────────────────────
