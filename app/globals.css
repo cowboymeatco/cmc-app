@@ -22,3 +22,73 @@ body {
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: var(--dark); }
 ::-webkit-scrollbar-thumb { background: var(--med-brown); border-radius: 3px; }
+
+/* ── Kill Sheet print styles ─────────────────────────────────────────── */
+@media print {
+  @page { size: landscape; margin: 0.4in 0.35in; }
+
+  /* Force white background, black text everywhere */
+  *, *::before, *::after {
+    background: #fff !important;
+    color: #000 !important;
+    border-color: #ccc !important;
+    box-shadow: none !important;
+  }
+
+  /* Hide everything except the kill sheet content */
+  header, footer,
+  [data-print-hide],
+  button { display: none !important; }
+
+  /* Show only the kill sheet main content */
+  main {
+    padding: 0 !important;
+    max-width: 100% !important;
+  }
+
+  /* Table sizing */
+  table {
+    width: 100% !important;
+    font-size: 8.5pt !important;
+    border-collapse: collapse !important;
+    table-layout: auto !important;
+  }
+
+  th, td {
+    padding: 4pt 5pt !important;
+    border-bottom: 0.5pt solid #ccc !important;
+    white-space: nowrap;
+  }
+
+  thead tr {
+    background: #f0f0f0 !important;
+    border-bottom: 1pt solid #000 !important;
+  }
+
+  tfoot tr {
+    border-top: 1.5pt solid #000 !important;
+    background: #f5f5f5 !important;
+    font-weight: 700 !important;
+  }
+
+  /* Hide action buttons column (last th/td in kill sheet table) */
+  table th:last-child,
+  table td:last-child { display: none !important; }
+
+  /* Summary bar — compact for print */
+  [data-print-summary] {
+    display: flex !important;
+    gap: 1.5rem !important;
+    margin-bottom: 0.3in !important;
+    font-size: 9pt !important;
+    border: 0.5pt solid #ccc !important;
+    padding: 6pt 10pt !important;
+    border-radius: 3pt !important;
+  }
+
+  /* Pending section — hide on print */
+  [data-print-pending] { display: none !important; }
+
+  /* Show print-only title */
+  [data-print-title] { display: block !important; }
+}

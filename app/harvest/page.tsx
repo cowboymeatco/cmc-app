@@ -1088,7 +1088,7 @@ function KillSheetTab() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
 
       {/* Date nav */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem' }}>
+      <div data-print-hide style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
           <button onClick={() => shiftDate(-1)} style={NAV_BTN}>‹</button>
           <input
@@ -1116,7 +1116,7 @@ function KillSheetTab() {
 
       {/* Summary bar */}
       {logs.length > 0 && (
-        <div style={{
+        <div data-print-summary style={{
           display: 'flex', gap: '1.5rem', padding: '0.85rem 1.25rem', flexWrap: 'wrap', alignItems: 'center',
           background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4,
         }}>
@@ -1143,6 +1143,12 @@ function KillSheetTab() {
           ))}
         </div>
       )}
+
+      {/* Print-only title */}
+      <div data-print-title style={{ display: 'none' }}>
+        <div style={{ fontSize: '13pt', fontWeight: 700, marginBottom: '4pt' }}>Cowboy Meat Company — Kill Sheet</div>
+        <div style={{ fontSize: '10pt', color: '#444', marginBottom: '10pt' }}>{formattedDate}</div>
+      </div>
 
       {/* Kill sheet table */}
       {loading ? (
@@ -1276,7 +1282,7 @@ function KillSheetTab() {
 
       {/* Pending — not yet harvested */}
       {pending.length > 0 && (
-        <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.2)', borderRadius: 4, padding: '0.85rem 1.25rem' }}>
+        <div data-print-pending style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.2)', borderRadius: 4, padding: '0.85rem 1.25rem' }}>
           <div style={{ fontSize: '0.69rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.6rem' }}>
             Pending — Not Yet Harvested &nbsp;({pending.reduce((s, a) => s + a.head_count, 0)} head)
           </div>
