@@ -126,10 +126,11 @@ export default function ScannerPage() {
   // ── Inputs ───────────────────────────────────────────────────────────────────
   const [inputs,       setInputs]       = useState<ProcessingInput[]>([])
   const [showInputs,   setShowInputs]   = useState(false)
-  const [newInputDesc, setNewInputDesc] = useState('')
-  const [newInputWt,   setNewInputWt]   = useState('')
-  const [newInputType, setNewInputType] = useState<'raw' | 'premade' | 'carcass'>('raw')
-  const [addingInput,  setAddingInput]  = useState(false)
+  const [newInputDesc,  setNewInputDesc]  = useState('')
+  const [newInputWt,    setNewInputWt]    = useState('')
+  const [newInputNotes, setNewInputNotes] = useState('')
+  const [newInputType,  setNewInputType]  = useState<'raw' | 'premade' | 'carcass'>('raw')
+  const [addingInput,   setAddingInput]   = useState(false)
 
   // ── Weight entry modal (box products with no embedded weight) ────────────────
   const [weightModal, setWeightModal] = useState<{ plu: string; itemName: string } | null>(null)
@@ -604,12 +605,14 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
           weight_lbs:    newInputWt ? parseFloat(newInputWt) : null,
           input_type:    newInputType,
           source_type:   'general',
+          notes:         newInputNotes.trim() || null,
         }),
       })
       const inp: ProcessingInput = await res.json()
       setInputs(prev => [...prev, inp])
       setNewInputDesc('')
       setNewInputWt('')
+      setNewInputNotes('')
     } catch {}
     finally { setAddingInput(false) }
   }
@@ -1200,64 +1203,99 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
           </div>
 
           {showInputs && (
-            <div style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(166,120,90,0.18)', borderTop: 'none', borderRadius: '0 0 4px 4px', padding: '0.5rem 0.6rem' }}>
-              {/* Quick-add row */}
-              <div style={{ display: 'flex', gap: '0.35rem', marginBottom: '0.45rem' }}>
-                <input
-                  placeholder="Description"
-                  value={newInputDesc}
-                  onChange={e => setNewInputDesc(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') addManualInput() }}
-                  style={{ flex: 2, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, padding: '0.32rem 0.5rem', color: C.cream, fontSize: '0.82rem', outline: 'none' }}
-                />
-                <input
-                  type="number"
-                  placeholder="Lbs"
-                  value={newInputWt}
-                  onChange={e => setNewInputWt(e.target.value)}
-                  style={{ width: 68, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, padding: '0.32rem 0.4rem', color: C.cream, fontSize: '0.82rem', outline: 'none' }}
-                />
-                <select
-                  value={newInputType}
-                  onChange={e => setNewInputType(e.target.value as 'raw' | 'premade' | 'carcass')}
-                  style={{ background: C.darkBrown, border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, padding: '0.32rem 0.35rem', color: C.cream, fontSize: '0.78rem', outline: 'none' }}
-                >
-                  <option value="raw">Raw</option>
-                  <option value="premade">Premade</option>
-                  <option value="carcass">Carcass</option>
-                </select>
-                <button
-                  onClick={addManualInput}
-                  disabled={addingInput || (!newInputDesc.trim() && !newInputWt)}
-                  style={{ background: (!newInputDesc.trim() && !newInputWt) ? C.medBrown : C.tan, border: 'none', borderRadius: 3, padding: '0.32rem 0.7rem', color: C.dark, fontSize: '0.82rem', fontWeight: 700, cursor: 'pointer', opacity: addingInput ? 0.6 : 1 }}
-                >
-                  + Add
-                </button>
+            <div style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(166,120,90,0.18)', borderTop: 'none', borderRadius: '0 0 4px 4px', padding: '0.55rem 0.65rem' }}>
+
+              {/* Quick-add form */}
+              <div style={{ marginBottom: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                {/* Row 1: desc + weight + type */}
+                <div style={{ display: 'flex', gap: '0.35rem' }}>
+                  <input
+                    placeholder="Description (or scan a barcode)"
+                    value={newInputDesc}
+                    onChange={e => setNewInputDesc(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') addManualInput() }}
+                    style={{ flex: 2, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, padding: '0.32rem 0.5rem', color: C.cream, fontSize: '0.82rem', outline: 'none' }}
+                  />
+                  <input
+                    type="number"
+                    placeholder="Lbs"
+                    value={newInputWt}
+                    onChange={e => setNewInputWt(e.target.value)}
+                    style={{ width: 68, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, padding: '0.32rem 0.4rem', color: C.cream, fontSize: '0.82rem', outline: 'none' }}
+                  />
+                  <select
+                    value={newInputType}
+                    onChange={e => setNewInputType(e.target.value as 'raw' | 'premade' | 'carcass')}
+                    style={{ background: C.darkBrown, border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, padding: '0.32rem 0.35rem', color: C.cream, fontSize: '0.78rem', outline: 'none' }}
+                  >
+                    <option value="raw">Raw</option>
+                    <option value="premade">Premade</option>
+                    <option value="carcass">Carcass</option>
+                  </select>
+                </div>
+                {/* Row 2: notes + add button */}
+                <div style={{ display: 'flex', gap: '0.35rem' }}>
+                  <input
+                    placeholder="Notes — e.g. grind coarse, keep roasts separate, mix with pork…"
+                    value={newInputNotes}
+                    onChange={e => setNewInputNotes(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') addManualInput() }}
+                    style={{ flex: 1, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, padding: '0.32rem 0.5rem', color: C.cream, fontSize: '0.82rem', outline: 'none' }}
+                  />
+                  <button
+                    onClick={addManualInput}
+                    disabled={addingInput || (!newInputDesc.trim() && !newInputWt)}
+                    style={{ background: (!newInputDesc.trim() && !newInputWt) ? C.medBrown : C.tan, border: 'none', borderRadius: 3, padding: '0.32rem 0.85rem', color: C.dark, fontSize: '0.82rem', fontWeight: 700, cursor: 'pointer', opacity: addingInput ? 0.6 : 1, flexShrink: 0 }}
+                  >
+                    + Add
+                  </button>
+                </div>
               </div>
+
               {/* Input list */}
-              <div style={{ maxHeight: 150, overflowY: 'auto' }}>
+              <div style={{ maxHeight: 200, overflowY: 'auto' }}>
                 {inputs.length === 0 ? (
                   <div style={{ textAlign: 'center', color: 'rgba(166,120,90,0.4)', fontSize: '0.78rem', padding: '0.65rem', fontStyle: 'italic' }}>
-                    No inputs yet — scan a CMC box label or add manually
+                    No inputs yet — scan a carcass tag or CMC box label, or add manually
                   </div>
-                ) : inputs.map(inp => (
-                  <div key={inp.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.28rem 0.15rem', borderBottom: '1px solid rgba(166,120,90,0.07)' }}>
-                    <span style={{ fontSize: '0.78rem', flexShrink: 0 }}>
-                      {inp.input_type === 'premade' ? '📦' : inp.input_type === 'carcass' ? '🐄' : '🥩'}
-                    </span>
-                    <span style={{ flex: 1, color: C.cream, fontSize: '0.82rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {inp.description || inp.box_identifier || '—'}
-                    </span>
+                ) : inputs.map((inp, idx) => (
+                  <div key={inp.id} style={{ padding: '0.4rem 0.2rem', borderBottom: '1px solid rgba(166,120,90,0.08)' }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
+                      {/* # + emoji */}
+                      <span style={{ fontSize: '0.7rem', color: C.lightBrown, flexShrink: 0, minWidth: 18 }}>
+                        {idx + 1}.
+                      </span>
+                      <span style={{ fontSize: '0.78rem', flexShrink: 0 }}>
+                        {inp.input_type === 'premade' ? '📦' : inp.input_type === 'carcass' ? '🐄' : '🥩'}
+                      </span>
+                      {/* Description */}
+                      <span style={{ flex: 1, color: C.cream, fontSize: '0.84rem', fontWeight: 600 }}>
+                        {inp.description || inp.box_identifier || '—'}
+                      </span>
+                      {/* Weight */}
+                      {inp.weight_lbs != null && (
+                        <span style={{ color: C.tan, fontSize: '0.82rem', fontFamily: 'monospace', flexShrink: 0 }}>
+                          {Number(inp.weight_lbs).toFixed(1)} lb
+                        </span>
+                      )}
+                      {/* Remove */}
+                      <button
+                        onClick={() => removeInput(inp.id)}
+                        style={{ background: 'none', border: 'none', color: 'rgba(166,120,90,0.35)', cursor: 'pointer', fontSize: '0.95rem', lineHeight: 1, padding: '0 0.1rem', flexShrink: 0 }}
+                      >×</button>
+                    </div>
+                    {/* Notes line */}
+                    {inp.notes && (
+                      <div style={{ marginLeft: 36, marginTop: '0.15rem', fontSize: '0.76rem', color: C.lightBrown, fontStyle: 'italic' }}>
+                        {inp.notes}
+                      </div>
+                    )}
+                    {/* Barcode identifier (small, secondary) */}
                     {inp.box_identifier && (
-                      <span style={{ fontSize: '0.68rem', color: C.lightBrown, fontFamily: 'monospace', flexShrink: 0 }}>{inp.box_identifier}</span>
+                      <div style={{ marginLeft: 36, marginTop: '0.1rem', fontSize: '0.66rem', color: 'rgba(166,120,90,0.45)', fontFamily: 'monospace' }}>
+                        {inp.box_identifier}
+                      </div>
                     )}
-                    {inp.weight_lbs != null && (
-                      <span style={{ color: C.tan, fontSize: '0.82rem', fontFamily: 'monospace', flexShrink: 0 }}>{Number(inp.weight_lbs).toFixed(2)} lb</span>
-                    )}
-                    <button
-                      onClick={() => removeInput(inp.id)}
-                      style={{ background: 'none', border: 'none', color: 'rgba(166,120,90,0.35)', cursor: 'pointer', fontSize: '0.95rem', lineHeight: 1, padding: '0 0.15rem', flexShrink: 0 }}
-                    >×</button>
                   </div>
                 ))}
               </div>
