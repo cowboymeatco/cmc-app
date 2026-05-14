@@ -99,8 +99,8 @@ function printCarcassTags(h: HarvestLog) {
                 letter-spacing: 0.03em; margin-bottom: 2pt; }
 
     /* ── Barcode ── */
-    .bc-wrap     { text-align: center; margin: 3pt 0; }
-    .bc-wrap svg { max-width: 100%; }
+    .bc-wrap     { text-align: center; margin: 4pt 0; padding: 0 2pt; }
+    .bc-wrap svg { max-width: 100%; display: block; margin: 0 auto; }
 
     /* ── Data rows ── */
     .row      { display: flex; justify-content: space-between; align-items: baseline;
@@ -119,7 +119,9 @@ function printCarcassTags(h: HarvestLog) {
 
   function makeLabel(side: 'L' | 'R', bcId: string) {
     const halfLabel  = side === 'L' ? '◀  L HALF' : 'R HALF  ▶'
-    const barcodeVal = `CT-${h.id}-${side}`
+    // Short scannable value: YYMMDD-TAG-SIDE  (e.g. 260514-001-L) — ~12 chars vs 38 for a UUID
+    const shortDate  = h.harvest_date.replace(/-/g, '').slice(2)  // "260514"
+    const barcodeVal = `${shortDate}-${h.carcass_tag}-${side}`
     const producerHtml = h.producer   ? `<div class="producer">${h.producer}</div>` : ''
     const identHtml    = identLine    ? `<div class="ident">${identLine}</div>`      : ''
     const otmHtml      = h.over_30_months ? `<div class="otm">&#9888; Over 30 Months</div>` : ''
@@ -156,8 +158,8 @@ function printCarcassTags(h: HarvestLog) {
       ${otmHtml}
       <script>
         JsBarcode("#${bcId}", "${barcodeVal}", {
-          format: "CODE128", width: 1.6, height: 52,
-          displayValue: true, fontSize: 8, margin: 2, textMargin: 1,
+          format: "CODE128", width: 2.4, height: 70,
+          displayValue: true, fontSize: 9, margin: 10, textMargin: 2,
         });
       <\/script>
     </div>`
