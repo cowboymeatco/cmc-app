@@ -947,12 +947,35 @@ function StatBlock({ label, value }: { label: string; value: string | number }) 
   )
 }
 
+type EditVals = {
+  live_weight_lbs:        string
+  hot_carcass_weight_lbs: string
+  ear_tag:                string
+  sex:                    string
+  breed:                  string
+  notes:                  string
+}
+
+function emptyEdit(l: HarvestLog): EditVals {
+  return {
+    live_weight_lbs:        l.live_weight_lbs        != null ? String(l.live_weight_lbs)        : '',
+    hot_carcass_weight_lbs: l.hot_carcass_weight_lbs != null ? String(l.hot_carcass_weight_lbs) : '',
+    ear_tag:                l.ear_tag  ?? '',
+    sex:                    l.sex      ?? '',
+    breed:                  l.breed    ?? '',
+    notes:                  l.notes    ?? '',
+  }
+}
+
 function KillSheetTab() {
   const todayStr = new Date().toISOString().slice(0, 10)
   const [date, setDate]           = useState(todayStr)
   const [logs, setLogs]           = useState<HarvestLog[]>([])
   const [pending, setPending]     = useState<HarvestAppointment[]>([])
   const [loading, setLoading]     = useState(false)
+  const [editId, setEditId]       = useState<string | null>(null)
+  const [editVals, setEditVals]   = useState<EditVals | null>(null)
+  const [saving, setSaving]       = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -968,6 +991,42 @@ function KillSheetTab() {
   }, [date])
 
   useEffect(() => { load() }, [load])
+
+  function startEdit(l: HarvestLog) {
+    setEditId(l.id)
+    setEditVals(emptyEdit(l))
+  }
+
+  function cancelEdit() {
+    setEditId(null)
+    setEditVals(null)
+  }
+
+  async function saveEdit(id: string) {
+    if (!editVals) return
+    setSaving(true)
+    const lw  = editVals.live_weight_lbs        !== '' ? parseFloat(editVals.live_weight_lbs)        : null
+    const hcw = editVals.hot_carcass_weight_lbs !== '' ? parseFloat(editVals.hot_carcass_weight_lbs) : null
+    const yieldPct = lw && hcw ? Math.round((hcw / lw) * 1000) / 10 : null
+    await fetch('/api/harvest', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id,
+        live_weight_lbs:        lw,
+        hot_carcass_weight_lbs: hcw,
+        yield_pct:              yieldPct,
+        ear_tag:                editVals.ear_tag,
+        sex:                    editVals.sex,
+        breed:                  editVals.breed,
+        notes:                  editVals.notes,
+      }),
+    })
+    setSaving(false)
+    setEditId(null)
+    setEditVals(null)
+    load()
+  }
 
   const shiftDate = (days: number) => {
     const d = new Date(date + 'T12:00:00')
@@ -1070,7 +1129,7 @@ function KillSheetTab() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
             <thead>
               <tr style={{ background: 'rgba(166,120,90,0.12)', borderBottom: '1px solid rgba(166,120,90,0.3)' }}>
-                {['#', 'Producer', 'Species', 'Ear Tag', 'Sex', 'Breed', 'Live Wt', 'HCW', 'Dress %', 'CCP', 'Tag #'].map(h => (
+                {['Kill #', 'Producer', 'Species', 'Ear Tag', 'Sex', 'Breed', 'Live Wt', 'HCW', 'Dress %', 'CCP', 'Tag #', ''].map(h => (
                   <th key={h} style={{ padding: '0.65rem 0.85rem', textAlign: h === 'Live Wt' || h === 'HCW' || h === 'Dress %' ? 'right' : 'left', color: C.lightBrown, fontSize: '0.69rem', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 600, whiteSpace: 'nowrap' }}>
                     {h}
                   </th>
@@ -1079,13 +1138,60 @@ function KillSheetTab() {
             </thead>
             <tbody>
               {logs.map((l, i) => {
+                const killNum    = parseInt(l.carcass_tag, 10) || (i + 1)
+                const isEditing  = editId === l.id
                 const dressColor = l.yield_pct == null ? C.lightBrown
                   : l.yield_pct >= 58 ? C.green
                   : l.yield_pct >= 54 ? C.yellow
                   : C.red
+                const rowBg = i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)'
+
+                if (isEditing && editVals) {
+                  const ev = editVals
+                  const setEv = (k: keyof EditVals, v: string) => setEditVals(prev => prev ? { ...prev, [k]: v } : prev)
+                  const previewDress = ev.live_weight_lbs && ev.hot_carcass_weight_lbs
+                    ? (parseFloat(ev.hot_carcass_weight_lbs) / parseFloat(ev.live_weight_lbs) * 100).toFixed(1)
+                    : null
+                  const EINPUT: React.CSSProperties = { ...INPUT, padding: '0.3rem 0.5rem', fontSize: '0.83rem' }
+                  return (
+                    <tr key={l.id} style={{ borderBottom: '1px solid rgba(166,120,90,0.2)', background: 'rgba(166,120,90,0.07)' }}>
+                      <td style={{ ...TD, color: C.lightBrown }}>{killNum}</td>
+                      <td style={{ ...TD, color: C.tan, fontWeight: 600 }}>{l.producer || '—'}</td>
+                      <td style={TD}>{l.species}</td>
+                      {/* Ear Tag */}
+                      <td style={TD}><input value={ev.ear_tag} onChange={e => setEv('ear_tag', e.target.value)} style={{ ...EINPUT, width: 80, fontFamily: 'monospace' }} /></td>
+                      {/* Sex */}
+                      <td style={TD}>
+                        <select value={ev.sex} onChange={e => setEv('sex', e.target.value)} style={{ ...EINPUT, width: 90 }}>
+                          <option value="">—</option>
+                          {(SEX_OPTIONS[l.species] ?? ['Steer','Heifer','Bull','Cow']).map(s => <option key={s}>{s}</option>)}
+                        </select>
+                      </td>
+                      {/* Breed */}
+                      <td style={TD}><input value={ev.breed} onChange={e => setEv('breed', e.target.value)} style={{ ...EINPUT, width: 90 }} /></td>
+                      {/* Live Wt */}
+                      <td style={TD}><input type="number" value={ev.live_weight_lbs} onChange={e => setEv('live_weight_lbs', e.target.value)} placeholder="lbs" style={{ ...EINPUT, width: 80, textAlign: 'right' }} /></td>
+                      {/* HCW */}
+                      <td style={TD}><input type="number" value={ev.hot_carcass_weight_lbs} onChange={e => setEv('hot_carcass_weight_lbs', e.target.value)} placeholder="lbs" style={{ ...EINPUT, width: 80, textAlign: 'right' }} /></td>
+                      {/* Dress preview */}
+                      <td style={{ ...TD, textAlign: 'right', color: C.tan, fontWeight: 600 }}>{previewDress ? `${previewDress}%` : '—'}</td>
+                      <td style={{ ...TD, textAlign: 'center' }}>{l.ccp_pass ? <span style={{ color: C.green }}>✓</span> : <span style={{ color: C.red }}>✗</span>}</td>
+                      <td style={{ ...TD, fontFamily: 'monospace', fontWeight: 700 }}>{l.carcass_tag}</td>
+                      <td style={{ ...TD, whiteSpace: 'nowrap' }}>
+                        <button onClick={() => saveEdit(l.id)} disabled={saving} style={{ ...BTN(C.tan), fontSize: '0.75rem', padding: '0.3rem 0.75rem', marginRight: '0.35rem' }}>
+                          {saving ? '…' : 'Save'}
+                        </button>
+                        <button onClick={cancelEdit} style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.3)', fontSize: '0.75rem', padding: '0.3rem 0.6rem' }}>
+                          ✕
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                }
+
                 return (
-                  <tr key={l.id} style={{ borderBottom: '1px solid rgba(166,120,90,0.08)', background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)' }}>
-                    <td style={{ ...TD, color: C.lightBrown, width: 36 }}>{i + 1}</td>
+                  <tr key={l.id} style={{ borderBottom: '1px solid rgba(166,120,90,0.08)', background: rowBg }}>
+                    <td style={{ ...TD, color: C.lightBrown, width: 42, fontWeight: 700 }}>{killNum}</td>
                     <td style={{ ...TD, color: C.tan, fontWeight: 600 }}>{l.producer || '—'}</td>
                     <td style={TD}>{l.species}</td>
                     <td style={{ ...TD, fontFamily: 'monospace' }}>{l.ear_tag || '—'}</td>
@@ -1096,6 +1202,11 @@ function KillSheetTab() {
                     <td style={{ ...TD, textAlign: 'right', fontWeight: 600, color: dressColor }}>{l.yield_pct != null ? `${l.yield_pct}%` : '—'}</td>
                     <td style={{ ...TD, textAlign: 'center' }}>{l.ccp_pass ? <span style={{ color: C.green, fontSize: '0.9rem' }}>✓</span> : <span style={{ color: C.red, fontSize: '0.9rem' }}>✗</span>}</td>
                     <td style={{ ...TD, fontFamily: 'monospace', fontWeight: 700 }}>{l.carcass_tag || '—'}</td>
+                    <td style={TD}>
+                      <button onClick={() => startEdit(l)} style={{ background: 'rgba(166,120,90,0.1)', border: '1px solid rgba(166,120,90,0.25)', color: C.tan, borderRadius: 3, padding: '0.2rem 0.6rem', fontSize: '0.72rem', cursor: 'pointer' }}>
+                        Edit
+                      </button>
+                    </td>
                   </tr>
                 )
               })}
@@ -1111,7 +1222,7 @@ function KillSheetTab() {
                   <td style={{ ...TD, textAlign: 'right', fontWeight: 700, color: avgDress != null ? (avgDress >= 58 ? C.green : avgDress >= 54 ? C.yellow : C.red) : C.lightBrown }}>
                     {avgDress != null ? `${avgDress.toFixed(1)}%` : '—'}
                   </td>
-                  <td colSpan={2} style={TD} />
+                  <td colSpan={3} style={TD} />
                 </tr>
               </tfoot>
             )}
