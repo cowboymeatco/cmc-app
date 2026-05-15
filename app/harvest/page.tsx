@@ -205,6 +205,10 @@ interface CarcassRow {
   direct_observation:   boolean
   over_30_months:       boolean
   notes:                string
+  // mixed-kill mode fields
+  appointment_id:       string
+  producer:             string
+  species:              string
 }
 
 function emptyCarcass(): CarcassRow {
@@ -215,11 +219,13 @@ function emptyCarcass(): CarcassRow {
     final_carcass_temp_f: '', ccp_pass: true,
     is_verification: false, direct_observation: false,
     over_30_months: false, notes: '',
+    appointment_id: '', producer: '', species: '',
   }
 }
 
 function CarcassForm({
   idx, row, species, onChange, defaultSolutionTemp, verificationCount,
+  isMixed, appointments, onProducerChange, onRemove,
 }: {
   idx:                 number
   row:                 CarcassRow
@@ -227,8 +233,13 @@ function CarcassForm({
   onChange:            (idx: number, field: keyof CarcassRow, val: string | boolean) => void
   defaultSolutionTemp: string
   verificationCount:   number
+  isMixed?:            boolean
+  appointments?:       HarvestAppointment[]
+  onProducerChange?:   (idx: number, appt: HarvestAppointment | null) => void
+  onRemove?:           (idx: number) => void
 }) {
-  const sexOpts = SEX_OPTIONS[species] ?? ['Unknown']
+  const effectiveSpecies = (isMixed ? row.species : species) || 'Beef'
+  const sexOpts = SEX_OPTIONS[effectiveSpecies] ?? ['Unknown']
   const h1  = parseFloat(row.half_1_weight)
   const h2  = parseFloat(row.half_2_weight)
   const hcw = (!isNaN(h1) && !isNaN(h2)) ? h1 + h2 : (!isNaN(h1) ? h1 : (!isNaN(h2) ? h2 : NaN))
@@ -244,14 +255,48 @@ function CarcassForm({
   return (
     <div style={{
       background: row.is_verification ? 'rgba(59,130,246,0.06)' : 'rgba(255,255,255,0.04)',
-      border: `1px solid ${row.is_verification ? 'rgba(59,130,246,0.4)' : 'rgba(166,120,90,0.2)'}`,
+      border: `1px solid ${row.is_verification ? 'rgba(59,130,246,0.4)' : (isMixed && !row.appointment_id ? 'rgba(217,119,6,0.45)' : 'rgba(166,120,90,0.2)')}`,
       borderRadius: 4, padding: '1rem 1.25rem', marginBottom: '1rem',
     }}>
+
+      {/* Mixed mode — producer selector */}
+      {isMixed && (
+        <div style={{ marginBottom: '0.85rem', paddingBottom: '0.85rem', borderBottom: '1px solid rgba(166,120,90,0.2)' }}>
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end' }}>
+            <div style={{ flex: 1 }}>
+              <label style={LABEL}>Producer / Appointment</label>
+              <select
+                style={{ ...INPUT, borderColor: !row.appointment_id ? 'rgba(217,119,6,0.55)' : undefined }}
+                value={row.appointment_id}
+                onChange={e => {
+                  const appt = appointments?.find(a => a.id === e.target.value) ?? null
+                  onProducerChange?.(idx, appt)
+                }}
+              >
+                <option value="">— Select producer —</option>
+                {(appointments ?? []).map(a => {
+                  const name = a.source || a.customers?.[0]?.customer_name || 'Unknown'
+                  return <option key={a.id} value={a.id}>{name} — {a.head_count} {a.species}</option>
+                })}
+              </select>
+            </div>
+            {onRemove && (
+              <button
+                onClick={() => onRemove(idx)}
+                title="Remove this row"
+                style={{ background: 'rgba(180,40,40,0.12)', border: '1px solid rgba(180,40,40,0.35)', borderRadius: 3, color: '#e05555', cursor: 'pointer', padding: '0.45rem 0.65rem', fontSize: '0.85rem', flexShrink: 0 }}
+              >✕</button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Card header row */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem' }}>
         <span style={{ fontSize: '0.72rem', color: C.tan, textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700 }}>
-          Head {idx + 1}
+          {isMixed
+            ? `Kill #${row.carcass_tag || (idx + 1)}${row.producer ? ` — ${row.producer}` : ' — unassigned'}`
+            : `Head ${idx + 1}`}
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           {/* OTM toggle */}
@@ -403,6 +448,7 @@ function HarvestTab() {
   const [selected, setSelected] = useState<HarvestAppointment | null>(null)
   const [saving, setSaving] = useState(false)
   const [success, setSuccess] = useState(false)
+  const [mixedMode, setMixedMode] = useState(false)
 
   const [header, setHeader] = useState({
     harvest_date:          new Date().toISOString().slice(0, 10),
@@ -460,6 +506,44 @@ function HarvestTab() {
     setCarcasses(prev => prev.map((r, i) => i === idx ? { ...r, [field]: val } : r))
   }
 
+  function handleProducerChange(idx: number, appt: HarvestAppointment | null) {
+    setCarcasses(prev => prev.map((r, i) => i === idx ? {
+      ...r,
+      appointment_id: appt?.id ?? '',
+      producer:       appt ? (appt.source || appt.customers?.[0]?.customer_name || '') : '',
+      species:        appt?.species ?? '',
+      sex:            r.sex || '',
+    } : r))
+  }
+
+  function addMixedRow() {
+    const existingCount = harvestLogs.filter(h => h.harvest_date === header.harvest_date).length
+    const tagNum = String(existingCount + carcasses.length + 1).padStart(3, '0')
+    setCarcasses(prev => [...prev, { ...emptyCarcass(), carcass_tag: tagNum }])
+  }
+
+  function removeMixedRow(idx: number) {
+    setCarcasses(prev => {
+      const next = prev.filter((_, i) => i !== idx)
+      // Re-sequence tag numbers
+      const base = harvestLogs.filter(h => h.harvest_date === header.harvest_date).length
+      return next.map((r, i) => ({ ...r, carcass_tag: String(base + i + 1).padStart(3, '0') }))
+    })
+  }
+
+  function enterMixedMode() {
+    setSelected(null)
+    setMixedMode(true)
+    const existingCount = harvestLogs.filter(h => h.harvest_date === header.harvest_date).length
+    setCarcasses([{ ...emptyCarcass(), carcass_tag: String(existingCount + 1).padStart(3, '0') }])
+  }
+
+  function exitMixedMode() {
+    setMixedMode(false)
+    setSelected(null)
+    setCarcasses([emptyCarcass()])
+  }
+
   const hf = (k: keyof typeof header) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setHeader(p => ({ ...p, [k]: e.target.value }))
 
@@ -475,54 +559,86 @@ function HarvestTab() {
     setAppointments(prev => prev.filter(x => x.id !== a.id))
   }
 
+  function buildCarcassPayload(c: CarcassRow) {
+    const h1  = parseFloat(c.half_1_weight)
+    const h2  = parseFloat(c.half_2_weight)
+    const hcw = (!isNaN(h1) && !isNaN(h2)) ? h1 + h2
+              : (!isNaN(h1) ? h1 : (!isNaN(h2) ? h2 : null))
+    const solTemp = c.intervention_temp_f
+      ? parseFloat(c.intervention_temp_f)
+      : header.default_solution_temp ? parseFloat(header.default_solution_temp) : null
+    return {
+      carcass_tag:            c.carcass_tag,
+      ear_tag:                c.ear_tag,
+      breed:                  c.breed,
+      sex:                    c.sex,
+      live_weight_lbs:        c.live_weight_lbs ? parseFloat(c.live_weight_lbs) : null,
+      half_1_weight_lbs:      !isNaN(h1) ? h1 : null,
+      half_2_weight_lbs:      !isNaN(h2) ? h2 : null,
+      hot_carcass_weight_lbs: hcw,
+      intervention_applied:   c.intervention_applied,
+      intervention_temp_f:    solTemp,
+      final_carcass_temp_f:   c.final_carcass_temp_f ? parseFloat(c.final_carcass_temp_f) : null,
+      ccp_pass:               c.ccp_pass,
+      is_verification:        c.is_verification,
+      direct_observation:     c.direct_observation,
+      over_30_months:         c.over_30_months,
+      notes:                  c.notes,
+    }
+  }
+
   async function handleSubmit() {
-    if (!selected) return
+    if (!mixedMode && !selected) return
     setSaving(true)
-    await fetch('/api/harvest', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type:               'log',
-        appointment_id:     selected.id,
-        harvest_date:       header.harvest_date,
-        species:            selected.species,
-        inspector_initials: header.inspector_initials,
-        performed_by:       header.performed_by,
-        intervention_type:  header.intervention_type,
-        producer:           selected.source || (selected.customers?.[0]?.customer_name ?? ''),
-        carcasses: carcasses.map(c => {
-          const h1  = parseFloat(c.half_1_weight)
-          const h2  = parseFloat(c.half_2_weight)
-          const hcw = (!isNaN(h1) && !isNaN(h2)) ? h1 + h2
-                    : (!isNaN(h1) ? h1 : (!isNaN(h2) ? h2 : null))
-          // per-carcass solution temp; fall back to header default
-          const solTemp = c.intervention_temp_f
-            ? parseFloat(c.intervention_temp_f)
-            : header.default_solution_temp ? parseFloat(header.default_solution_temp) : null
-          return {
-            carcass_tag:            c.carcass_tag,
-            ear_tag:                c.ear_tag,
-            breed:                  c.breed,
-            sex:                    c.sex,
-            live_weight_lbs:        c.live_weight_lbs ? parseFloat(c.live_weight_lbs) : null,
-            half_1_weight_lbs:      !isNaN(h1) ? h1 : null,
-            half_2_weight_lbs:      !isNaN(h2) ? h2 : null,
-            hot_carcass_weight_lbs: hcw,
-            intervention_applied:   c.intervention_applied,
-            intervention_temp_f:    solTemp,
-            final_carcass_temp_f:   c.final_carcass_temp_f ? parseFloat(c.final_carcass_temp_f) : null,
-            ccp_pass:               c.ccp_pass,
-            is_verification:        c.is_verification,
-            direct_observation:     c.direct_observation,
-            over_30_months:         c.over_30_months,
-            notes:                  c.notes,
-          }
+
+    if (mixedMode) {
+      // Group rows by appointment_id, submit each group separately
+      const groups = new Map<string, CarcassRow[]>()
+      for (const c of carcasses) {
+        const key = c.appointment_id || '__unassigned__'
+        if (!groups.has(key)) groups.set(key, [])
+        groups.get(key)!.push(c)
+      }
+      await Promise.all([...groups.entries()].map(([apptId, rows]) => {
+        const appt = appointments.find(a => a.id === apptId)
+        return fetch('/api/harvest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type:               'log',
+            appointment_id:     apptId === '__unassigned__' ? null : apptId,
+            harvest_date:       header.harvest_date,
+            species:            appt?.species ?? rows[0].species ?? 'Beef',
+            inspector_initials: header.inspector_initials,
+            performed_by:       header.performed_by,
+            intervention_type:  header.intervention_type,
+            producer:           rows[0].producer,
+            carcasses:          rows.map(buildCarcassPayload),
+          }),
+        })
+      }))
+    } else {
+      await fetch('/api/harvest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type:               'log',
+          appointment_id:     selected!.id,
+          harvest_date:       header.harvest_date,
+          species:            selected!.species,
+          inspector_initials: header.inspector_initials,
+          performed_by:       header.performed_by,
+          intervention_type:  header.intervention_type,
+          producer:           selected!.source || (selected!.customers?.[0]?.customer_name ?? ''),
+          carcasses:          carcasses.map(buildCarcassPayload),
         }),
-      }),
-    })
+      })
+    }
+
     setSaving(false)
     setSuccess(true)
     setSelected(null)
+    if (mixedMode) setCarcasses([{ ...emptyCarcass(), carcass_tag: String(carcasses.length + 1).padStart(3, '0') }])
     load()
   }
 
@@ -530,8 +646,22 @@ function HarvestTab() {
     <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: '1.5rem', height: '100%' }}>
       {/* Left — appointment list */}
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.2)', fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.12em' }}>
-          Ready to Harvest ({appointments.length})
+        <div style={{ padding: '0.75rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.12em' }}>
+            Ready to Harvest ({appointments.length})
+          </span>
+          <button
+            onClick={mixedMode ? exitMixedMode : enterMixedMode}
+            title={mixedMode ? 'Exit Mixed Kill mode' : 'Enter Mixed Kill mode — log animals from multiple appointments in kill order'}
+            style={{
+              fontSize: '0.7rem', fontWeight: 700, padding: '0.25rem 0.6rem', borderRadius: 3, cursor: 'pointer',
+              background: mixedMode ? 'rgba(217,119,6,0.25)' : 'rgba(166,120,90,0.12)',
+              border: mixedMode ? '1px solid rgba(217,119,6,0.6)' : '1px solid rgba(166,120,90,0.3)',
+              color: mixedMode ? '#f59e0b' : C.tan,
+            }}
+          >
+            {mixedMode ? '⚡ Mixed ON' : '⚡ Mixed Kill'}
+          </button>
         </div>
         <div style={{ overflowY: 'auto', flex: 1 }}>
           {appointments.length === 0 && (
@@ -622,23 +752,41 @@ function HarvestTab() {
           </div>
         )}
 
-        {!selected ? (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '60%', color: C.lightBrown, fontSize: '0.9rem' }}>
-            ← Select an appointment to log harvest
+        {!mixedMode && !selected ? (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '60%', gap: '1rem', color: C.lightBrown, fontSize: '0.9rem' }}>
+            <div>← Select an appointment to log harvest</div>
+            <div style={{ fontSize: '0.78rem', color: C.lightBrown, opacity: 0.7 }}>
+              or use <strong style={{ color: C.tan }}>⚡ Mixed Kill</strong> to log animals from multiple groups in rail order
+            </div>
           </div>
         ) : (
           <>
-            {/* Appointment summary */}
-            <div style={{ background: 'rgba(166,120,90,0.08)', border: '1px solid rgba(166,120,90,0.2)', borderRadius: 4, padding: '1rem 1.25rem', marginBottom: '1.25rem' }}>
-              <div style={{ color: C.cream, fontWeight: 700, fontSize: '1rem' }}>
-                {selected.species} — {selected.head_count} head
-              </div>
-              {selected.customers?.length > 0 && (
-                <div style={{ fontSize: '0.8rem', color: C.tan, marginTop: '0.2rem' }}>
-                  {selected.customers.map(c => c.customer_name).join(', ')}
+            {/* Mixed mode banner */}
+            {mixedMode && (
+              <div style={{ background: 'rgba(217,119,6,0.12)', border: '1px solid rgba(217,119,6,0.4)', borderRadius: 4, padding: '0.75rem 1.1rem', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <span style={{ fontSize: '1.1rem' }}>⚡</span>
+                <div>
+                  <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#f59e0b' }}>Mixed Kill Mode</div>
+                  <div style={{ fontSize: '0.76rem', color: C.tan, marginTop: '0.1rem' }}>
+                    Each animal row has its own producer selector. Add animals in actual kill order — group by appointment happens automatically on submit.
+                  </div>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
+
+            {/* Appointment summary (single-appointment mode only) */}
+            {!mixedMode && selected && (
+              <div style={{ background: 'rgba(166,120,90,0.08)', border: '1px solid rgba(166,120,90,0.2)', borderRadius: 4, padding: '1rem 1.25rem', marginBottom: '1.25rem' }}>
+                <div style={{ color: C.cream, fontWeight: 700, fontSize: '1rem' }}>
+                  {selected.species} — {selected.head_count} head
+                </div>
+                {selected.customers?.length > 0 && (
+                  <div style={{ fontSize: '0.8rem', color: C.tan, marginTop: '0.2rem' }}>
+                    {selected.customers.map(c => c.customer_name).join(', ')}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Header fields — row 1 */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0 1rem', marginBottom: '0.85rem' }}>
@@ -708,7 +856,9 @@ function HarvestTab() {
             {/* Per-carcass forms */}
             <div style={{ borderTop: '1px solid rgba(166,120,90,0.2)', paddingTop: '1.25rem', marginBottom: '1rem' }}>
               <div style={{ fontSize: '0.75rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '1rem' }}>
-                Carcass Records — {selected.head_count} head
+                {mixedMode
+                  ? `Carcass Records — ${carcasses.length} animal${carcasses.length !== 1 ? 's' : ''} (mixed)`
+                  : `Carcass Records — ${selected!.head_count} head`}
               </div>
               {(() => {
                 const verificationCount = carcasses.filter(c => c.is_verification).length
@@ -717,21 +867,53 @@ function HarvestTab() {
                     key={i}
                     idx={i}
                     row={row}
-                    species={selected.species}
+                    species={mixedMode ? (row.species || 'Beef') : selected!.species}
                     onChange={updateCarcass}
                     defaultSolutionTemp={header.default_solution_temp}
                     verificationCount={verificationCount}
+                    isMixed={mixedMode}
+                    appointments={mixedMode ? appointments : undefined}
+                    onProducerChange={mixedMode ? handleProducerChange : undefined}
+                    onRemove={mixedMode && carcasses.length > 1 ? removeMixedRow : undefined}
                   />
                 ))
               })()}
+
+              {/* Add Animal button (mixed mode only) */}
+              {mixedMode && (
+                <button
+                  onClick={addMixedRow}
+                  style={{
+                    width: '100%', padding: '0.65rem', borderRadius: 4, cursor: 'pointer',
+                    background: 'rgba(166,120,90,0.08)', border: '1px dashed rgba(166,120,90,0.35)',
+                    color: C.tan, fontSize: '0.85rem', fontWeight: 600, marginTop: '0.25rem',
+                  }}
+                >
+                  + Add Animal
+                </button>
+              )}
             </div>
 
+            {/* Validation warning (mixed mode) */}
+            {mixedMode && carcasses.some(c => !c.appointment_id) && (
+              <div style={{ background: 'rgba(217,119,6,0.1)', border: '1px solid rgba(217,119,6,0.35)', borderRadius: 3, padding: '0.6rem 1rem', marginBottom: '1rem', fontSize: '0.8rem', color: '#f59e0b' }}>
+                ⚠ Assign a producer to every animal before submitting
+              </div>
+            )}
+
             <div style={{ display: 'flex', gap: '0.75rem' }}>
-              <button style={BTN(C.tan)} onClick={handleSubmit} disabled={saving}>
+              <button
+                style={BTN(C.tan)}
+                onClick={handleSubmit}
+                disabled={saving || (mixedMode && carcasses.some(c => !c.appointment_id))}
+              >
                 {saving ? 'Saving…' : '✓ Log Harvest'}
               </button>
-              <button style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.3)' }} onClick={() => setSelected(null)}>
-                Cancel
+              <button
+                style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.3)' }}
+                onClick={mixedMode ? exitMixedMode : () => setSelected(null)}
+              >
+                {mixedMode ? 'Exit Mixed Mode' : 'Cancel'}
               </button>
             </div>
           </>
