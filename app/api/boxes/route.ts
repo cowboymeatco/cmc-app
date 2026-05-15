@@ -1,3 +1,4 @@
+﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
@@ -5,7 +6,7 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const date     = searchParams.get('date')
   const customer = searchParams.get('customer_name')
-  const recent   = searchParams.get('recent')   // 'sessions' → distinct customer+date pairs
+  const recent   = searchParams.get('recent')   // 'sessions' â†’ distinct customer+date pairs
 
   let query = supabase
     .from('boxes')

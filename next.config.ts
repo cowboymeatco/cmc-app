@@ -5,3 +5,6 @@ const nextConfig: NextConfig = {
 };
 
 export default nextConfig;
+
+// Suppress experimental warning from @cloudflare/next-on-pages
+// https://github.com/cloudflare/next-on-pages

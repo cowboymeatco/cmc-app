@@ -1,3 +1,4 @@
+﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
@@ -22,7 +23,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json(data)
 }
 
-// POST /api/processing/records — save a batch of records
+// POST /api/processing/records â€” save a batch of records
 export async function POST(req: NextRequest) {
   const body = await req.json()
   const { records } = body as { records: Record<string, unknown>[] }

@@ -1,3 +1,4 @@
+﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
@@ -14,7 +15,7 @@ export async function GET() {
   return NextResponse.json(data)
 }
 
-// POST /api/cutting-instructions — create new instruction internally
+// POST /api/cutting-instructions â€” create new instruction internally
 export async function POST(req: NextRequest) {
   const body = await req.json()
   const { data, error } = await supabase
@@ -26,7 +27,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json(data)
 }
 
-// PATCH /api/cutting-instructions — update status
+// PATCH /api/cutting-instructions â€” update status
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
   const { ids, status } = body as { ids: string[]; status: string }

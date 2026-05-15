@@ -1,3 +1,4 @@
+﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
@@ -32,7 +33,7 @@ export async function POST(req: NextRequest) {
   const { type, ...fields } = body
 
   if (type === 'animal') {
-    // Batch insert — animals array contains per-head data
+    // Batch insert â€” animals array contains per-head data
     const animals: Record<string, unknown>[] = fields.animals ?? [{
       animal_index:   1,
       ear_tag:        fields.ear_tag        ?? '',
@@ -78,7 +79,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(data)
   }
 
-  // Box product — auto-generate CMC-YYYYMMDD-NNN identifier
+  // Box product â€” auto-generate CMC-YYYYMMDD-NNN identifier
   const today    = new Date().toISOString().slice(0, 10).replace(/-/g, '')  // e.g. "20260503"
   const prefix   = `CMC-${today}-`
   const { count } = await supabase
@@ -111,7 +112,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json(data)
 }
 
-// PATCH /api/receiving — update status or fields
+// PATCH /api/receiving â€” update status or fields
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
   const { type, id, ...updates } = body

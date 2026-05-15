@@ -1,3 +1,4 @@
+﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
@@ -27,7 +28,7 @@ export interface CapacityResponse {
   upcoming_eq:   number    // total beef equivalents from booked (not yet harvested)
   total_eq:      number    // cooler + upcoming
   days_on_hand:  number    // total_eq / beef_eq_per_day
-  available_eq:  number    // (max_cooler_days × beef_eq_per_day) - total_eq (can be negative)
+  available_eq:  number    // (max_cooler_days Ã— beef_eq_per_day) - total_eq (can be negative)
 }
 
 const DEFAULTS: CapacitySettings = {
@@ -109,7 +110,7 @@ export async function GET() {
   return NextResponse.json(resp)
 }
 
-// POST /api/capacity — upsert settings
+// POST /api/capacity â€” upsert settings
 export async function POST(req: NextRequest) {
   const body: Partial<CapacitySettings> = await req.json()
   const { data, error } = await supabase

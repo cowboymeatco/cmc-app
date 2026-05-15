@@ -1,9 +1,10 @@
+﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
 
-// GET — merged list of sessions (processing_sessions records + derived from boxes)
+// GET â€” merged list of sessions (processing_sessions records + derived from boxes)
 export async function GET() {
   // 1. Fetch session records
   const { data: sessionRows } = await supabase
@@ -56,7 +57,7 @@ export async function GET() {
     result.push({ id: s.id, customer_name: s.customer_name, session_date: s.session_date, status: s.status, notes: s.notes, ...stats })
     seen.add(key)
   }
-  // Box groups with no session record yet → derive status
+  // Box groups with no session record yet â†’ derive status
   for (const [key, stats] of boxGroups) {
     if (!seen.has(key)) {
       const { customer_name, session_date, ...rest } = stats
@@ -68,7 +69,7 @@ export async function GET() {
   return NextResponse.json(result)
 }
 
-// POST — upsert session record (by customer_name + session_date)
+// POST â€” upsert session record (by customer_name + session_date)
 export async function POST(req: NextRequest) {
   const body = await req.json()
   const { customer_name, session_date, status = 'scanning', notes = '' } = body
@@ -86,7 +87,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json(data)
 }
 
-// PATCH — update status / notes (by id OR customer_name+session_date)
+// PATCH â€” update status / notes (by id OR customer_name+session_date)
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
   const { id, customer_name, session_date, ...updates } = body

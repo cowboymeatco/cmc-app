@@ -1,3 +1,4 @@
+﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
@@ -22,7 +23,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json(data)
 }
 
-// POST /api/processing — bulk upsert from file upload
+// POST /api/processing â€” bulk upsert from file upload
 export async function POST(req: NextRequest) {
   const body = await req.json()
   const { items } = body as { items: Record<string, unknown>[] }
@@ -39,7 +40,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ ok: true, count: data.length })
 }
 
-// PATCH /api/processing — update single item by id
+// PATCH /api/processing â€” update single item by id
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
   const { id, ...updates } = body

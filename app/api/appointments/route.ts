@@ -1,7 +1,8 @@
+﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
-// GET /api/appointments — list all appointments
+// GET /api/appointments â€” list all appointments
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const date = searchParams.get('date')
@@ -20,7 +21,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json(data)
 }
 
-// POST /api/appointments — create a new appointment
+// POST /api/appointments â€” create a new appointment
 export async function POST(req: NextRequest) {
   const body = await req.json()
   const { data, error } = await supabase
@@ -42,7 +43,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json(data)
 }
 
-// PATCH /api/appointments — update an appointment
+// PATCH /api/appointments â€” update an appointment
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
   const { id, ...updates } = body
@@ -58,7 +59,7 @@ export async function PATCH(req: NextRequest) {
   return NextResponse.json(data)
 }
 
-// DELETE /api/appointments — delete an appointment
+// DELETE /api/appointments â€” delete an appointment
 export async function DELETE(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const id = searchParams.get('id')

@@ -580,6 +580,8 @@ export default function ValueAddPage() {
     { id: 'history' as Tab, label: '📜 History' },
   ]
 
+  const cookLogHref = '/value-add/cooking'
+
   return (
     <div style={{ minHeight: '100vh', background: 'var(--dark-brown)', display: 'flex', flexDirection: 'column' }}>
       <header style={{ background: 'var(--dark)', borderBottom: '1px solid rgba(166,120,90,0.3)', padding: '0 2rem', height: '64px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
@@ -597,6 +599,12 @@ export default function ValueAddPage() {
               letterSpacing: '0.04em', transition: 'background 0.15s',
             }}>{t.label}</button>
           ))}
+          <Link href={cookLogHref} style={{
+            padding: '0.45rem 1.25rem', fontSize: '0.83rem', fontWeight: 600,
+            color: C.lightBrown, letterSpacing: '0.04em', textDecoration: 'none',
+            display: 'flex', alignItems: 'center',
+            borderLeft: '1px solid rgba(166,120,90,0.25)',
+          }}>🌡️ Cook Log</Link>
         </div>
       </header>
 

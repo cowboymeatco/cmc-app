@@ -72,9 +72,25 @@ const LAMB_SECTIONS = [
   { label: 'Notes', fields: [['cuttingNotes','Cutting Notes']] },
 ]
 
+const GOAT_SECTIONS = [
+  { label: 'Customer Info', fields: [
+    ['customerName','Customer'],['contactPreference','Contact Pref'],['contactValue','Contact'],
+    ['deliveryDate','Delivery Date'],
+  ]},
+  { label: 'Goat Cuts', fields: [
+    ['goatRack','Rack'],['goatLoinChops','Loin Chops'],['goatLeg','Leg'],
+    ['goatLegChops','Leg Chops'],['goatShoulder','Shoulder'],['goatShank','Shank'],
+  ]},
+  { label: 'Ground & Trim', fields: [
+    ['burgerBlend','Grind Blend'],['burgerPackaging','Packaging'],
+  ]},
+  { label: 'Notes', fields: [['cuttingNotes','Cutting Notes']] },
+]
+
 function sectionsFor(species: string) {
-  if (species === 'Hog') return HOG_SECTIONS
+  if (species === 'Hog')  return HOG_SECTIONS
   if (species === 'Lamb') return LAMB_SECTIONS
+  if (species === 'Goat') return GOAT_SECTIONS
   return BEEF_SECTIONS
 }
 
@@ -214,7 +230,7 @@ export default function CuttingInstructionsPage() {
               ))}
             </div>
             <div style={{ display: 'flex', gap: '0', border: '1px solid rgba(166,120,90,0.3)', borderRadius: '3px', overflow: 'hidden' }}>
-              {['all','Beef','Hog','Lamb'].map(s => (
+              {['all','Beef','Hog','Lamb','Goat'].map(s => (
                 <button key={s} onClick={() => setFilterSpecies(s)} style={tabBtn(filterSpecies === s)}>{s}</button>
               ))}
             </div>
@@ -312,7 +328,7 @@ export default function CuttingInstructionsPage() {
               })}
 
               {/* Specialty orders */}
-              {['bratOrders','sticksOrders','jerkyOrders','summerOrders','salamiOrders','lambBratOrders'].map(key => {
+              {['bratOrders','sticksOrders','jerkyOrders','summerOrders','salamiOrders','lambBratOrders','goatBratOrders'].map(key => {
                 const orders = selected.data?.[key]
                 if (!orders || orders.length === 0) return null
                 return (
@@ -480,6 +496,11 @@ function printCutCard(ci: RawInstruction) {
     body += section('Lamb Cuts', [
       row('Rack', d.lambRack), row('Loin Chops', d.lambLoinChops), row('Leg', d.lambLeg),
       row('Leg Chops', d.lambLegChops), row('Shoulder', d.lambShoulder), row('Shank', d.lambShank),
+    ].join(''))
+  } else if (species === 'Goat') {
+    body += section('Goat Cuts', [
+      row('Rack', d.goatRack), row('Loin Chops', d.goatLoinChops), row('Leg', d.goatLeg),
+      row('Leg Chops', d.goatLegChops), row('Shoulder', d.goatShoulder), row('Shank', d.goatShank),
     ].join(''))
   }
 

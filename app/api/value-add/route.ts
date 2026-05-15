@@ -1,9 +1,10 @@
+﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
 
-// GET /api/value-add — list all jobs (optionally filtered by status or order)
+// GET /api/value-add â€” list all jobs (optionally filtered by status or order)
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const status   = searchParams.get('status')
@@ -22,7 +23,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json(data)
 }
 
-// POST /api/value-add — create a new value-add job
+// POST /api/value-add â€” create a new value-add job
 export async function POST(req: NextRequest) {
   const body = await req.json()
 
@@ -51,7 +52,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json(data)
 }
 
-// PATCH /api/value-add — update a job (weight in/out, status, etc.)
+// PATCH /api/value-add â€” update a job (weight in/out, status, etc.)
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
   const { id, ...updates } = body

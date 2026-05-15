@@ -1,8 +1,9 @@
+﻿export const runtime = 'edge'
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
 // GET /api/availability
-// Public endpoint — returns next 12 weeks with booking availability.
+// Public endpoint â€” returns next 12 weeks with booking availability.
 // Does NOT expose any customer names or appointment details.
 
 const DEFAULTS = {
@@ -32,7 +33,7 @@ function isoDate(d: Date): string {
 function mondayOf(date: Date): Date {
   const d = new Date(date)
   d.setHours(12, 0, 0, 0)
-  const dow = d.getDay()                  // 0=Sun … 6=Sat
+  const dow = d.getDay()                  // 0=Sun â€¦ 6=Sat
   d.setDate(d.getDate() - (dow === 0 ? 6 : dow - 1))
   return d
 }

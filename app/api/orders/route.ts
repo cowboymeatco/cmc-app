@@ -1,9 +1,10 @@
+﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
 
-// GET /api/orders — list all orders with their items
+// GET /api/orders â€” list all orders with their items
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const status = searchParams.get('status')
@@ -31,7 +32,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json(data)
 }
 
-// POST /api/orders — create a new retail order with line items
+// POST /api/orders â€” create a new retail order with line items
 export async function POST(req: NextRequest) {
   const body = await req.json()
   const { items, ...orderFields } = body
@@ -89,7 +90,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json(full)
 }
 
-// PATCH /api/orders — update order fields or status
+// PATCH /api/orders â€” update order fields or status
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
   const { id, ...updates } = body

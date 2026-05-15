@@ -1,0 +1,429 @@
+2026-05-11 09:04:51,398  INFO     --- ThermoWorks sync start ---
+2026-05-11 09:04:52,989  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-11 09:04:52,990  INFO     Syncing cook logger...
+2026-05-11 09:09:56,688  INFO     --- ThermoWorks sync start ---
+2026-05-11 09:09:58,602  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-11 09:09:58,603  INFO     Syncing cook logger...
+2026-05-11 09:12:51,462  INFO     --- ThermoWorks sync start ---
+2026-05-11 09:12:55,511  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-11 09:12:55,512  INFO     Syncing cook logger...
+2026-05-11 11:21:39,290  INFO     --- ThermoWorks sync start ---
+2026-05-11 11:21:43,368  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-11 11:21:43,368  INFO     Syncing cook logger...
+2026-05-11 11:29:49,293  INFO     --- ThermoWorks sync start ---
+2026-05-11 11:29:50,819  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-11 11:29:50,819  INFO     Syncing cook logger...
+2026-05-11 11:31:25,994  INFO     --- ThermoWorks sync start ---
+2026-05-11 11:31:33,332  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-11 11:31:33,333  INFO     Syncing cook logger...
+2026-05-11 11:31:42,667  INFO       No active cook session — readings recorded without session link
+2026-05-11 11:31:42,954  INFO       SENSOR 1: 68.8°F
+2026-05-11 11:31:43,254  INFO       SENSOR 2: 68.7°F
+2026-05-11 11:31:43,737  INFO     Inserted 2 cook reading(s)
+2026-05-11 11:31:43,739  INFO     --- sync complete ---
+
+2026-05-11 18:48:36,324  INFO     --- ThermoWorks sync start ---
+2026-05-11 18:48:36,819  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-11 18:48:36,820  INFO     Syncing cook logger...
+2026-05-11 18:48:37,497  INFO       No active cook session — readings recorded without session link
+2026-05-11 18:48:37,542  INFO       SENSOR 1: 71.5°F
+2026-05-11 18:48:37,590  INFO       SENSOR 2: 71.6°F
+2026-05-11 18:48:37,730  INFO     Inserted 2 cook reading(s)
+2026-05-11 18:48:37,733  INFO     --- sync complete ---
+
+2026-05-11 19:43:55,748  INFO     --- ThermoWorks sync start ---
+2026-05-11 19:43:56,243  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-11 19:43:56,243  INFO     Syncing cook logger...
+2026-05-11 19:43:57,624  INFO       No active cook session — readings recorded without session link
+2026-05-11 19:43:57,676  INFO       SENSOR 1: 71.0°F
+2026-05-11 19:43:57,728  INFO       SENSOR 2: 71.2°F
+2026-05-11 19:43:57,875  INFO     Inserted 2 cook reading(s)
+2026-05-11 19:43:57,877  INFO     --- sync complete ---
+
+2026-05-13 06:50:55,155  INFO     --- ThermoWorks sync start ---
+2026-05-13 06:50:55,581  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-13 06:50:55,582  INFO     Syncing cook logger...
+2026-05-13 06:50:56,927  INFO       No active cook session — readings recorded without session link
+2026-05-13 06:50:56,969  INFO       SENSOR 1: 75.0°F
+2026-05-13 06:50:57,019  INFO       SENSOR 2: 71.6°F
+2026-05-13 06:50:57,163  INFO     Inserted 2 cook reading(s)
+2026-05-13 06:50:57,168  INFO     --- sync complete ---
+
+2026-05-13 07:20:55,131  INFO     --- ThermoWorks sync start ---
+2026-05-13 07:20:55,591  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-13 07:20:55,591  INFO     Syncing cook logger...
+2026-05-13 07:20:56,894  INFO       No active cook session — readings recorded without session link
+2026-05-13 07:20:56,954  INFO       SENSOR 1: 75.4°F
+2026-05-13 07:20:57,003  INFO       SENSOR 2: 72.0°F
+2026-05-13 07:20:57,132  INFO     Inserted 2 cook reading(s)
+2026-05-13 07:20:57,137  INFO     --- sync complete ---
+
+2026-05-13 07:50:55,019  INFO     --- ThermoWorks sync start ---
+2026-05-13 07:50:55,519  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-13 07:50:55,520  INFO     Syncing cook logger...
+2026-05-13 07:50:56,780  INFO       No active cook session — readings recorded without session link
+2026-05-13 07:50:56,831  INFO       SENSOR 1: 75.4°F
+2026-05-13 07:50:56,891  INFO       SENSOR 2: 72.0°F
+2026-05-13 07:50:57,046  INFO     Inserted 2 cook reading(s)
+2026-05-13 07:50:57,051  INFO     --- sync complete ---
+
+2026-05-13 08:20:54,918  INFO     --- ThermoWorks sync start ---
+2026-05-13 08:20:55,389  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-13 08:20:55,389  INFO     Syncing cook logger...
+2026-05-13 08:20:56,551  INFO       No active cook session — readings recorded without session link
+2026-05-13 08:20:56,599  INFO       SENSOR 1: 75.5°F
+2026-05-13 08:20:56,679  INFO       SENSOR 2: 71.4°F
+2026-05-13 08:20:56,807  INFO     Inserted 2 cook reading(s)
+2026-05-13 08:20:56,811  INFO     --- sync complete ---
+
+2026-05-13 12:01:46,281  INFO     --- ThermoWorks sync start ---
+2026-05-13 12:01:46,773  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-13 12:01:46,773  INFO     Syncing cook logger...
+2026-05-13 12:01:48,247  INFO       No active cook session — readings recorded without session link
+2026-05-13 12:01:48,293  INFO       SENSOR 1: 75.8°F
+2026-05-13 12:01:48,341  INFO       SENSOR 2: 71.9°F
+2026-05-13 12:01:48,488  INFO     Inserted 2 cook reading(s)
+2026-05-13 12:01:48,491  INFO     --- sync complete ---
+
+2026-05-13 12:20:54,257  INFO     --- ThermoWorks sync start ---
+2026-05-13 12:20:54,710  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-13 12:20:54,710  INFO     Syncing cook logger...
+2026-05-13 12:20:55,846  INFO       No active cook session — readings recorded without session link
+2026-05-13 12:20:55,894  INFO       SENSOR 1: 75.8°F
+2026-05-13 12:20:55,964  INFO       SENSOR 2: 71.8°F
+2026-05-13 12:20:56,091  INFO     Inserted 2 cook reading(s)
+2026-05-13 12:20:56,093  INFO     --- sync complete ---
+
+2026-05-13 12:50:53,963  INFO     --- ThermoWorks sync start ---
+2026-05-13 12:50:54,408  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-13 12:50:54,409  INFO     Syncing cook logger...
+2026-05-13 12:50:55,554  INFO       No active cook session — readings recorded without session link
+2026-05-13 12:50:55,603  INFO       SENSOR 1: 75.8°F
+2026-05-13 12:50:55,655  INFO       SENSOR 2: 71.8°F
+2026-05-13 12:50:55,770  INFO     Inserted 2 cook reading(s)
+2026-05-13 12:50:55,771  INFO     --- sync complete ---
+
+2026-05-13 13:20:54,030  INFO     --- ThermoWorks sync start ---
+2026-05-13 13:20:54,490  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-13 13:20:54,490  INFO     Syncing cook logger...
+2026-05-13 13:20:55,570  INFO       No active cook session — readings recorded without session link
+2026-05-13 13:20:55,621  INFO       SENSOR 1: 76.6°F
+2026-05-13 13:20:55,671  INFO       SENSOR 2: 72.6°F
+2026-05-13 13:20:55,813  INFO     Inserted 2 cook reading(s)
+2026-05-13 13:20:55,815  INFO     --- sync complete ---
+
+2026-05-13 13:50:53,999  INFO     --- ThermoWorks sync start ---
+2026-05-13 13:50:54,463  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-13 13:50:54,464  INFO     Syncing cook logger...
+2026-05-13 13:50:55,246  INFO       No active cook session — readings recorded without session link
+2026-05-13 13:50:55,295  INFO       SENSOR 1: 76.6°F
+2026-05-13 13:50:55,366  INFO       SENSOR 2: 72.6°F
+2026-05-13 13:50:55,493  INFO     Inserted 2 cook reading(s)
+2026-05-13 13:50:55,494  INFO     --- sync complete ---
+
+2026-05-13 14:20:54,012  INFO     --- ThermoWorks sync start ---
+2026-05-13 14:20:54,460  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-13 14:20:54,460  INFO     Syncing cook logger...
+2026-05-13 14:20:55,017  INFO       No active cook session — readings recorded without session link
+2026-05-13 14:20:55,067  INFO       SENSOR 1: 76.7°F
+2026-05-13 14:20:55,118  INFO       SENSOR 2: 72.8°F
+2026-05-13 14:20:55,244  INFO     Inserted 2 cook reading(s)
+2026-05-13 14:20:55,246  INFO     --- sync complete ---
+
+2026-05-13 14:50:54,110  INFO     --- ThermoWorks sync start ---
+2026-05-13 14:50:54,544  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-13 14:50:54,545  INFO     Syncing cook logger...
+2026-05-13 14:50:55,074  INFO       No active cook session — readings recorded without session link
+2026-05-13 14:50:55,126  INFO       SENSOR 1: 76.7°F
+2026-05-13 14:50:55,177  INFO       SENSOR 2: 72.8°F
+2026-05-13 14:50:55,271  INFO     Inserted 2 cook reading(s)
+2026-05-13 14:50:55,273  INFO     --- sync complete ---
+
+2026-05-13 15:20:53,976  INFO     --- ThermoWorks sync start ---
+2026-05-13 15:20:54,466  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-13 15:20:54,466  INFO     Syncing cook logger...
+2026-05-13 15:20:55,155  INFO       No active cook session — readings recorded without session link
+2026-05-13 15:20:55,209  INFO       SENSOR 1: 77.7°F
+2026-05-13 15:20:55,265  INFO       SENSOR 2: 73.7°F
+2026-05-13 15:20:55,387  INFO     Inserted 2 cook reading(s)
+2026-05-13 15:20:55,391  INFO     --- sync complete ---
+
+2026-05-13 15:50:53,798  INFO     --- ThermoWorks sync start ---
+2026-05-13 15:50:54,247  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-13 15:50:54,247  INFO     Syncing cook logger...
+2026-05-13 15:50:54,798  INFO       No active cook session — readings recorded without session link
+2026-05-13 15:50:54,844  INFO       SENSOR 1: 77.7°F
+2026-05-13 15:50:54,911  INFO       SENSOR 2: 73.7°F
+2026-05-13 15:50:55,047  INFO     Inserted 2 cook reading(s)
+2026-05-13 15:50:55,049  INFO     --- sync complete ---
+
+2026-05-13 16:20:54,403  INFO     --- ThermoWorks sync start ---
+2026-05-13 16:20:54,906  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-13 16:20:54,906  INFO     Syncing cook logger...
+2026-05-13 16:20:55,446  INFO       No active cook session — readings recorded without session link
+2026-05-13 16:20:55,501  INFO       SENSOR 1: 78.4°F
+2026-05-13 16:20:55,556  INFO       SENSOR 2: 74.3°F
+2026-05-13 16:20:55,672  INFO     Inserted 2 cook reading(s)
+2026-05-13 16:20:55,675  INFO     --- sync complete ---
+
+2026-05-13 16:50:54,422  INFO     --- ThermoWorks sync start ---
+2026-05-13 16:50:54,869  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-13 16:50:54,870  INFO     Syncing cook logger...
+2026-05-13 16:50:55,454  INFO       No active cook session — readings recorded without session link
+2026-05-13 16:50:55,504  INFO       SENSOR 1: 78.4°F
+2026-05-13 16:50:55,564  INFO       SENSOR 2: 74.3°F
+2026-05-13 16:50:55,687  INFO     Inserted 2 cook reading(s)
+2026-05-13 16:50:55,690  INFO     --- sync complete ---
+
+2026-05-14 06:05:33,316  INFO     --- ThermoWorks sync start ---
+2026-05-14 06:05:33,803  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-14 06:05:33,803  INFO     Syncing cook logger...
+2026-05-14 06:05:34,854  INFO       No active cook session — readings recorded without session link
+2026-05-14 06:05:34,899  INFO       SENSOR 1: 76.0°F
+2026-05-14 06:05:34,955  INFO       SENSOR 2: 71.8°F
+2026-05-14 06:05:35,137  INFO     Inserted 2 cook reading(s)
+2026-05-14 06:05:35,139  INFO     --- sync complete ---
+
+2026-05-14 06:20:54,976  INFO     --- ThermoWorks sync start ---
+2026-05-14 06:20:55,410  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-14 06:20:55,411  INFO     Syncing cook logger...
+2026-05-14 06:20:55,980  INFO       No active cook session — readings recorded without session link
+2026-05-14 06:20:56,024  INFO       SENSOR 1: 74.9°F
+2026-05-14 06:20:56,073  INFO       SENSOR 2: 71.4°F
+2026-05-14 06:20:56,192  INFO     Inserted 2 cook reading(s)
+2026-05-14 06:20:56,195  INFO     --- sync complete ---
+
+2026-05-14 06:50:54,923  INFO     --- ThermoWorks sync start ---
+2026-05-14 06:50:55,377  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-14 06:50:55,378  INFO     Syncing cook logger...
+2026-05-14 06:50:56,365  INFO       No active cook session — readings recorded without session link
+2026-05-14 06:50:56,411  INFO       SENSOR 1: 74.9°F
+2026-05-14 06:50:56,467  INFO       SENSOR 2: 71.4°F
+2026-05-14 06:50:56,598  INFO     Inserted 2 cook reading(s)
+2026-05-14 06:50:56,601  INFO     --- sync complete ---
+
+2026-05-14 07:20:54,634  INFO     --- ThermoWorks sync start ---
+2026-05-14 07:20:55,028  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-14 07:20:55,028  INFO     Syncing cook logger...
+2026-05-14 07:20:56,189  INFO       No active cook session — readings recorded without session link
+2026-05-14 07:20:56,232  INFO       SENSOR 1: 75.7°F
+2026-05-14 07:20:56,297  INFO       SENSOR 2: 71.7°F
+2026-05-14 07:20:56,436  INFO     Inserted 2 cook reading(s)
+2026-05-14 07:20:56,438  INFO     --- sync complete ---
+
+2026-05-14 08:52:13,317  INFO     --- ThermoWorks sync start ---
+2026-05-14 08:52:13,982  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-14 08:52:13,982  INFO     Syncing cook logger...
+2026-05-14 08:52:14,725  INFO       No active cook session — readings recorded without session link
+2026-05-14 08:52:14,771  INFO       SENSOR 1: 76.1°F
+2026-05-14 08:52:14,825  INFO       SENSOR 2: 71.8°F
+2026-05-14 08:52:15,016  INFO     Inserted 2 cook reading(s)
+2026-05-14 08:52:15,019  INFO     --- sync complete ---
+
+2026-05-14 09:20:54,358  INFO     --- ThermoWorks sync start ---
+2026-05-14 09:20:54,800  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-14 09:20:54,801  INFO     Syncing cook logger...
+2026-05-14 09:20:56,021  INFO       No active cook session — readings recorded without session link
+2026-05-14 09:20:56,076  INFO       SENSOR 1: 75.3°F
+2026-05-14 09:20:56,123  INFO       SENSOR 2: 71.4°F
+2026-05-14 09:20:56,287  INFO     Inserted 2 cook reading(s)
+2026-05-14 09:20:56,289  INFO     --- sync complete ---
+
+2026-05-14 09:50:53,887  INFO     --- ThermoWorks sync start ---
+2026-05-14 09:50:54,326  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-14 09:50:54,327  INFO     Syncing cook logger...
+2026-05-14 09:50:55,491  INFO       No active cook session — readings recorded without session link
+2026-05-14 09:50:55,538  INFO       SENSOR 1: 75.3°F
+2026-05-14 09:50:55,600  INFO       SENSOR 2: 71.4°F
+2026-05-14 09:50:55,737  INFO     Inserted 2 cook reading(s)
+2026-05-14 09:50:55,738  INFO     --- sync complete ---
+
+2026-05-14 10:20:53,915  INFO     --- ThermoWorks sync start ---
+2026-05-14 10:20:54,335  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-14 10:20:54,335  INFO     Syncing cook logger...
+2026-05-14 10:20:55,439  INFO       No active cook session — readings recorded without session link
+2026-05-14 10:20:55,491  INFO       SENSOR 1: 74.1°F
+2026-05-14 10:20:55,536  INFO       SENSOR 2: 70.3°F
+2026-05-14 10:20:55,684  INFO     Inserted 2 cook reading(s)
+2026-05-14 10:20:55,685  INFO     --- sync complete ---
+
+2026-05-14 10:50:53,941  INFO     --- ThermoWorks sync start ---
+2026-05-14 10:50:54,354  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-14 10:50:54,354  INFO     Syncing cook logger...
+2026-05-14 10:50:55,503  INFO       No active cook session — readings recorded without session link
+2026-05-14 10:50:55,550  INFO       SENSOR 1: 74.1°F
+2026-05-14 10:50:55,599  INFO       SENSOR 2: 70.3°F
+2026-05-14 10:50:55,760  INFO     Inserted 2 cook reading(s)
+2026-05-14 10:50:55,761  INFO     --- sync complete ---
+
+2026-05-14 11:20:53,949  INFO     --- ThermoWorks sync start ---
+2026-05-14 11:20:54,388  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-14 11:20:54,389  INFO     Syncing cook logger...
+2026-05-14 11:20:55,548  INFO       No active cook session — readings recorded without session link
+2026-05-14 11:20:55,593  INFO       SENSOR 1: 75.5°F
+2026-05-14 11:20:55,643  INFO       SENSOR 2: 71.3°F
+2026-05-14 11:20:55,788  INFO     Inserted 2 cook reading(s)
+2026-05-14 11:20:55,790  INFO     --- sync complete ---
+
+2026-05-14 11:50:54,395  INFO     --- ThermoWorks sync start ---
+2026-05-14 11:50:54,808  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-14 11:50:54,809  INFO     Syncing cook logger...
+2026-05-14 11:50:55,834  INFO       No active cook session — readings recorded without session link
+2026-05-14 11:50:55,885  INFO       SENSOR 1: 75.5°F
+2026-05-14 11:50:55,933  INFO       SENSOR 2: 71.3°F
+2026-05-14 11:50:56,065  INFO     Inserted 2 cook reading(s)
+2026-05-14 11:50:56,067  INFO     --- sync complete ---
+
+2026-05-14 12:20:54,311  INFO     --- ThermoWorks sync start ---
+2026-05-14 12:20:54,781  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-14 12:20:54,781  INFO     Syncing cook logger...
+2026-05-14 12:20:55,280  INFO       No active cook session — readings recorded without session link
+2026-05-14 12:20:55,331  INFO       SENSOR 1: 75.8°F
+2026-05-14 12:20:55,388  INFO       SENSOR 2: 71.7°F
+2026-05-14 12:20:55,490  INFO     Inserted 2 cook reading(s)
+2026-05-14 12:20:55,492  INFO     --- sync complete ---
+
+2026-05-14 12:50:54,345  INFO     --- ThermoWorks sync start ---
+2026-05-14 12:50:54,745  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-14 12:50:54,745  INFO     Syncing cook logger...
+2026-05-14 12:50:55,711  INFO       No active cook session — readings recorded without session link
+2026-05-14 12:50:55,753  INFO       SENSOR 1: 75.8°F
+2026-05-14 12:50:55,800  INFO       SENSOR 2: 71.7°F
+2026-05-14 12:50:55,935  INFO     Inserted 2 cook reading(s)
+2026-05-14 12:50:55,937  INFO     --- sync complete ---
+
+2026-05-14 13:20:54,224  INFO     --- ThermoWorks sync start ---
+2026-05-14 13:20:54,666  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-14 13:20:54,666  INFO     Syncing cook logger...
+2026-05-14 13:20:55,598  INFO       No active cook session — readings recorded without session link
+2026-05-14 13:20:55,646  INFO       SENSOR 1: 76.3°F
+2026-05-14 13:20:55,698  INFO       SENSOR 2: 72.3°F
+2026-05-14 13:20:55,804  INFO     Inserted 2 cook reading(s)
+2026-05-14 13:20:55,806  INFO     --- sync complete ---
+
+2026-05-14 13:50:54,364  INFO     --- ThermoWorks sync start ---
+2026-05-14 13:50:54,775  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-14 13:50:54,775  INFO     Syncing cook logger...
+2026-05-14 13:50:56,157  INFO       No active cook session — readings recorded without session link
+2026-05-14 13:50:56,205  INFO       SENSOR 1: 76.3°F
+2026-05-14 13:50:56,247  INFO       SENSOR 2: 72.3°F
+2026-05-14 13:50:56,413  INFO     Inserted 2 cook reading(s)
+2026-05-14 13:50:56,414  INFO     --- sync complete ---
+
+2026-05-14 14:20:53,975  INFO     --- ThermoWorks sync start ---
+2026-05-14 14:20:54,394  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-14 14:20:54,395  INFO     Syncing cook logger...
+2026-05-14 14:20:55,489  INFO       No active cook session — readings recorded without session link
+2026-05-14 14:20:55,534  INFO       SENSOR 1: 76.4°F
+2026-05-14 14:20:55,582  INFO       SENSOR 2: 72.6°F
+2026-05-14 14:20:55,730  INFO     Inserted 2 cook reading(s)
+2026-05-14 14:20:55,731  INFO     --- sync complete ---
+
+2026-05-14 14:50:54,462  INFO     --- ThermoWorks sync start ---
+2026-05-14 14:50:54,909  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-14 14:50:54,909  INFO     Syncing cook logger...
+2026-05-14 14:50:55,916  INFO       No active cook session — readings recorded without session link
+2026-05-14 14:50:55,963  INFO       SENSOR 1: 76.4°F
+2026-05-14 14:50:56,018  INFO       SENSOR 2: 72.6°F
+2026-05-14 14:50:56,132  INFO     Inserted 2 cook reading(s)
+2026-05-14 14:50:56,135  INFO     --- sync complete ---
+
+2026-05-14 15:20:54,313  INFO     --- ThermoWorks sync start ---
+2026-05-14 15:20:54,732  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-14 15:20:54,732  INFO     Syncing cook logger...
+2026-05-14 15:20:55,363  INFO       No active cook session — readings recorded without session link
+2026-05-14 15:20:55,411  INFO       SENSOR 1: 76.6°F
+2026-05-14 15:20:55,459  INFO       SENSOR 2: 72.5°F
+2026-05-14 15:20:55,557  INFO     Inserted 2 cook reading(s)
+2026-05-14 15:20:55,559  INFO     --- sync complete ---
+
+2026-05-14 15:50:54,186  INFO     --- ThermoWorks sync start ---
+2026-05-14 15:50:54,608  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-14 15:50:54,608  INFO     Syncing cook logger...
+2026-05-14 15:50:55,625  INFO       No active cook session — readings recorded without session link
+2026-05-14 15:50:55,678  INFO       SENSOR 1: 76.6°F
+2026-05-14 15:50:55,723  INFO       SENSOR 2: 72.5°F
+2026-05-14 15:50:55,865  INFO     Inserted 2 cook reading(s)
+2026-05-14 15:50:55,866  INFO     --- sync complete ---
+
+2026-05-14 16:20:54,530  INFO     --- ThermoWorks sync start ---
+2026-05-14 16:20:55,049  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-14 16:20:55,050  INFO     Syncing cook logger...
+2026-05-14 16:20:55,927  INFO       No active cook session — readings recorded without session link
+2026-05-14 16:20:55,967  INFO       SENSOR 1: 76.9°F
+2026-05-14 16:20:56,015  INFO       SENSOR 2: 72.7°F
+2026-05-14 16:20:56,139  INFO     Inserted 2 cook reading(s)
+2026-05-14 16:20:56,142  INFO     --- sync complete ---
+
+2026-05-14 16:50:54,397  INFO     --- ThermoWorks sync start ---
+2026-05-14 16:50:54,818  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-14 16:50:54,818  INFO     Syncing cook logger...
+2026-05-14 16:50:55,760  INFO       No active cook session — readings recorded without session link
+2026-05-14 16:50:55,806  INFO       SENSOR 1: 76.9°F
+2026-05-14 16:50:55,849  INFO       SENSOR 2: 72.7°F
+2026-05-14 16:50:55,989  INFO     Inserted 2 cook reading(s)
+2026-05-14 16:50:55,990  INFO     --- sync complete ---
+
+2026-05-15 06:57:55,131  INFO     --- ThermoWorks sync start ---
+2026-05-15 06:57:56,087  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-15 06:57:56,087  INFO     Syncing cook logger...
+2026-05-15 06:57:58,150  INFO       No active cook session — readings recorded without session link
+2026-05-15 06:57:58,218  INFO       SENSOR 1: 75.2°F
+2026-05-15 06:57:58,265  INFO       SENSOR 2: 71.4°F
+2026-05-15 06:57:58,467  INFO     Inserted 2 cook reading(s)
+2026-05-15 06:57:58,501  INFO     --- sync complete ---
+
+2026-05-15 07:20:54,653  INFO     --- ThermoWorks sync start ---
+2026-05-15 07:20:55,113  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-15 07:20:55,113  INFO     Syncing cook logger...
+2026-05-15 07:20:56,266  INFO       No active cook session — readings recorded without session link
+2026-05-15 07:20:56,312  INFO       SENSOR 1: 74.4°F
+2026-05-15 07:20:56,362  INFO       SENSOR 2: 71.2°F
+2026-05-15 07:20:56,492  INFO     Inserted 2 cook reading(s)
+2026-05-15 07:20:56,496  INFO     --- sync complete ---
+
+2026-05-15 07:50:54,546  INFO     --- ThermoWorks sync start ---
+2026-05-15 07:50:54,941  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-15 07:50:54,941  INFO     Syncing cook logger...
+2026-05-15 07:50:56,066  INFO       No active cook session — readings recorded without session link
+2026-05-15 07:50:56,113  INFO       SENSOR 1: 74.4°F
+2026-05-15 07:50:56,157  INFO       SENSOR 2: 71.2°F
+2026-05-15 07:50:56,286  INFO     Inserted 2 cook reading(s)
+2026-05-15 07:50:56,290  INFO     --- sync complete ---
+
+2026-05-15 08:20:54,562  INFO     --- ThermoWorks sync start ---
+2026-05-15 08:20:55,092  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-15 08:20:55,092  INFO     Syncing cook logger...
+2026-05-15 08:20:56,213  INFO       No active cook session — readings recorded without session link
+2026-05-15 08:20:56,259  INFO       SENSOR 1: 75.4°F
+2026-05-15 08:20:56,317  INFO       SENSOR 2: 71.3°F
+2026-05-15 08:20:56,438  INFO     Inserted 2 cook reading(s)
+2026-05-15 08:20:56,441  INFO     --- sync complete ---
+
+2026-05-15 08:50:54,427  INFO     --- ThermoWorks sync start ---
+2026-05-15 08:50:55,434  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-15 08:50:55,434  INFO     Syncing cook logger...
+2026-05-15 08:50:56,259  INFO       No active cook session — readings recorded without session link
+2026-05-15 08:50:56,328  INFO       SENSOR 1: 75.4°F
+2026-05-15 08:50:56,485  INFO       SENSOR 2: 71.3°F
+2026-05-15 08:50:56,601  INFO     Inserted 2 cook reading(s)
+2026-05-15 08:50:56,605  INFO     --- sync complete ---
+
+2026-05-15 09:20:54,456  INFO     --- ThermoWorks sync start ---
+2026-05-15 09:20:54,923  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-15 09:20:54,923  INFO     Syncing cook logger...
+2026-05-15 09:20:55,959  INFO       No active cook session — readings recorded without session link
+2026-05-15 09:20:56,002  INFO       SENSOR 1: 75.0°F
+2026-05-15 09:20:56,043  INFO       SENSOR 2: 70.9°F
+2026-05-15 09:20:56,184  INFO     Inserted 2 cook reading(s)
+2026-05-15 09:20:56,188  INFO     --- sync complete ---
+
+2026-05-15 09:50:54,656  INFO     --- ThermoWorks sync start ---
+2026-05-15 09:50:55,140  INFO     Authenticated as charlie@cowboymeats.com
+2026-05-15 09:50:55,140  INFO     Syncing cook logger...
+2026-05-15 09:50:56,320  INFO       No active cook session — readings recorded without session link
+2026-05-15 09:50:56,405  INFO       SENSOR 1: 75.0°F
+2026-05-15 09:50:56,454  INFO       SENSOR 2: 70.9°F
+2026-05-15 09:50:56,618  INFO     Inserted 2 cook reading(s)
+2026-05-15 09:50:56,622  INFO     --- sync complete ---
+

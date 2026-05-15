@@ -1,9 +1,10 @@
+﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
 // GET /api/customers
-//   ?search=text   — search name / ranch_name / phone / email (for autocomplete)
-//   ?id=UUID       — single customer + their cutting instructions + appointment count
+//   ?search=text   â€” search name / ranch_name / phone / email (for autocomplete)
+//   ?id=UUID       â€” single customer + their cutting instructions + appointment count
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const search = searchParams.get('search')?.trim()
@@ -42,7 +43,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json(data)
 }
 
-// POST /api/customers — create a new customer record
+// POST /api/customers â€” create a new customer record
 export async function POST(req: NextRequest) {
   const body = await req.json()
   const { data, error } = await supabase
@@ -61,7 +62,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json(data)
 }
 
-// PATCH /api/customers — update customer fields
+// PATCH /api/customers â€” update customer fields
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
   const { id, ...updates } = body
