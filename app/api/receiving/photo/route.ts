@@ -10,14 +10,12 @@ export async function POST(req: NextRequest) {
 
   if (!file) return NextResponse.json({ error: 'No file' }, { status: 400 })
 
-  const bytes  = await file.arrayBuffer()
-  const buffer = Buffer.from(bytes)
-  const ext    = file.name.split('.').pop()?.toLowerCase() ?? 'jpg'
-  const path   = `${apptId}/${animalIndex}_${Date.now()}.${ext}`
+  const ext  = file.name.split('.').pop()?.toLowerCase() ?? 'jpg'
+  const path = `${apptId}/${animalIndex}_${Date.now()}.${ext}`
 
   const { error } = await supabase.storage
     .from('animal-photos')
-    .upload(path, buffer, { contentType: file.type, upsert: true })
+    .upload(path, file, { contentType: file.type || 'image/jpeg', upsert: true })
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 

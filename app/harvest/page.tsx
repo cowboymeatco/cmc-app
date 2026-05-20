@@ -242,11 +242,13 @@ function CarcassForm({
   apptId?:             string
 }) {
   const [photoUploading, setPhotoUploading] = useState(false)
+  const [photoError, setPhotoError] = useState('')
 
   async function handlePhotoUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
     setPhotoUploading(true)
+    setPhotoError('')
     const fd = new FormData()
     fd.append('file', file)
     fd.append('appointment_id', apptId ?? row.appointment_id ?? 'unknown')
@@ -263,8 +265,12 @@ function CarcassForm({
             body: JSON.stringify({ type: 'animal', id: row.receiving_log_id, photo_url: json.url }),
           })
         }
+      } else {
+        setPhotoError(json.error ?? 'Upload failed')
       }
-    } catch { /* silent */ }
+    } catch (err) {
+      setPhotoError(err instanceof Error ? err.message : 'Upload failed')
+    }
     setPhotoUploading(false)
   }
   const effectiveSpecies = (isMixed ? row.species : species) || 'Beef'
@@ -382,6 +388,7 @@ function CarcassForm({
 
       {/* Check-in photo */}
       <div style={{ marginBottom: '0.85rem' }}>
+        {photoError && <div style={{ fontSize: '0.72rem', color: '#e05555', marginBottom: '0.4rem' }}>Upload error: {photoError}</div>}
         {row.photo_url ? (
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
             <a href={row.photo_url} target="_blank" rel="noreferrer" title="View full check-in photo">
