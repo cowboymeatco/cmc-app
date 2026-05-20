@@ -209,6 +209,7 @@ interface CarcassRow {
   appointment_id:       string
   producer:             string
   species:              string
+  photo_url:            string
 }
 
 function emptyCarcass(): CarcassRow {
@@ -219,7 +220,7 @@ function emptyCarcass(): CarcassRow {
     final_carcass_temp_f: '', ccp_pass: true,
     is_verification: false, direct_observation: false,
     over_30_months: false, notes: '',
-    appointment_id: '', producer: '', species: '',
+    appointment_id: '', producer: '', species: '', photo_url: '',
   }
 }
 
@@ -351,6 +352,20 @@ function CarcassForm({
         </div>
       </div>
 
+      {/* Check-in photo */}
+      {row.photo_url && (
+        <div style={{ marginBottom: '0.85rem', display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+          <a href={row.photo_url} target="_blank" rel="noreferrer" title="View full check-in photo">
+            <img
+              src={row.photo_url}
+              alt="Check-in photo"
+              style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 3, border: '1px solid rgba(166,120,90,0.4)', cursor: 'pointer', display: 'block' }}
+            />
+          </a>
+          <span style={{ fontSize: '0.7rem', color: C.lightBrown, alignSelf: 'center' }}>Check-in photo — click to enlarge</span>
+        </div>
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1rem' }}>
         {/* Tag */}
         <div style={{ marginBottom: '0.85rem' }}>
@@ -481,7 +496,7 @@ function HarvestTab() {
     const existingForDate = harvestLogs.filter(h => h.harvest_date === a.harvest_date).length
 
     // Fetch receiving records for this appointment (sorted by animal_index)
-    let receivingAnimals: { animal_index: number; sex: string; over_30_months: boolean; ear_tag: string; breed: string }[] = []
+    let receivingAnimals: { animal_index: number; sex: string; over_30_months: boolean; ear_tag: string; breed: string; photo_url?: string }[] = []
     try {
       const res = await fetch(`/api/receiving?type=animal&appointment_id=${encodeURIComponent(a.id)}`)
       if (res.ok) receivingAnimals = await res.json().catch(() => [])
@@ -497,6 +512,7 @@ function HarvestTab() {
         breed:          animal?.breed          ?? '',
         sex:            animal?.sex            ?? '',
         over_30_months: animal?.over_30_months ?? false,
+        photo_url:      animal?.photo_url      ?? '',
       }
     })
     setCarcasses(rows)
