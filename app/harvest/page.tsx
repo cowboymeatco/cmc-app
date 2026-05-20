@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { HarvestAppointment, HarvestLog, ChillLog } from '@/lib/types'
 
@@ -210,6 +210,7 @@ interface CarcassRow {
   producer:             string
   species:              string
   photo_url:            string
+  receiving_log_id:     string
 }
 
 function emptyCarcass(): CarcassRow {
@@ -220,13 +221,13 @@ function emptyCarcass(): CarcassRow {
     final_carcass_temp_f: '', ccp_pass: true,
     is_verification: false, direct_observation: false,
     over_30_months: false, notes: '',
-    appointment_id: '', producer: '', species: '', photo_url: '',
+    appointment_id: '', producer: '', species: '', photo_url: '', receiving_log_id: '',
   }
 }
 
 function CarcassForm({
   idx, row, species, onChange, defaultSolutionTemp, verificationCount,
-  isMixed, appointments, onProducerChange, onRemove,
+  isMixed, appointments, onProducerChange, onRemove, apptId,
 }: {
   idx:                 number
   row:                 CarcassRow
@@ -238,7 +239,36 @@ function CarcassForm({
   appointments?:       HarvestAppointment[]
   onProducerChange?:   (idx: number, appt: HarvestAppointment | null) => void
   onRemove?:           (idx: number) => void
+  apptId?:             string
 }) {
+  const [photoUploading, setPhotoUploading] = useState(false)
+  const photoFileRef = useRef<HTMLInputElement>(null)
+
+  async function handlePhotoUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setPhotoUploading(true)
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('appointment_id', apptId ?? row.appointment_id ?? 'unknown')
+    fd.append('animal_index', String(idx + 1))
+    try {
+      const res  = await fetch('/api/receiving/photo', { method: 'POST', body: fd })
+      const json = await res.json()
+      if (json.url) {
+        onChange(idx, 'photo_url', json.url)
+        if (row.receiving_log_id) {
+          await fetch('/api/receiving', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'animal', id: row.receiving_log_id, photo_url: json.url }),
+          })
+        }
+      }
+    } catch { /* silent */ }
+    setPhotoUploading(false)
+    if (photoFileRef.current) photoFileRef.current.value = ''
+  }
   const effectiveSpecies = (isMixed ? row.species : species) || 'Beef'
   const sexOpts = SEX_OPTIONS[effectiveSpecies] ?? ['Unknown']
   const h1  = parseFloat(row.half_1_weight)
@@ -353,18 +383,35 @@ function CarcassForm({
       </div>
 
       {/* Check-in photo */}
-      {row.photo_url && (
-        <div style={{ marginBottom: '0.85rem', display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
-          <a href={row.photo_url} target="_blank" rel="noreferrer" title="View full check-in photo">
-            <img
-              src={row.photo_url}
-              alt="Check-in photo"
-              style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 3, border: '1px solid rgba(166,120,90,0.4)', cursor: 'pointer', display: 'block' }}
-            />
-          </a>
-          <span style={{ fontSize: '0.7rem', color: C.lightBrown, alignSelf: 'center' }}>Check-in photo — click to enlarge</span>
-        </div>
-      )}
+      <div style={{ marginBottom: '0.85rem' }}>
+        <input ref={photoFileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handlePhotoUpload} />
+        {row.photo_url ? (
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+            <a href={row.photo_url} target="_blank" rel="noreferrer" title="View full check-in photo">
+              <img
+                src={row.photo_url}
+                alt="Check-in photo"
+                style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 3, border: '1px solid rgba(166,120,90,0.4)', cursor: 'pointer', display: 'block' }}
+              />
+            </a>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', alignSelf: 'center' }}>
+              <span style={{ fontSize: '0.7rem', color: C.lightBrown }}>Check-in photo — click to enlarge</span>
+              <button
+                onClick={() => photoFileRef.current?.click()}
+                style={{ fontSize: '0.7rem', background: 'rgba(166,120,90,0.1)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, color: C.tan, cursor: 'pointer', padding: '0.2rem 0.5rem' }}
+              >Replace</button>
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={() => photoFileRef.current?.click()}
+            disabled={photoUploading}
+            style={{ fontSize: '0.78rem', background: 'rgba(166,120,90,0.08)', border: '1px dashed rgba(166,120,90,0.35)', borderRadius: 3, color: photoUploading ? C.lightBrown : C.tan, cursor: photoUploading ? 'default' : 'pointer', padding: '0.4rem 0.9rem' }}
+          >
+            {photoUploading ? 'Uploading…' : '+ Add Photo'}
+          </button>
+        )}
+      </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1rem' }}>
         {/* Tag */}
@@ -496,7 +543,7 @@ function HarvestTab() {
     const existingForDate = harvestLogs.filter(h => h.harvest_date === a.harvest_date).length
 
     // Fetch receiving records for this appointment (sorted by animal_index)
-    let receivingAnimals: { animal_index: number; sex: string; over_30_months: boolean; ear_tag: string; breed: string; photo_url?: string }[] = []
+    let receivingAnimals: { id?: string; animal_index: number; sex: string; over_30_months: boolean; ear_tag: string; breed: string; photo_url?: string }[] = []
     try {
       const res = await fetch(`/api/receiving?type=animal&appointment_id=${encodeURIComponent(a.id)}`)
       if (res.ok) receivingAnimals = await res.json().catch(() => [])
@@ -511,8 +558,9 @@ function HarvestTab() {
         ear_tag:        animal?.ear_tag        ?? '',
         breed:          animal?.breed          ?? '',
         sex:            animal?.sex            ?? '',
-        over_30_months: animal?.over_30_months ?? false,
-        photo_url:      animal?.photo_url      ?? '',
+        over_30_months:    animal?.over_30_months ?? false,
+        photo_url:         animal?.photo_url      ?? '',
+        receiving_log_id:  animal?.id             ?? '',
       }
     })
     setCarcasses(rows)
@@ -891,6 +939,7 @@ function HarvestTab() {
                     appointments={mixedMode ? appointments : undefined}
                     onProducerChange={mixedMode ? handleProducerChange : undefined}
                     onRemove={mixedMode && carcasses.length > 1 ? removeMixedRow : undefined}
+                    apptId={mixedMode ? row.appointment_id : (selected?.id ?? '')}
                   />
                 ))
               })()}
