@@ -382,14 +382,6 @@ function CarcassForm({
 
       {/* Check-in photo */}
       <div style={{ marginBottom: '0.85rem' }}>
-        <input
-          id={`photo-input-${idx}`}
-          type="file"
-          accept=".jpg,.jpeg,.png,.heic,.webp"
-          style={{ display: 'none' }}
-          onChange={handlePhotoUpload}
-          disabled={photoUploading}
-        />
         {row.photo_url ? (
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
             <a href={row.photo_url} target="_blank" rel="noreferrer" title="View full check-in photo">
@@ -401,15 +393,19 @@ function CarcassForm({
             </a>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', alignSelf: 'center' }}>
               <span style={{ fontSize: '0.7rem', color: C.lightBrown }}>Check-in photo — click to enlarge</span>
-              <label htmlFor={`photo-input-${idx}`} style={{ fontSize: '0.7rem', background: 'rgba(166,120,90,0.1)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, color: C.tan, cursor: 'pointer', padding: '0.2rem 0.5rem', display: 'inline-block' }}>
-                Replace
-              </label>
+              <div style={{ position: 'relative', display: 'inline-block' }}>
+                <span style={{ fontSize: '0.7rem', background: 'rgba(166,120,90,0.1)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, color: C.tan, padding: '0.2rem 0.5rem', display: 'inline-block' }}>Replace</span>
+                <input type="file" onChange={handlePhotoUpload} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%' }} />
+              </div>
             </div>
           </div>
         ) : (
-          <label htmlFor={`photo-input-${idx}`} style={{ fontSize: '0.78rem', background: 'rgba(166,120,90,0.08)', border: '1px dashed rgba(166,120,90,0.35)', borderRadius: 3, color: photoUploading ? C.lightBrown : C.tan, cursor: photoUploading ? 'default' : 'pointer', padding: '0.4rem 0.9rem', display: 'inline-block' }}>
-            {photoUploading ? 'Uploading…' : '+ Add Photo'}
-          </label>
+          <div style={{ position: 'relative', display: 'inline-block' }}>
+            <span style={{ fontSize: '0.78rem', background: 'rgba(166,120,90,0.08)', border: '1px dashed rgba(166,120,90,0.35)', borderRadius: 3, color: photoUploading ? C.lightBrown : C.tan, padding: '0.4rem 0.9rem', display: 'inline-block', pointerEvents: 'none' }}>
+              {photoUploading ? 'Uploading…' : '+ Add Photo'}
+            </span>
+            {!photoUploading && <input type="file" onChange={handlePhotoUpload} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%' }} />}
+          </div>
         )}
       </div>
 
