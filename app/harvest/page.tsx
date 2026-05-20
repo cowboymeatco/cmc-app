@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { HarvestAppointment, HarvestLog, ChillLog } from '@/lib/types'
 
@@ -242,7 +242,6 @@ function CarcassForm({
   apptId?:             string
 }) {
   const [photoUploading, setPhotoUploading] = useState(false)
-  const photoFileRef = useRef<HTMLInputElement>(null)
 
   async function handlePhotoUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -267,7 +266,6 @@ function CarcassForm({
       }
     } catch { /* silent */ }
     setPhotoUploading(false)
-    if (photoFileRef.current) photoFileRef.current.value = ''
   }
   const effectiveSpecies = (isMixed ? row.species : species) || 'Beef'
   const sexOpts = SEX_OPTIONS[effectiveSpecies] ?? ['Unknown']
@@ -384,6 +382,14 @@ function CarcassForm({
 
       {/* Check-in photo */}
       <div style={{ marginBottom: '0.85rem' }}>
+        <input
+          id={`photo-input-${idx}`}
+          type="file"
+          accept="image/*"
+          style={{ display: 'none' }}
+          onChange={handlePhotoUpload}
+          disabled={photoUploading}
+        />
         {row.photo_url ? (
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
             <a href={row.photo_url} target="_blank" rel="noreferrer" title="View full check-in photo">
@@ -395,16 +401,14 @@ function CarcassForm({
             </a>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', alignSelf: 'center' }}>
               <span style={{ fontSize: '0.7rem', color: C.lightBrown }}>Check-in photo — click to enlarge</span>
-              <label style={{ fontSize: '0.7rem', background: 'rgba(166,120,90,0.1)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, color: C.tan, cursor: 'pointer', padding: '0.2rem 0.5rem', display: 'inline-block' }}>
+              <label htmlFor={`photo-input-${idx}`} style={{ fontSize: '0.7rem', background: 'rgba(166,120,90,0.1)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, color: C.tan, cursor: 'pointer', padding: '0.2rem 0.5rem', display: 'inline-block' }}>
                 Replace
-                <input ref={photoFileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handlePhotoUpload} />
               </label>
             </div>
           </div>
         ) : (
-          <label style={{ fontSize: '0.78rem', background: 'rgba(166,120,90,0.08)', border: '1px dashed rgba(166,120,90,0.35)', borderRadius: 3, color: photoUploading ? C.lightBrown : C.tan, cursor: photoUploading ? 'default' : 'pointer', padding: '0.4rem 0.9rem', display: 'inline-block' }}>
+          <label htmlFor={`photo-input-${idx}`} style={{ fontSize: '0.78rem', background: 'rgba(166,120,90,0.08)', border: '1px dashed rgba(166,120,90,0.35)', borderRadius: 3, color: photoUploading ? C.lightBrown : C.tan, cursor: photoUploading ? 'default' : 'pointer', padding: '0.4rem 0.9rem', display: 'inline-block' }}>
             {photoUploading ? 'Uploading…' : '+ Add Photo'}
-            {!photoUploading && <input ref={photoFileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handlePhotoUpload} />}
           </label>
         )}
       </div>
