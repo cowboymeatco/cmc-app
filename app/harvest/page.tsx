@@ -385,7 +385,7 @@ function CarcassForm({
         <input
           id={`photo-input-${idx}`}
           type="file"
-          accept="image/*"
+          accept=".jpg,.jpeg,.png,.heic,.webp"
           style={{ display: 'none' }}
           onChange={handlePhotoUpload}
           disabled={photoUploading}
