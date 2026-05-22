@@ -409,7 +409,7 @@ export default function ScannerPage() {
   // ── Add new box ───────────────────────────────────────────────────────────────
   async function addBox(isFinal: boolean) {
     if (!customer) return
-    const nextNum = boxes.length + 1
+    const nextNum = boxes.length > 0 ? Math.max(...boxes.map(b => b.box_number)) + 1 : 1
     const res = await fetch('/api/boxes', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
