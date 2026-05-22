@@ -522,6 +522,28 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
     setScans(prev => prev.filter(s => s.id !== id))
   }
 
+  // ── Delete a box (and all its scans) ─────────────────────────────────────────
+  async function deleteBox(box: BoxRecord) {
+    const msg = box.is_closed
+      ? `Delete Box ${box.box_number}? This will permanently remove it and all ${box.total_cuts} scans.`
+      : `Delete Box ${box.box_number} and all its scans?`
+    if (!window.confirm(msg)) return
+    await fetch(`/api/boxes?id=${box.id}`, { method: 'DELETE' })
+    const remaining = boxes.filter(b => b.id !== box.id)
+    setBoxes(remaining)
+    if (activeBox?.id === box.id) {
+      const next = remaining[remaining.length - 1] ?? null
+      setActiveBox(next)
+      if (next) {
+        const res  = await fetch(`/api/boxes/scans?box_id=${next.id}`)
+        const data = await res.json()
+        setScans(Array.isArray(data) ? ([...data] as ScanLine[]).reverse() : [])
+      } else {
+        setScans([])
+      }
+    }
+  }
+
   // ── Submit weight for a box product (no weight-embedded barcode) ─────────────
   async function submitWeightEntry() {
     if (!weightModal) return
@@ -1126,6 +1148,13 @@ ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
                 </button>
               </div>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button
+                  onClick={() => deleteBox(activeBox)}
+                  title="Delete this box and all its scans"
+                  style={{ background: 'rgba(180,40,40,0.12)', border: '1px solid rgba(180,40,40,0.4)', borderRadius: 3, padding: '0.4rem 0.75rem', color: '#e05555', fontSize: '0.78rem', cursor: 'pointer' }}
+                >
+                  🗑 Delete
+                </button>
                 <button
                   onClick={() => openPrintWindow(activeBox, scans)}
                   style={{ background: 'transparent', border: `1px solid ${C.tan}`, borderRadius: 3, padding: '0.4rem 0.9rem', color: C.tan, fontSize: '0.82rem', cursor: 'pointer', fontWeight: 600 }}
