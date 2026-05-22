@@ -121,33 +121,57 @@ export interface ProcessingInput {
 // ── Harvest ───────────────────────────────────────────────────────────────────
 
 export interface HarvestLog {
-  id:                     string
-  created_at:             string
-  appointment_id:         string
-  harvest_date:           string
-  species:                string
-  carcass_tag:            string
-  sex:                    string
-  live_weight_lbs:        number | null
-  half_1_weight_lbs:      number | null
-  half_2_weight_lbs:      number | null
-  hot_carcass_weight_lbs: number | null
-  yield_pct:              number | null
-  inspector_initials:     string
-  intervention_applied:   boolean
-  intervention_type:      string
-  intervention_temp_f:    number | null
-  final_carcass_temp_f:   number | null
-  ccp_pass:               boolean
-  performed_by:           string
-  notes:                  string
-  status:                 string   // 'chilling' | 'complete'
-  is_verification:        boolean
-  direct_observation:     boolean
-  over_30_months:         boolean
-  producer:               string
-  ear_tag:                string
-  breed:                  string
+  id:                       string
+  created_at:               string
+  appointment_id:           string
+  harvest_date:             string
+  species:                  string
+  carcass_tag:              string
+  sex:                      string
+  live_weight_lbs:          number | null
+  half_1_weight_lbs:        number | null
+  half_2_weight_lbs:        number | null
+  hot_carcass_weight_lbs:   number | null
+  yield_pct:                number | null
+  inspector_initials:       string
+  intervention_applied:     boolean
+  intervention_type:        string
+  intervention_temp_f:      number | null
+  final_carcass_temp_f:     number | null
+  ccp_pass:                 boolean
+  performed_by:             string
+  notes:                    string
+  status:                   string   // 'chilling' | 'complete'
+  is_verification:          boolean
+  direct_observation:       boolean
+  over_30_months:           boolean
+  producer:                 string
+  ear_tag:                  string
+  breed:                    string
+  // Part A / B fields
+  knock_time:               string | null
+  harvest_order:            number | null
+  part_a_complete:          boolean
+  part_b_complete:          boolean
+  zero_tolerance_pass:      boolean | null
+  zero_tolerance_direct_obs: boolean
+  initial_cooler_temp_f:    number | null
+}
+
+export interface CorrectiveAction {
+  id:                string
+  created_at:        string
+  car_number:        string        // e.g. '2026-001'
+  harvest_log_id:    string | null
+  harvest_date:      string
+  type:              'zero_tolerance' | 'hot_water'
+  monitor_initials:  string | null
+  action_1:          string | null
+  action_2:          string | null
+  action_3:          string | null
+  action_4:          string | null
+  root_cause:        string | null
+  completion_date:   string | null
 }
 
 export interface ChillLog {

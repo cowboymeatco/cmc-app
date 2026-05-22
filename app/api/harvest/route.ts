@@ -75,15 +75,22 @@ export async function POST(req: NextRequest) {
     intervention_temp_f:    c.intervention_temp_f ?? null,
     final_carcass_temp_f:   c.final_carcass_temp_f ?? null,
     ccp_pass:               c.ccp_pass ?? true,
-    performed_by:           fields.performed_by ?? '',
-    notes:                  c.notes ?? '',
-    status:                 'chilling',
-    is_verification:        c.is_verification ?? false,
-    direct_observation:     c.direct_observation ?? false,
-    over_30_months:         c.over_30_months ?? false,
-    producer:               fields.producer ?? '',
-    ear_tag:                c.ear_tag ?? '',
-    breed:                  c.breed ?? '',
+    performed_by:              fields.performed_by ?? '',
+    notes:                     c.notes ?? '',
+    status:                    'chilling',
+    is_verification:           c.is_verification ?? false,
+    direct_observation:        c.direct_observation ?? false,
+    over_30_months:            c.over_30_months ?? false,
+    producer:                  fields.producer ?? '',
+    ear_tag:                   c.ear_tag ?? '',
+    breed:                     c.breed ?? '',
+    knock_time:                c.knock_time ?? null,
+    harvest_order:             c.harvest_order ?? null,
+    part_a_complete:           c.part_a_complete ?? false,
+    part_b_complete:           false,
+    zero_tolerance_pass:       null,
+    zero_tolerance_direct_obs: false,
+    initial_cooler_temp_f:     null,
   }))
 
   const { data, error } = await supabase
@@ -104,12 +111,23 @@ export async function POST(req: NextRequest) {
   return NextResponse.json(data)
 }
 
-// PATCH /api/harvest â€” update status
+// PATCH /api/harvest — update single record by id, or bulk-update harvest_logs by appointment_id
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
-  const { type, id, ...updates } = body
+  const { type, id, appointment_id, ...updates } = body
 
   const table = type === 'chill' ? 'chill_log' : 'harvest_log'
+
+  // Bulk update all harvest_logs for an appointment (e.g. producer name overwrite from check-in)
+  if (appointment_id && !id) {
+    const { data, error } = await supabase
+      .from('harvest_log')
+      .update(updates)
+      .eq('appointment_id', appointment_id)
+      .select()
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json(data)
+  }
 
   const { data, error } = await supabase
     .from(table)
