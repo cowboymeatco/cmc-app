@@ -107,6 +107,7 @@ export default function CutScheduleTab() {
   const [savedAt,     setSavedAt]     = useState<string | null>(null)
   const [dragging,    setDragging]    = useState<string | null>(null)
   const [dragOver,    setDragOver]    = useState<string | null>(null)
+  const [cutting,     setCutting]     = useState<Set<string>>(new Set())
 
   const todayISO = new Date().toISOString().slice(0, 10)
 
@@ -263,6 +264,21 @@ export default function CutScheduleTab() {
   const handleNoteChange = (key: string, note: string) =>
     setEntries(prev => prev.map(e => e.key === key ? { ...e, entry_notes: note } : e))
 
+  // Called here and will also be called by the processing scanner
+  const handleMarkCut = async (entry: ScheduleEntry) => {
+    setCutting(prev => new Set(prev).add(entry.key))
+    try {
+      await fetch('/api/harvest', {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ id: entry.harvest_log_id, status: 'cut' }),
+      })
+      setEntries(prev => prev.filter(e => e.key !== entry.key))
+    } finally {
+      setCutting(prev => { const s = new Set(prev); s.delete(entry.key); return s })
+    }
+  }
+
   const handleSave = async () => {
     setSaving(true)
     try {
@@ -416,10 +432,10 @@ export default function CutScheduleTab() {
           {/* Column headers */}
           <div style={{
             display: 'grid',
-            gridTemplateColumns: '24px 30px 1fr 80px 56px 72px 52px 44px 30px',
+            gridTemplateColumns: '24px 30px 1fr 80px 56px 72px 52px 44px 30px 58px',
             gap: '0.5rem', padding: '0 0.75rem', marginBottom: '0.4rem',
           }}>
-            {['', '#', 'Customer', 'Species', 'Cut', 'Hanging', 'Sheet', 'Score', ''].map((h, i) => (
+            {['', '#', 'Customer', 'Species', 'Cut', 'Hanging', 'Sheet', 'Score', '', ''].map((h, i) => (
               <span key={i} style={{
                 fontSize: '0.65rem', color: C.lightBrown,
                 textTransform: 'uppercase', letterSpacing: '0.1em',
@@ -447,7 +463,7 @@ export default function CutScheduleTab() {
                   onDragEnd={handleDragEnd}
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: '24px 30px 1fr 80px 56px 72px 52px 44px 30px',
+                    gridTemplateColumns: '24px 30px 1fr 80px 56px 72px 52px 44px 30px 58px',
                     gap: '0.5rem', alignItems: 'center',
                     background: C.dark,
                     border: `1px solid ${isOver ? C.amber : entry.locked ? 'rgba(239,68,68,0.35)' : 'rgba(166,120,90,0.18)'}`,
@@ -564,6 +580,23 @@ export default function CutScheduleTab() {
                     }}
                   >
                     {entry.locked ? '🔒' : '🔓'}
+                  </button>
+
+                  {/* Mark as Cut */}
+                  <button
+                    title="Mark as cut — removes from cooler list"
+                    onClick={e => { e.stopPropagation(); handleMarkCut(entry) }}
+                    disabled={cutting.has(entry.key)}
+                    style={{
+                      height: 24, padding: '0 6px',
+                      background: cutting.has(entry.key) ? 'rgba(76,175,80,0.1)' : 'rgba(76,175,80,0.15)',
+                      border: '1px solid rgba(76,175,80,0.4)',
+                      borderRadius: 3, cursor: cutting.has(entry.key) ? 'not-allowed' : 'pointer',
+                      fontSize: '0.72rem', fontWeight: 700, color: C.green,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {cutting.has(entry.key) ? '…' : 'Cut ✓'}
                   </button>
                 </div>
               )

@@ -1,0 +1,202 @@
+'use client'
+import { useState } from 'react'
+import { usePathname } from 'next/navigation'
+
+const C = {
+  dark:       '#1A0A04',
+  darkBrown:  '#351E0E',
+  medBrown:   '#75471B',
+  lightBrown: '#A6785A',
+  tan:        '#C9A882',
+  cream:      '#F2E8D9',
+  green:      '#4CAF50',
+  red:        '#EF4444',
+  amber:      '#F59E0B',
+}
+
+export default function FeedbackButton() {
+  const pathname = usePathname()
+  const [open, setOpen]             = useState(false)
+  const [type, setType]             = useState<'bug' | 'idea'>('bug')
+  const [description, setDescription] = useState('')
+  const [submitter, setSubmitter]   = useState('')
+  const [sending, setSending]       = useState(false)
+  const [sent, setSent]             = useState(false)
+
+  async function submit() {
+    if (!description.trim()) return
+    setSending(true)
+    try {
+      await fetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type,
+          description: description.trim(),
+          submitter:   submitter.trim() || null,
+          page_url:    pathname,
+        }),
+      })
+      setSent(true)
+      setTimeout(() => {
+        setOpen(false)
+        setSent(false)
+        setDescription('')
+        setSubmitter('')
+        setType('bug')
+      }, 1500)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        title="Report a bug or idea"
+        style={{
+          position:        'fixed',
+          bottom:          20,
+          right:           20,
+          width:           36,
+          height:          36,
+          borderRadius:    '50%',
+          background:      C.darkBrown,
+          border:          `1px solid ${C.medBrown}`,
+          color:           C.tan,
+          fontSize:        16,
+          cursor:          'pointer',
+          display:         'flex',
+          alignItems:      'center',
+          justifyContent:  'center',
+          zIndex:          999,
+          opacity:         0.45,
+          transition:      'opacity 0.2s',
+        } as React.CSSProperties}
+        onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+        onMouseLeave={e => (e.currentTarget.style.opacity = '0.45')}
+      >
+        💬
+      </button>
+
+      {open && (
+        <div
+          onClick={() => setOpen(false)}
+          style={{
+            position:       'fixed',
+            inset:          0,
+            background:     'rgba(0,0,0,0.55)',
+            zIndex:         1000,
+            display:        'flex',
+            alignItems:     'flex-end',
+            justifyContent: 'flex-end',
+            padding:        20,
+          } as React.CSSProperties}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background:    C.darkBrown,
+              border:        `1px solid ${C.medBrown}`,
+              borderRadius:  12,
+              padding:       20,
+              width:         320,
+              display:       'flex',
+              flexDirection: 'column',
+              gap:           14,
+            } as React.CSSProperties}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ color: C.cream, fontWeight: 700, fontSize: 15 }}>Send Feedback</span>
+              <button
+                onClick={() => setOpen(false)}
+                style={{ background: 'none', border: 'none', color: C.tan, cursor: 'pointer', fontSize: 18 }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              {(['bug', 'idea'] as const).map(t => (
+                <button
+                  key={t}
+                  onClick={() => setType(t)}
+                  style={{
+                    flex:       1,
+                    padding:    '6px 0',
+                    borderRadius: 6,
+                    border:     `1px solid ${type === t ? C.amber : C.medBrown}`,
+                    background: type === t ? C.medBrown : 'transparent',
+                    color:      type === t ? C.cream : C.tan,
+                    cursor:     'pointer',
+                    fontSize:   13,
+                    fontWeight: type === t ? 700 : 400,
+                  } as React.CSSProperties}
+                >
+                  {t === 'bug' ? '🐛 Bug' : '💡 Idea'}
+                </button>
+              ))}
+            </div>
+
+            <textarea
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              placeholder={type === 'bug' ? 'What went wrong?' : 'What would make this better?'}
+              rows={4}
+              style={{
+                background:  C.dark,
+                border:      `1px solid ${C.medBrown}`,
+                borderRadius: 6,
+                color:       C.cream,
+                padding:     10,
+                fontSize:    14,
+                resize:      'vertical',
+                outline:     'none',
+                fontFamily:  'inherit',
+              } as React.CSSProperties}
+            />
+
+            <input
+              value={submitter}
+              onChange={e => setSubmitter(e.target.value)}
+              placeholder="Your name (optional)"
+              style={{
+                background:  C.dark,
+                border:      `1px solid ${C.medBrown}`,
+                borderRadius: 6,
+                color:       C.cream,
+                padding:     '8px 10px',
+                fontSize:    13,
+                outline:     'none',
+                fontFamily:  'inherit',
+              } as React.CSSProperties}
+            />
+
+            <button
+              onClick={submit}
+              disabled={!description.trim() || sending || sent}
+              style={{
+                background:   sent ? C.green : C.medBrown,
+                border:       'none',
+                borderRadius: 6,
+                color:        C.cream,
+                padding:      '10px 0',
+                fontSize:     14,
+                fontWeight:   700,
+                cursor:       description.trim() && !sending && !sent ? 'pointer' : 'default',
+                opacity:      !description.trim() ? 0.5 : 1,
+              } as React.CSSProperties}
+            >
+              {sent ? '✓ Sent!' : sending ? 'Sending…' : 'Send'}
+            </button>
+
+            <div style={{ fontSize: 11, color: C.lightBrown, textAlign: 'center' }}>
+              page: {pathname}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}

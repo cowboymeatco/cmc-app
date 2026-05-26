@@ -1,0 +1,63 @@
+export const runtime = 'edge'
+import { NextRequest, NextResponse } from 'next/server'
+import { supabase } from '@/lib/supabase'
+
+export async function GET() {
+  const { data, error } = await supabase
+    .from('feedback')
+    .select('*')
+    .order('created_at', { ascending: false })
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json(data)
+}
+
+export async function POST(req: NextRequest) {
+  const body = await req.json()
+  if (!body.type || !body.description) {
+    return NextResponse.json({ error: 'type and description required' }, { status: 400 })
+  }
+  const { data, error } = await supabase
+    .from('feedback')
+    .insert([{
+      type:        body.type,
+      description: body.description,
+      submitter:   body.submitter ?? null,
+      page_url:    body.page_url ?? null,
+    }])
+    .select()
+    .single()
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  // Fire Zapier webhook to alert via MessageDesk — non-blocking, failure doesn't affect the submission
+  const webhookUrl = process.env.ZAPIER_FEEDBACK_WEBHOOK
+  if (webhookUrl) {
+    const who  = body.submitter ? body.submitter : 'Anonymous'
+    const page = body.page_url  ? body.page_url  : 'unknown page'
+    fetch(webhookUrl, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type:        body.type === 'bug' ? '🐛 Bug' : '💡 Idea',
+        submitter:   who,
+        page_url:    page,
+        description: body.description,
+      }),
+    }).catch(() => { /* webhook failure is silent — submission already saved */ })
+  }
+
+  return NextResponse.json(data)
+}
+
+export async function PATCH(req: NextRequest) {
+  const body = await req.json()
+  const { id, ...updates } = body
+  if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
+  const { data, error } = await supabase
+    .from('feedback')
+    .update(updates)
+    .eq('id', id)
+    .select()
+    .single()
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json(data)
+}

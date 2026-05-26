@@ -58,12 +58,26 @@ interface AnimalSlot {
   over_30_months: boolean
   photo_url:      string
   uploading:      boolean
+  upload_error:   string
   no_show:        boolean
 }
 
 function blankSlot(species: string): AnimalSlot {
   const sexOpts = SEX_BY_SPECIES[species] ?? ['Male', 'Female']
-  return { ear_tag: '', sex: sexOpts[0], breed: '', over_30_months: false, photo_url: '', uploading: false, no_show: false }
+  return { ear_tag: '', sex: sexOpts[0], breed: '', over_30_months: false, photo_url: '', uploading: false, upload_error: '', no_show: false }
+}
+
+async function resizeImage(file: File, maxPx = 1920, quality = 0.82): Promise<File> {
+  const bitmap = await createImageBitmap(file)
+  const scale  = Math.min(1, maxPx / Math.max(bitmap.width, bitmap.height))
+  const w = Math.round(bitmap.width  * scale)
+  const h = Math.round(bitmap.height * scale)
+  const canvas = Object.assign(document.createElement('canvas'), { width: w, height: h })
+  canvas.getContext('2d')!.drawImage(bitmap, 0, 0, w, h)
+  bitmap.close()
+  return new Promise(resolve =>
+    canvas.toBlob(blob => resolve(new File([blob!], file.name, { type: 'image/jpeg' })), 'image/jpeg', quality)
+  )
 }
 
 // ── Box receiving label printer — 2.4" Brother DK label ──────────────────────
@@ -273,6 +287,7 @@ function AnimalTab() {
   const [shared, setShared] = useState({
     received_at:    new Date().toISOString().slice(0, 16),
     received_by:    '',
+    actual_producer: '',
     health_cert_no: '',
     brand_insp_no:  '',
     notes:          '',
@@ -305,7 +320,14 @@ function AnimalTab() {
   function selectAppt(a: HarvestAppointment) {
     setSelected(a)
     setSuccess(false)
-    setShared({ received_at: new Date().toISOString().slice(0, 16), received_by: '', health_cert_no: '', brand_insp_no: '', notes: '' })
+    setShared({
+      received_at:     new Date().toISOString().slice(0, 16),
+      received_by:     '',
+      actual_producer: a.source || a.customers?.[0]?.customer_name || '',
+      health_cert_no:  '',
+      brand_insp_no:   '',
+      notes:           '',
+    })
     setSlots(Array.from({ length: a.head_count ?? 1 }, () => blankSlot(a.species)))
   }
 
@@ -315,18 +337,19 @@ function AnimalTab() {
 
   async function uploadPhoto(idx: number, file: File) {
     if (!selected) return
-    updateSlot(idx, { uploading: true })
-    const fd = new FormData()
-    fd.append('file', file)
-    fd.append('appointment_id', selected.id)
-    fd.append('animal_index', String(idx + 1))
+    updateSlot(idx, { uploading: true, upload_error: '' })
     try {
-      const res = await fetch('/api/receiving/photo', { method: 'POST', body: fd })
+      const resized = await resizeImage(file)
+      const fd = new FormData()
+      fd.append('file', resized)
+      fd.append('appointment_id', selected.id)
+      fd.append('animal_index', String(idx + 1))
+      const res  = await fetch('/api/receiving/photo', { method: 'POST', body: fd })
       const json = await res.json()
       if (json.url) updateSlot(idx, { photo_url: json.url, uploading: false })
-      else updateSlot(idx, { uploading: false })
-    } catch {
-      updateSlot(idx, { uploading: false })
+      else updateSlot(idx, { uploading: false, upload_error: json.error ?? 'Upload failed' })
+    } catch (e) {
+      updateSlot(idx, { uploading: false, upload_error: e instanceof Error ? e.message : 'Upload failed' })
     }
   }
 
@@ -364,6 +387,23 @@ function AnimalTab() {
         setSaving(false)
         return   // keep form intact so data isn't lost
       }
+
+      // Overwrite appointment source + any existing harvest logs with the actual producer name
+      if (shared.actual_producer.trim()) {
+        await Promise.all([
+          fetch('/api/appointments', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: selected.id, source: shared.actual_producer.trim() }),
+          }),
+          fetch('/api/harvest', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ appointment_id: selected.id, producer: shared.actual_producer.trim() }),
+          }),
+        ])
+      }
+
       setSaving(false)
       setSuccess(true)
       setSelected(null)
@@ -493,6 +533,21 @@ function AnimalTab() {
               <Field label="Received By">
                 <input type="text" placeholder="Name" style={INPUT} value={shared.received_by} onChange={e => setShared(p => ({ ...p, received_by: e.target.value }))} />
               </Field>
+              <div style={{ gridColumn: 'span 2', marginBottom: '1rem' }}>
+                <label style={LABEL}>
+                  Actual Producer / Ranch
+                  <span style={{ color: C.tan, fontWeight: 400, marginLeft: '0.5rem', textTransform: 'none', letterSpacing: 0 }}>
+                    — overrides the scheduled name everywhere
+                  </span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. XYZ Ranch — who actually owns the animal"
+                  style={{ ...INPUT, borderColor: shared.actual_producer.trim() ? 'rgba(76,175,80,0.5)' : 'rgba(166,120,90,0.35)' }}
+                  value={shared.actual_producer}
+                  onChange={e => setShared(p => ({ ...p, actual_producer: e.target.value }))}
+                />
+              </div>
               <Field label="Health Cert #">
                 <input type="text" placeholder="Optional" style={INPUT} value={shared.health_cert_no} onChange={e => setShared(p => ({ ...p, health_cert_no: e.target.value }))} />
               </Field>
@@ -667,6 +722,11 @@ function AnimalCard({ index, total, species, slot, onChange, onPhotoChange, appo
             {/* Photo */}
             <div style={{ marginLeft: species === 'Beef' ? 'auto' : 0 }}>
               <label style={LABEL}>Photo</label>
+              {slot.upload_error && (
+                <div style={{ fontSize: '0.75rem', color: '#fca5a5', marginBottom: '0.35rem' }}>
+                  {slot.upload_error}
+                </div>
+              )}
               {slot.photo_url ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <img src={slot.photo_url} alt="animal" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 4, border: '1px solid rgba(166,120,90,0.3)' }} />

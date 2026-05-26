@@ -99,8 +99,8 @@ export async function GET() {
   const cooler_eq   = cooler.reduce((s, c) => s + c.beef_eq, 0)
   const upcoming_eq = upcoming.reduce((s, u) => s + u.beef_eq, 0)
   const total_eq    = cooler_eq + upcoming_eq
-  const days_on_hand = settings.beef_eq_per_day > 0 ? total_eq / settings.beef_eq_per_day : 0
-  const available_eq = (settings.max_cooler_days * settings.beef_eq_per_day) - total_eq
+  const days_on_hand = settings.beef_eq_per_day > 0 ? cooler_eq / settings.beef_eq_per_day : 0
+  const available_eq = (settings.max_cooler_days * settings.beef_eq_per_day) - cooler_eq
 
   const resp: CapacityResponse = {
     settings, cooler, upcoming,

@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import CutScheduleTab from './CutScheduleTab'
 
-type Tab = 'browser' | 'upload' | 'export' | 'cleanup' | 'cut-schedule'
+type Tab = 'browser' | 'upload' | 'export' | 'cleanup' | 'cut-schedule' | 'box-labels'
 
 interface PluItem {
   id:                 string
@@ -159,7 +159,7 @@ function EditPanel({ item, onSaved, onDeleted, onClose }: {
           <span style={{ fontFamily: 'monospace', color: C.lightBrown, fontSize: '0.8rem' }}>PLU {form.plu_number}</span>
           <span style={{ color: C.cream, fontWeight: 600, marginLeft: '0.75rem', fontSize: '0.95rem' }}>{form.item_name || 'Unnamed'}</span>
         </div>
-        <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1 }}>Ã—</button>
+        <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1 }}>×</button>
       </div>
 
       {/* Sub-tabs */}
@@ -784,8 +784,36 @@ function UploadTab() {
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // LABEL GENERATOR
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// Code 39 barcode — supports 0-9 and A-Z (covers all CMCxxxxxxxx serial chars)
+function makeCode39Barcode(text: string): string {
+  const P: Record<string, string> = {
+    '*':'010010100','0':'000110100','1':'100100001','2':'001100001','3':'101100000',
+    '4':'000110001','5':'100110000','6':'001110000','7':'000100101','8':'100100100',
+    '9':'001100100','A':'100001001','B':'001001001','C':'101001000','D':'000011001',
+    'E':'100011000','F':'001011000','G':'000001101','H':'100001100','I':'001001100',
+    'J':'000011100','K':'100000011','L':'001000011','M':'101000010','N':'000010011',
+    'O':'100010010','P':'001010010','Q':'000000111','R':'100000110','S':'001000110',
+    'T':'000010110','U':'110000001','V':'011000001','W':'111000000','X':'010010001',
+    'Y':'110010000','Z':'011010000','-':'010000101','.':'110000100',
+  }
+  const N = 2, W = 6, H = 60
+  const chars = ('*' + text.toUpperCase() + '*').split('')
+  let x = 0, rects = ''
+  for (let ci = 0; ci < chars.length; ci++) {
+    const pat = P[chars[ci]]
+    if (!pat) continue
+    for (let i = 0; i < 9; i++) {
+      const w = pat[i] === '1' ? W : N
+      if (i % 2 === 0) rects += `<rect x="${x}" y="0" width="${w}" height="${H}"/>`
+      x += w
+    }
+    if (ci < chars.length - 1) x += N
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${x}" height="${H}" style="display:block;margin:0 auto"><g fill="#000">${rects}</g></svg>`
+}
+
 interface BoxScan   { id: string; item_name: string; plu_number: string; weight_lbs: number; quantity: number }
-interface BoxRecord { id: string; customer_name: string; pack_date: string; box_number: number; is_closed: boolean; is_final: boolean; total_weight_lbs: number; total_cuts: number }
+interface BoxRecord { id: string; customer_name: string; pack_date: string; box_number: number; is_closed: boolean; is_final: boolean; total_weight_lbs: number; total_cuts: number; serial_number?: string }
 interface LabelFlags { usda_bug: boolean; retail_exempt: boolean; not_for_sale: boolean }
 
 const DEFAULT_FLAGS: LabelFlags = { usda_bug: true, retail_exempt: false, not_for_sale: false }
@@ -838,6 +866,8 @@ function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlags = DEF
   .footer   { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 10pt; font-weight: bold; text-align: center; margin-top: 2px; }
   .badge    { text-align: center; font-size: 7.5pt; font-weight: bold; border: 1px solid #000; border-radius: 2px; padding: 1px 4px; display: inline-block; margin: 2px auto; letter-spacing: 0.06em; }
   .nfs      { text-align: center; font-size: 9pt; font-weight: bold; letter-spacing: 0.1em; margin: 3px 0; }
+  .barcode  { text-align: center; margin: 6px 0 2px; }
+  .serial   { text-align: center; font-size: 10pt; font-family: monospace; letter-spacing: 0.1em; font-weight: bold; margin-bottom: 4px; }
   @media print { html, body { width: 4in; } }
 </style>
 </head>
@@ -857,7 +887,12 @@ function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlags = DEF
   ${itemRows}
   <hr>
   <div class="footer">${totalCuts} cut${totalCuts !== 1 ? 's' : ''} | ${totalWeight.toFixed(2)} lbs total</div>
-  <script>window.onload = () => window.print()</script>
+  ${box.serial_number ? `
+  <hr>
+  <div class="serial">SERIAL: ${box.serial_number}</div>
+  <div class="barcode">${makeCode39Barcode(box.serial_number)}</div>
+  ` : '<p style="text-align:center;font-size:8pt;color:#999">no serial</p>'}
+  <script>window.onload = () => setTimeout(() => window.print(), 250)</script>
 </body>
 </html>`
 }
@@ -943,11 +978,15 @@ function BoxLabelsTab() {
     if (!customer.trim()) { alert('Enter customer name first'); return }
     setSaving(true)
     const nextNum = boxes.length + 1
+    const dateStr = new Date().toISOString().slice(2, 10).replace(/-/g, '')
+    const rand = Math.random().toString(36).substring(2, 6).toUpperCase()
+    const serial_number = `CMC${dateStr}${rand}`
     const res  = await fetch('/api/boxes', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ customer_name: customer, pack_date: date, box_number: nextNum, is_final: isFinal }),
+      body: JSON.stringify({ customer_name: customer, pack_date: date, box_number: nextNum, is_final: isFinal, serial_number }),
     })
-    const box: BoxRecord = await res.json()
+    const data = await res.json()
+    const box: BoxRecord = { ...data, serial_number: data.serial_number ?? serial_number }
     setBoxes(prev => [...prev, box])
     setScans(prev => ({ ...prev, [box.id]: [] }))
     setActiveBox(box)
@@ -974,6 +1013,14 @@ function BoxLabelsTab() {
     setScans(prev => ({ ...prev, [boxId]: prev[boxId].filter(s => s.id !== scanId) }))
   }
 
+  function labelUrl(box_id: string) {
+    const p = new URLSearchParams({ box_id })
+    if (!labelFlags.usda_bug)     p.set('usda',   '0')
+    if (labelFlags.retail_exempt) p.set('exempt', '1')
+    if (labelFlags.not_for_sale)  p.set('nfs',    '1')
+    return `/api/boxes/label?${p}`
+  }
+
   async function closeBox(box: BoxRecord) {
     const boxScans = scans[box.id] ?? []
     const totalWeight = boxScans.reduce((s, sc) => s + (Number(sc.weight_lbs) || 0), 0)
@@ -983,17 +1030,11 @@ function BoxLabelsTab() {
       body: JSON.stringify({ id: box.id, is_closed: true, total_weight_lbs: totalWeight, total_cuts: totalCuts }),
     })
     setBoxes(prev => prev.map(b => b.id === box.id ? { ...b, is_closed: true, total_weight_lbs: totalWeight, total_cuts: totalCuts } : b))
-    // Print label
-    const html = generateLabel({ ...box, is_closed: true, total_weight_lbs: totalWeight, total_cuts: totalCuts }, boxScans, labelFlags)
-    const win  = window.open('', '_blank')
-    if (win) { win.document.write(html); win.document.close() }
+    window.open(labelUrl(box.id), '_blank')
   }
 
   async function printLabel(box: BoxRecord) {
-    if (!scans[box.id]) await loadScans(box.id)
-    const html = generateLabel(box, scans[box.id] ?? [], labelFlags)
-    const win  = window.open('', '_blank')
-    if (win) { win.document.write(html); win.document.close() }
+    window.open(labelUrl(box.id), '_blank')
   }
 
   async function deleteBox(box: BoxRecord) {
@@ -1127,7 +1168,7 @@ function BoxLabelsTab() {
                   </button>
                 )}
                 <button onClick={() => deleteBox(activeBox)} style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.2)', fontSize: '0.78rem' }}>
-                  Ã—
+                  ×
                 </button>
               </div>
             </div>
@@ -1213,7 +1254,7 @@ function BoxLabelsTab() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                     <span style={{ color: C.tan, fontWeight: 600 }}>{Number(scan.weight_lbs).toFixed(3)} lb</span>
                     {!activeBox.is_closed && (
-                      <button onClick={() => removeScan(activeBox.id, scan.id)} style={{ background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '1rem' }}>Ã—</button>
+                      <button onClick={() => removeScan(activeBox.id, scan.id)} style={{ background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '1rem' }}>×</button>
                     )}
                   </div>
                 </div>
@@ -1241,6 +1282,7 @@ export default function ProcessingPage() {
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'cut-schedule', label: '📋 Cut Schedule' },
+    { id: 'box-labels',   label: '🏷️ Box Labels' },
     { id: 'browser',      label: '🔪 PLU Browser' },
     { id: 'export',       label: '📤 Export' },
     { id: 'cleanup',      label: '🧹 Cleanup' },
@@ -1271,6 +1313,7 @@ export default function ProcessingPage() {
 
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1400px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
         {tab === 'cut-schedule' && <CutScheduleTab />}
+        {tab === 'box-labels'   && <BoxLabelsTab />}
         {tab === 'browser'      && <BrowserTab />}
         {tab === 'export'       && <ExportTab />}
         {tab === 'cleanup'      && <CleanupTab />}

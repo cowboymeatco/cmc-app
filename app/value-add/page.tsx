@@ -29,6 +29,7 @@ interface ValueAddJob {
 }
 
 interface RetailOrderSummary { id: string; customer_name: string; due_date: string }
+interface CuttingInstructionSummary { id: string; label: string }
 interface PluItem { plu_number: string; item_name: string }
 
 const C = {
@@ -250,7 +251,7 @@ function JobCard({ job, onUpdated }: { job: ValueAddJob; onUpdated: (j: ValueAdd
 // ══════════════════════════════════════════════════════════════════════════════
 // NEW JOB FORM
 // ══════════════════════════════════════════════════════════════════════════════
-function NewJobTab({ onSaved, orders, pluList }: { onSaved: () => void; orders: RetailOrderSummary[]; pluList: PluItem[] }) {
+function NewJobTab({ onSaved, orders, cuttingInstructions, pluList }: { onSaved: () => void; orders: RetailOrderSummary[]; cuttingInstructions: CuttingInstructionSummary[]; pluList: PluItem[] }) {
   const [saving, setSaving] = useState(false)
   const [success, setSuccess] = useState(false)
   const [pluSearch, setPluSearch] = useState('')
@@ -261,6 +262,7 @@ function NewJobTab({ onSaved, orders, pluList }: { onSaved: () => void; orders: 
     description:      '',
     source_type:      'general' as SourceType,
     linked_order_id:  '',
+    linked_cutting_instruction_id: '',
     output_plu:       '',
     output_item_name: '',
     weight_in_lbs:    '',
@@ -294,7 +296,8 @@ function NewJobTab({ onSaved, orders, pluList }: { onSaved: () => void; orders: 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...form,
-        linked_order_id: form.linked_order_id || null,
+        linked_order_id:               form.source_type === 'retail_order'        ? (form.linked_order_id || null)               : null,
+        linked_cutting_instruction_id: form.source_type === 'cutting_instruction' ? (form.linked_cutting_instruction_id || null) : null,
         output_plu:      form.output_plu      || null,
         weight_in_lbs:   form.weight_in_lbs   ? parseFloat(form.weight_in_lbs) : null,
       }),
@@ -350,6 +353,23 @@ function NewJobTab({ onSaved, orders, pluList }: { onSaved: () => void; orders: 
                 </option>
               ))}
             </select>
+          </div>
+        )}
+
+        {form.source_type === 'cutting_instruction' && (
+          <div>
+            <label style={LABEL}>Linked Cutting Instruction</label>
+            <select style={INPUT} value={form.linked_cutting_instruction_id} onChange={f('linked_cutting_instruction_id')}>
+              <option value="">— Select cutting instruction —</option>
+              {cuttingInstructions.map(ci => (
+                <option key={ci.id} value={ci.id}>{ci.label}</option>
+              ))}
+            </select>
+            {cuttingInstructions.length === 0 && (
+              <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.3rem' }}>
+                No cutting instructions found yet.
+              </div>
+            )}
           </div>
         )}
 
@@ -544,6 +564,7 @@ export default function ValueAddPage() {
   const [tab,    setTab]    = useState<Tab>('active')
   const [newKey, setNewKey] = useState(0)
   const [orders,  setOrders]  = useState<RetailOrderSummary[]>([])
+  const [cuttingInstructions, setCuttingInstructions] = useState<CuttingInstructionSummary[]>([])
   const [pluList, setPluList] = useState<PluItem[]>([])
 
   useEffect(() => {
@@ -555,6 +576,25 @@ export default function ValueAddPage() {
           setOrders((data as { id: string; customer_name: string; due_date: string; status: string }[])
             .filter(o => o.status !== 'fulfilled')
             .map(o => ({ id: o.id, customer_name: o.customer_name, due_date: o.due_date }))
+          )
+        }
+      })
+      .catch(() => {})
+
+    // Load cutting instructions for linking
+    fetch('/api/cutting-instructions')
+      .then(r => r.json())
+      .then((data: unknown) => {
+        if (Array.isArray(data)) {
+          setCuttingInstructions((data as { id: string; data?: Record<string, unknown> }[])
+            .map(ci => {
+              const d = ci.data ?? {}
+              const name    = (d.customerName as string) || 'Unnamed'
+              const species = (d.species as string) || ''
+              const killDate = (d.killDate as string) || ''
+              const parts = [name, species, killDate].filter(Boolean)
+              return { id: ci.id, label: parts.join(' · ') }
+            })
           )
         }
       })
@@ -610,7 +650,7 @@ export default function ValueAddPage() {
 
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1200px', width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
         {tab === 'active'  && <ActiveJobsTab key={newKey} />}
-        {tab === 'new'     && <NewJobTab key={newKey} onSaved={() => { setNewKey(k => k + 1); setTab('active') }} orders={orders} pluList={pluList} />}
+        {tab === 'new'     && <NewJobTab key={newKey} onSaved={() => { setNewKey(k => k + 1); setTab('active') }} orders={orders} cuttingInstructions={cuttingInstructions} pluList={pluList} />}
         {tab === 'history' && <HistoryTab />}
       </main>
 

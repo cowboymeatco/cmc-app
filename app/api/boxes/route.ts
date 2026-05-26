@@ -24,6 +24,9 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await req.json()
+  const dateStr = new Date().toISOString().slice(2, 10).replace(/-/g, '')
+  const rand = Math.random().toString(36).substring(2, 6).toUpperCase()
+  const serial_number = `CMC${dateStr}${rand}`
   const { data, error } = await supabase
     .from('boxes')
     .insert([{
@@ -32,6 +35,7 @@ export async function POST(req: NextRequest) {
       box_number:    body.box_number ?? 1,
       is_closed:     false,
       is_final:      body.is_final ?? false,
+      serial_number: body.serial_number ?? serial_number,
     }])
     .select()
     .single()
