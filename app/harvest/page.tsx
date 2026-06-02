@@ -271,17 +271,30 @@ function PartATab({ date, appt }: { date: string; appt: HarvestAppointment | nul
     ])
     const receiving: AnimalReceivingLog[] = await recRes.json().catch(() => [])
     const allLogs: HarvestLog[]           = await logRes.json().catch(() => [])
-    const apptLogs = allLogs.filter(l => l.appointment_id === appt.id)
+    // Stable order so the positional fallback below is deterministic across reloads.
+    const apptLogs = allLogs
+      .filter(l => l.appointment_id === appt.id)
+      .sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''))
 
+    // Tagged animals link to their existing harvest row by ear tag. Untagged
+    // animals (e.g. hogs, which carry no ear tag) have no unique key, so we pair
+    // them positionally with the untagged harvest rows, in the same order.
+    // Without this, a blank ear tag never matched its row — so every save took the
+    // "create new" path, piling up duplicate carcasses and making the harvest
+    // order appear to never save.
     const logByTag = new Map<string, HarvestLog>()
     apptLogs.forEach(l => { if (l.ear_tag) logByTag.set(l.ear_tag, l) })
+    const untaggedLogs = apptLogs.filter(l => !l.ear_tag)
+    let untaggedCursor = 0
 
     // Suggest next available harvest order
     const maxOrder = apptLogs.reduce((m, l) => Math.max(m, l.harvest_order ?? 0), 0)
     let nextOrder  = maxOrder + 1
 
     const built: PartARow[] = receiving.map(animal => {
-      const log = animal.ear_tag ? (logByTag.get(animal.ear_tag) ?? null) : null
+      const log = animal.ear_tag
+        ? (logByTag.get(animal.ear_tag) ?? null)
+        : (untaggedLogs[untaggedCursor++] ?? null)
       const ord = log?.harvest_order ?? nextOrder++
       return {
         animal,
