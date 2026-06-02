@@ -381,6 +381,30 @@ function PartATab({ date, appt }: { date: string; appt: HarvestAppointment | nul
     upd(i, { saving: false, partAComplete: true, expanded: false })
   }
 
+  // Remove a whole animal (e.g. a mis-counted / phantom check-in): deletes its
+  // harvest record (if any) and its receiving record, then reloads.
+  async function removeAnimal(i: number) {
+    const a = rows[i]
+    if (!appt) return
+    const label = a.animal.ear_tag ? `ET ${a.animal.ear_tag}` : `${a.animal.sex || 'animal'} #${a.harvestOrder || i + 1}`
+    if (!window.confirm(
+      `Remove ${label} from this ${appt.species} appointment?\n\n` +
+      `This permanently deletes its check-in record${a.logId ? ' and its harvest record' : ''}. ` +
+      `Use this only for an animal that wasn't actually harvested (e.g. a mis-count). This cannot be undone.`
+    )) return
+
+    upd(i, { saving: true, error: '' })
+    if (a.logId) {
+      const r = await fetch(`/api/harvest?type=log&id=${a.logId}`, { method: 'DELETE' })
+      const j = await r.json().catch(() => ({}))
+      if (j.error) { upd(i, { saving: false, error: j.error }); return }
+    }
+    const r2 = await fetch(`/api/receiving?type=animal&id=${a.animal.id}`, { method: 'DELETE' })
+    const j2 = await r2.json().catch(() => ({}))
+    if (j2.error) { upd(i, { saving: false, error: j2.error }); return }
+    await load()
+  }
+
   if (!appt) {
     return (
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '3rem', textAlign: 'center', color: C.lightBrown, fontSize: '0.9rem' }}>
@@ -411,6 +435,16 @@ function PartATab({ date, appt }: { date: string; appt: HarvestAppointment | nul
           </div>
         )}
       </div>
+
+      {/* Head-count mismatch warning: receiving rows vs appointment head count */}
+      {!loading && rows.length > 0 && appt.head_count !== rows.length && (
+        <div style={{ background: 'rgba(217,119,6,0.12)', border: `1px solid ${C.yellow}66`, borderRadius: 4, padding: '0.7rem 1rem', marginBottom: '0.85rem', color: C.yellow, fontSize: '0.85rem', fontWeight: 600, lineHeight: 1.4 }}>
+          ⚠ Head-count mismatch: this appointment is booked for <strong>{appt.head_count} head</strong>, but <strong>{rows.length}</strong> {rows.length === 1 ? 'animal was' : 'animals were'} checked in at receiving.{' '}
+          {rows.length > appt.head_count
+            ? 'If an extra was a mis-count, expand it below and use “Remove animal.” Otherwise update the head count on the Schedule.'
+            : 'Check in the missing animal(s) at Receiving, or update the head count on the Schedule.'}
+        </div>
+      )}
 
       {loading && <div style={{ color: C.lightBrown, textAlign: 'center', padding: '2rem' }}>Loading animals…</div>}
       {!loading && rows.length === 0 && (
@@ -487,17 +521,27 @@ function PartATab({ date, appt }: { date: string; appt: HarvestAppointment | nul
                     onChange={e => upd(i, { liveWeight: e.target.value })} placeholder="e.g. 1245" />
                 </div>
               </div>
-              <button
-                onClick={() => save(i)}
-                disabled={row.saving}
-                style={{
-                  ...BTN(row.partAComplete ? 'rgba(76,175,80,0.18)' : C.tan, row.partAComplete ? C.green : C.dark),
-                  border: row.partAComplete ? '1px solid rgba(76,175,80,0.4)' : 'none',
-                  opacity: row.saving ? 0.6 : 1,
-                }}
-              >
-                {row.saving ? 'Saving…' : row.partAComplete ? '✓ Update' : 'Save Part A'}
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <button
+                  onClick={() => save(i)}
+                  disabled={row.saving}
+                  style={{
+                    ...BTN(row.partAComplete ? 'rgba(76,175,80,0.18)' : C.tan, row.partAComplete ? C.green : C.dark),
+                    border: row.partAComplete ? '1px solid rgba(76,175,80,0.4)' : 'none',
+                    opacity: row.saving ? 0.6 : 1,
+                  }}
+                >
+                  {row.saving ? 'Saving…' : row.partAComplete ? '✓ Update' : 'Save Part A'}
+                </button>
+                <button
+                  onClick={() => removeAnimal(i)}
+                  disabled={row.saving}
+                  title="Remove this animal (mis-count / not harvested)"
+                  style={{ background: 'transparent', border: `1px solid ${C.red}55`, color: C.red, borderRadius: 4, padding: '0.5rem 0.85rem', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer', opacity: row.saving ? 0.6 : 1 }}
+                >
+                  🗑 Remove animal
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -863,6 +907,19 @@ function HarvestLogTab() {
     setDate(dt.toISOString().slice(0, 10))
   }
 
+  // Delete a single harvest record (e.g. a leftover duplicate carcass row).
+  async function deleteLog(l: HarvestLog) {
+    const hasData = l.hot_carcass_weight_lbs != null || l.live_weight_lbs != null || l.part_b_complete || !!l.knock_time
+    const warn = hasData ? '\n\n⚠ This record has harvest data entered (weights / CCP / knock time) — make sure it is truly a duplicate before deleting.' : ''
+    if (!window.confirm(
+      `Delete harvest record #${l.harvest_order ?? '?'} — ${l.species} ${l.sex || ''}${l.ear_tag ? ` (ET ${l.ear_tag})` : ''}?${warn}\n\nThis permanently removes it and cannot be undone.`
+    )) return
+    const res = await fetch(`/api/harvest?type=log&id=${l.id}`, { method: 'DELETE' })
+    const j   = await res.json().catch(() => ({}))
+    if (j.error) { alert(`Delete failed: ${j.error}`); return }
+    load()
+  }
+
   // Summary stats
   const totalHead = logs.length
   const totalHCW  = logs.reduce((s, l) => s + (l.hot_carcass_weight_lbs ?? 0), 0)
@@ -988,10 +1045,14 @@ function HarvestLogTab() {
                     </td>
                     <td style={{ padding: '0.5rem 0.75rem', color: C.lightBrown }}>{l.inspector_initials || '—'}</td>
                     <td style={{ padding: '0.5rem 0.75rem', color: C.lightBrown }}>{l.performed_by || '—'}</td>
-                    <td style={{ padding: '0.5rem 0.4rem' }}>
+                    <td style={{ padding: '0.5rem 0.4rem', whiteSpace: 'nowrap' }}>
                       <button onClick={() => printCarcassTags(l)} title="Print carcass tag"
                         style={{ background: 'rgba(166,120,90,0.15)', border: '1px solid rgba(166,120,90,0.3)', color: C.tan, borderRadius: 3, padding: '2px 7px', fontSize: '0.7rem', cursor: 'pointer' }}>
                         🏷
+                      </button>
+                      <button onClick={() => deleteLog(l)} title="Delete this harvest record (duplicate)"
+                        style={{ background: 'transparent', border: `1px solid ${C.red}55`, color: C.red, borderRadius: 3, padding: '2px 7px', fontSize: '0.7rem', cursor: 'pointer', marginLeft: 4 }}>
+                        🗑
                       </button>
                     </td>
                   </tr>

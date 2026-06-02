@@ -139,3 +139,16 @@ export async function PATCH(req: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json(data)
 }
+
+// DELETE /api/harvest?id=xxx&type=log|chill — remove a single record
+export async function DELETE(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const id   = searchParams.get('id')
+  const type = searchParams.get('type') ?? 'log'
+  if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
+
+  const table = type === 'chill' ? 'chill_log' : 'harvest_log'
+  const { error } = await supabase.from(table).delete().eq('id', id)
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json({ ok: true })
+}
