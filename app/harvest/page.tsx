@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { HarvestAppointment, HarvestLog, ChillLog, AnimalReceivingLog, CorrectiveAction } from '@/lib/types'
 
-type Tab = 'parta' | 'partb' | 'harvestlog' | 'chill'
+type Tab = 'parta' | 'partb' | 'worksheet' | 'harvestlog' | 'chill'
 
 // ── Colour palette ─────────────────────────────────────────────────────────────
 const C = {
@@ -1104,6 +1104,185 @@ function HarvestLogTab() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// WORKSHEET TAB — printable pre-harvest sheet of every checked-in animal for a day
+// ══════════════════════════════════════════════════════════════════════════════
+interface WSRow { ear_tag: string; sex: string; breed: string; over_30_months: boolean }
+interface WSGroup { producer: string; species: string; rows: WSRow[] }
+
+function WorksheetTab({ date }: { date: string }) {
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const [d, setD]           = useState(date)
+  const [groups, setGroups] = useState<WSGroup[]>([])
+  const [loading, setLoad]  = useState(false)
+
+  const load = useCallback(async () => {
+    setLoad(true)
+    const appts: HarvestAppointment[] = await fetch(`/api/appointments?date=${d}`).then(r => r.json()).catch(() => [])
+    // Animals that are checked in but not yet finished — i.e. "before they're logged".
+    const active = (Array.isArray(appts) ? appts : [])
+      .filter(a => a.status === 'AnimalIn' || a.status === 'Processing')
+      .sort((a, b) => (a.source || '').localeCompare(b.source || ''))
+
+    const built: WSGroup[] = []
+    for (const a of active) {
+      const animals: AnimalReceivingLog[] = await fetch(`/api/receiving?type=animal&appointment_id=${a.id}`).then(r => r.json()).catch(() => [])
+      const live = (Array.isArray(animals) ? animals : [])
+        .filter(an => an.status !== 'no_show')
+        .sort((x, y) => (x.animal_index ?? 0) - (y.animal_index ?? 0))
+      if (live.length === 0) continue
+      built.push({
+        producer: a.source || a.customers?.[0]?.customer_name || 'Unknown',
+        species:  a.species,
+        rows: live.map(an => ({ ear_tag: an.ear_tag || '', sex: an.sex || '', breed: an.breed || '', over_30_months: an.over_30_months })),
+      })
+    }
+    setGroups(built)
+    setLoad(false)
+  }, [d])
+
+  useEffect(() => { load() }, [load])
+
+  function shiftDate(n: number) {
+    const dt = new Date(d + 'T12:00:00'); dt.setDate(dt.getDate() + n)
+    setD(dt.toISOString().slice(0, 10))
+  }
+
+  const totalHead = groups.reduce((s, g) => s + g.rows.length, 0)
+  const fmtDate   = new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+  const NAV: React.CSSProperties = { background: 'rgba(166,120,90,0.12)', border: '1px solid rgba(166,120,90,0.3)', color: C.tan, borderRadius: 3, padding: '0.4rem 0.75rem', fontSize: '1rem', cursor: 'pointer', lineHeight: 1 }
+
+  function printSheet() {
+    const esc = (s: string) => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] as string))
+    const rowsHtml = groups.map(g => {
+      const head = `<tr class="grp"><td colspan="7">${esc(g.producer)} — ${esc(g.species)} · ${g.rows.length} head</td></tr>`
+      const body = g.rows.map(r => `<tr>
+        <td class="ko"></td>
+        <td class="id">${r.ear_tag ? esc(r.ear_tag) : '—'}${r.over_30_months ? ' <span class="otm">OTM</span>' : ''}</td>
+        <td>${esc(r.sex)}</td>
+        <td>${esc(r.breed)}</td>
+        <td class="wt"></td>
+        <td class="wt"></td>
+        <td class="wt"></td>
+      </tr>`).join('')
+      return head + body
+    }).join('')
+
+    const css = `
+      @page { size: letter portrait; margin: 0.5in; }
+      * { box-sizing: border-box; }
+      body { font-family: Arial, sans-serif; color: #000; margin: 0; }
+      h1 { font-size: 15pt; margin: 0 0 1pt; letter-spacing: 0.03em; }
+      .sub { font-size: 8.5pt; color: #444; text-transform: uppercase; letter-spacing: 0.12em; margin-bottom: 9pt; }
+      .meta { font-size: 9.5pt; margin-bottom: 8pt; }
+      table { width: 100%; border-collapse: collapse; font-size: 10pt; }
+      th, td { border: 0.75pt solid #000; padding: 5pt 6pt; text-align: left; vertical-align: middle; }
+      th { background: #eee; font-size: 7.5pt; text-transform: uppercase; letter-spacing: 0.05em; }
+      td.ko, td.wt { width: 1.05in; height: 28pt; }
+      td.id { font-weight: 600; }
+      tr.grp td { background: #ddd; font-weight: 700; font-size: 10pt; letter-spacing: 0.03em; }
+      .otm { color: #bb0000; font-weight: 700; font-size: 7.5pt; border: 1pt solid #bb0000; padding: 0 2pt; margin-left: 2pt; }
+      .sig { margin-top: 24pt; font-size: 9pt; }
+      .sig span { display: inline-block; border-top: 0.75pt solid #000; padding-top: 2pt; width: 2.4in; margin-right: 0.6in; }
+      .empty { text-align: center; padding: 20pt; color: #666; }
+    `
+    const body = rowsHtml || '<tr><td colspan="7" class="empty">No animals checked in for this date.</td></tr>'
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${css}</style></head><body>
+      <h1>Cowboy Meat Co. — Harvest Worksheet</h1>
+      <div class="sub">Forsyth, Montana</div>
+      <div class="meta"><strong>${fmtDate}</strong> &nbsp;·&nbsp; ${totalHead} head &nbsp;·&nbsp; ${groups.length} producer${groups.length === 1 ? '' : 's'}</div>
+      <table>
+        <thead><tr>
+          <th>Kill Order</th><th>Ear Tag / ID</th><th>Sex</th><th>Breed</th>
+          <th>L Half (lbs)</th><th>R Half (lbs)</th><th>Total (lbs)</th>
+        </tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+      <div class="sig"><span>Inspector</span><span>Performed By</span></div>
+      <script>window.onload=function(){window.print()}<\/script>
+    </body></html>`
+    const w = window.open('', '_blank', 'width=900,height=760')
+    if (w) { w.document.write(html); w.document.close() }
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      {/* Date nav + print */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+          <button onClick={() => shiftDate(-1)} style={NAV}>‹</button>
+          <input type="date" value={d} onChange={e => setD(e.target.value)} style={{ ...INPUT, width: 'auto', padding: '0.4rem 0.75rem' }} />
+          <button onClick={() => shiftDate(1)} style={NAV}>›</button>
+          <span style={{ color: C.tan, fontSize: '0.9rem', fontWeight: 600, marginLeft: '0.2rem' }}>{fmtDate}</span>
+        </div>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          {d !== todayStr && <button onClick={() => setD(todayStr)} style={{ ...BTN('rgba(166,120,90,0.12)', C.tan), border: '1px solid rgba(166,120,90,0.3)' }}>Today</button>}
+          <button onClick={printSheet} disabled={totalHead === 0} style={{ ...BTN(C.tan, C.dark), opacity: totalHead === 0 ? 0.5 : 1, cursor: totalHead === 0 ? 'not-allowed' : 'pointer' }}>🖨 Print Worksheet</button>
+        </div>
+      </div>
+
+      <div style={{ color: C.lightBrown, fontSize: '0.8rem' }}>
+        Every animal checked in for this date, across all producers. The blank Kill Order / L&nbsp;Half / R&nbsp;Half / Total columns are for writing weights at the rail before logging in Part&nbsp;A/B.
+      </div>
+
+      {loading && <div style={{ color: C.lightBrown, textAlign: 'center', padding: '2rem' }}>Loading…</div>}
+
+      {!loading && totalHead === 0 && (
+        <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '2rem', textAlign: 'center', color: C.lightBrown }}>
+          No animals checked in for this date. Check animals in via Receiving first.
+        </div>
+      )}
+
+      {!loading && totalHead > 0 && (
+        <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.84rem' }}>
+            <thead>
+              <tr style={{ borderBottom: '2px solid rgba(166,120,90,0.3)' }}>
+                {['Kill Order', 'Ear Tag / ID', 'Sex', 'Breed', 'L Half', 'R Half', 'Total'].map(h => (
+                  <th key={h} style={{ padding: '0.6rem 0.75rem', color: C.lightBrown, fontWeight: 600, textAlign: 'left', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {groups.map((g, gi) => (
+                <FragmentGroup key={gi} group={g} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// One producer block: a header row + its animal rows (blank weight cells to write on)
+function FragmentGroup({ group }: { group: WSGroup }) {
+  const blank = <span style={{ color: 'rgba(166,120,90,0.35)' }}>—</span>
+  return (
+    <>
+      <tr style={{ background: 'rgba(166,120,90,0.14)' }}>
+        <td colSpan={7} style={{ padding: '0.45rem 0.75rem', color: C.cream, fontWeight: 700, fontSize: '0.82rem', letterSpacing: '0.02em' }}>
+          {group.producer} <span style={{ color: C.tan, fontWeight: 400 }}>· {group.species} · {group.rows.length} head</span>
+        </td>
+      </tr>
+      {group.rows.map((r, i) => (
+        <tr key={i} style={{ borderBottom: '1px solid rgba(166,120,90,0.1)' }}>
+          <td style={{ padding: '0.5rem 0.75rem' }}>{blank}</td>
+          <td style={{ padding: '0.5rem 0.75rem', color: C.cream, fontWeight: 600 }}>
+            {r.ear_tag || 'No Ear Tag'}
+            {r.over_30_months && <span style={{ color: C.red, fontSize: '0.65rem', fontWeight: 700, border: `1px solid ${C.red}`, borderRadius: 2, padding: '0 3px', marginLeft: 4 }}>OTM</span>}
+          </td>
+          <td style={{ padding: '0.5rem 0.75rem', color: C.cream }}>{r.sex || blank}</td>
+          <td style={{ padding: '0.5rem 0.75rem', color: C.lightBrown }}>{r.breed || blank}</td>
+          <td style={{ padding: '0.5rem 0.75rem' }}>{blank}</td>
+          <td style={{ padding: '0.5rem 0.75rem' }}>{blank}</td>
+          <td style={{ padding: '0.5rem 0.75rem' }}>{blank}</td>
+        </tr>
+      ))}
+    </>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // CHILL LOG TAB
 // ══════════════════════════════════════════════════════════════════════════════
 function ChillTab() {
@@ -1318,6 +1497,7 @@ export default function HarvestPage() {
           {([
             ['parta',      '📋 Part A'],
             ['partb',      '⚖ Part B'],
+            ['worksheet',  '📝 Worksheet'],
             ['harvestlog', '📊 Harvest Log'],
             ['chill',      '🌡️ Chill Log'],
           ] as [Tab, string][]).map(([t, lbl]) => (
@@ -1363,6 +1543,7 @@ export default function HarvestPage() {
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1320px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', overflow: 'auto' }}>
         {tab === 'parta'      && <PartATab      date={harvestDate} appt={selectedAppt} />}
         {tab === 'partb'      && <PartBTab      date={harvestDate} appt={selectedAppt} />}
+        {tab === 'worksheet'  && <WorksheetTab  date={harvestDate} />}
         {tab === 'harvestlog' && <HarvestLogTab />}
         {tab === 'chill'      && <ChillTab />}
       </main>
