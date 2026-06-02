@@ -1103,6 +1103,14 @@ function HarvestLogTab() {
   )
 }
 
+// Julian code YYDDD (e.g. 2026-06-02 → "26153"): 2-digit year + day-of-year.
+function julianCode(dateISO: string): string {
+  const dt        = new Date(dateISO + 'T12:00:00')
+  const yearStart = new Date(dt.getFullYear(), 0, 1)
+  const dayOfYear = Math.floor((dt.getTime() - yearStart.getTime()) / 86400000) + 1
+  return `${String(dt.getFullYear()).slice(-2)}${String(dayOfYear).padStart(3, '0')}`
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // WORKSHEET TAB — printable pre-harvest sheet of every checked-in animal for a day
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1114,10 +1122,20 @@ function WorksheetTab({ date }: { date: string }) {
   const [d, setD]           = useState(date)
   const [groups, setGroups] = useState<WSGroup[]>([])
   const [loading, setLoad]  = useState(false)
+  const [scheduledHead, setScheduledHead] = useState(0)
+  const [qty, setQty]       = useState('')   // tags to pre-print (blank → use scheduledHead)
+  const [startNum, setStart] = useState('1')
 
   const load = useCallback(async () => {
     setLoad(true)
     const appts: HarvestAppointment[] = await fetch(`/api/appointments?date=${d}`).then(r => r.json()).catch(() => [])
+
+    // Expected head for the day (for the default tag count): everything booked
+    // through in-progress, excluding cancelled/finished/no-show.
+    setScheduledHead((Array.isArray(appts) ? appts : [])
+      .filter(a => ['Booked', 'InstructionsReceived', 'AnimalIn', 'Processing'].includes(a.status))
+      .reduce((s, a) => s + (a.head_count ?? 1), 0))
+
     // Animals that are checked in but not yet finished — i.e. "before they're logged".
     const active = (Array.isArray(appts) ? appts : [])
       .filter(a => a.status === 'AnimalIn' || a.status === 'Processing')
@@ -1204,6 +1222,68 @@ function WorksheetTab({ date }: { date: string }) {
     if (w) { w.document.write(html); w.document.close() }
   }
 
+  // Pre-print a sheet of blank tags: Julian date + sequential #, a scannable
+  // barcode of "<julian>-<seq>", and blank lines to hand-write producer/weights.
+  function printTags() {
+    const count = parseInt(qty, 10) || scheduledHead || 0
+    const start = parseInt(startNum, 10) || 1
+    if (count < 1) { alert('Enter how many tags to print (or schedule/check in animals for this day first).'); return }
+    const jul     = julianCode(d)
+    const calDate = new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+
+    const tags = Array.from({ length: count }, (_, i) => {
+      const seq = String(start + i).padStart(3, '0')
+      return `<div class="tag">
+        <div class="co">COWBOY MEAT CO. · FORSYTH, MT</div>
+        <div class="mid">
+          <div class="jul"><div class="jl">JULIAN</div><div class="jv">${jul}</div><div class="cal">${calDate}</div></div>
+          <div class="num">${seq}</div>
+        </div>
+        <div class="bcwrap"><svg id="bc${start + i}"></svg></div>
+        <div class="lines">
+          <div class="ln"><span class="k">Producer</span><span class="w"></span></div>
+          <div class="ln"><span class="k">Ear Tag / Sex</span><span class="w"></span></div>
+          <div class="ln two"><span class="k">L Half</span><span class="w"></span><span class="k">R Half</span><span class="w"></span></div>
+          <div class="ln"><span class="k">Total</span><span class="w"></span></div>
+        </div>
+      </div>`
+    }).join('')
+
+    const barcodeCalls = Array.from({ length: count }, (_, i) => {
+      const id = `${jul}-${String(start + i).padStart(3, '0')}`
+      return `JsBarcode("#bc${start + i}","${id}",{format:"CODE128",width:1.6,height:34,displayValue:true,fontSize:10,margin:0,textMargin:1});`
+    }).join('')
+
+    const css = `
+      @page { size: letter portrait; margin: 0.35in; }
+      * { box-sizing: border-box; }
+      body { font-family: Arial, sans-serif; color: #000; margin: 0; display: flex; flex-wrap: wrap; gap: 0.14in; align-content: flex-start; }
+      .tag { width: 3.55in; height: 1.95in; border: 1pt solid #000; border-radius: 4pt; padding: 6pt 8pt; page-break-inside: avoid; display: flex; flex-direction: column; }
+      .co { font-size: 7pt; font-weight: 800; letter-spacing: 0.12em; text-align: center; border-bottom: 0.5pt solid #999; padding-bottom: 2pt; }
+      .mid { display: flex; justify-content: space-between; align-items: center; margin-top: 2pt; }
+      .jul { line-height: 1.05; }
+      .jl { font-size: 6.5pt; letter-spacing: 0.18em; color: #555; }
+      .jv { font-size: 19pt; font-weight: 900; }
+      .cal { font-size: 7.5pt; color: #333; }
+      .num { font-size: 40pt; font-weight: 900; letter-spacing: 0.02em; }
+      .bcwrap { text-align: center; margin: 1pt 0; }
+      .bcwrap svg { height: 34px; }
+      .lines { margin-top: auto; }
+      .ln { display: flex; align-items: flex-end; gap: 4pt; font-size: 8pt; margin-top: 3pt; }
+      .ln.two { gap: 6pt; }
+      .k { color: #555; white-space: nowrap; }
+      .w { flex: 1; border-bottom: 0.6pt solid #000; min-height: 11pt; }
+    `
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+      <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
+      <style>${css}</style></head><body>
+      ${tags}
+      <script>window.onload=function(){${barcodeCalls}window.print()}<\/script>
+    </body></html>`
+    const w = window.open('', '_blank', 'width=900,height=820')
+    if (w) { w.document.write(html); w.document.close() }
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
       {/* Date nav + print */}
@@ -1217,6 +1297,27 @@ function WorksheetTab({ date }: { date: string }) {
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           {d !== todayStr && <button onClick={() => setD(todayStr)} style={{ ...BTN('rgba(166,120,90,0.12)', C.tan), border: '1px solid rgba(166,120,90,0.3)' }}>Today</button>}
           <button onClick={printSheet} disabled={totalHead === 0} style={{ ...BTN(C.tan, C.dark), opacity: totalHead === 0 ? 0.5 : 1, cursor: totalHead === 0 ? 'not-allowed' : 'pointer' }}>🖨 Print Worksheet</button>
+        </div>
+      </div>
+
+      {/* Pre-print blank tags (interim process before the floor printer is set up) */}
+      <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.3)', borderRadius: 4, padding: '0.85rem 1rem', display: 'flex', alignItems: 'flex-end', gap: '1rem', flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ color: C.cream, fontWeight: 700, fontSize: '0.9rem' }}>🏷 Pre-print blank tags</div>
+          <div style={{ color: C.lightBrown, fontSize: '0.76rem', marginTop: '0.15rem' }}>
+            Julian <strong style={{ color: C.tan }}>{julianCode(d)}</strong> + sequential #, with a scannable barcode. Hand-write producer &amp; weights until the floor printer is set up.
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: '0.6rem', marginLeft: 'auto', flexWrap: 'wrap' }}>
+          <div>
+            <label style={LABEL}>How many</label>
+            <input type="number" min="1" value={qty} onChange={e => setQty(e.target.value)} placeholder={String(scheduledHead || '')} style={{ ...INPUT, width: '5.5rem' }} />
+          </div>
+          <div>
+            <label style={LABEL}>Start at #</label>
+            <input type="number" min="1" value={startNum} onChange={e => setStart(e.target.value)} style={{ ...INPUT, width: '5.5rem' }} />
+          </div>
+          <button onClick={printTags} style={BTN(C.tan, C.dark)}>🖨 Print Tags</button>
         </div>
       </div>
 
