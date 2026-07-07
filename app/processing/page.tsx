@@ -4,10 +4,11 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import CutScheduleTab from './CutScheduleTab'
 import CloverTab from './CloverTab'
+import QuickBooksTab from './QuickBooksTab'
 import { buildHtFile, type HobartPlu } from '@/lib/hobart'
 import { isoDate } from '@/lib/dates'
 
-type Tab = 'browser' | 'upload' | 'export' | 'cleanup' | 'cut-schedule' | 'box-labels' | 'clover'
+type Tab = 'browser' | 'upload' | 'export' | 'cleanup' | 'cut-schedule' | 'box-labels' | 'clover' | 'quickbooks'
 
 interface PluItem {
   id:                 string
@@ -24,6 +25,7 @@ interface PluItem {
   is_retail:          boolean
   is_wholesale:       boolean
   clover_item_id:     string
+  quickbooks_item_id: string
   upc:                string
   label_message:      string
   sell_by_weight:     boolean
@@ -279,9 +281,14 @@ function EditPanel({ item, onSaved, onDeleted, onClose }: {
               </div>
             </div>
             <Field label="QuickBooks Item ID">
-              <input style={{ ...INPUT, fontFamily: 'monospace' }} value={''} readOnly placeholder="Coming soon" />
+              <input style={{ ...INPUT, fontFamily: 'monospace' }} value={form.quickbooks_item_id} onChange={f('quickbooks_item_id')} placeholder="Linked from QuickBooks tab" />
             </Field>
-            <div />
+            <div style={{ marginBottom: '0.75rem' }}>
+              <label style={LABEL}>QuickBooks Status</label>
+              <div style={{ padding: '0.45rem 0.7rem', background: 'rgba(255,255,255,0.04)', borderRadius: 3, fontSize: '0.83rem', color: form.quickbooks_item_id ? C.green : C.lightBrown }}>
+                {form.quickbooks_item_id ? '✓ Linked' : 'Not linked'}
+              </div>
+            </div>
             <div style={{ gridColumn: 'span 2', background: 'rgba(255,255,255,0.03)', borderRadius: 4, padding: '0.85rem 1rem', fontSize: '0.8rem', color: C.lightBrown }}>
               <strong style={{ color: C.tan, display: 'block', marginBottom: '0.4rem' }}>Connections</strong>
               Clover sync and QuickBooks integration are managed from their respective tabs.
@@ -365,7 +372,7 @@ function BrowserTab() {
     setSelected({
       id: '', plu_number: '', item_name: '', price: null, retail_price: null, wholesale_price: null,
       tare_weight: 0, department: '0', unit: '02', species: '', description: '',
-      is_retail: false, is_wholesale: false, clover_item_id: '', upc: '', label_message: '',
+      is_retail: false, is_wholesale: false, clover_item_id: '', quickbooks_item_id: '', upc: '', label_message: '',
       sell_by_weight: true, active: true, notes: '', updated_at: '', raw_data: {},
     })
   }
@@ -1448,6 +1455,7 @@ export default function ProcessingPage() {
     { id: 'box-labels',   label: '🏷️ Box Labels' },
     { id: 'browser',      label: '🔪 PLU Browser' },
     { id: 'clover',       label: '🍀 Clover' },
+    { id: 'quickbooks',   label: '📗 QuickBooks' },
     { id: 'export',       label: '📤 Export' },
     { id: 'cleanup',      label: '🧹 Cleanup' },
     { id: 'upload',       label: '📂 Upload File' },
@@ -1481,6 +1489,7 @@ export default function ProcessingPage() {
         {tab === 'box-labels'   && <BoxLabelsTab />}
         {tab === 'browser'      && <BrowserTab />}
         {tab === 'clover'       && <CloverTab />}
+        {tab === 'quickbooks'   && <QuickBooksTab />}
         {tab === 'export'       && <ExportTab />}
         {tab === 'cleanup'      && <CleanupTab />}
         {tab === 'upload'       && <UploadTab />}
