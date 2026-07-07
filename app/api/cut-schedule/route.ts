@@ -24,11 +24,13 @@ export async function POST(req: NextRequest) {
   const { schedule_date, items } = body as {
     schedule_date: string
     items: Array<{
-      appointment_id: string
-      appointment_customer_id: string
+      kind?: 'carcass' | 'break'
+      appointment_id: string | null
+      appointment_customer_id: string | null
       manual_rank: number
       locked: boolean
       notes: string
+      break_date?: string | null
     }>
   }
 
@@ -48,11 +50,13 @@ export async function POST(req: NextRequest) {
 
   const rows = items.map(item => ({
     schedule_date,
-    appointment_id: item.appointment_id,
-    appointment_customer_id: item.appointment_customer_id,
+    kind: item.kind ?? 'carcass',
+    appointment_id: item.appointment_id ?? null,
+    appointment_customer_id: item.appointment_customer_id ?? null,
     manual_rank: item.manual_rank,
     locked: item.locked,
     notes: item.notes ?? '',
+    break_date: item.break_date ?? null,
   }))
 
   const { error: insError } = await supabase
