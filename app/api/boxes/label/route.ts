@@ -2,6 +2,12 @@ export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { generateLabel, DEFAULT_FLAGS, LabelFlags, BoxRecord, BoxScan } from '@/lib/label'
+import { generateCMBLabel } from '@/lib/labelCMB'
+
+// Central Montana Beef cases get their US Foods label (4x6, GTIN barcode)
+// instead of the standard CMC box label. Sessions are named "CMB", "CMB 26181",
+// "CMB Grind All", etc. Override per-print with ?format=std or ?format=cmb.
+const isCMBCustomer = (name: string) => /^\s*(cmb\b|central\s+montana)/i.test(name || '')
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -24,7 +30,12 @@ export async function GET(req: NextRequest) {
 
   const box   = boxRes.data   as BoxRecord
   const scans = scansRes.data as BoxScan[]
-  const html  = generateLabel(box, scans, flags)
+
+  const format = searchParams.get('format')
+  const useCMB = format === 'cmb' || (isCMBCustomer(box.customer_name) && format !== 'std')
+  const html   = useCMB
+    ? generateCMBLabel(box, scans, { productGtin: searchParams.get('product'), lot: searchParams.get('lot') })
+    : generateLabel(box, scans, flags)
 
   return new NextResponse(html, {
     headers: {
