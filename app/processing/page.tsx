@@ -1142,15 +1142,14 @@ function BoxLabelsTab() {
     if (!customer.trim()) { alert('Enter customer name first'); return }
     setSaving(true)
     const nextNum = boxes.length + 1
-    const dateStr = isoDate().slice(2).replace(/-/g, '')
-    const rand = Math.random().toString(36).substring(2, 6).toUpperCase()
-    const serial_number = `CMC${dateStr}${rand}`
+    // The boxes API mints the CMC serial when none is sent — one generator,
+    // so the printed barcode format can never drift from the server's.
     const res  = await fetch('/api/boxes', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ customer_name: customer, pack_date: date, box_number: nextNum, is_final: isFinal, serial_number }),
+      body: JSON.stringify({ customer_name: customer, pack_date: date, box_number: nextNum, is_final: isFinal }),
     })
     const data = await res.json()
-    const box: BoxRecord = { ...data, serial_number: data.serial_number ?? serial_number }
+    const box: BoxRecord = { ...data }
     setBoxes(prev => [...prev, box])
     setScans(prev => ({ ...prev, [box.id]: [] }))
     setActiveBox(box)

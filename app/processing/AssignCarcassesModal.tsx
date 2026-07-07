@@ -1,6 +1,7 @@
 'use client'
 import { useMemo, useState } from 'react'
 import { HarvestAppointment, HarvestLog, CarcassAssignment } from '@/lib/types'
+import { FRACTION } from '@/lib/cutSchedule'
 
 const C = {
   dark:       '#1A0A04',
@@ -14,8 +15,6 @@ const C = {
   amber:      '#F59E0B',
 }
 
-// Portion → fraction of one whole carcass.
-const FRACTION: Record<string, number> = { Whole: 1, Half: 0.5, Quarter: 0.25 }
 const portionLabel = (p: string) => (p === 'Half' ? '½' : p === 'Quarter' ? '¼' : 'Whole')
 const portionColor = (p: string) => (p === 'Whole' ? C.red : p === 'Half' ? '#F97316' : C.amber)
 

@@ -148,6 +148,14 @@ export function buildEntries(
 ): ListItem[] {
   const raw: Omit<ScheduleEntry, 'type' | 'priority_score' | 'rank'>[] = []
 
+  // Saved rows keyed the same way entry keys are built, so the per-row lookups
+  // below are O(1) instead of scanning savedItems per carcass.
+  const savedByKey = new Map(
+    savedItems
+      .filter(s => s.kind !== 'break')
+      .map(s => [`${s.appointment_id}__${s.appointment_customer_id}`, s])
+  )
+
   // Group assignments by the carcass they belong to.
   const assignByLog = new Map<string, CarcassAssignment[]>()
   for (const a of assignments) {
@@ -184,9 +192,7 @@ export function buildEntries(
       for (const asg of logAssigns) {
         const cust    = customers.find(c => c.id === asg.appointment_customer_id)
         const instrId = cust?.linked_cutting_instruction_id || asg.linked_cutting_instruction_id || null
-        const saved   = savedItems.find(
-          s => s.appointment_id === log.id && s.appointment_customer_id === asg.appointment_customer_id
-        )
+        const saved   = savedByKey.get(`${log.id}__${asg.appointment_customer_id}`)
         raw.push({
           key:                     `${log.id}__${asg.appointment_customer_id}`,
           harvest_log_id:          log.id,
@@ -226,9 +232,7 @@ export function buildEntries(
     const hasInstructions = single
       ? !!(single.linked_cutting_instruction_id && instructionIds.has(single.linked_cutting_instruction_id))
       : customers.some(c => c.linked_cutting_instruction_id && instructionIds.has(c.linked_cutting_instruction_id))
-    const saved = savedItems.find(
-      s => s.appointment_id === log.id && s.appointment_customer_id === custId
-    )
+    const saved = savedByKey.get(`${log.id}__${custId}`)
     raw.push({
       key:                     `${log.id}__${custId}`,
       harvest_log_id:          log.id,
@@ -263,9 +267,7 @@ export function buildEntries(
 
   // Saved manual ranks for carcasses (keyed by appointment + customer).
   const savedRank = new Map(
-    savedItems
-      .filter(s => s.kind !== 'break')
-      .map(s => [`${s.appointment_id}__${s.appointment_customer_id}`, s.manual_rank])
+    Array.from(savedByKey, ([key, s]) => [key, s.manual_rank] as const)
   )
 
   // Day-break dividers come straight from saved rows (they aren't re-derived

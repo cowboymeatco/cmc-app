@@ -1,10 +1,7 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
-
-// Portion → fraction of one whole carcass. Used to enforce that the portions
-// assigned to a single carcass never exceed one whole.
-const FRACTION: Record<string, number> = { Whole: 1, Half: 0.5, Quarter: 0.25 }
+import { FRACTION } from '@/lib/cutSchedule'
 
 // GET /api/carcass-assignments?harvest_log_ids=a,b,c   (for the Cut Schedule)
 //   or /api/carcass-assignments?appointment_id=X        (for the assign modal)
