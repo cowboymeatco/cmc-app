@@ -16,13 +16,26 @@ export async function POST(req: NextRequest) {
   if (!body.type || !body.description) {
     return NextResponse.json({ error: 'type and description required' }, { status: 400 })
   }
+  // Stamp diagnostic context server-side so the client can't forge it and so we
+  // always know which code version + browser the report came from.
+  const commitSha = process.env.VERCEL_GIT_COMMIT_SHA ?? null
+  const userAgent = req.headers.get('user-agent') ?? null
+
   const { data, error } = await supabase
     .from('feedback')
     .insert([{
-      type:        body.type,
-      description: body.description,
-      submitter:   body.submitter ?? null,
-      page_url:    body.page_url ?? null,
+      type:           body.type,
+      description:    body.description,
+      submitter:      body.submitter ?? null,
+      page_url:       body.page_url ?? null,
+      // diagnostics (see migration add_feedback_diagnostics)
+      full_url:       body.full_url ?? null,
+      app_context:    body.app_context ?? null,
+      viewport:       body.viewport ?? null,
+      console_errors: body.console_errors ?? null,
+      breadcrumbs:    body.breadcrumbs ?? null,
+      commit_sha:     commitSha,
+      user_agent:     userAgent,
     }])
     .select()
     .single()

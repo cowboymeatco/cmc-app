@@ -108,3 +108,25 @@ export async function PATCH(req: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json(data)
 }
+
+// DELETE — remove a session record (by id OR customer_name+session_date).
+// Only deletes the processing_sessions row; boxes are untouched.
+export async function DELETE(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const id            = searchParams.get('id')
+  const customer_name = searchParams.get('customer_name')
+  const session_date  = searchParams.get('session_date')
+
+  let query = supabase.from('processing_sessions').delete()
+  if (id) {
+    query = query.eq('id', id)
+  } else if (customer_name && session_date) {
+    query = query.eq('customer_name', customer_name).eq('session_date', session_date)
+  } else {
+    return NextResponse.json({ error: 'id or customer_name+session_date required' }, { status: 400 })
+  }
+
+  const { error } = await query
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json({ ok: true })
+}

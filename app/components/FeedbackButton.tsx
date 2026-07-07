@@ -1,6 +1,7 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { usePathname } from 'next/navigation'
+import { installTelemetry, addBreadcrumb, getTelemetry } from '@/lib/feedbackTelemetry'
 
 const C = {
   dark:       '#1A0A04',
@@ -23,10 +24,16 @@ export default function FeedbackButton() {
   const [sending, setSending]       = useState(false)
   const [sent, setSent]             = useState(false)
 
+  // Install client telemetry once (console errors, click/fetch/nav breadcrumbs).
+  useEffect(() => { installTelemetry() }, [])
+  // Record route changes as breadcrumbs.
+  useEffect(() => { addBreadcrumb('nav', `page → ${pathname}`) }, [pathname])
+
   async function submit() {
     if (!description.trim()) return
     setSending(true)
     try {
+      const telemetry = getTelemetry()
       await fetch('/api/feedback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -35,6 +42,7 @@ export default function FeedbackButton() {
           description: description.trim(),
           submitter:   submitter.trim() || null,
           page_url:    pathname,
+          ...telemetry,   // full_url, viewport, app_context, console_errors, breadcrumbs
         }),
       })
       setSent(true)

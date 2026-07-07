@@ -1,8 +1,39 @@
 export interface BoxScan   { id: string; item_name: string; plu_number: string; weight_lbs: number; quantity: number }
-export interface BoxRecord { id: string; customer_name: string; pack_date: string; box_number: number; is_closed: boolean; is_final: boolean; total_weight_lbs: number; total_cuts: number; serial_number?: string }
+export interface BoxRecord { id: string; customer_name: string; pack_date: string; box_number: number; is_closed: boolean; is_final: boolean; total_weight_lbs: number; total_cuts: number; serial_number?: string; box_label?: string | null }
 export interface LabelFlags { usda_bug: boolean; retail_exempt: boolean; not_for_sale: boolean }
 
 export const DEFAULT_FLAGS: LabelFlags = { usda_bug: true, retail_exempt: false, not_for_sale: false }
+
+// CMC's USDA establishment number — appears in the center of the mark of
+// inspection (from the Grant of Inspection). If blank the stamp prints "EST. ____".
+export const USDA_EST_NUMBER = '47648'
+
+// Official USDA mark of inspection: a circular legend reading
+// "U.S. INSPECTED AND PASSED BY DEPARTMENT OF AGRICULTURE" with the
+// establishment number in the center. Rendered as inline SVG so it prints
+// crisp (vector) at the small size the box label uses.
+export function usdaMarkSVG(est: string): string {
+  const num = est || '____'
+  // Text rides an arc of radius 33 (inside the r=40 inner ring). Top arc runs
+  // ~200°→340° over the top; bottom arc ~160°→20° under the bottom, both
+  // centered on the vertical axis. Font 5 keeps the full legend inside the arc.
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100" style="display:block;width:100%;height:auto">
+    <defs>
+      <path id="usda-top" d="M17.5,44.3 A33,33 0 0 1 82.5,44.3" fill="none"/>
+      <path id="usda-bot" d="M17.5,55.7 A33,33 0 0 0 82.5,55.7" fill="none"/>
+    </defs>
+    <circle cx="50" cy="50" r="47" fill="#fff" stroke="#000" stroke-width="2.5"/>
+    <circle cx="50" cy="50" r="40" fill="none" stroke="#000" stroke-width="1"/>
+    <text font-family="Arial, sans-serif" font-weight="bold" font-size="5" fill="#000">
+      <textPath href="#usda-top" startOffset="50%" text-anchor="middle">U.S. INSPECTED AND PASSED BY</textPath>
+    </text>
+    <text font-family="Arial, sans-serif" font-weight="bold" font-size="5" fill="#000">
+      <textPath href="#usda-bot" startOffset="50%" text-anchor="middle">DEPARTMENT OF AGRICULTURE</textPath>
+    </text>
+    <text x="50" y="48" text-anchor="middle" font-family="Arial, sans-serif" font-weight="bold" font-size="7" fill="#000">EST.</text>
+    <text x="50" y="62" text-anchor="middle" font-family="Arial, sans-serif" font-weight="bold" font-size="13" fill="#000">${num}</text>
+  </svg>`
+}
 
 // Code 39 barcode — supports 0-9 and A-Z (covers all CMCxxxxxxxx serial chars)
 export function makeCode39Barcode(text: string): string {
@@ -50,11 +81,7 @@ export function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlag
     `<div class="item-row"><span><b>(${v.count})</b> ${name}</span><span>${v.weight.toFixed(2)} lb</span></div>`
   ).join('')
 
-  const usdaHTML = flags.usda_bug ? `
-    <div class="usda-bug">
-      <div style="font-size:7pt;font-weight:bold;letter-spacing:0.08em">USDA</div>
-      <div style="font-size:5.5pt;letter-spacing:0.04em">INSPECTED &amp; PASSED</div>
-    </div>` : ''
+  const usdaHTML = flags.usda_bug ? `<div class="usda-bug">${usdaMarkSVG(USDA_EST_NUMBER)}</div>` : ''
   const exemptHTML     = flags.retail_exempt ? `<div class="badge">RETAIL EXEMPT</div>` : ''
   const notForSaleHTML = flags.not_for_sale   ? `<div class="nfs">★ NOT FOR SALE ★</div>` : ''
 
@@ -74,9 +101,10 @@ export function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlag
   body { width: 3.7in; font-family: Arial, sans-serif; color: #000; background: #fff; }
   .top-bar  { display: flex; justify-content: space-between; align-items: flex-start; }
   .company  { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 9pt; font-weight: bold; text-align: center; letter-spacing: 0.05em; margin-bottom: 2px; flex: 1; }
-  .usda-bug { border: 1.5px solid #000; border-radius: 50%; padding: 3px 5px; text-align: center; line-height: 1.25; flex-shrink: 0; }
+  .usda-bug { width: 0.62in; flex-shrink: 0; }
   .customer { font-size: 20pt; font-weight: bold; text-align: center; line-height: 1.1; margin: 4px 0; }
   .box-num  { font-size: 14pt; font-weight: bold; text-align: center; margin-bottom: 2px; }
+  .box-for  { font-size: 13pt; font-weight: bold; text-align: center; margin-bottom: 2px; border: 1.5px solid #000; border-radius: 3px; padding: 2px 4px; }
   .date     { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 9pt; text-align: center; margin-bottom: 4px; }
   hr        { border: none; border-top: 1px solid #000; margin: 5px 0; }
   .item-row { display: flex; justify-content: space-between; align-items: baseline;
@@ -102,6 +130,7 @@ export function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlag
   ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
   <div class="customer">${box.customer_name.toUpperCase()}</div>
   <div class="box-num">${boxLabel}</div>
+  ${box.box_label ? `<div class="box-for">FOR: ${box.box_label.toUpperCase()}</div>` : ''}
   <div class="date">${dateStr}</div>
   <hr>
   ${itemRows}

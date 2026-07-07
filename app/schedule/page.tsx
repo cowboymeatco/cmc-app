@@ -6,10 +6,11 @@ import type { HarvestAppointment, AppointmentCustomer, Customer } from '@/lib/ty
 const SPECIES  = ['Beef', 'Hog', 'Lamb', 'Goat']
 const PORTIONS = ['Whole', 'Half', 'Quarter']
 const CONTACTS = ['Email', 'Text Message', 'Phone Call']
-const STATUSES = ['Booked', 'InstructionsReceived', 'AnimalIn', 'Processing', 'Complete']
+const STATUSES = ['Booked', 'Confirmed', 'InstructionsReceived', 'AnimalIn', 'Processing', 'Complete']
 
 const STATUS_LABELS: Record<string, string> = {
   Booked:               'Booked',
+  Confirmed:            'Confirmed',
   InstructionsReceived: 'Instructions ✅',
   AnimalIn:             'Animal In',
   Processing:           'Processing',
@@ -18,11 +19,27 @@ const STATUS_LABELS: Record<string, string> = {
 
 const STATUS_COLORS: Record<string, string> = {
   Booked:               'rgba(201,168,130,0.2)',
+  Confirmed:            'rgba(45,212,191,0.2)',
   InstructionsReceived: 'rgba(100,180,100,0.2)',
   AnimalIn:             'rgba(100,150,220,0.2)',
   Processing:           'rgba(220,160,50,0.2)',
   Complete:             'rgba(100,100,100,0.2)',
 }
+
+// Bright, high-contrast text colors for the Status dropdown. The open option
+// list renders on the OS default (white on Windows), so we also paint a dark
+// background on each option — that keeps these colors readable in BOTH the
+// closed control (dark) and the open list.
+const STATUS_TEXT: Record<string, string> = {
+  Booked:               '#E8C9A0',
+  Confirmed:            '#34E2CC',
+  InstructionsReceived: '#74D86E',
+  AnimalIn:             '#85B6F0',
+  Processing:           '#F2BC4D',
+  Complete:             '#C2C8D2',
+}
+const STATUS_OPT_BG = '#2a1d16'
+function statusColor(s: string) { return STATUS_TEXT[s] ?? 'var(--cream)' }
 
 // ── Species color palette ─────────────────────────────────────────────────────
 const SPECIES_CLR: Record<string, string> = {
@@ -837,8 +854,8 @@ function Modal({ editing, saving, onChange, onSave, onClose }: {
             <input type="number" min={1} value={editing.head_count??1} onChange={e=>onChange({...editing,head_count:parseInt(e.target.value)})} style={inputStyle()} />
           </Field>
           <Field label="Status">
-            <select value={editing.status??'Booked'} onChange={e=>onChange({...editing,status:e.target.value as any})} style={inputStyle()}>
-              {STATUSES.map(s=><option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
+            <select value={editing.status??'Booked'} onChange={e=>onChange({...editing,status:e.target.value as any})} style={{ ...inputStyle(), color: statusColor(editing.status??'Booked'), fontWeight: 600 }}>
+              {STATUSES.map(s=><option key={s} value={s} style={{ color: statusColor(s), background: STATUS_OPT_BG, fontWeight: 600 }}>{STATUS_LABELS[s]}</option>)}
             </select>
           </Field>
         </div>

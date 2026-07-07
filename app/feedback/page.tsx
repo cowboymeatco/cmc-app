@@ -14,6 +14,7 @@ const C = {
   amber:      '#F59E0B',
 }
 
+interface Breadcrumb { t: string; kind: string; label: string }
 interface FeedbackItem {
   id:          string
   created_at:  string
@@ -22,6 +23,75 @@ interface FeedbackItem {
   submitter:   string | null
   page_url:    string | null
   status:      'new' | 'done' | 'dismissed'
+  // diagnostics
+  full_url:       string | null
+  app_context:    Record<string, unknown> | null
+  commit_sha:     string | null
+  user_agent:     string | null
+  viewport:       string | null
+  console_errors: string[] | null
+  breadcrumbs:    Breadcrumb[] | null
+}
+
+function Diagnostics({ item }: { item: FeedbackItem }) {
+  const ctx     = item.app_context && Object.keys(item.app_context).length ? item.app_context : null
+  const crumbs  = item.breadcrumbs?.length ? item.breadcrumbs : null
+  const errs    = item.console_errors?.length ? item.console_errors : null
+  const hasAny  = ctx || crumbs || errs || item.commit_sha || item.full_url || item.viewport || item.user_agent
+  if (!hasAny) return null
+
+  const mono: React.CSSProperties = { fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 11 }
+  const chip: React.CSSProperties = { background: C.dark, border: `1px solid ${C.medBrown}`, borderRadius: 4, padding: '2px 7px', fontSize: 11, color: C.tan }
+
+  return (
+    <details style={{ marginTop: 12, borderTop: `1px solid ${C.medBrown}`, paddingTop: 10 }}>
+      <summary style={{ cursor: 'pointer', color: C.tan, fontSize: 12, fontWeight: 700, userSelect: 'none' }}>
+        🔧 Diagnostics
+        {errs && <span style={{ color: C.red, marginLeft: 8 }}>· {errs.length} console error{errs.length === 1 ? '' : 's'}</span>}
+      </summary>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
+        {/* quick chips */}
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {item.commit_sha && <span style={chip}>commit {item.commit_sha.slice(0, 7)}</span>}
+          {item.viewport   && <span style={chip}>{item.viewport}</span>}
+          {ctx && Object.entries(ctx).filter(([, v]) => v != null && v !== '').map(([k, v]) => (
+            <span key={k} style={chip}>{k}: <strong style={{ color: C.cream }}>{String(v)}</strong></span>
+          ))}
+        </div>
+
+        {item.full_url && (
+          <div style={{ ...mono, color: C.lightBrown, wordBreak: 'break-all' }}>{item.full_url}</div>
+        )}
+
+        {crumbs && (
+          <div>
+            <div style={{ fontSize: 10, color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Last actions</div>
+            <ol style={{ ...mono, color: C.tan, margin: 0, paddingLeft: 18, lineHeight: 1.6 }}>
+              {crumbs.map((b, i) => (
+                <li key={i}><span style={{ color: C.lightBrown }}>[{b.kind}]</span> {b.label}</li>
+              ))}
+            </ol>
+          </div>
+        )}
+
+        {errs && (
+          <div>
+            <div style={{ fontSize: 10, color: C.red, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Console errors</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {errs.map((e, i) => (
+                <div key={i} style={{ ...mono, color: '#ffb4a8', background: 'rgba(229,62,62,0.08)', border: '1px solid rgba(229,62,62,0.25)', borderRadius: 4, padding: '4px 7px', wordBreak: 'break-word' }}>{e}</div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {item.user_agent && (
+          <div style={{ ...mono, color: C.lightBrown, fontSize: 10, wordBreak: 'break-all' }}>{item.user_agent}</div>
+        )}
+      </div>
+    </details>
+  )
 }
 
 export default function FeedbackPage() {
@@ -168,6 +238,8 @@ export default function FeedbackPage() {
                 </div>
               )}
             </div>
+
+            <Diagnostics item={item} />
           </div>
         ))}
       </div>

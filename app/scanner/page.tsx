@@ -77,6 +77,18 @@ interface BoxRecord {
   total_weight_lbs: number
   total_cuts:       number
   serial_number?:   string
+  box_label?:       string | null
+  order_id?:        string | null
+}
+
+interface RetailOrderItem {
+  id: string; plu_number: string | null; item_name: string
+  unit: string; qty_ordered: number; qty_filled: number; notes?: string | null
+}
+interface RetailOrderLite {
+  id: string; customer_name: string; due_date: string; status: string
+  fulfillment_type?: string; notes?: string | null
+  retail_order_items?: RetailOrderItem[]
 }
 
 interface ScanLine {
@@ -114,6 +126,11 @@ const PIE_COLORS = [
 
 function esc(s: string): string {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+function fmtDue(iso: string): string {
+  if (!iso) return '—'
+  return new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
 function buildPackoutHTML(
@@ -158,7 +175,7 @@ function buildPackoutHTML(
         </tr>`).join('')
     return `
     <div class="box-block">
-      <div class="box-head">Box ${box.box_number}${box.is_final ? ' ★' : ''}</div>
+      <div class="box-head">Box ${box.box_number}${box.is_final ? ' ★' : ''}${box.box_label ? ` &nbsp;—&nbsp; ${esc(box.box_label)}` : ''}</div>
       <table>
         <thead><tr><th>Item Name</th><th class="num"># Pieces</th><th class="num">Weight (lbs)</th></tr></thead>
         <tbody>${itemRows}
@@ -325,10 +342,23 @@ export default function ScannerPage() {
   const [activeBox, setActiveBox] = useState<BoxRecord | null>(null)
   const [scans,     setScans]     = useState<ScanLine[]>([])   // newest first
 
+  // ── Retail orders (to tie a box back to an order) ────────────────────────────
+  const [orders,          setOrders]          = useState<RetailOrderLite[]>([])
+  const [showOrderPicker, setShowOrderPicker] = useState(false)
+  const loadOrders = useCallback(async () => {
+    try {
+      const res  = await fetch('/api/orders')
+      const data = await res.json()
+      // Open orders only — anything not yet fulfilled can still be packed against.
+      setOrders(Array.isArray(data) ? (data as RetailOrderLite[]).filter(o => o.status !== 'fulfilled') : [])
+    } catch { setOrders([]) }
+  }, [])
+
   // ── Scan input ───────────────────────────────────────────────────────────────
   const [scanValue,   setScanValue]   = useState('')
   const [flash,       setFlash]       = useState<'ok' | 'bad' | null>(null)
   const [lastItem,    setLastItem]    = useState('')
+  const [lastKind,    setLastKind]    = useState<'ok' | 'bad'>('ok')   // icon/color for lastItem after the flash fades
   const [processing,  setProcessing]  = useState(false)
   const [labelFlags,  setLabelFlags]  = useState<LabelFlags>(DEFAULT_FLAGS)
 
@@ -353,6 +383,14 @@ export default function ScannerPage() {
   const [currentStatus,    setCurrentStatus]    = useState<'scanning' | 'value_add' | 'complete'>('scanning')
   const [showNewForm,      setShowNewForm]      = useState(false)
   const [showAllComplete,  setShowAllComplete]  = useState(false)
+  const [mergeSource,      setMergeSource]      = useState<SessionWithStats | null>(null)
+  const [mergeBusy,        setMergeBusy]        = useState(false)
+
+  // ── Box reassignment (right-click a box tab) ─────────────────────────────────
+  const [boxMenu,          setBoxMenu]          = useState<{ box: BoxRecord; x: number; y: number } | null>(null)
+  const [reassignBox,      setReassignBox]      = useState<BoxRecord | null>(null)
+  const [reassignBusy,     setReassignBusy]     = useState(false)
+  const [reassignNewName,  setReassignNewName]  = useState('')
 
   const scanRef       = useRef<HTMLInputElement>(null)
   // Stable refs so event listeners don't go stale
@@ -382,6 +420,7 @@ export default function ScannerPage() {
   }, [])
 
   useEffect(() => { loadSessions() }, [loadSessions])
+  useEffect(() => { loadOrders() }, [loadOrders])
 
   useEffect(() => {
     fetch('/api/processing?active=true')
@@ -427,11 +466,9 @@ export default function ScannerPage() {
 
   // ── Process a scan ────────────────────────────────────────────────────────────
   const doScan = useCallback(async (raw: string) => {
-    if (processingRef.current) return
     const box = activeBoxRef.current
     if (!box || box.is_closed) return
 
-    setScanValue('')
     setFlash(null)
 
     const decoded = decodeBarcode(raw)
@@ -445,6 +482,7 @@ export default function ScannerPage() {
         setTimeout(() => weightInputRef.current?.focus(), 80)
       } else {
         setFlash('bad')
+        setLastKind('bad')
         setLastItem('Not a weight barcode')
         setTimeout(() => setFlash(null), 1800)
         scanRef.current?.focus()
@@ -467,11 +505,13 @@ export default function ScannerPage() {
       if (!res.ok) throw new Error(await res.text())
       const scan: ScanLine = await res.json()
       setScans(prev => [scan, ...prev])
+      setLastKind('ok')
       setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb`)
       setFlash('ok')
       setTimeout(() => setFlash(null), 2000)
     } catch {
       setFlash('bad')
+      setLastKind('bad')
       setLastItem('Save failed — retry')
     } finally {
       setProcessing(false)
@@ -479,6 +519,38 @@ export default function ScannerPage() {
       scanRef.current?.focus()
     }
   }, [])
+
+  // ── Scan queue ─────────────────────────────────────────────────────────────────
+  // Scan guns fire faster than a save round-trip. Complete barcodes are queued and
+  // saved one at a time, so a scan arriving mid-save is never dropped or left
+  // sitting in the scan bar.
+  const scanQueueRef = useRef<string[]>([])
+  const pumpingRef   = useRef(false)
+
+  const pumpScanQueue = useCallback(async () => {
+    if (pumpingRef.current) return
+    pumpingRef.current = true
+    try {
+      while (scanQueueRef.current.length > 0) {
+        const code = scanQueueRef.current.shift()!
+        await doScan(code)
+      }
+    } finally {
+      pumpingRef.current = false
+    }
+  }, [doScan])
+
+  // Consume complete 13-digit barcodes from the scan bar however the digits got
+  // there (typed into the input, or appended by the global key redirect while a
+  // save was in flight). Anything past 13 digits stays in the bar as the start of
+  // the next scan.
+  useEffect(() => {
+    if (!/^\d{13}/.test(scanValue)) return
+    const code = scanValue.slice(0, 13)
+    setScanValue(scanValue.slice(13))
+    scanQueueRef.current.push(code)
+    pumpScanQueue()
+  }, [scanValue, pumpScanQueue])
 
   // ── Session record helpers ───────────────────────────────────────────────────
   async function upsertSession(custName: string, sessDate: string, status = 'scanning'): Promise<string | null> {
@@ -508,6 +580,38 @@ export default function ScannerPage() {
     setSessions(prev => prev.map(x =>
       x.customer_name === s.customer_name && x.session_date === s.session_date ? { ...x, status } : x
     ))
+  }
+
+  // ── Merge two sessions ────────────────────────────────────────────────────────
+  // Moves every box (and its scans + inputs) from src into tgt, renumbering after
+  // the target's highest box, then removes the empty src session.
+  async function mergeSessions(src: SessionWithStats, tgt: SessionWithStats) {
+    const boxWord = src.box_count === 1 ? 'box' : 'boxes'
+    const ok = window.confirm(
+      `Merge "${src.customer_name}" (${src.session_date}) into "${tgt.customer_name}" (${tgt.session_date})?\n\n` +
+      `Its ${src.box_count} ${boxWord} will move into the target session and be renumbered after the target's boxes. This cannot be undone.`
+    )
+    if (!ok) return
+    setMergeBusy(true)
+    try {
+      const res = await fetch('/api/processing/sessions/merge', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source: { customer_name: src.customer_name, session_date: src.session_date },
+          target: { customer_name: tgt.customer_name, session_date: tgt.session_date },
+        }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({} as { error?: string }))
+        window.alert(`Merge failed: ${d.error ?? res.statusText}`)
+      }
+    } catch {
+      window.alert('Merge failed — network error')
+    } finally {
+      setMergeBusy(false)
+      setMergeSource(null)
+      loadSessions()
+    }
   }
 
   async function generatePackoutForSession(s: SessionWithStats) {
@@ -575,6 +679,57 @@ export default function ScannerPage() {
       .catch(() => {})
   }
 
+  // ── Start a scanning session straight from an in-progress retail order ───────
+  // Opens (or creates) a session for the order's customer with Box 1 pre-linked to
+  // the order, so Jill's built order populates right into the scanner.
+  async function startSessionFromOrder(order: RetailOrderLite) {
+    if (!pluLoaded) return
+    const cust = order.customer_name
+    const dt   = new Date().toISOString().slice(0, 10)   // pack date = today
+    setCustomer(cust)
+    setDate(dt)
+    setStarted(true)
+    setCurrentStatus('scanning')
+    const sid = await upsertSession(cust, dt, 'scanning')
+    setCurrentSessionId(sid)
+
+    // Reuse an existing session's boxes for this customer+date if any, else make Box 1.
+    const res = await fetch(`/api/boxes?customer_name=${encodeURIComponent(cust)}&date=${dt}`)
+    let sorted = ([...(await res.json().catch(() => []))] as BoxRecord[]).sort((a, b) => a.box_number - b.box_number)
+    if (sorted.length === 0) {
+      const cr = await fetch('/api/boxes', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ customer_name: cust, pack_date: dt, box_number: 1, is_final: false, order_id: order.id, box_label: cust }),
+      })
+      sorted = [await cr.json() as BoxRecord]
+    } else if (!sorted.some(b => b.order_id === order.id)) {
+      // Boxes already exist but none linked yet → link the first open one.
+      const target = sorted.find(b => !b.is_closed) ?? sorted[0]
+      await fetch('/api/boxes', {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ id: target.id, order_id: order.id, box_label: (target.box_label?.trim() || cust) }),
+      })
+      sorted = sorted.map(b => b.id === target.id ? { ...b, order_id: order.id, box_label: (target.box_label?.trim() || cust) } : b)
+    }
+    setBoxes(sorted)
+    const openBox = sorted.find(b => !b.is_closed) ?? sorted[sorted.length - 1] ?? null
+    setActiveBox(openBox)
+    if (openBox) {
+      const scanRes  = await fetch(`/api/boxes/scans?box_id=${openBox.id}`)
+      const scanData = await scanRes.json().catch(() => [])
+      setScans(Array.isArray(scanData) ? ([...scanData] as ScanLine[]).reverse() : [])
+    } else {
+      setScans([])
+    }
+    loadOrders()
+    fetch(`/api/processing/inputs?customer_name=${encodeURIComponent(cust)}&session_date=${dt}`)
+      .then(r => r.json())
+      .then((d: unknown) => { if (Array.isArray(d)) setInputs(d as ProcessingInput[]) })
+      .catch(() => {})
+  }
+
   // ── Add new box ───────────────────────────────────────────────────────────────
   async function addBox(isFinal: boolean) {
     if (!customer) return
@@ -612,6 +767,45 @@ export default function ScannerPage() {
     setBoxes(prev => prev.map(b => b.id === box.id ? updated : b))
     setActiveBox(updated)
   }
+
+  // ── Set a per-box recipient label (for retail orders scanned under one session) ─
+  async function saveBoxLabel(box: BoxRecord, value: string) {
+    const trimmed = value.trim()
+    const next    = trimmed || null
+    if ((box.box_label ?? null) === next) return
+    // Optimistic update so the field + tab reflect it immediately
+    setBoxes(prev => prev.map(b => b.id === box.id ? { ...b, box_label: next } : b))
+    setActiveBox(prev => prev && prev.id === box.id ? { ...prev, box_label: next } : prev)
+    await fetch('/api/boxes', {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ id: box.id, box_label: next }),
+    })
+  }
+
+  // ── Tie a box to a retail order ──────────────────────────────────────────────
+  async function linkOrder(box: BoxRecord, order: RetailOrderLite) {
+    setShowOrderPicker(false)
+    // Auto-fill the box recipient from the order if it's still blank.
+    const nextLabel = (box.box_label && box.box_label.trim()) ? box.box_label : order.customer_name
+    setBoxes(prev => prev.map(b => b.id === box.id ? { ...b, order_id: order.id, box_label: nextLabel } : b))
+    setActiveBox(prev => prev && prev.id === box.id ? { ...prev, order_id: order.id, box_label: nextLabel } : prev)
+    await fetch('/api/boxes', {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ id: box.id, order_id: order.id, box_label: nextLabel }),
+    })
+  }
+  async function unlinkOrder(box: BoxRecord) {
+    setBoxes(prev => prev.map(b => b.id === box.id ? { ...b, order_id: null } : b))
+    setActiveBox(prev => prev && prev.id === box.id ? { ...prev, order_id: null } : prev)
+    await fetch('/api/boxes', {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ id: box.id, order_id: null }),
+    })
+  }
+  const linkedOrder = activeBox?.order_id ? orders.find(o => o.id === activeBox.order_id) ?? null : null
 
   // ── Close box + auto-print label ─────────────────────────────────────────────
   async function closeBox() {
@@ -668,6 +862,51 @@ export default function ScannerPage() {
     }
   }
 
+  // ── Reassign a box to another session ────────────────────────────────────────
+  // Moves the box (scans follow via box_id) to the target session, renumbered
+  // after the target's boxes, then auto-prints a fresh label with the new info.
+  async function reassignBoxTo(box: BoxRecord, tgtCust: string, tgtDate: string) {
+    setReassignBusy(true)
+    try {
+      const res = await fetch('/api/boxes/reassign', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ box_id: box.id, target: { customer_name: tgtCust, session_date: tgtDate } }),
+      })
+      const data = await res.json().catch(() => ({} as { error?: string }))
+      if (!res.ok) {
+        window.alert(`Reassign failed: ${(data as { error?: string }).error ?? res.statusText}`)
+        return
+      }
+      const moved = data as BoxRecord
+      const remaining = boxes.filter(b => b.id !== box.id)
+      setBoxes(remaining)
+      if (activeBox?.id === box.id) {
+        const next = remaining[remaining.length - 1] ?? null
+        setActiveBox(next)
+        if (next) {
+          const r = await fetch(`/api/boxes/scans?box_id=${next.id}`)
+          const d = await r.json().catch(() => [])
+          setScans(Array.isArray(d) ? ([...d] as ScanLine[]).reverse() : [])
+        } else {
+          setScans([])
+        }
+      }
+      setLastKind('ok')
+      setLastItem(`Box moved to ${tgtCust} — now Box ${moved.box_number} · printing new label`)
+      setFlash('ok')
+      setTimeout(() => setFlash(null), 2500)
+      openPrintWindow(moved, [], labelFlags)   // label route re-reads the box, so it prints the new session info
+      loadSessions()
+    } catch {
+      window.alert('Reassign failed — network error')
+    } finally {
+      setReassignBusy(false)
+      setReassignBox(null)
+      setReassignNewName('')
+      scanRef.current?.focus()
+    }
+  }
+
   // ── Submit weight for a box product (no weight-embedded barcode) ─────────────
   async function submitWeightEntry() {
     if (!weightModal) return
@@ -691,11 +930,13 @@ export default function ScannerPage() {
       if (!res.ok) throw new Error(await res.text())
       const scan: ScanLine = await res.json()
       setScans(prev => [scan, ...prev])
+      setLastKind('ok')
       setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb`)
       setFlash('ok')
       setTimeout(() => setFlash(null), 2000)
     } catch {
       setFlash('bad')
+      setLastKind('bad')
       setLastItem('Save failed — retry')
     } finally {
       setProcessing(false)
@@ -709,6 +950,7 @@ export default function ScannerPage() {
     const isCarcass = /^CT-/.test(identifier)
     setScanValue('')
     setFlash('ok')
+    setLastKind('ok')
     setLastItem(isCarcass ? `🐄 Carcass tag: ${identifier}` : `📦 Box: ${identifier}`)
     setTimeout(() => setFlash(null), 2000)
     try {
@@ -729,6 +971,7 @@ export default function ScannerPage() {
       setShowInputs(true)
     } catch {
       setFlash('bad')
+      setLastKind('bad')
       setLastItem('Input save failed')
     } finally {
       scanRef.current?.focus()
@@ -799,6 +1042,7 @@ export default function ScannerPage() {
       const data = await res.json().catch(() => [])
       setScans(Array.isArray(data) ? ([...data] as ScanLine[]).reverse() : [])
     }
+    setLastKind('ok')
     setLastItem(`Split ${scan.item_name} into ${count} × ${baseWeight.toFixed(2)} lb`)
     setFlash('ok')
     setTimeout(() => setFlash(null), 2500)
@@ -849,6 +1093,8 @@ export default function ScannerPage() {
     const scanning  = sessions.filter(s => s.status === 'scanning')
     const valueAdd  = sessions.filter(s => s.status === 'value_add')
     const complete  = sessions.filter(s => s.status === 'complete')
+    // Retail orders Jill marked "In Progress" — ready to pack/scan straight in.
+    const inProgressOrders = orders.filter(o => o.status === 'in_progress')
 
     const STATUS_CFG = {
       scanning:  { label: 'Scanning',   color: C.yellow,        dot: '●' },
@@ -860,8 +1106,10 @@ export default function ScannerPage() {
       const dateStr = new Date(s.session_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
       const cfg = STATUS_CFG[s.status]
       const btnBase: React.CSSProperties = { borderRadius: 3, padding: '0.3rem 0.75rem', fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer' }
+      const isMergeSource = mergeSource !== null
+        && mergeSource.customer_name === s.customer_name && mergeSource.session_date === s.session_date
       return (
-        <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(166,120,90,0.2)', borderRadius: 6, padding: '0.9rem 1.1rem' }}>
+        <div style={{ background: 'rgba(255,255,255,0.03)', border: isMergeSource ? `1px solid ${C.yellow}` : '1px solid rgba(166,120,90,0.2)', borderRadius: 6, padding: '0.9rem 1.1rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.25rem' }}>
             <span style={{ color: C.cream, fontWeight: 700, fontSize: '0.95rem' }}>{s.customer_name}</span>
             <span style={{ color: C.lightBrown, fontSize: '0.75rem' }}>{dateStr}</span>
@@ -871,6 +1119,22 @@ export default function ScannerPage() {
             {s.closed_count > 0 && ` · ${s.closed_count} closed`}
             {s.total_weight > 0 && ` · ${s.total_weight.toFixed(1)} lbs`}
           </div>
+          {mergeSource ? (
+            // Merge mode: only merge-relevant buttons, so a stray tap can't open a session
+            <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+              {isMergeSource ? (
+                <button onClick={() => setMergeSource(null)}
+                  style={{ ...btnBase, background: 'transparent', border: `1px solid ${C.yellow}`, color: C.yellow }}>
+                  ✕ Cancel Merge
+                </button>
+              ) : (
+                <button disabled={mergeBusy} onClick={() => mergeSessions(mergeSource, s)}
+                  style={{ ...btnBase, background: C.tan, color: C.dark, border: 'none', opacity: mergeBusy ? 0.5 : 1 }}>
+                  ⇄ Merge Into This
+                </button>
+              )}
+            </div>
+          ) : (
           <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
             {(s.status === 'scanning' || s.status === 'value_add') && (
               <button disabled={!pluLoaded} onClick={() => startSessionFromExisting(s.customer_name, s.session_date)}
@@ -882,6 +1146,12 @@ export default function ScannerPage() {
               <button onClick={() => quickStatus(s, 'value_add')}
                 style={{ ...btnBase, background: 'transparent', border: '1px solid rgba(232,136,58,0.5)', color: '#E8883A' }}>
                 → Value Add
+              </button>
+            )}
+            {s.status === 'scanning' && (
+              <button onClick={() => quickStatus(s, 'complete')}
+                style={{ ...btnBase, background: 'transparent', border: `1px solid rgba(76,175,80,0.5)`, color: C.green }}>
+                ✓ Complete
               </button>
             )}
             {s.status === 'value_add' && (
@@ -900,7 +1170,12 @@ export default function ScannerPage() {
               style={{ ...btnBase, background: 'transparent', border: '1px solid rgba(166,120,90,0.25)', color: C.lightBrown }}>
               📋 Packout
             </button>
+            <button onClick={() => setMergeSource(s)} title="Move this session's boxes into another session"
+              style={{ ...btnBase, background: 'transparent', border: '1px solid rgba(166,120,90,0.25)', color: C.lightBrown }}>
+              ⇄ Merge
+            </button>
           </div>
+          )}
         </div>
       )
     }
@@ -946,9 +1221,51 @@ export default function ScannerPage() {
 
         {/* Sessions */}
         <div style={{ flex: 1, padding: '1.5rem', maxWidth: 920, width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
+          {/* Merge mode banner */}
+          {mergeSource && (
+            <div style={{ marginBottom: '1.25rem', background: 'rgba(217,119,6,0.1)', border: `1px solid ${C.yellow}`, borderRadius: 8, padding: '0.85rem 1.1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <span style={{ color: C.cream, fontSize: '0.88rem' }}>
+                {mergeBusy ? '⟳ Merging…' : <>⇄ Merging <strong>{mergeSource.customer_name}</strong> ({mergeSource.session_date}) — pick the session to move its boxes into</>}
+              </span>
+              <button onClick={() => setMergeSource(null)} disabled={mergeBusy}
+                style={{ background: 'transparent', border: `1px solid ${C.yellow}`, color: C.yellow, borderRadius: 3, padding: '0.3rem 0.8rem', fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer' }}>
+                Cancel
+              </button>
+            </div>
+          )}
+          {/* Ready to Pack — retail orders Jill marked In Progress, one click to scan */}
+          {inProgressOrders.length > 0 && (
+            <div style={{ marginBottom: '1.75rem', background: 'rgba(76,175,80,0.06)', border: '1px solid rgba(76,175,80,0.3)', borderRadius: 8, padding: '1rem 1.1rem' }}>
+              <div style={{ fontSize: '0.65rem', color: C.green, textTransform: 'uppercase', letterSpacing: '0.14em', fontWeight: 700, marginBottom: '0.75rem' }}>
+                📋 Ready to Pack — In-Progress Retail Orders ({inProgressOrders.length})
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(255px, 1fr))', gap: '0.65rem' }}>
+                {inProgressOrders.map(o => {
+                  const items   = o.retail_order_items ?? []
+                  const preview = items.slice(0, 3).map(it => it.item_name).join(', ')
+                  return (
+                    <div key={o.id} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(76,175,80,0.3)', borderRadius: 6, padding: '0.9rem 1.1rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.25rem' }}>
+                        <span style={{ color: C.cream, fontWeight: 700, fontSize: '0.95rem' }}>{o.customer_name}</span>
+                        <span style={{ color: C.lightBrown, fontSize: '0.75rem' }}>due {fmtDue(o.due_date)}</span>
+                      </div>
+                      <div style={{ color: C.lightBrown, fontSize: '0.75rem', marginBottom: '0.7rem', minHeight: '1rem' }}>
+                        {items.length} item{items.length !== 1 ? 's' : ''}{preview ? ` · ${preview}${items.length > 3 ? '…' : ''}` : ''}
+                      </div>
+                      <button disabled={!pluLoaded} onClick={() => startSessionFromOrder(o)}
+                        style={{ background: C.green, color: C.dark, border: 'none', borderRadius: 3, padding: '0.4rem 0.9rem', fontSize: '0.8rem', fontWeight: 700, cursor: pluLoaded ? 'pointer' : 'not-allowed', opacity: pluLoaded ? 1 : 0.5 }}>
+                        → Scan this order
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
           {sessionsLoading ? (
             <div style={{ textAlign: 'center', color: C.lightBrown, padding: '3rem', fontSize: '0.9rem' }}>Loading sessions…</div>
           ) : sessions.length === 0 ? (
+            inProgressOrders.length > 0 ? null : (
             <div style={{ textAlign: 'center', color: C.lightBrown, padding: '4rem 2rem' }}>
               <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🔍</div>
               <div style={{ fontSize: '0.95rem', marginBottom: '1.25rem' }}>No sessions yet</div>
@@ -956,6 +1273,7 @@ export default function ScannerPage() {
                 Start First Session
               </button>
             </div>
+            )
           ) : (
             <>
               <Section title="● Scanning"       color={C.yellow}  items={scanning} />
@@ -1069,6 +1387,8 @@ export default function ScannerPage() {
           <button
             key={box.id}
             onClick={() => switchBox(box)}
+            onContextMenu={e => { e.preventDefault(); setBoxMenu({ box, x: e.clientX, y: e.clientY }) }}
+            title="Right-click to reassign to another session"
             style={{
               padding: '0.35rem 0.9rem', borderRadius: 3, cursor: 'pointer',
               fontSize: '0.85rem', fontWeight: 700, whiteSpace: 'nowrap',
@@ -1077,7 +1397,7 @@ export default function ScannerPage() {
               color: activeBox?.id === box.id ? C.dark : (box.is_closed ? C.green : C.tan),
             }}
           >
-            Box {box.box_number}{box.is_final ? ' ★' : ''} {box.is_closed ? '✓' : '●'}
+            Box {box.box_number}{box.is_final ? ' ★' : ''}{box.box_label ? ` · ${box.box_label}` : ''} {box.is_closed ? '✓' : '●'}
           </button>
         ))}
         <div style={{ width: 1, height: 18, background: 'rgba(166,120,90,0.25)', margin: '0 0.3rem', flexShrink: 0 }} />
@@ -1116,19 +1436,17 @@ export default function ScannerPage() {
               if (/^CT-[0-9a-f-]{36}$/.test(raw)) { addInput(raw); return }
               // Partial CMC or CT prefix — let it build up, don't strip
               if (/^(CMC|CT)/i.test(raw)) { setScanValue(raw); return }
-              // Hobart EAN-13: digits only
-              const v = raw.replace(/\D/g, '')
-              setScanValue(v)
-              if (v.length === 13) doScan(v)
+              // Hobart EAN-13: digits only — the scan-queue effect fires once 13 arrive
+              setScanValue(raw.replace(/\D/g, ''))
             }}
             onKeyDown={e => {
               if (e.key === 'Enter' && scanValue.length > 0 && scanValue.length < 13) {
                 if (/^CMC-\d{8}-\d{3}$/.test(scanValue)) addInput(scanValue)
                 else if (/^CT-[0-9a-f-]{36}$/.test(scanValue)) addInput(scanValue)
-                else doScan(scanValue)
+                else { const v = scanValue; setScanValue(''); doScan(v) }
               }
             }}
-            disabled={!isOpen || processing}
+            disabled={!isOpen}
             placeholder={
               !activeBox            ? 'Select or create a box above'
               : activeBox.is_closed ? 'Box closed — add a new box to continue'
@@ -1147,8 +1465,8 @@ export default function ScannerPage() {
         {/* Feedback line */}
         <div style={{ flexShrink: 0, minHeight: '1.9rem', textAlign: 'center' }}>
           {lastItem && (
-            <span style={{ fontSize: '1.05rem', fontWeight: 700, color: flash === 'bad' ? C.red : C.green }}>
-              {flash === 'ok' ? '✓ ' : '⚠ '}{lastItem}
+            <span style={{ fontSize: '1.05rem', fontWeight: 700, color: lastKind === 'bad' ? C.red : C.green }}>
+              {lastKind === 'ok' ? '✓ ' : '⚠ '}{lastItem}
             </span>
           )}
         </div>
@@ -1207,6 +1525,41 @@ export default function ScannerPage() {
                 )}
               </div>
             </div>
+            {/* Per-box recipient name + retail-order link */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '0.65rem', color: 'rgba(166,120,90,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em', flexShrink: 0 }}>For:</span>
+              <input
+                key={activeBox.id}
+                defaultValue={activeBox.box_label ?? ''}
+                onBlur={e => saveBoxLabel(activeBox, e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { (e.target as HTMLInputElement).blur() } }}
+                placeholder="Box recipient / retail customer (optional) — prints on label"
+                style={{ flex: 1, minWidth: 200, maxWidth: 380, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 3, padding: '0.3rem 0.55rem', color: C.cream, fontSize: '0.82rem', outline: 'none' }}
+              />
+              {linkedOrder ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'rgba(76,175,80,0.12)', border: '1px solid rgba(76,175,80,0.4)', borderRadius: 3, padding: '0.25rem 0.5rem' }}>
+                  <span style={{ color: C.green, fontSize: '0.8rem', fontWeight: 700 }}>📋 {linkedOrder.customer_name}</span>
+                  <span style={{ color: C.lightBrown, fontSize: '0.72rem' }}>due {fmtDue(linkedOrder.due_date)}</span>
+                  <button onClick={() => unlinkOrder(activeBox)} title="Unlink order" style={{ background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '0.95rem', lineHeight: 1, padding: 0 }}>✕</button>
+                </div>
+              ) : (
+                <button onClick={() => { loadOrders(); setShowOrderPicker(true) }} style={{ background: 'rgba(201,168,130,0.12)', border: '1px solid rgba(201,168,130,0.4)', borderRadius: 3, padding: '0.3rem 0.7rem', color: C.tan, fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>📋 Link retail order</button>
+              )}
+            </div>
+            {/* What the linked customer ordered — a packing reference */}
+            {linkedOrder && (linkedOrder.retail_order_items?.length ?? 0) > 0 && (
+              <div style={{ marginBottom: '0.5rem', background: 'rgba(76,175,80,0.06)', border: '1px solid rgba(76,175,80,0.2)', borderRadius: 4, padding: '0.4rem 0.6rem' }}>
+                <div style={{ fontSize: '0.64rem', color: C.green, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700, marginBottom: '0.3rem' }}>📋 {linkedOrder.customer_name} ordered</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem 0.9rem' }}>
+                  {linkedOrder.retail_order_items!.map(it => (
+                    <span key={it.id} style={{ fontSize: '0.78rem', color: C.cream }}>
+                      <strong style={{ color: C.tan }}>{it.qty_ordered}{it.unit === 'LB' ? ' lb' : '×'}</strong> {it.item_name}
+                      {it.notes ? <span style={{ color: C.lightBrown }}> ({it.notes})</span> : null}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
             {/* Label flags row */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
               <span style={{ fontSize: '0.65rem', color: 'rgba(166,120,90,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em', marginRight: '0.2rem' }}>Label:</span>
@@ -1433,6 +1786,128 @@ export default function ScannerPage() {
         </div>
 
       </div>
+
+      {/* ── Box right-click menu ── */}
+      {boxMenu && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 250 }}
+          onClick={() => setBoxMenu(null)}
+          onContextMenu={e => { e.preventDefault(); setBoxMenu(null) }}>
+          <div style={{ position: 'fixed', top: Math.min(boxMenu.y, window.innerHeight - 60), left: Math.min(boxMenu.x, window.innerWidth - 240), background: C.darkBrown, border: '1px solid rgba(166,120,90,0.45)', borderRadius: 6, boxShadow: '0 6px 24px rgba(0,0,0,0.6)', overflow: 'hidden' }}>
+            <button
+              onClick={e => { e.stopPropagation(); const b = boxMenu.box; setBoxMenu(null); setReassignBox(b); setReassignNewName(''); loadSessions() }}
+              style={{ display: 'block', width: '100%', textAlign: 'left', background: 'transparent', border: 'none', color: C.cream, padding: '0.7rem 1.1rem', fontSize: '0.88rem', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+              ⇄ Reassign Box {boxMenu.box.box_number} to another session…
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Reassign box modal ── */}
+      {reassignBox && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: '1rem' }}
+          onClick={() => { if (!reassignBusy) { setReassignBox(null); setReassignNewName('') } }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: C.darkBrown, border: '1px solid rgba(166,120,90,0.4)', borderRadius: 8, padding: '1.5rem', width: '100%', maxWidth: 470, maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+              <div style={{ fontFamily: 'Georgia, serif', color: C.cream, fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                Reassign Box {reassignBox.box_number}
+              </div>
+              <button onClick={() => { setReassignBox(null); setReassignNewName('') }} disabled={reassignBusy}
+                style={{ background: 'none', border: 'none', color: C.lightBrown, fontSize: '1.4rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
+            </div>
+            <div style={{ color: C.lightBrown, fontSize: '0.8rem', marginBottom: '1rem' }}>
+              {reassignBusy ? '⟳ Moving box…' : 'Its scans move with it, and a new label prints with the new session info.'}
+            </div>
+
+            {/* New session — who is this case for? */}
+            <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '1rem' }}>
+              <input
+                value={reassignNewName}
+                onChange={e => setReassignNewName(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && reassignNewName.trim() && !reassignBusy) reassignBoxTo(reassignBox, reassignNewName.trim(), date) }}
+                placeholder="New session — who is this case for?"
+                disabled={reassignBusy}
+                style={{ flex: 1, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 4, padding: '0.55rem 0.7rem', color: C.cream, fontSize: '0.9rem', outline: 'none' }}
+              />
+              <button
+                onClick={() => reassignBoxTo(reassignBox, reassignNewName.trim(), date)}
+                disabled={reassignBusy || !reassignNewName.trim()}
+                style={{ background: reassignNewName.trim() ? C.tan : C.medBrown, color: C.dark, border: 'none', borderRadius: 4, padding: '0.55rem 1rem', fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer', opacity: reassignBusy ? 0.6 : 1, flexShrink: 0 }}>
+                + New
+              </button>
+            </div>
+
+            {/* Existing open sessions */}
+            <div style={{ fontSize: '0.65rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: '0.5rem' }}>
+              Or pick an open session
+            </div>
+            {(() => {
+              const open = sessions.filter(s =>
+                s.status !== 'complete' && !(s.customer_name === customer && s.session_date === date))
+              return open.length === 0 ? (
+                <div style={{ color: C.lightBrown, fontSize: '0.85rem', textAlign: 'center', padding: '1.5rem 1rem', fontStyle: 'italic' }}>
+                  No other open sessions — type a name above to start one.
+                </div>
+              ) : (
+                <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                  {open.map(s => (
+                    <button key={`${s.customer_name}|${s.session_date}`}
+                      onClick={() => reassignBoxTo(reassignBox, s.customer_name, s.session_date)}
+                      disabled={reassignBusy}
+                      style={{ textAlign: 'left', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 6, padding: '0.65rem 0.9rem', cursor: 'pointer', opacity: reassignBusy ? 0.5 : 1 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '0.5rem' }}>
+                        <span style={{ color: C.cream, fontWeight: 700, fontSize: '0.92rem' }}>{s.customer_name}</span>
+                        <span style={{ color: C.lightBrown, fontSize: '0.74rem', flexShrink: 0 }}>{s.session_date}</span>
+                      </div>
+                      <div style={{ color: C.lightBrown, fontSize: '0.74rem', marginTop: '0.15rem' }}>
+                        {s.status === 'value_add' ? '◆ Value Add · ' : ''}{s.box_count} box{s.box_count !== 1 ? 'es' : ''}
+                        {s.total_weight > 0 && ` · ${s.total_weight.toFixed(1)} lbs`}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* ── Retail order picker ── */}
+      {showOrderPicker && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: '1rem' }} onClick={() => setShowOrderPicker(false)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: C.darkBrown, border: '1px solid rgba(166,120,90,0.4)', borderRadius: 8, padding: '1.5rem', width: '100%', maxWidth: 470, maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <div style={{ fontFamily: 'Georgia, serif', color: C.cream, fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                Tie Box {activeBox?.box_number} to a retail order
+              </div>
+              <button onClick={() => setShowOrderPicker(false)} style={{ background: 'none', border: 'none', color: C.lightBrown, fontSize: '1.4rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
+            </div>
+            {orders.length === 0 ? (
+              <div style={{ color: C.lightBrown, fontSize: '0.85rem', textAlign: 'center', padding: '2rem 1rem', lineHeight: 1.6 }}>
+                No open retail orders.<br />Create one on the <Link href="/orders" style={{ color: C.tan }}>Orders page</Link> first.
+              </div>
+            ) : (
+              <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                {orders.map(o => {
+                  const items = o.retail_order_items ?? []
+                  const preview = items.slice(0, 3).map(it => it.item_name).join(', ')
+                  return (
+                    <button key={o.id} onClick={() => activeBox && linkOrder(activeBox, o)}
+                      style={{ textAlign: 'left', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 6, padding: '0.7rem 0.9rem', cursor: 'pointer' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '0.5rem' }}>
+                        <span style={{ color: C.cream, fontWeight: 700, fontSize: '0.95rem' }}>{o.customer_name}</span>
+                        <span style={{ color: C.lightBrown, fontSize: '0.74rem', flexShrink: 0 }}>due {fmtDue(o.due_date)}</span>
+                      </div>
+                      <div style={{ color: C.lightBrown, fontSize: '0.76rem', marginTop: '0.2rem' }}>
+                        {items.length} item{items.length !== 1 ? 's' : ''}{preview ? ` · ${preview}${items.length > 3 ? '…' : ''}` : ''}
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── Weight entry modal (box / each products) ── */}
       {weightModal && (

@@ -3,8 +3,10 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import CutScheduleTab from './CutScheduleTab'
+import CloverTab from './CloverTab'
+import { buildHtFile, type HobartPlu } from '@/lib/hobart'
 
-type Tab = 'browser' | 'upload' | 'export' | 'cleanup' | 'cut-schedule' | 'box-labels'
+type Tab = 'browser' | 'upload' | 'export' | 'cleanup' | 'cut-schedule' | 'box-labels' | 'clover'
 
 interface PluItem {
   id:                 string
@@ -121,7 +123,9 @@ function EditPanel({ item, onSaved, onDeleted, onClose }: {
   const [form, setForm] = useState<PluItem>({ ...item, species: item.species || detectSpecies(item.plu_number) })
   const [saving, setSaving]   = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [error, setError]     = useState<string | null>(null)
   const [editTab, setEditTab] = useState<'basic' | 'pricing' | 'label' | 'connections'>('basic')
+  const isNew = !form.id
 
   const f = (k: keyof PluItem) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm(p => ({ ...p, [k]: e.target.value }))
@@ -130,15 +134,31 @@ function EditPanel({ item, onSaved, onDeleted, onClose }: {
   const bool = (k: keyof PluItem) => (v: boolean) => setForm(p => ({ ...p, [k]: v }))
 
   async function save() {
+    if (isNew && (!form.plu_number.trim() || !form.item_name.trim())) {
+      setError('PLU number and item name are required.')
+      return
+    }
     setSaving(true)
-    const res = await fetch('/api/processing', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(form),
-    })
-    const updated = await res.json()
-    setSaving(false)
-    onSaved(updated)
+    setError(null)
+    try {
+      const res = await fetch('/api/processing', {
+        method: isNew ? 'PUT' : 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        // ALL CAPS names (Jill's standard); the API enforces it too.
+        body: JSON.stringify({ ...form, item_name: form.item_name.toUpperCase() }),
+      })
+      const data = await res.json()
+      if (!res.ok || data?.error) {
+        setError(data?.error ?? 'Save failed.')
+        setSaving(false)
+        return
+      }
+      setSaving(false)
+      onSaved(data)
+    } catch {
+      setError('Save failed — check your connection.')
+      setSaving(false)
+    }
   }
 
   async function del() {
@@ -156,8 +176,8 @@ function EditPanel({ item, onSaved, onDeleted, onClose }: {
       {/* Edit header */}
       <div style={{ padding: '0.85rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <span style={{ fontFamily: 'monospace', color: C.lightBrown, fontSize: '0.8rem' }}>PLU {form.plu_number}</span>
-          <span style={{ color: C.cream, fontWeight: 600, marginLeft: '0.75rem', fontSize: '0.95rem' }}>{form.item_name || 'Unnamed'}</span>
+          <span style={{ fontFamily: 'monospace', color: C.lightBrown, fontSize: '0.8rem' }}>{isNew ? '＋ NEW PLU' : `PLU ${form.plu_number}`}</span>
+          <span style={{ color: C.cream, fontWeight: 600, marginLeft: '0.75rem', fontSize: '0.95rem' }}>{form.item_name || (isNew ? 'Fill in the details →' : 'Unnamed')}</span>
         </div>
         <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1 }}>×</button>
       </div>
@@ -270,15 +290,24 @@ function EditPanel({ item, onSaved, onDeleted, onClose }: {
         )}
       </div>
 
+      {/* Error banner */}
+      {error && (
+        <div style={{ padding: '0.55rem 1.25rem', background: 'rgba(224,96,58,0.12)', color: '#E0603A', fontSize: '0.8rem', borderTop: '1px solid rgba(224,96,58,0.3)' }}>
+          {error}
+        </div>
+      )}
+
       {/* Action bar */}
       <div style={{ padding: '0.85rem 1.25rem', borderTop: '1px solid rgba(166,120,90,0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <button onClick={del} disabled={deleting} style={{ ...BTN('transparent', C.red), border: `1px solid ${C.red}`, opacity: 0.7 }}>
-          {deleting ? 'Deleting…' : 'Delete'}
-        </button>
+        {isNew ? <span /> : (
+          <button onClick={del} disabled={deleting} style={{ ...BTN('transparent', C.red), border: `1px solid ${C.red}`, opacity: 0.7 }}>
+            {deleting ? 'Deleting…' : 'Delete'}
+          </button>
+        )}
         <div style={{ display: 'flex', gap: '0.6rem' }}>
           <button onClick={onClose} style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.3)' }}>Cancel</button>
           <button onClick={save} disabled={saving} style={BTN(C.tan)}>
-            {saving ? 'Saving…' : 'Save Changes'}
+            {saving ? (isNew ? 'Creating…' : 'Saving…') : (isNew ? 'Create PLU' : 'Save Changes')}
           </button>
         </div>
       </div>
@@ -319,13 +348,25 @@ function BrowserTab() {
   }, [search, speciesFilter, showInactive, load])
 
   function handleSaved(updated: PluItem) {
-    setItems(prev => prev.map(x => x.id === updated.id ? updated : x))
+    // add-or-update: a newly created PLU won't be in the list yet
+    setItems(prev => prev.some(x => x.id === updated.id)
+      ? prev.map(x => x.id === updated.id ? updated : x)
+      : [updated, ...prev])
     setSelected(updated)
   }
 
   function handleDeleted(id: string) {
     setItems(prev => prev.filter(x => x.id !== id))
     setSelected(null)
+  }
+
+  function startNew() {
+    setSelected({
+      id: '', plu_number: '', item_name: '', price: null, retail_price: null, wholesale_price: null,
+      tare_weight: 0, department: '0', unit: '02', species: '', description: '',
+      is_retail: false, is_wholesale: false, clover_item_id: '', upc: '', label_message: '',
+      sell_by_weight: true, active: true, notes: '', updated_at: '', raw_data: {},
+    })
   }
 
   const speciesCounts = items.reduce<Record<string, number>>((acc, item) => {
@@ -340,6 +381,12 @@ function BrowserTab() {
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {/* Search + filters */}
         <div style={{ padding: '0.75rem', borderBottom: '1px solid rgba(166,120,90,0.2)' }}>
+          <button
+            onClick={startNew}
+            style={{ ...BTN(selected?.id === '' ? C.medBrown : C.tan), width: '100%', marginBottom: '0.6rem', fontSize: '0.85rem' }}
+          >
+            ＋ New PLU
+          </button>
           <input style={{ ...INPUT, marginBottom: '0.5rem' }} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search PLU # or name…" />
           <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
             <select style={{ ...INPUT, width: 'auto', flex: 1, fontSize: '0.78rem', padding: '0.3rem 0.5rem' }} value={speciesFilter} onChange={e => setSpeciesFilter(e.target.value)}>
@@ -413,12 +460,24 @@ function BrowserTab() {
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // EXPORT TAB
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+interface PushReq {
+  id: string
+  created_at: string
+  status: string
+  requested_by?: string | null
+  completed_at?: string | null
+  result?: { plus?: number; scales?: { ip: string; ok: boolean; asleep?: boolean; records?: number }[] } | null
+}
+
 function ExportTab() {
   const [species, setSpecies]     = useState('')
   const [retailOnly, setRetailOnly] = useState(false)
   const [activeOnly, setActiveOnly] = useState(true)
   const [exporting, setExporting] = useState(false)
+  const [exportingHt, setExportingHt] = useState(false)
   const [count, setCount]         = useState<number | null>(null)
+  const [pushing, setPushing]     = useState(false)
+  const [pushLog, setPushLog]     = useState<PushReq[]>([])
 
   async function fetchCount() {
     const params = new URLSearchParams()
@@ -477,6 +536,67 @@ function ExportTab() {
     setExporting(false)
   }
 
+  // Native Hobart .ht export — the ONLY format HCT's "Import HT File" accepts.
+  // Builds RT89 PLU records via lib/hobart (round-trip-validated against the
+  // shop's real scale export). Faithful, conservative: only new/changed PLUs
+  // are written, and HCT merges them into the existing book.
+  async function handleExportHt() {
+    setExportingHt(true)
+    const items = await fetchCount()
+    const plus: HobartPlu[] = items.map(i => ({
+      plu_number:    i.plu_number,
+      item_name:     i.item_name,
+      price:         i.price,
+      tare_weight:   i.tare_weight,
+      upc:           i.upc,
+      unit:          i.unit,
+      department:    i.department,
+      label_message: i.label_message,
+    }))
+    const ht = buildHtFile(plus)
+    // Encode latin-1 (one byte per char) so the 0x1E/0x1F framing bytes match
+    // the scale's native file exactly — no UTF-8 BOM, no multi-byte expansion.
+    const bytes = new Uint8Array(ht.length)
+    for (let n = 0; n < ht.length; n++) bytes[n] = ht.charCodeAt(n) & 0xff
+    const blob = new Blob([bytes], { type: 'application/octet-stream' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href     = url
+    a.download = `PLU_Export_${new Date().toISOString().slice(0,10)}.ht`
+    a.click()
+    URL.revokeObjectURL(url)
+    setExportingHt(false)
+  }
+
+  // Push to scales: queue a request; the shop kiosk (watch mode) picks it up
+  // and sends current prices to all scales on-site.
+  async function loadPushLog() {
+    try {
+      const res = await fetch('/api/scale-push')
+      const j = await res.json()
+      setPushLog(Array.isArray(j) ? j : [])
+    } catch { /* ignore transient errors */ }
+  }
+  useEffect(() => {
+    loadPushLog()
+    const t = setInterval(loadPushLog, 8000)
+    return () => clearInterval(t)
+  }, [])
+
+  async function handlePush() {
+    setPushing(true)
+    try {
+      await fetch('/api/scale-push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requested_by: 'app' }),
+      })
+      await loadPushLog()
+    } finally {
+      setPushing(false)
+    }
+  }
+
   return (
     <div style={{ maxWidth: 680, margin: '0 auto' }}>
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1.5rem', marginBottom: '1.25rem' }}>
@@ -502,19 +622,62 @@ function ExportTab() {
           {count !== null ? <><strong style={{ color: C.cream }}>{count}</strong> items will be exported</> : 'Calculating…'}
         </div>
 
-        <button style={BTN(count ? C.tan : C.medBrown)} onClick={handleExport} disabled={exporting || !count}>
-          {exporting ? 'Generating…' : '⬇ Download CSV'}
+        <button style={BTN(count ? C.tan : C.medBrown)} onClick={handleExportHt} disabled={exportingHt || !count}>
+          {exportingHt ? 'Generating…' : '⬇ Download .ht for Hobart (HCT)'}
+        </button>
+        <button
+          style={{ ...BTN(C.medBrown), marginTop: '0.6rem', fontSize: '0.78rem', opacity: 0.8 }}
+          onClick={handleExport}
+          disabled={exporting || !count}
+        >
+          {exporting ? 'Generating…' : '⬇ Download CSV (spreadsheets only — HCT can’t read this)'}
         </button>
       </div>
 
       <div style={{ background: 'rgba(26,10,4,0.6)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: 4, padding: '1.25rem 1.5rem', fontSize: '0.82rem', color: C.lightBrown, lineHeight: 1.8 }}>
-        <strong style={{ color: C.tan, display: 'block', marginBottom: '0.5rem' }}>To load into Hobart:</strong>
+        <strong style={{ color: C.tan, display: 'block', marginBottom: '0.5rem' }}>To load into the Hobart scale:</strong>
         <ol style={{ margin: 0, paddingLeft: '1.25rem' }}>
-          <li>Download the CSV file above</li>
-          <li>Open Hobart Scale Manager</li>
-          <li>Go to PLU â†’ Import â†’ Select file</li>
-          <li>Map columns if prompted, then import</li>
+          <li>Download the <strong>.ht</strong> file above (not the CSV — HCT only reads HT/Access/HLX).</li>
+          <li>Open HCT (Hobart Communication Tool).</li>
+          <li>Choose <em>Import HT File</em> and select this file.</li>
+          <li>HCT <strong>merges</strong> these PLUs into the scale — existing PLUs not in the file are left untouched.</li>
         </ol>
+      </div>
+
+      <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1.25rem 1.5rem', marginTop: '1.25rem' }}>
+        <h3 style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 0.6rem' }}>
+          🛰 Push to Scales
+        </h3>
+        <p style={{ color: C.tan, fontSize: '0.82rem', lineHeight: 1.6, margin: '0 0 1rem' }}>
+          Send current prices to all shop scales automatically — the kiosk does the on-site push. No file, no HCT.
+        </p>
+        <button style={BTN(pushing ? C.medBrown : C.tan)} onClick={handlePush} disabled={pushing}>
+          {pushing ? 'Queuing…' : '🛰 Push to scales'}
+        </button>
+
+        {pushLog.length > 0 && (
+          <div style={{ marginTop: '1rem', fontSize: '0.78rem' }}>
+            {pushLog.map(r => {
+              const scales = r.result?.scales
+              const okN = scales ? scales.filter(s => s.ok).length : 0
+              const color = r.status === 'done' ? C.green : r.status === 'error' ? '#E0603A' : C.tan
+              const label =
+                r.status === 'pending' ? '⏳ waiting for kiosk'
+                : r.status === 'running' ? '⏳ pushing…'
+                : `${okN}/${scales?.length ?? 0} scales${r.result?.plus ? ` · ${r.result.plus} PLUs` : ''}`
+              return (
+                <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', padding: '0.35rem 0', borderTop: '1px solid rgba(166,120,90,0.12)', color: C.lightBrown }}>
+                  <span>{new Date(r.created_at).toLocaleString()}</span>
+                  <span style={{ color, fontWeight: 600, whiteSpace: 'nowrap' }}>{label}</span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        <p style={{ color: C.lightBrown, fontSize: '0.72rem', marginTop: '0.85rem', opacity: 0.8 }}>
+          Needs the kiosk watcher running (<code>watch.bat</code>) and the scales awake.
+        </p>
       </div>
     </div>
   )
@@ -1284,6 +1447,7 @@ export default function ProcessingPage() {
     { id: 'cut-schedule', label: '📋 Cut Schedule' },
     { id: 'box-labels',   label: '🏷️ Box Labels' },
     { id: 'browser',      label: '🔪 PLU Browser' },
+    { id: 'clover',       label: '🍀 Clover' },
     { id: 'export',       label: '📤 Export' },
     { id: 'cleanup',      label: '🧹 Cleanup' },
     { id: 'upload',       label: '📂 Upload File' },
@@ -1298,6 +1462,7 @@ export default function ProcessingPage() {
           <h1 style={{ fontFamily: 'Georgia, serif', fontSize: '1.1rem', fontWeight: 700, color: C.cream, letterSpacing: '0.08em', textTransform: 'uppercase', margin: 0 }}>Processing</h1>
           <span style={{ color: 'rgba(166,120,90,0.4)' }}>|</span>
           <Link href="/scanner" style={{ background: C.green, color: C.dark, textDecoration: 'none', fontSize: '0.78rem', fontWeight: 700, padding: '0.3rem 0.75rem', borderRadius: 3, letterSpacing: '0.04em' }}>🔍 Processing Scanner ↗</Link>
+          <Link href="/plu-book" style={{ background: C.tan, color: C.dark, textDecoration: 'none', fontSize: '0.78rem', fontWeight: 700, padding: '0.3rem 0.75rem', borderRadius: 3, letterSpacing: '0.04em' }}>📖 Barcode Book ↗</Link>
         </div>
         <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden' }}>
           {tabs.map(t => (
@@ -1315,6 +1480,7 @@ export default function ProcessingPage() {
         {tab === 'cut-schedule' && <CutScheduleTab />}
         {tab === 'box-labels'   && <BoxLabelsTab />}
         {tab === 'browser'      && <BrowserTab />}
+        {tab === 'clover'       && <CloverTab />}
         {tab === 'export'       && <ExportTab />}
         {tab === 'cleanup'      && <CleanupTab />}
         {tab === 'upload'       && <UploadTab />}

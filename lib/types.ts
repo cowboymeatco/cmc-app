@@ -17,6 +17,7 @@ export interface Customer {
 export type AppointmentStatus =
   | 'PendingRequest'
   | 'Booked'
+  | 'Confirmed'
   | 'InstructionsReceived'
   | 'AnimalIn'
   | 'NoShow'
@@ -156,6 +157,7 @@ export interface HarvestLog {
   zero_tolerance_pass:      boolean | null
   zero_tolerance_direct_obs: boolean
   initial_cooler_temp_f:    number | null
+  kill_type:                'USDA' | 'Custom' | null
 }
 
 export interface CorrectiveAction {
@@ -241,6 +243,22 @@ export interface CutScheduleItem {
   locked:                  boolean
   notes:                   string
   created_at:              string
+}
+
+// ── Carcass Assignments ──────────────────────────────────────────────────────
+// Ties a physical carcass (and a split portion of it) to a specific cut customer
+// from the appointment's customers list. The Cut Schedule reads these to show one
+// cut job per assigned portion. Carcasses with no rows fall back to the interim
+// one-row-per-carcass behaviour.
+export interface CarcassAssignment {
+  id:                            string
+  created_at:                    string
+  harvest_log_id:                string
+  appointment_id:                string | null
+  appointment_customer_id:       string   // = customer.id inside the appointment jsonb
+  customer_name:                 string
+  portion:                       string   // 'Whole' | 'Half' | 'Quarter'
+  linked_cutting_instruction_id: string | null
 }
 
 // ── Delivery Scans ────────────────────────────────────────────────────────────

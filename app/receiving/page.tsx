@@ -299,9 +299,13 @@ function AnimalTab() {
       fetch('/api/appointments'),
     ])
     const appts: HarvestAppointment[] = await apptRes.json().catch(() => [])
-    // Only show appointments still waiting to be checked in
+    // Only show appointments still waiting to be checked in. These are every
+    // status BEFORE the animal physically arrives (AnimalIn). Listing them
+    // explicitly so a new pre-check-in status can't silently get dropped here
+    // the way 'Confirmed' was.
+    const PENDING_STATUSES = ['Booked', 'Confirmed', 'InstructionsReceived']
     setAppointments(Array.isArray(appts)
-      ? appts.filter(a => a.status === 'Booked' || a.status === 'InstructionsReceived')
+      ? appts.filter(a => PENDING_STATUSES.includes(a.status))
       : [])
     // checked-in animals (AnimalIn/Processing) now live in harvest log only
   }, [])

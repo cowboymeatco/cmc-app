@@ -105,3 +105,28 @@ export async function PATCH(req: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json(data)
 }
+
+// DELETE /api/orders?id= â€” permanently delete an order.
+// retail_order_items cascade-delete; any scanned boxes get order_id set NULL
+// (their scans are preserved). If the order is already linked to a value-add
+// job or processing input (FK = NO ACTION) the delete is blocked â€” we surface a
+// friendly message so an in-production order can't be silently destroyed.
+export async function DELETE(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const id = searchParams.get('id')
+  if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
+
+  const { error } = await supabase
+    .from('retail_orders')
+    .delete()
+    .eq('id', id)
+
+  if (error) {
+    const blocked = /foreign key|violates|constraint/i.test(error.message)
+    const msg = blocked
+      ? 'This order is already linked to processing or value-add work, so it can’t be deleted. Remove it from there first.'
+      : error.message
+    return NextResponse.json({ error: msg }, { status: blocked ? 409 : 500 })
+  }
+  return NextResponse.json({ ok: true })
+}

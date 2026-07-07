@@ -444,8 +444,9 @@ function NewOrderTab({ onSaved, pluList }: { onSaved: () => void; pluList: PluIt
 // ══════════════════════════════════════════════════════════════════════════════
 // ORDER DETAIL PANEL
 // ══════════════════════════════════════════════════════════════════════════════
-function OrderDetail({ order, onUpdated, pluList }: { order: RetailOrder; onUpdated: (o: RetailOrder) => void; pluList: PluItem[] }) {
+function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOrder; onUpdated: (o: RetailOrder) => void; onDeleted: (id: string) => void; pluList: PluItem[] }) {
   const [advancing, setAdvancing] = useState(false)
+  const [deleting, setDeleting]   = useState(false)
   const [editingItem, setEditingItem] = useState<string | null>(null)
   const [filledVal, setFilledVal] = useState('')
 
@@ -513,6 +514,22 @@ function OrderDetail({ order, onUpdated, pluList }: { order: RetailOrder; onUpda
     onUpdated(updated)
   }
 
+  async function deleteOrder() {
+    const itemNote = order.retail_order_items.length
+      ? ` and its ${order.retail_order_items.length} item${order.retail_order_items.length !== 1 ? 's' : ''}`
+      : ''
+    if (!window.confirm(`Delete ${order.customer_name}'s order${itemNote}? This can’t be undone.`)) return
+    setDeleting(true)
+    const res = await fetch(`/api/orders?id=${order.id}`, { method: 'DELETE' })
+    setDeleting(false)
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      alert(body.error ?? 'Could not delete this order.')
+      return
+    }
+    onDeleted(order.id)
+  }
+
   async function saveFilled(itemId: string) {
     const qty = parseFloat(filledVal)
     if (isNaN(qty)) return
@@ -563,6 +580,14 @@ function OrderDetail({ order, onUpdated, pluList }: { order: RetailOrder; onUpda
               {advancing ? '…' : `→ Mark ${STATUS_LABELS[nextStatus]}`}
             </button>
           )}
+          <button
+            onClick={deleteOrder}
+            disabled={deleting}
+            title="Delete this order"
+            style={{ background: 'transparent', border: `1px solid ${C.red}`, color: C.red, borderRadius: 3, padding: '0.3rem 0.7rem', fontSize: '0.75rem', fontWeight: 600, cursor: deleting ? 'default' : 'pointer', opacity: deleting ? 0.5 : 1 }}
+          >
+            {deleting ? 'Deleting…' : '🗑 Delete Order'}
+          </button>
         </div>
       </div>
 
@@ -798,6 +823,11 @@ function OrderListTab({ fulfilled, pluList }: { fulfilled: boolean; pluList: Plu
     setSelected(updated)
   }
 
+  function handleDeleted(id: string) {
+    setOrders(prev => prev.filter(o => o.id !== id))
+    setSelected(prev => prev?.id === id ? null : prev)
+  }
+
   const overdue = (o: RetailOrder) => new Date(o.due_date) < new Date() && o.status !== 'fulfilled'
 
   return (
@@ -848,7 +878,7 @@ function OrderListTab({ fulfilled, pluList }: { fulfilled: boolean; pluList: Plu
             ← Select an order to view
           </div>
         ) : (
-          <OrderDetail order={selected} onUpdated={handleUpdated} pluList={pluList} />
+          <OrderDetail order={selected} onUpdated={handleUpdated} onDeleted={handleDeleted} pluList={pluList} />
         )}
       </div>
     </div>

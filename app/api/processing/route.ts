@@ -40,10 +40,36 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ ok: true, count: data.length })
 }
 
+// PUT /api/processing â€” create a single new PLU
+export async function PUT(req: NextRequest) {
+  const body = await req.json()
+  const { id: _ignore, created_at: _c, updated_at: _u, ...rest } = body
+  const pluNumber = String(rest.plu_number ?? '').trim()
+  const name = String(rest.item_name ?? '').trim()
+  if (!pluNumber) return NextResponse.json({ error: 'PLU number is required' }, { status: 400 })
+  if (!name)      return NextResponse.json({ error: 'Item name is required' }, { status: 400 })
+
+  const row = {
+    ...rest,
+    plu_number: pluNumber,
+    item_name: name.toUpperCase(), // ALL CAPS standard (Jill)
+    updated_at: new Date().toISOString(),
+  }
+
+  const { data, error } = await supabase.from('plu_items').insert(row).select().single()
+  if (error) {
+    const msg = error.code === '23505' ? `PLU ${pluNumber} already exists` : error.message
+    return NextResponse.json({ error: msg }, { status: 400 })
+  }
+  return NextResponse.json(data)
+}
+
 // PATCH /api/processing â€” update single item by id
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
   const { id, ...updates } = body
+  // ALL CAPS standard (Jill): uppercase any name we write.
+  if (typeof updates.item_name === 'string') updates.item_name = updates.item_name.toUpperCase()
 
   const { data, error } = await supabase
     .from('plu_items')

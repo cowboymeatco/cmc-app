@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { HarvestAppointment, HarvestLog, ChillLog, AnimalReceivingLog, CorrectiveAction } from '@/lib/types'
+import { setFeedbackContext, clearFeedbackContext } from '@/lib/feedbackTelemetry'
 
 type Tab = 'parta' | 'partb' | 'worksheet' | 'harvestlog' | 'chill'
 
@@ -63,9 +64,13 @@ function printCarcassTags(h: HarvestLog) {
   const css = `
     @page { size: 2.4in 5in; margin: 0.18in 0.14in 0.1in; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: Arial, sans-serif; color: #000; width: 2.12in; }
-    .label { page-break-after: always; }
-    .label:last-child { page-break-after: auto; }
+    html, body { font-family: Arial, sans-serif; color: #000; width: 2.12in; }
+    /* Each label must fill the printable page height (5in − top/bottom margin
+       0.28in = 4.72in) so the continuous-roll printer feeds & cuts a SEPARATE
+       physical label per half. Without min-height the two halves collapse onto
+       one label. break-after: page is the modern alias for page-break-after. */
+    .label { min-height: 4.72in; page-break-after: always; break-after: page; page-break-inside: avoid; break-inside: avoid; }
+    .label:last-child { min-height: 0; page-break-after: auto; break-after: auto; }
     .header { text-align: center; margin-bottom: 4pt; }
     .co { font-size: 10pt; font-weight: 900; letter-spacing: 0.18em; text-transform: uppercase; line-height: 1.1; }
     .co-sub { font-size: 6.5pt; letter-spacing: 0.2em; text-transform: uppercase; color: #444; margin-top: 1pt; }
@@ -85,33 +90,45 @@ function printCarcassTags(h: HarvestLog) {
     .val.big { font-size: 12pt; }
     .otm { margin-top: 5pt; text-align: center; font-size: 8.5pt; font-weight: 700; color: #bb0000; border: 2pt solid #bb0000; padding: 3pt 0; letter-spacing: 0.14em; text-transform: uppercase; }
   `
-  function makeLabel(side: 'L' | 'R', bcId: string) {
+  function makeLabel(side: 'L' | 'R' | 'WHOLE', bcId: string) {
+    const whole      = side === 'WHOLE'
     const halfLabel  = side === 'L' ? '◀  L HALF' : 'R HALF  ▶'
     const shortDate  = h.harvest_date.replace(/-/g, '').slice(2)
-    const barcodeVal = `${shortDate}-${h.carcass_tag}-${side}`
+    // Whole-carcass tags carry no -L/-R side suffix on the barcode.
+    const barcodeVal = whole ? `${shortDate}-${h.carcass_tag}` : `${shortDate}-${h.carcass_tag}-${side}`
     const producerHtml = h.producer ? `<div class="producer">${h.producer}</div>` : ''
     const identHtml    = identLine  ? `<div class="ident">${identLine}</div>`      : ''
     const otmHtml      = h.over_30_months ? `<div class="otm">&#9888; Over 30 Months</div>` : ''
-    const avgHtHtml    = avgHalfWt != null ? `<div class="row hl"><span class="lbl">Avg Half Wt</span><span class="val big">${avgHalfWt.toFixed(1)} lbs</span></div>` : ''
-    const totalHtml    = totalHCW  != null ? `<div class="row"><span class="lbl">Total HCW</span><span class="val">${totalHCW} lbs</span></div>` : ''
+    // Split carcasses (beef) highlight average half weight; a whole small-animal
+    // carcass highlights its full hot carcass weight instead.
+    const avgHtHtml    = !whole && avgHalfWt != null ? `<div class="row hl"><span class="lbl">Avg Half Wt</span><span class="val big">${avgHalfWt.toFixed(1)} lbs</span></div>` : ''
+    const wholeWtHtml  =  whole && totalHCW  != null ? `<div class="row hl"><span class="lbl">Carcass Wt</span><span class="val big">${totalHCW} lbs</span></div>` : ''
+    const totalHtml    = !whole && totalHCW  != null ? `<div class="row"><span class="lbl">Total HCW</span><span class="val">${totalHCW} lbs</span></div>` : ''
     const yieldHtml    = h.yield_pct  != null ? `<div class="row"><span class="lbl">Yield</span><span class="val">${h.yield_pct}%</span></div>` : ''
     const inspHtml     = h.inspector_initials ? `<div class="row"><span class="lbl">Inspector</span><span class="val">${h.inspector_initials}</span></div>` : ''
+    const badgeHtml    = whole ? '' : `<div class="half-badge">${halfLabel}</div>`
     return `<div class="label">
       <div class="header"><div class="co">Cowboy Meat Co.</div><div class="co-sub">Forsyth, Montana &nbsp;&middot;&nbsp; Carcass Tag</div></div>
-      <div class="half-badge">${halfLabel}</div><hr/>
+      ${badgeHtml}<hr/>
       ${producerHtml}<div class="species">${h.species}</div>
       <div class="tagnum">${h.carcass_tag || '—'}</div>
       ${identHtml}
       <div class="bc-wrap"><svg id="${bcId}"></svg></div><hr/>
       <div class="row"><span class="lbl">Date</span><span class="val">${dateStr}</span></div>
-      ${avgHtHtml}${totalHtml}${yieldHtml}${inspHtml}${otmHtml}
+      ${avgHtHtml}${wholeWtHtml}${totalHtml}${yieldHtml}${inspHtml}${otmHtml}
       <script>JsBarcode("#${bcId}","${barcodeVal}",{format:"CODE128",width:2.4,height:70,displayValue:true,fontSize:9,margin:10,textMargin:2});<\/script>
     </div>`
   }
+  // Beef carcasses are split into sides → one tag per half. Small animals
+  // (hog / lamb / goat) hang whole → a single carcass tag.
+  const isBeef     = h.species === 'Beef'
+  const labelsHtml = isBeef
+    ? `${makeLabel('L','bc-l')}${makeLabel('R','bc-r')}`
+    : makeLabel('WHOLE','bc-w')
   const html = `<!DOCTYPE html><html><head>
   <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
   <style>${css}</style></head><body>
-  ${makeLabel('L','bc-l')}${makeLabel('R','bc-r')}
+  ${labelsHtml}
   <script>window.onload=function(){window.print()};<\/script>
   </body></html>`
   const w = window.open('', '_blank', 'width=300,height=580')
@@ -247,13 +264,32 @@ function CARModal({ type, harvestLogId, harvestDate, onClose, onSaved }: {
 interface PartARow {
   animal:       AnimalReceivingLog
   logId:        string | null
+  earTag:       string
   knockTime:    string
   liveWeight:   string
   harvestOrder: string
+  killType:     'USDA' | 'Custom' | ''
   partAComplete: boolean
   expanded:     boolean
   saving:       boolean
   error:        string
+}
+
+// ── Small USDA/Custom badge ───────────────────────────────────────────────────
+function KillTypeBadge({ killType }: { killType: 'USDA' | 'Custom' | null | undefined }) {
+  if (!killType) return null
+  const usda = killType === 'USDA'
+  return (
+    <span style={{
+      fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+      padding: '1px 6px', borderRadius: 3, whiteSpace: 'nowrap',
+      color: usda ? C.green : C.yellow,
+      border: `1px solid ${usda ? C.green : C.yellow}66`,
+      background: `${usda ? C.green : C.yellow}1A`,
+    }}>
+      {killType}
+    </span>
+  )
 }
 
 function PartATab({ date, appt }: { date: string; appt: HarvestAppointment | null }) {
@@ -271,37 +307,48 @@ function PartATab({ date, appt }: { date: string; appt: HarvestAppointment | nul
     ])
     const receiving: AnimalReceivingLog[] = await recRes.json().catch(() => [])
     const allLogs: HarvestLog[]           = await logRes.json().catch(() => [])
+    // Stable, deterministic order so the positional same-tag pairing below is repeatable.
+    receiving.sort((a, b) => (a.animal_index ?? 0) - (b.animal_index ?? 0))
     // Stable order so the positional fallback below is deterministic across reloads.
     const apptLogs = allLogs
       .filter(l => l.appointment_id === appt.id)
       .sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''))
 
-    // Tagged animals link to their existing harvest row by ear tag. Untagged
-    // animals (e.g. hogs, which carry no ear tag) have no unique key, so we pair
-    // them positionally with the untagged harvest rows, in the same order.
-    // Without this, a blank ear tag never matched its row — so every save took the
-    // "create new" path, piling up duplicate carcasses and making the harvest
-    // order appear to never save.
-    const logByTag = new Map<string, HarvestLog>()
-    apptLogs.forEach(l => { if (l.ear_tag) logByTag.set(l.ear_tag, l) })
-    const untaggedLogs = apptLogs.filter(l => !l.ear_tag)
-    let untaggedCursor = 0
+    // Pair each receiving animal to its harvest row. Tagged animals normally match
+    // by ear tag — but tags are NOT guaranteed unique: several untagged animals are
+    // often all entered as the same literal (e.g. "NT" for "no tag"), and truly
+    // tagless animals (hogs) carry no tag at all. So bucket the harvest rows by ear
+    // tag (blank tags share the '' bucket) and consume each bucket positionally in
+    // created_at order — a 1:1 animal→row pairing even when many animals share one
+    // tag value. Without this, a duplicate tag collapsed every matching animal onto
+    // a SINGLE row, so only the last save stuck — e.g. only 1 of 4 same-tag "NT"
+    // carcasses recorded its kill type / weights / knock time.
+    const logsByTag = new Map<string, HarvestLog[]>()
+    apptLogs.forEach(l => {
+      const key = l.ear_tag || ''
+      const bucket = logsByTag.get(key)
+      if (bucket) bucket.push(l); else logsByTag.set(key, [l])
+    })
+    const tagCursor = new Map<string, number>()
 
     // Suggest next available harvest order
     const maxOrder = apptLogs.reduce((m, l) => Math.max(m, l.harvest_order ?? 0), 0)
     let nextOrder  = maxOrder + 1
 
     const built: PartARow[] = receiving.map(animal => {
-      const log = animal.ear_tag
-        ? (logByTag.get(animal.ear_tag) ?? null)
-        : (untaggedLogs[untaggedCursor++] ?? null)
+      const key    = animal.ear_tag || ''
+      const cursor = tagCursor.get(key) ?? 0
+      const log    = logsByTag.get(key)?.[cursor] ?? null
+      tagCursor.set(key, cursor + 1)
       const ord = log?.harvest_order ?? nextOrder++
       return {
         animal,
         logId:        log?.id ?? null,
+        earTag:       animal.ear_tag || '',
         knockTime:    log?.knock_time ?? '',
         liveWeight:   log?.live_weight_lbs != null ? String(log.live_weight_lbs) : '',
         harvestOrder: String(ord),
+        killType:     log?.kill_type ?? '',
         partAComplete: log?.part_a_complete ?? false,
         expanded:     false,
         saving:       false,
@@ -338,6 +385,7 @@ function PartATab({ date, appt }: { date: string; appt: HarvestAppointment | nul
       knock_time:        knockTime,
       live_weight_lbs:   liveWt,
       harvest_order:     order,
+      kill_type:         a.killType || null,
       part_a_complete:   true,
       inspector_initials: inspInitials,
       performed_by:      performedBy,
@@ -368,6 +416,7 @@ function PartATab({ date, appt }: { date: string; appt: HarvestAppointment | nul
             knock_time:     knockTime,
             live_weight_lbs: liveWt,
             harvest_order:  order,
+            kill_type:      a.killType || null,
             part_a_complete: true,
           }],
         }),
@@ -379,6 +428,31 @@ function PartATab({ date, appt }: { date: string; appt: HarvestAppointment | nul
     }
 
     upd(i, { saving: false, partAComplete: true, expanded: false })
+  }
+
+  // Correct an animal's ear tag after harvest. The tag is the pairing key between
+  // the receiving record and the harvest record, so BOTH must move together —
+  // updating only one would un-pair them on the next reload.
+  async function saveEarTag(i: number) {
+    const a = rows[i]
+    const newTag = a.earTag.trim()
+    if (newTag === (a.animal.ear_tag || '')) return   // no change
+    upd(i, { saving: true, error: '' })
+
+    // Receiving record first (source of truth for the animal list)…
+    const r1 = await fetch('/api/receiving', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'animal', id: a.animal.id, ear_tag: newTag }) })
+    const j1 = await r1.json().catch(() => ({}))
+    if (j1.error) { upd(i, { saving: false, error: `Tag update failed: ${j1.error}` }); return }
+
+    // …then keep the harvest record's tag in sync (if Part A has been saved).
+    if (a.logId) {
+      const r2 = await fetch('/api/harvest', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: a.logId, ear_tag: newTag }) })
+      const j2 = await r2.json().catch(() => ({}))
+      if (j2.error) { upd(i, { saving: false, error: `Tag synced to check-in but not the harvest record: ${j2.error}` }); return }
+    }
+
+    // Both records moved together → local pairing stays valid, no reload needed.
+    upd(i, { saving: false, animal: { ...a.animal, ear_tag: newTag }, earTag: newTag })
   }
 
   // Remove a whole animal (e.g. a mis-counted / phantom check-in): deletes its
@@ -478,9 +552,12 @@ function PartATab({ date, appt }: { date: string; appt: HarvestAppointment | nul
 
             {/* Animal info */}
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ color: C.cream, fontWeight: 600, fontSize: '0.95rem' }}>
-                {row.animal.ear_tag ? `ET: ${row.animal.ear_tag}` : 'No Ear Tag'}
-                <span style={{ color: C.lightBrown, fontWeight: 400 }}> · {row.animal.sex}</span>
+              <div style={{ color: C.cream, fontWeight: 600, fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span>
+                  {row.animal.ear_tag ? `ET: ${row.animal.ear_tag}` : 'No Ear Tag'}
+                  <span style={{ color: C.lightBrown, fontWeight: 400 }}> · {row.animal.sex}</span>
+                </span>
+                <KillTypeBadge killType={row.killType || null} />
               </div>
               <div style={{ color: C.lightBrown, fontSize: '0.78rem', marginTop: '0.1rem' }}>
                 {row.animal.breed}
@@ -504,6 +581,23 @@ function PartATab({ date, appt }: { date: string; appt: HarvestAppointment | nul
                   {row.error}
                 </div>
               )}
+              {/* Ear-tag correction — writes to both the receiving and harvest records */}
+              <div style={{ marginBottom: '0.85rem' }}>
+                <label style={LABEL}>Ear Tag #</label>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <input style={{ ...INPUT, maxWidth: 220 }} value={row.earTag}
+                    onChange={e => upd(i, { earTag: e.target.value })} placeholder="No tag" />
+                  <button
+                    onClick={() => saveEarTag(i)}
+                    disabled={row.saving || row.earTag.trim() === (row.animal.ear_tag || '')}
+                    title="Correct this animal's ear tag"
+                    style={{ ...BTN('rgba(166,120,90,0.15)', C.tan), border: '1px solid rgba(166,120,90,0.3)',
+                      opacity: (row.saving || row.earTag.trim() === (row.animal.ear_tag || '')) ? 0.5 : 1 }}
+                  >
+                    Update tag
+                  </button>
+                </div>
+              </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0 1rem', marginBottom: '0.85rem' }}>
                 <div>
                   <label style={LABEL}>Harvest Order</label>
@@ -519,6 +613,27 @@ function PartATab({ date, appt }: { date: string; appt: HarvestAppointment | nul
                   <label style={LABEL}>Live Weight (lbs)</label>
                   <input type="number" step="1" style={INPUT} value={row.liveWeight}
                     onChange={e => upd(i, { liveWeight: e.target.value })} placeholder="e.g. 1245" />
+                </div>
+              </div>
+              <div style={{ marginBottom: '0.85rem' }}>
+                <label style={LABEL}>Kill Type</label>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  {(['USDA', 'Custom'] as const).map(kt => {
+                    const active = row.killType === kt
+                    const color  = kt === 'USDA' ? C.green : C.yellow
+                    return (
+                      <button key={kt} type="button"
+                        onClick={() => upd(i, { killType: active ? '' : kt })}
+                        style={{
+                          padding: '0.45rem 1.1rem', borderRadius: 3, cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem',
+                          border: active ? `2px solid ${color}` : '1px solid rgba(166,120,90,0.3)',
+                          background: active ? `${color}22` : 'rgba(255,255,255,0.04)',
+                          color: active ? color : C.lightBrown,
+                        }}>
+                        {kt}
+                      </button>
+                    )
+                  })}
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
@@ -638,17 +753,29 @@ function PartBTab({ date, appt }: { date: string; appt: HarvestAppointment | nul
 
   async function saveZT(i: number) {
     const { fields } = rows[i]
-    if (fields.ztPass === null) return
-    await patch(i, 'zt', { zero_tolerance_pass: fields.ztPass, zero_tolerance_direct_obs: fields.ztDirect })
-    if (!fields.ztPass) setCarModal({ rowIdx: i, type: 'zero_tolerance' })
+    // null is now a valid value to save — it clears a previously-recorded Pass/Fail.
+    // Clearing a CCP also drops the row out of "Part B complete".
+    const body: Record<string, unknown> = { zero_tolerance_pass: fields.ztPass, zero_tolerance_direct_obs: fields.ztDirect }
+    if (fields.ztPass === null) body.part_b_complete = false
+    await patch(i, 'zt', body)
+    if (fields.ztPass === false) setCarModal({ rowIdx: i, type: 'zero_tolerance' })
   }
 
   async function saveHW(i: number) {
     const { fields } = rows[i]
-    if (fields.hwPass === null) return
-    const hwTemp = fields.hwTemp ? parseFloat(fields.hwTemp) : null
-    await patch(i, 'hw', { ccp_pass: fields.hwPass, direct_observation: fields.hwDirect, intervention_temp_f: hwTemp, intervention_applied: true })
-    if (!fields.hwPass) setCarModal({ rowIdx: i, type: 'hot_water' })
+    const cleared = fields.hwPass === null
+    const hwTemp  = !cleared && fields.hwTemp ? parseFloat(fields.hwTemp) : null
+    // Clearing wipes the intervention temp too so the row reads as un-recorded again,
+    // and drops the row out of "Part B complete".
+    const body: Record<string, unknown> = {
+      ccp_pass:             fields.hwPass,
+      direct_observation:   fields.hwDirect,
+      intervention_temp_f:  cleared ? null : hwTemp,
+      intervention_applied: !cleared,
+    }
+    if (cleared) body.part_b_complete = false
+    await patch(i, 'hw', body)
+    if (fields.hwPass === false) setCarModal({ rowIdx: i, type: 'hot_water' })
   }
 
   async function saveCooler(i: number) {
@@ -688,6 +815,14 @@ function PartBTab({ date, appt }: { date: string; appt: HarvestAppointment | nul
 
         const hwStatus = row.log.intervention_temp_f != null ? row.log.ccp_pass : null
 
+        // Un-click support: a Pass/Fail can be deselected back to null. Allow the
+        // Save button when a value is selected OR when a previously-saved value is
+        // being cleared, so an accidental/wrong entry can actually be undone in the DB.
+        const ztClearing = row.fields.ztPass === null && row.log.zero_tolerance_pass !== null
+        const hwClearing = row.fields.hwPass === null && row.log.intervention_temp_f  !== null
+        const ztCanSave  = row.fields.ztPass !== null || ztClearing
+        const hwCanSave  = row.fields.hwPass !== null || hwClearing
+
         return (
           <div key={row.log.id} style={{
             background: C.dark,
@@ -709,10 +844,13 @@ function PartBTab({ date, appt }: { date: string; appt: HarvestAppointment | nul
               </div>
 
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ color: C.cream, fontWeight: 600, fontSize: '0.9rem' }}>
-                  {row.log.ear_tag ? `ET: ${row.log.ear_tag}` : 'No Ear Tag'}
-                  {row.log.carcass_tag ? <span style={{ color: C.tan }}> · Tag {row.log.carcass_tag}</span> : null}
-                  <span style={{ color: C.lightBrown, fontWeight: 400 }}> · {row.log.sex}</span>
+                <div style={{ color: C.cream, fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span>
+                    {row.log.ear_tag ? `ET: ${row.log.ear_tag}` : 'No Ear Tag'}
+                    {row.log.carcass_tag ? <span style={{ color: C.tan }}> · Tag {row.log.carcass_tag}</span> : null}
+                    <span style={{ color: C.lightBrown, fontWeight: 400 }}> · {row.log.sex}</span>
+                  </span>
+                  <KillTypeBadge killType={row.log.kill_type} />
                 </div>
                 <div style={{ fontSize: '0.78rem', color: C.lightBrown, marginTop: '0.1rem' }}>
                   {row.log.breed}
@@ -783,18 +921,18 @@ function PartBTab({ date, appt }: { date: string; appt: HarvestAppointment | nul
                     )}
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
-                    <PassFailBtn active={row.fields.ztPass === true}  pass={true}  onClick={() => updField(i, { ztPass: true  })} />
-                    <PassFailBtn active={row.fields.ztPass === false} pass={false} onClick={() => updField(i, { ztPass: false })} />
+                    <PassFailBtn active={row.fields.ztPass === true}  pass={true}  onClick={() => updField(i, { ztPass: row.fields.ztPass === true  ? null : true  })} />
+                    <PassFailBtn active={row.fields.ztPass === false} pass={false} onClick={() => updField(i, { ztPass: row.fields.ztPass === false ? null : false })} />
                     <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: C.tan, fontSize: '0.85rem', cursor: 'pointer', marginLeft: '0.5rem' }}>
                       <input type="checkbox" checked={row.fields.ztDirect} onChange={e => updField(i, { ztDirect: e.target.checked })} style={{ width: 16, height: 16 }} />
                       Direct Observation
                     </label>
                     <button
                       onClick={() => saveZT(i)}
-                      disabled={row.fields.ztPass === null || row.saving === 'zt'}
-                      style={{ ...BTN(C.tan), opacity: (row.fields.ztPass === null || row.saving === 'zt') ? 0.5 : 1 }}
+                      disabled={!ztCanSave || row.saving === 'zt'}
+                      style={{ ...BTN(ztClearing ? C.red : C.tan), opacity: (!ztCanSave || row.saving === 'zt') ? 0.5 : 1 }}
                     >
-                      {row.saving === 'zt' ? 'Saving…' : 'Save ZT'}
+                      {row.saving === 'zt' ? 'Saving…' : ztClearing ? 'Clear ZT' : 'Save ZT'}
                     </button>
                   </div>
                 </div>
@@ -816,18 +954,18 @@ function PartBTab({ date, appt }: { date: string; appt: HarvestAppointment | nul
                     </div>
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
-                    <PassFailBtn active={row.fields.hwPass === true}  pass={true}  onClick={() => updField(i, { hwPass: true  })} />
-                    <PassFailBtn active={row.fields.hwPass === false} pass={false} onClick={() => updField(i, { hwPass: false })} />
+                    <PassFailBtn active={row.fields.hwPass === true}  pass={true}  onClick={() => updField(i, { hwPass: row.fields.hwPass === true  ? null : true  })} />
+                    <PassFailBtn active={row.fields.hwPass === false} pass={false} onClick={() => updField(i, { hwPass: row.fields.hwPass === false ? null : false })} />
                     <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: C.tan, fontSize: '0.85rem', cursor: 'pointer', marginLeft: '0.5rem' }}>
                       <input type="checkbox" checked={row.fields.hwDirect} onChange={e => updField(i, { hwDirect: e.target.checked })} style={{ width: 16, height: 16 }} />
                       Direct Observation
                     </label>
                     <button
                       onClick={() => saveHW(i)}
-                      disabled={row.fields.hwPass === null || row.saving === 'hw'}
-                      style={{ ...BTN(C.tan), opacity: (row.fields.hwPass === null || row.saving === 'hw') ? 0.5 : 1 }}
+                      disabled={!hwCanSave || row.saving === 'hw'}
+                      style={{ ...BTN(hwClearing ? C.red : C.tan), opacity: (!hwCanSave || row.saving === 'hw') ? 0.5 : 1 }}
                     >
-                      {row.saving === 'hw' ? 'Saving…' : 'Save HW'}
+                      {row.saving === 'hw' ? 'Saving…' : hwClearing ? 'Clear HW' : 'Save HW'}
                     </button>
                   </div>
                 </div>
@@ -1013,7 +1151,7 @@ function HarvestLogTab() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.83rem' }}>
               <thead>
                 <tr style={{ borderBottom: '2px solid rgba(166,120,90,0.3)' }}>
-                  {['#', 'Tag', 'ET', 'Species', 'Sex', 'Breed', 'LW (lbs)', 'L Half', 'R Half', 'HCW (lbs)', 'Yield', 'ZT', 'HW °F', 'Cooler °F', 'Inspector', 'By', ''].map(h => (
+                  {['#', 'Tag', 'ET', 'Owner', 'Species', 'Type', 'Sex', 'Breed', 'LW (lbs)', 'L Half', 'R Half', 'HCW (lbs)', 'Yield', 'ZT', 'HW °F', 'Cooler °F', 'Inspector', 'By', ''].map(h => (
                     <th key={h} style={{ padding: '0.6rem 0.75rem', color: C.lightBrown, fontWeight: 600, textAlign: 'left', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
@@ -1024,7 +1162,9 @@ function HarvestLogTab() {
                     <td style={{ padding: '0.5rem 0.75rem', color: C.lightBrown }}>{l.harvest_order ?? i + 1}</td>
                     <td style={{ padding: '0.5rem 0.75rem', color: C.cream, fontWeight: 600 }}>{l.carcass_tag || '—'}</td>
                     <td style={{ padding: '0.5rem 0.75rem', color: C.tan }}>{l.ear_tag || '—'}</td>
+                    <td style={{ padding: '0.5rem 0.75rem', color: C.cream, whiteSpace: 'nowrap' }}>{l.producer || '—'}</td>
                     <td style={{ padding: '0.5rem 0.75rem', color: C.lightBrown }}>{l.species}</td>
+                    <td style={{ padding: '0.5rem 0.75rem' }}>{l.kill_type ? <KillTypeBadge killType={l.kill_type} /> : <span style={{ color: C.lightBrown }}>—</span>}</td>
                     <td style={{ padding: '0.5rem 0.75rem', color: C.cream }}>{l.sex || '—'}</td>
                     <td style={{ padding: '0.5rem 0.75rem', color: C.lightBrown }}>{l.breed || '—'}</td>
                     <td style={{ padding: '0.5rem 0.75rem', color: C.cream }}>{l.live_weight_lbs ?? '—'}</td>
@@ -1125,6 +1265,7 @@ function WorksheetTab({ date }: { date: string }) {
   const [scheduledHead, setScheduledHead] = useState(0)
   const [qty, setQty]       = useState('')   // tags to pre-print (blank → use scheduledHead)
   const [startNum, setStart] = useState('1')
+  const [halves, setHalves]  = useState(true) // beef split into sides → one tag per half (2 per head)
 
   const load = useCallback(async () => {
     setLoad(true)
@@ -1132,9 +1273,14 @@ function WorksheetTab({ date }: { date: string }) {
 
     // Expected head for the day (for the default tag count): everything booked
     // through in-progress, excluding cancelled/finished/no-show.
-    setScheduledHead((Array.isArray(appts) ? appts : [])
+    const dayAppts = (Array.isArray(appts) ? appts : [])
       .filter(a => ['Booked', 'InstructionsReceived', 'AnimalIn', 'Processing'].includes(a.status))
-      .reduce((s, a) => s + (a.head_count ?? 1), 0))
+    setScheduledHead(dayAppts.reduce((s, a) => s + (a.head_count ?? 1), 0))
+
+    // Default the L+R toggle by species: beef splits into sides (2 tags per head),
+    // but a day with only small animals (hog / lamb / goat) defaults to a single
+    // tag per head. The crew can still flip the checkbox manually for the day.
+    setHalves(dayAppts.length === 0 || dayAppts.some(a => a.species === 'Beef'))
 
     // Animals that are checked in but not yet finished — i.e. "before they're logged".
     const active = (Array.isArray(appts) ? appts : [])
@@ -1171,17 +1317,26 @@ function WorksheetTab({ date }: { date: string }) {
 
   function printSheet() {
     const esc = (s: string) => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] as string))
+    // Carcass ID counts up across all animals in producer order, starting at the
+    // same "Start at #" as the pre-printed tags, so each worksheet row's ID matches
+    // its physical tag number.
+    let cid = parseInt(startNum, 10) || 1
     const rowsHtml = groups.map(g => {
-      const head = `<tr class="grp"><td colspan="7">${esc(g.producer)} — ${esc(g.species)} · ${g.rows.length} head</td></tr>`
-      const body = g.rows.map(r => `<tr>
+      const head = `<tr class="grp"><td colspan="9">${esc(g.producer)} — ${esc(g.species)} · ${g.rows.length} head</td></tr>`
+      const body = g.rows.map(r => {
+        const cidStr = String(cid).padStart(2, '0'); cid += 1
+        return `<tr>
+        <td class="cid">${cidStr}</td>
         <td class="ko"></td>
+        <td class="kt"><span class="cb">☐ Custom</span><span class="cb">☐ USDA</span></td>
         <td class="id">${r.ear_tag ? esc(r.ear_tag) : '—'}${r.over_30_months ? ' <span class="otm">OTM</span>' : ''}</td>
         <td>${esc(r.sex)}</td>
         <td>${esc(r.breed)}</td>
         <td class="wt"></td>
         <td class="wt"></td>
         <td class="wt"></td>
-      </tr>`).join('')
+      </tr>`
+      }).join('')
       return head + body
     }).join('')
 
@@ -1195,7 +1350,11 @@ function WorksheetTab({ date }: { date: string }) {
       table { width: 100%; border-collapse: collapse; font-size: 10pt; }
       th, td { border: 0.75pt solid #000; padding: 5pt 6pt; text-align: left; vertical-align: middle; }
       th { background: #eee; font-size: 7.5pt; text-transform: uppercase; letter-spacing: 0.05em; }
-      td.ko, td.wt { width: 1.05in; height: 28pt; }
+      td.cid { width: 0.6in; height: 32pt; text-align: center; font-weight: 800; font-size: 12pt; }
+      td.ko { width: 0.6in; height: 32pt; }
+      td.wt { width: 0.8in; height: 32pt; }
+      td.kt { width: 0.9in; padding: 4pt 5pt; }
+      td.kt .cb { display: block; font-size: 8pt; white-space: nowrap; line-height: 1.6; }
       td.id { font-weight: 600; }
       tr.grp td { background: #ddd; font-weight: 700; font-size: 10pt; letter-spacing: 0.03em; }
       .otm { color: #bb0000; font-weight: 700; font-size: 7.5pt; border: 1pt solid #bb0000; padding: 0 2pt; margin-left: 2pt; }
@@ -1203,14 +1362,83 @@ function WorksheetTab({ date }: { date: string }) {
       .sig span { display: inline-block; border-top: 0.75pt solid #000; padding-top: 2pt; width: 2.4in; margin-right: 0.6in; }
       .empty { text-align: center; padding: 20pt; color: #666; }
     `
-    const body = rowsHtml || '<tr><td colspan="7" class="empty">No animals checked in for this date.</td></tr>'
+    const body = rowsHtml || '<tr><td colspan="9" class="empty">No animals checked in for this date.</td></tr>'
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${css}</style></head><body>
       <h1>Cowboy Meat Co. — Harvest Worksheet</h1>
       <div class="sub">Forsyth, Montana</div>
-      <div class="meta"><strong>${fmtDate}</strong> &nbsp;·&nbsp; ${totalHead} head &nbsp;·&nbsp; ${groups.length} producer${groups.length === 1 ? '' : 's'}</div>
+      <div class="meta"><strong>${fmtDate}</strong> &nbsp;·&nbsp; Julian <strong>${julianCode(d)}</strong> &nbsp;·&nbsp; ${totalHead} head &nbsp;·&nbsp; ${groups.length} producer${groups.length === 1 ? '' : 's'}</div>
       <table>
         <thead><tr>
-          <th>Kill Order</th><th>Ear Tag / ID</th><th>Sex</th><th>Breed</th>
+          <th>Carcass ID</th><th>Kill Order</th><th>Kill Type</th><th>Ear Tag / ID</th><th>Sex</th><th>Breed</th>
+          <th>L Half (lbs)</th><th>R Half (lbs)</th><th>Total (lbs)</th>
+        </tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+      <div class="sig"><span>Inspector</span><span>Performed By</span></div>
+      <script>window.onload=function(){window.print()}<\/script>
+    </body></html>`
+    const w = window.open('', '_blank', 'width=900,height=760')
+    if (w) { w.document.write(html); w.document.close() }
+  }
+
+  // Preliminary kill sheet — a flat, ordered run-list to carry to the floor
+  // BEFORE the kill. Animals are enumerated in the same order their tags pre-print
+  // (producer-sorted, then check-in order), each assigned its Julian-date tag #
+  // (<julian>-<seq>) so the sheet's order matches the physical tags. Brand owner
+  // shows on every line. Blank weight columns are filled in at the rail.
+  function printKillSheet() {
+    const esc = (s: string) => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] as string))
+    const jul   = julianCode(d)
+    const start = parseInt(startNum, 10) || 1
+    let seq = start
+    const flat = groups.flatMap(g => g.rows.map(r => {
+      const tag = `${jul}-${String(seq).padStart(2, '0')}`
+      seq += 1
+      return { tag, seq: seq - 1, producer: g.producer, species: g.species, ...r }
+    }))
+
+    const bodyRows = flat.map(r => `<tr>
+      <td class="tag">${r.tag}</td>
+      <td class="owner">${esc(r.producer)}</td>
+      <td class="kt"><span class="cb">☐ Custom</span><span class="cb">☐ USDA</span></td>
+      <td>${esc(r.species)}</td>
+      <td class="id">${r.ear_tag ? esc(r.ear_tag) : '—'}${r.over_30_months ? ' <span class="otm">OTM</span>' : ''}</td>
+      <td>${esc(r.sex)}</td>
+      <td>${esc(r.breed)}</td>
+      <td class="wt"></td>
+      <td class="wt"></td>
+      <td class="wt"></td>
+    </tr>`).join('')
+
+    const css = `
+      @page { size: letter portrait; margin: 0.5in; }
+      * { box-sizing: border-box; }
+      body { font-family: Arial, sans-serif; color: #000; margin: 0; }
+      h1 { font-size: 15pt; margin: 0 0 1pt; letter-spacing: 0.03em; }
+      .sub { font-size: 8.5pt; color: #444; text-transform: uppercase; letter-spacing: 0.12em; margin-bottom: 9pt; }
+      .meta { font-size: 9.5pt; margin-bottom: 8pt; }
+      table { width: 100%; border-collapse: collapse; font-size: 9.5pt; }
+      th, td { border: 0.75pt solid #000; padding: 4pt 6pt; text-align: left; vertical-align: middle; }
+      th { background: #eee; font-size: 7.5pt; text-transform: uppercase; letter-spacing: 0.05em; }
+      td.tag { font-weight: 800; font-size: 11pt; white-space: nowrap; }
+      td.owner { font-weight: 600; }
+      td.id { font-weight: 600; }
+      td.wt { width: 0.85in; height: 26pt; }
+      td.kt { width: 0.9in; padding: 3pt 5pt; }
+      td.kt .cb { display: block; font-size: 8pt; white-space: nowrap; line-height: 1.6; }
+      .otm { color: #bb0000; font-weight: 700; font-size: 7.5pt; border: 1pt solid #bb0000; padding: 0 2pt; margin-left: 2pt; }
+      .sig { margin-top: 24pt; font-size: 9pt; }
+      .sig span { display: inline-block; border-top: 0.75pt solid #000; padding-top: 2pt; width: 2.4in; margin-right: 0.6in; }
+      .empty { text-align: center; padding: 20pt; color: #666; }
+    `
+    const body = bodyRows || '<tr><td colspan="10" class="empty">No animals checked in for this date.</td></tr>'
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${css}</style></head><body>
+      <h1>Cowboy Meat Co. — Preliminary Kill Sheet</h1>
+      <div class="sub">Forsyth, Montana</div>
+      <div class="meta"><strong>${fmtDate}</strong> &nbsp;·&nbsp; ${totalHead} head &nbsp;·&nbsp; ${groups.length} producer${groups.length === 1 ? '' : 's'} &nbsp;·&nbsp; Julian ${jul}</div>
+      <table>
+        <thead><tr>
+          <th>Tag #</th><th>Brand Owner</th><th>Kill Type</th><th>Species</th><th>Ear Tag / ID</th><th>Sex</th><th>Breed</th>
           <th>L Half (lbs)</th><th>R Half (lbs)</th><th>Total (lbs)</th>
         </tr></thead>
         <tbody>${body}</tbody>
@@ -1231,48 +1459,66 @@ function WorksheetTab({ date }: { date: string }) {
     const jul     = julianCode(d)
     const calDate = new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 
-    const tags = Array.from({ length: count }, (_, i) => {
-      const seq = String(start + i).padStart(3, '0')
+    // In halves mode every head gets two tags (L + R side), sharing its number.
+    // bcId keeps the SVG element id unique per tag; the barcode value carries the
+    // -L / -R suffix so each half scans distinctly.
+    const sides: (('L' | 'R') | null)[] = halves ? ['L', 'R'] : [null]
+    function makeTag(i: number, side: 'L' | 'R' | null): string {
+      const seq      = String(start + i).padStart(2, '0')
+      const bcId     = `bc${start + i}${side ?? ''}`
+      const halfBand = side ? `<div class="half">${side === 'L' ? '◀  L HALF' : 'R HALF  ▶'}</div>` : ''
+      const wtLines  = side
+        ? `<div class="ln"><span class="k">Half Wt</span><span class="w"></span></div>`
+        : `<div class="ln two"><span class="k">L Half</span><span class="w"></span><span class="k">R Half</span><span class="w"></span></div>
+           <div class="ln"><span class="k">Total</span><span class="w"></span></div>`
       return `<div class="tag">
         <div class="co">COWBOY MEAT CO. · FORSYTH, MT</div>
+        ${halfBand}
         <div class="mid">
           <div class="jul"><div class="jl">JULIAN</div><div class="jv">${jul}</div><div class="cal">${calDate}</div></div>
           <div class="num">${seq}</div>
         </div>
-        <div class="bcwrap"><svg id="bc${start + i}"></svg></div>
+        <div class="bcwrap"><svg id="${bcId}"></svg></div>
         <div class="lines">
           <div class="ln"><span class="k">Producer</span><span class="w"></span></div>
           <div class="ln"><span class="k">Ear Tag / Sex</span><span class="w"></span></div>
-          <div class="ln two"><span class="k">L Half</span><span class="w"></span><span class="k">R Half</span><span class="w"></span></div>
-          <div class="ln"><span class="k">Total</span><span class="w"></span></div>
+          ${wtLines}
         </div>
       </div>`
-    }).join('')
+    }
+    const tags = Array.from({ length: count }, (_, i) => sides.map(s => makeTag(i, s)).join('')).join('')
 
-    const barcodeCalls = Array.from({ length: count }, (_, i) => {
-      const id = `${jul}-${String(start + i).padStart(3, '0')}`
-      return `JsBarcode("#bc${start + i}","${id}",{format:"CODE128",width:1.6,height:34,displayValue:true,fontSize:10,margin:0,textMargin:1});`
-    }).join('')
+    const barcodeCalls = Array.from({ length: count }, (_, i) => sides.map(side => {
+      const seq  = String(start + i).padStart(2, '0')
+      const bcId = `bc${start + i}${side ?? ''}`
+      const id   = `${jul}-${seq}${side ? `-${side}` : ''}`
+      return `JsBarcode("#${bcId}","${id}",{format:"CODE128",width:1.4,height:30,displayValue:true,fontSize:10,margin:0,textMargin:1});`
+    }).join('')).join('')
 
+    // Brother QL-810W, 2.4in (62mm DK-2205) continuous roll: one tag per label.
+    // Each .tag fills the printable page height so the printer feeds & cuts a
+    // SEPARATE label per tag instead of squashing the whole run onto one.
     const css = `
-      @page { size: letter portrait; margin: 0.35in; }
-      * { box-sizing: border-box; }
-      body { font-family: Arial, sans-serif; color: #000; margin: 0; display: flex; flex-wrap: wrap; gap: 0.14in; align-content: flex-start; }
-      .tag { width: 3.55in; height: 1.95in; border: 1pt solid #000; border-radius: 4pt; padding: 6pt 8pt; page-break-inside: avoid; display: flex; flex-direction: column; }
-      .co { font-size: 7pt; font-weight: 800; letter-spacing: 0.12em; text-align: center; border-bottom: 0.5pt solid #999; padding-bottom: 2pt; }
-      .mid { display: flex; justify-content: space-between; align-items: center; margin-top: 2pt; }
+      @page { size: 2.4in 2.5in; margin: 0.1in 0.12in; }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body { font-family: Arial, sans-serif; color: #000; width: 2.16in; }
+      .tag { width: 2.16in; min-height: 2.3in; page-break-after: always; break-after: page; page-break-inside: avoid; break-inside: avoid; display: flex; flex-direction: column; }
+      .tag:last-child { min-height: 0; page-break-after: auto; break-after: auto; }
+      .co { font-size: 7pt; font-weight: 800; letter-spacing: 0.08em; text-align: center; border-bottom: 0.5pt solid #999; padding-bottom: 2pt; }
+      .half { text-align: center; font-size: 11pt; font-weight: 900; letter-spacing: 0.16em; border: 1.5pt solid #000; padding: 2pt 0; margin-top: 3pt; }
+      .mid { display: flex; justify-content: space-between; align-items: center; margin-top: 3pt; }
       .jul { line-height: 1.05; }
       .jl { font-size: 6.5pt; letter-spacing: 0.18em; color: #555; }
-      .jv { font-size: 19pt; font-weight: 900; }
-      .cal { font-size: 7.5pt; color: #333; }
-      .num { font-size: 40pt; font-weight: 900; letter-spacing: 0.02em; }
-      .bcwrap { text-align: center; margin: 1pt 0; }
-      .bcwrap svg { height: 34px; }
+      .jv { font-size: 17pt; font-weight: 900; }
+      .cal { font-size: 7pt; color: #333; }
+      .num { font-size: 36pt; font-weight: 900; letter-spacing: 0.02em; line-height: 1; }
+      .bcwrap { text-align: center; margin: 3pt 0; }
+      .bcwrap svg { max-width: 100%; height: auto; }
       .lines { margin-top: auto; }
-      .ln { display: flex; align-items: flex-end; gap: 4pt; font-size: 8pt; margin-top: 3pt; }
+      .ln { display: flex; align-items: flex-end; gap: 4pt; font-size: 8pt; margin-top: 4pt; }
       .ln.two { gap: 6pt; }
       .k { color: #555; white-space: nowrap; }
-      .w { flex: 1; border-bottom: 0.6pt solid #000; min-height: 11pt; }
+      .w { flex: 1; border-bottom: 0.6pt solid #000; min-height: 12pt; }
     `
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
       <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
@@ -1293,9 +1539,11 @@ function WorksheetTab({ date }: { date: string }) {
           <input type="date" value={d} onChange={e => setD(e.target.value)} style={{ ...INPUT, width: 'auto', padding: '0.4rem 0.75rem' }} />
           <button onClick={() => shiftDate(1)} style={NAV}>›</button>
           <span style={{ color: C.tan, fontSize: '0.9rem', fontWeight: 600, marginLeft: '0.2rem' }}>{fmtDate}</span>
+          <span style={{ color: C.lightBrown, fontSize: '0.78rem', fontWeight: 600 }}>· Julian <strong style={{ color: C.tan }}>{julianCode(d)}</strong></span>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           {d !== todayStr && <button onClick={() => setD(todayStr)} style={{ ...BTN('rgba(166,120,90,0.12)', C.tan), border: '1px solid rgba(166,120,90,0.3)' }}>Today</button>}
+          <button onClick={printKillSheet} disabled={totalHead === 0} style={{ ...BTN('rgba(166,120,90,0.12)', C.tan), border: '1px solid rgba(166,120,90,0.3)', opacity: totalHead === 0 ? 0.5 : 1, cursor: totalHead === 0 ? 'not-allowed' : 'pointer' }} title="Flat run-list ordered by tag #, brand owner per row — carry to the floor before the kill">🖨 Kill Sheet</button>
           <button onClick={printSheet} disabled={totalHead === 0} style={{ ...BTN(C.tan, C.dark), opacity: totalHead === 0 ? 0.5 : 1, cursor: totalHead === 0 ? 'not-allowed' : 'pointer' }}>🖨 Print Worksheet</button>
         </div>
       </div>
@@ -1306,12 +1554,17 @@ function WorksheetTab({ date }: { date: string }) {
           <div style={{ color: C.cream, fontWeight: 700, fontSize: '0.9rem' }}>🏷 Pre-print blank tags</div>
           <div style={{ color: C.lightBrown, fontSize: '0.76rem', marginTop: '0.15rem' }}>
             Julian <strong style={{ color: C.tan }}>{julianCode(d)}</strong> + sequential #, with a scannable barcode. Hand-write producer &amp; weights until the floor printer is set up.
+            {(() => { const heads = (parseInt(qty, 10) || scheduledHead || 0); const labels = heads * (halves ? 2 : 1); return heads > 0 ? <> <strong style={{ color: C.tan }}>{heads} head → {labels} label{labels === 1 ? '' : 's'}{halves ? ' (L + R)' : ''}.</strong></> : null })()}
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: '0.6rem', marginLeft: 'auto', flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', color: halves ? C.cream : C.lightBrown, fontSize: '0.82rem', fontWeight: 600, paddingBottom: '0.5rem' }} title="Beef carcasses split into two sides — print an L tag and an R tag for each head">
+            <input type="checkbox" checked={halves} onChange={e => setHalves(e.target.checked)} style={{ width: 16, height: 16, accentColor: C.tan, cursor: 'pointer' }} />
+            2 per head (L + R)
+          </label>
           <div>
-            <label style={LABEL}>How many</label>
-            <input type="number" min="1" value={qty} onChange={e => setQty(e.target.value)} placeholder={String(scheduledHead || '')} style={{ ...INPUT, width: '5.5rem' }} />
+            <label style={LABEL}>How many head</label>
+            <input type="number" min="1" value={qty} onChange={e => setQty(e.target.value)} placeholder={String(scheduledHead || '')} style={{ ...INPUT, width: '6.5rem' }} />
           </div>
           <div>
             <label style={LABEL}>Start at #</label>
@@ -1338,15 +1591,13 @@ function WorksheetTab({ date }: { date: string }) {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.84rem' }}>
             <thead>
               <tr style={{ borderBottom: '2px solid rgba(166,120,90,0.3)' }}>
-                {['Kill Order', 'Ear Tag / ID', 'Sex', 'Breed', 'L Half', 'R Half', 'Total'].map(h => (
+                {['Carcass ID', 'Kill Order', 'Kill Type', 'Ear Tag / ID', 'Sex', 'Breed', 'L Half', 'R Half', 'Total'].map(h => (
                   <th key={h} style={{ padding: '0.6rem 0.75rem', color: C.lightBrown, fontWeight: 600, textAlign: 'left', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {groups.map((g, gi) => (
-                <FragmentGroup key={gi} group={g} />
-              ))}
+              {(() => { let off = parseInt(startNum, 10) || 1; return groups.map((g, gi) => { const startId = off; off += g.rows.length; return <FragmentGroup key={gi} group={g} startId={startId} /> }) })()}
             </tbody>
           </table>
         </div>
@@ -1356,18 +1607,20 @@ function WorksheetTab({ date }: { date: string }) {
 }
 
 // One producer block: a header row + its animal rows (blank weight cells to write on)
-function FragmentGroup({ group }: { group: WSGroup }) {
+function FragmentGroup({ group, startId }: { group: WSGroup; startId: number }) {
   const blank = <span style={{ color: 'rgba(166,120,90,0.35)' }}>—</span>
   return (
     <>
       <tr style={{ background: 'rgba(166,120,90,0.14)' }}>
-        <td colSpan={7} style={{ padding: '0.45rem 0.75rem', color: C.cream, fontWeight: 700, fontSize: '0.82rem', letterSpacing: '0.02em' }}>
+        <td colSpan={9} style={{ padding: '0.45rem 0.75rem', color: C.cream, fontWeight: 700, fontSize: '0.82rem', letterSpacing: '0.02em' }}>
           {group.producer} <span style={{ color: C.tan, fontWeight: 400 }}>· {group.species} · {group.rows.length} head</span>
         </td>
       </tr>
       {group.rows.map((r, i) => (
         <tr key={i} style={{ borderBottom: '1px solid rgba(166,120,90,0.1)' }}>
+          <td style={{ padding: '0.5rem 0.75rem', color: C.tan, fontWeight: 800, fontFamily: 'monospace' }}>{String(startId + i).padStart(2, '0')}</td>
           <td style={{ padding: '0.5rem 0.75rem' }}>{blank}</td>
+          <td style={{ padding: '0.5rem 0.75rem', color: 'rgba(166,120,90,0.45)', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>☐ Custom &nbsp;☐ USDA</td>
           <td style={{ padding: '0.5rem 0.75rem', color: C.cream, fontWeight: 600 }}>
             {r.ear_tag || 'No Ear Tag'}
             {r.over_30_months && <span style={{ color: C.red, fontSize: '0.65rem', fontWeight: 700, border: `1px solid ${C.red}`, borderRadius: 2, padding: '0 3px', marginLeft: 4 }}>OTM</span>}
@@ -1561,6 +1814,18 @@ export default function HarvestPage() {
   }, [harvestDate])
 
   useEffect(() => { loadAppts() }, [loadAppts])
+
+  // Register harvest state for the feedback widget, so a bug report from this
+  // page arrives knowing the date / tab / appointment the user was on.
+  useEffect(() => {
+    setFeedbackContext({
+      harvest_date:    harvestDate,
+      tab,
+      appointment:     selectedAppt ? `${selectedAppt.source || '—'} · ${selectedAppt.species} · ${selectedAppt.head_count} head` : null,
+      appointment_id:  selectedAppt?.id ?? null,
+    })
+    return () => clearFeedbackContext(['harvest_date', 'tab', 'appointment', 'appointment_id'])
+  }, [harvestDate, tab, selectedAppt])
 
   function shiftDate(d: number) {
     const dt = new Date(harvestDate + 'T12:00:00'); dt.setDate(dt.getDate() + d)

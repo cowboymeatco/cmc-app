@@ -91,6 +91,7 @@ export async function POST(req: NextRequest) {
     zero_tolerance_pass:       null,
     zero_tolerance_direct_obs: false,
     initial_cooler_temp_f:     null,
+    kill_type:                 c.kill_type ?? fields.kill_type ?? null,
   }))
 
   const { data, error } = await supabase
