@@ -152,9 +152,12 @@ export function portionBadge(p: string): { label: string; color: string } {
 // ── Fetch everything the schedule needs ───────────────────────────────────────
 // One pipeline for both the desktop planner and the crew view, so the two can
 // never drift on WHAT they load, only on how they render it. The assignments
-// call chains off the harvest response while the other fetches run, so nothing
-// is serialized behind unrelated requests. Throws on a malformed core response
-// so callers show an error state instead of a falsely empty cooler.
+// and appointments calls chain off the harvest response (fetching only the
+// rows the cooler carcasses reference — both tables grow forever, and the
+// crew view re-fetches every time a phone wakes) while the other fetches run,
+// so nothing is serialized behind unrelated requests. Throws on a malformed
+// core response so callers show an error state instead of a falsely empty
+// cooler.
 export interface ScheduleData {
   logs:        HarvestLog[]
   apptMap:     Map<string, HarvestAppointment>
@@ -164,29 +167,39 @@ export interface ScheduleData {
 }
 
 export async function loadScheduleData(todayISO: string): Promise<ScheduleData> {
-  const [harvest, apptData, instrData, savedData] = await Promise.all([
+  const [harvest, instrData, savedData] = await Promise.all([
     fetch('/api/harvest?status=chilling').then(r => r.json()).then(async data => {
       if (!Array.isArray(data)) throw new Error('unexpected /api/harvest response')
-      const logs = data as HarvestLog[]
-      const ids  = logs.map(l => l.id)
-      const assignData = ids.length
-        ? await fetch(`/api/carcass-assignments?harvest_log_ids=${ids.join(',')}`)
-            .then(r => r.json()).catch(() => [])
-        : []
-      return { logs, assignments: Array.isArray(assignData) ? assignData as CarcassAssignment[] : [] }
+      const logs    = data as HarvestLog[]
+      const logIds  = logs.map(l => l.id)
+      const apptIds = Array.from(new Set(logs.map(l => l.appointment_id).filter(Boolean)))
+      const [assignData, apptData] = await Promise.all([
+        logIds.length
+          ? fetch(`/api/carcass-assignments?harvest_log_ids=${logIds.join(',')}`)
+              .then(r => r.json()).catch(() => [])
+          : [],
+        apptIds.length
+          ? fetch(`/api/appointments?ids=${apptIds.join(',')}`).then(r => r.json())
+          : [],
+      ])
+      if (!Array.isArray(apptData)) throw new Error('unexpected /api/appointments response')
+      return {
+        logs,
+        assignments:  Array.isArray(assignData) ? assignData as CarcassAssignment[] : [],
+        appointments: apptData as HarvestAppointment[],
+      }
     }),
-    fetch('/api/appointments').then(r => r.json()),
-    fetch('/api/cutting-instructions').then(r => r.json()),
+    fetch('/api/cutting-instructions?ids_only=1').then(r => r.json()),
     fetch('/api/cut-schedule?latest=1').then(r => r.json()).catch(() => []),
   ])
-  if (!Array.isArray(apptData) || !Array.isArray(instrData)) {
+  if (!Array.isArray(instrData)) {
     throw new Error('unexpected API response')
   }
   const savedAll = Array.isArray(savedData) ? (savedData as SavedItem[]) : []
   return {
     logs:        harvest.logs,
     assignments: harvest.assignments,
-    apptMap:     new Map((apptData as HarvestAppointment[]).map(a => [a.id, a])),
+    apptMap:     new Map(harvest.appointments.map(a => [a.id, a])),
     instrIds:    new Set<string>((instrData as { id: string }[]).map(i => i.id)),
     saved:       planIsLive(savedAll, todayISO) ? savedAll : [],
   }

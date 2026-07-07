@@ -5,10 +5,16 @@ import { supabase } from '@/lib/supabase'
 export const dynamic = 'force-dynamic'
 
 // GET /api/cutting-instructions
-export async function GET() {
+//   ?ids_only=1 â€” return just [{ id }] rows. The cut schedule only needs an
+//   existence check per id, and the full rows carry the whole form payload,
+//   so this keeps the phone-facing response small as the table grows.
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const idsOnly = searchParams.get('ids_only')
+
   const { data, error } = await supabase
     .from('cutting_instructions')
-    .select('*')
+    .select(idsOnly ? 'id' : '*')
     .order('created_at', { ascending: false })
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

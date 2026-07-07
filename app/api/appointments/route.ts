@@ -2,10 +2,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
-// GET /api/appointments â€” list all appointments
+// GET /api/appointments â€” list appointments
+//   ?date=YYYY-MM-DD  â€” only that harvest date
+//   ?ids=a,b,c        â€” only those appointment ids (the cut schedule fetches
+//                       just the appointments its cooler carcasses reference)
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const date = searchParams.get('date')
+  const idsParam = searchParams.get('ids')
 
   let query = supabase
     .from('harvest_appointments')
@@ -14,6 +18,11 @@ export async function GET(req: NextRequest) {
 
   if (date) {
     query = query.eq('harvest_date', date)
+  }
+  if (idsParam !== null) {
+    const ids = idsParam.split(',').map(s => s.trim()).filter(Boolean)
+    if (ids.length === 0) return NextResponse.json([])
+    query = query.in('id', ids)
   }
 
   const { data, error } = await query
