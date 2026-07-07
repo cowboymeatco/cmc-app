@@ -48,3 +48,13 @@ export function mondayOfISO(iso: string): string {
 export function daysBetweenISO(fromISO: string, toISO: string): number {
   return Math.round((anchor(toISO).getTime() - anchor(fromISO).getTime()) / 86400000)
 }
+
+/** Human label for a YYYY-MM-DD business date (e.g. "Wednesday, Jul 8").
+ * Noon-anchored so the rendered day can't shift in any timezone, browser
+ * or server — use this instead of hand-rolling toLocaleDateString. */
+export function dateLabel(
+  iso: string,
+  opts: Intl.DateTimeFormatOptions = { weekday: 'long', month: 'short', day: 'numeric' },
+): string {
+  return new Date(iso + 'T12:00:00').toLocaleDateString('en-US', opts)
+}

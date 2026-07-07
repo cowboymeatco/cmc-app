@@ -3,6 +3,7 @@ import { useEffect, useState, useRef } from 'react'
 import Link from 'next/link'
 import type { HarvestAppointment, AppointmentCustomer, Customer } from '@/lib/types'
 import { isoDate, addDaysISO, dayOfWeekISO } from '@/lib/dates'
+import { SPECIES_CLR, SPECIES_EMOJI } from '@/lib/cutSchedule'
 
 const SPECIES  = ['Beef', 'Hog', 'Lamb', 'Goat']
 const PORTIONS = ['Whole', 'Half', 'Quarter']
@@ -42,16 +43,6 @@ const STATUS_TEXT: Record<string, string> = {
 const STATUS_OPT_BG = '#2a1d16'
 function statusColor(s: string) { return STATUS_TEXT[s] ?? 'var(--cream)' }
 
-// ── Species color palette ─────────────────────────────────────────────────────
-const SPECIES_CLR: Record<string, string> = {
-  Beef: '#E8883A',
-  Hog:  '#E879A0',
-  Lamb: '#60A5FA',
-  Goat: '#A78BFA',
-}
-const SPECIES_EMOJI: Record<string, string> = {
-  Beef: '🐄', Hog: '🐷', Lamb: '🐑', Goat: '🐐',
-}
 function speciesColor(s: string) { return SPECIES_CLR[s] ?? '#9CA3AF' }
 
 // Encode: full days use "FULL|{note}", closed days use plain reason text

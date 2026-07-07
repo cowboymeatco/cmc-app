@@ -12,13 +12,16 @@ export async function GET(req: NextRequest) {
   let date = searchParams.get('date')
 
   if (searchParams.get('latest')) {
-    const { data: newest, error: newestError } = await supabase
+    // One round trip: newest rows first, then keep only the newest plan's
+    // date. A plan is at most a few dozen rows, so 500 always covers it.
+    const { data, error } = await supabase
       .from('cut_schedule_items')
-      .select('schedule_date')
+      .select('*')
       .order('schedule_date', { ascending: false })
-      .limit(1)
-    if (newestError || !newest?.length) return NextResponse.json([])
-    date = newest[0].schedule_date
+      .order('manual_rank', { ascending: true })
+      .limit(500)
+    if (error || !data?.length) return NextResponse.json([])
+    return NextResponse.json(data.filter(r => r.schedule_date === data[0].schedule_date))
   }
 
   if (!date) return NextResponse.json({ error: 'date required' }, { status: 400 })

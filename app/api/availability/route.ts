@@ -1,7 +1,7 @@
 ﻿export const runtime = 'edge'
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
-import { isoDate, addDaysISO, mondayOfISO } from '@/lib/dates'
+import { isoDate, addDaysISO, mondayOfISO, dateLabel } from '@/lib/dates'
 
 // GET /api/availability
 // Public endpoint â€” returns next 12 weeks with booking availability.
@@ -26,10 +26,9 @@ function speciesEq(species: string, s: typeof DEFAULTS): number {
   }
 }
 
-// "Jul 6" style label for a YYYY-MM-DD (noon-UTC anchor keeps the day stable)
+// "Jul 6" style label for a YYYY-MM-DD
 function weekLabel(iso: string): string {
-  return new Date(iso + 'T12:00:00Z')
-    .toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
+  return dateLabel(iso, { month: 'short', day: 'numeric' })
 }
 
 export async function GET() {

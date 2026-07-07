@@ -4,11 +4,11 @@ import Link from 'next/link'
 import { HarvestAppointment, HarvestLog, CarcassAssignment } from '@/lib/types'
 import AssignCarcassesModal from './AssignCarcassesModal'
 import {
-  type PriorityWeights, type ScheduleEntry, type BreakItem, type ListItem, type SavedItem,
-  DEFAULT_WEIGHTS, WEIGHT_LABELS, buildEntries, planIsLive,
+  type PriorityWeights, type ScheduleEntry, type BreakItem, type ListItem,
+  DEFAULT_WEIGHTS, WEIGHT_LABELS, buildEntries, loadScheduleData, uniqueCarcasses as uniqueOf,
   calcScore, speciesColor, speciesIcon, portionBadge,
 } from '@/lib/cutSchedule'
-import { isoDate } from '@/lib/dates'
+import { isoDate, dateLabel } from '@/lib/dates'
 
 const C = {
   dark:       '#1A0A04',
@@ -47,40 +47,11 @@ export default function CutScheduleTab() {
   const loadAll = useCallback(async () => {
     setLoading(true)
     try {
-      const [harvestData, apptData, instrData, savedData] = await Promise.all([
-        fetch('/api/harvest?status=chilling').then(r => r.json()),
-        fetch('/api/appointments').then(r => r.json()),
-        fetch('/api/cutting-instructions').then(r => r.json()),
-        // Latest saved plan, same as the crew view — a plan saved yesterday
-        // with day breaks covering today must survive the date rollover.
-        fetch('/api/cut-schedule?latest=1').then(r => r.json()).catch(() => []),
-      ])
-      // A non-array is an API error body, not an empty cooler — bail to the
-      // catch so we show an error instead of a silently empty schedule.
-      if (!Array.isArray(harvestData) || !Array.isArray(apptData) || !Array.isArray(instrData)) {
-        throw new Error('unexpected API response')
-      }
-      const loadedLogs  = harvestData as HarvestLog[]
-      const loadedAppts = apptData    as HarvestAppointment[]
-
-      // Assignments for exactly the carcasses currently in the cooler.
-      const logIds = loadedLogs.map(l => l.id)
-      const assignData: CarcassAssignment[] = logIds.length
-        ? await fetch(`/api/carcass-assignments?harvest_log_ids=${logIds.join(',')}`)
-            .then(r => r.json()).catch(() => [])
-        : []
-      const loadedAssigns = Array.isArray(assignData) ? assignData : []
-
-      const apptMap  = new Map(loadedAppts.map(a => [a.id, a]))
-      const instrIds = new Set<string>(instrData.map((i: { id: string }) => i.id))
-      const savedAll = Array.isArray(savedData) ? (savedData as SavedItem[]) : []
-      // A plan that no longer covers today is stale — start from priority order.
-      const saved = planIsLive(savedAll, todayISO) ? savedAll : []
-
-      setLogs(loadedLogs)
-      setAppts(loadedAppts)
-      setAssignments(loadedAssigns)
-      setEntries(buildEntries(loadedLogs, apptMap, instrIds, saved, loadedAssigns, weights))
+      const { logs, apptMap, instrIds, saved, assignments } = await loadScheduleData(todayISO)
+      setLogs(logs)
+      setAppts([...apptMap.values()])
+      setAssignments(assignments)
+      setEntries(buildEntries(logs, apptMap, instrIds, saved, assignments, weights))
       setLoadError(false)
     } catch {
       setLoadError(true)
@@ -238,11 +209,7 @@ export default function CutScheduleTab() {
 
   // ── Render ────────────────────────────────────────────────────────────────────
   const carcasses = entries.filter((e): e is ScheduleEntry => e.type === 'carcass')
-  // Unique physical carcasses (a split animal shows as 2+ rows but is 1 carcass),
-  // so head-count style stats don't double-count splits.
-  const uniqueCarcasses = Array.from(
-    new Map(carcasses.map(e => [e.harvest_log_id, e])).values()
-  )
+  const uniqueCarcasses = uniqueOf(carcasses)
 
   return (
     <div style={{ maxWidth: 900 }}>
@@ -508,7 +475,7 @@ export default function CutScheduleTab() {
                     />
                     {entry.break_date && (
                       <span style={{ color: C.tan, fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
-                        {new Date(entry.break_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long' })}
+                        {dateLabel(entry.break_date, { weekday: 'long' })}
                       </span>
                     )}
                     <span style={{ flex: 1, height: 1, background: 'rgba(245,158,11,0.25)' }} />
@@ -702,7 +669,7 @@ export default function CutScheduleTab() {
                       {entry.days_hanging}d
                     </span>
                     <div style={{ fontSize: '0.63rem', color: C.lightBrown }}>
-                      {new Date(entry.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                      {dateLabel(entry.harvest_date, { month: 'short', day: 'numeric' })}
                     </div>
                   </div>
 

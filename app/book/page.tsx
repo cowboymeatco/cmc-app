@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { SPECIES_EMOJI } from '@/lib/cutSchedule'
 
 // ── Palette (slightly lighter than ops dashboard — more welcoming) ─────────────
 const C = {
@@ -16,7 +17,6 @@ const C = {
 }
 
 const SPECIES_OPTIONS = ['Beef', 'Hog', 'Lamb', 'Goat']
-const SPECIES_EMOJI: Record<string, string> = { Beef: '🐄', Hog: '🐷', Lamb: '🐑', Goat: '🐐' }
 const SPECIES_UNIT: Record<string, string>  = { Beef: 'head', Hog: 'head', Lamb: 'head', Goat: 'head' }
 
 interface Week {

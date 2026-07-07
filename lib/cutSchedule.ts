@@ -108,23 +108,35 @@ export function calcScore(
   return score
 }
 
+// Canonical species palette — every page imports these so Beef is the same
+// color on the cut schedule, capacity, and harvest schedule alike.
+export const SPECIES_CLR: Record<string, string> = {
+  Beef: '#E8883A', Hog: '#E879A0', Lamb: '#60A5FA', Goat: '#A78BFA',
+}
+export const SPECIES_EMOJI: Record<string, string> = {
+  Beef: '🐄', Hog: '🐷', Lamb: '🐑', Goat: '🐐',
+}
+
 export function speciesColor(s: string): string {
-  switch (s) {
-    case 'Beef': return '#A78BFA'
-    case 'Hog':  return '#F59E0B'
-    case 'Lamb': return '#60A5FA'
-    case 'Goat': return '#4CAF50'
-    default:     return '#C9A882'
-  }
+  return SPECIES_CLR[s] ?? '#C9A882'
 }
 
 export function speciesIcon(s: string): string {
-  switch (s) {
-    case 'Beef': return '🐄'
-    case 'Hog':  return '🐖'
-    case 'Lamb': return '🐑'
-    case 'Goat': return '🐐'
-    default:     return '🏷'
+  return SPECIES_EMOJI[s] ?? '🏷'
+}
+
+// A split animal shows as 2+ rows that share harvest_log_id but is ONE
+// physical carcass — head counts and hanging weight must count it once.
+// These are the only two places that rule lives.
+export function uniqueCarcasses(entries: ScheduleEntry[]): ScheduleEntry[] {
+  return Array.from(new Map(entries.map(e => [e.harvest_log_id, e])).values())
+}
+
+export function carcassTotals(entries: ScheduleEntry[]): { head: number; lbs: number } {
+  const uniq = uniqueCarcasses(entries)
+  return {
+    head: uniq.length,
+    lbs:  uniq.reduce((s, e) => s + (e.hot_carcass_weight_lbs ?? 0), 0),
   }
 }
 
@@ -134,6 +146,49 @@ export function portionBadge(p: string): { label: string; color: string } {
     case 'Half':    return { label: '½',     color: '#F97316' }
     case 'Quarter': return { label: '¼',     color: '#F59E0B' }
     default:        return { label: p,       color: '#C9A882' }
+  }
+}
+
+// ── Fetch everything the schedule needs ───────────────────────────────────────
+// One pipeline for both the desktop planner and the crew view, so the two can
+// never drift on WHAT they load, only on how they render it. The assignments
+// call chains off the harvest response while the other fetches run, so nothing
+// is serialized behind unrelated requests. Throws on a malformed core response
+// so callers show an error state instead of a falsely empty cooler.
+export interface ScheduleData {
+  logs:        HarvestLog[]
+  apptMap:     Map<string, HarvestAppointment>
+  instrIds:    Set<string>
+  saved:       SavedItem[]   // already filtered to the live plan (planIsLive)
+  assignments: CarcassAssignment[]
+}
+
+export async function loadScheduleData(todayISO: string): Promise<ScheduleData> {
+  const [harvest, apptData, instrData, savedData] = await Promise.all([
+    fetch('/api/harvest?status=chilling').then(r => r.json()).then(async data => {
+      if (!Array.isArray(data)) throw new Error('unexpected /api/harvest response')
+      const logs = data as HarvestLog[]
+      const ids  = logs.map(l => l.id)
+      const assignData = ids.length
+        ? await fetch(`/api/carcass-assignments?harvest_log_ids=${ids.join(',')}`)
+            .then(r => r.json()).catch(() => [])
+        : []
+      return { logs, assignments: Array.isArray(assignData) ? assignData as CarcassAssignment[] : [] }
+    }),
+    fetch('/api/appointments').then(r => r.json()),
+    fetch('/api/cutting-instructions').then(r => r.json()),
+    fetch('/api/cut-schedule?latest=1').then(r => r.json()).catch(() => []),
+  ])
+  if (!Array.isArray(apptData) || !Array.isArray(instrData)) {
+    throw new Error('unexpected API response')
+  }
+  const savedAll = Array.isArray(savedData) ? (savedData as SavedItem[]) : []
+  return {
+    logs:        harvest.logs,
+    assignments: harvest.assignments,
+    apptMap:     new Map((apptData as HarvestAppointment[]).map(a => [a.id, a])),
+    instrIds:    new Set<string>((instrData as { id: string }[]).map(i => i.id)),
+    saved:       planIsLive(savedAll, todayISO) ? savedAll : [],
   }
 }
 

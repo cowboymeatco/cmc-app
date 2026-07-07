@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import type { CapacityResponse, CapacitySettings } from '@/app/api/capacity/route'
 import { isoDate } from '@/lib/dates'
+import { SPECIES_CLR, SPECIES_EMOJI } from '@/lib/cutSchedule'
 
 const C = {
   dark:       '#1A0A04',
@@ -16,12 +17,6 @@ const C = {
   red:        '#EF4444',
 }
 
-const SPECIES_CLR: Record<string, string> = {
-  Beef: '#E8883A', Hog: '#E879A0', Lamb: '#60A5FA', Goat: '#A78BFA',
-}
-const SPECIES_EMOJI: Record<string, string> = {
-  Beef: '🐄', Hog: '🐷', Lamb: '🐑', Goat: '🐐',
-}
 
 const INPUT: React.CSSProperties = {
   background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(166,120,90,0.35)',

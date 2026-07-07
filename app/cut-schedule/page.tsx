@@ -6,12 +6,12 @@
 // latest saved plan, falling back to priority order when nothing is saved yet.
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
-import { HarvestAppointment, HarvestLog, CarcassAssignment } from '@/lib/types'
 import {
-  type ScheduleEntry, type SavedItem,
-  DEFAULT_WEIGHTS, buildEntries, planIsLive, speciesColor, speciesIcon, portionBadge,
+  type ScheduleEntry,
+  DEFAULT_WEIGHTS, buildEntries, loadScheduleData, carcassTotals,
+  speciesColor, speciesIcon, portionBadge,
 } from '@/lib/cutSchedule'
-import { isoDate } from '@/lib/dates'
+import { isoDate, dateLabel } from '@/lib/dates'
 
 const C = {
   dark:       '#1A0A04',
@@ -32,7 +32,6 @@ interface Section {
 }
 
 export default function CrewCutSchedulePage() {
-  const [entries,    setEntries]    = useState<ScheduleEntry[]>([])
   const [sections,   setSections]   = useState<Section[]>([])
   const [planDate,   setPlanDate]   = useState<string | null>(null)
   const [loading,    setLoading]    = useState(true)
@@ -46,36 +45,9 @@ export default function CrewCutSchedulePage() {
     inFlight.current = true
     setRefreshing(true)
     try {
-      const [harvestData, apptData, instrData, savedData] = await Promise.all([
-        fetch('/api/harvest?status=chilling').then(r => r.json()),
-        fetch('/api/appointments').then(r => r.json()),
-        fetch('/api/cutting-instructions').then(r => r.json()),
-        fetch('/api/cut-schedule?latest=1').then(r => r.json()).catch(() => []),
-      ])
-      // A non-array here is an API error body, not an empty cooler — bail to
-      // the catch so the last good data stays on screen instead of wiping it.
-      if (!Array.isArray(harvestData) || !Array.isArray(apptData) || !Array.isArray(instrData)) {
-        throw new Error('unexpected API response')
-      }
-      const logs  = harvestData as HarvestLog[]
-      const appts = apptData    as HarvestAppointment[]
-
-      const logIds = logs.map(l => l.id)
-      const assignData: CarcassAssignment[] = logIds.length
-        ? await fetch(`/api/carcass-assignments?harvest_log_ids=${logIds.join(',')}`)
-            .then(r => r.json()).catch(() => [])
-        : []
-      const assigns = Array.isArray(assignData) ? assignData : []
-
-      const apptMap  = new Map(appts.map(a => [a.id, a]))
-      const instrIds = new Set<string>(instrData.map((i: { id: string }) => i.id))
-      const savedAll = Array.isArray(savedData) ? (savedData as SavedItem[]) : []
-      const today    = isoDate()
-      // A plan that no longer covers today would render stale day headings —
-      // ignore it and fall back to fresh priority order.
-      const saved = planIsLive(savedAll, today) ? savedAll : []
-
-      const list = buildEntries(logs, apptMap, instrIds, saved, assigns, DEFAULT_WEIGHTS)
+      const today = isoDate()
+      const { logs, apptMap, instrIds, saved, assignments } = await loadScheduleData(today)
+      const list = buildEntries(logs, apptMap, instrIds, saved, assignments, DEFAULT_WEIGHTS)
 
       // Split the ordered list into day sections: a break heads the day below
       // it, carcasses before the first break are simply "up first".
@@ -101,7 +73,6 @@ export default function CrewCutSchedulePage() {
       }
       const secs = [lead, ...rest].filter(s => s.entries.length > 0)
 
-      setEntries(list.filter((e): e is ScheduleEntry => e.type === 'carcass'))
       setSections(secs)
       setPlanDate(saved[0]?.schedule_date ?? null)
       setUpdatedAt(new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }))
@@ -125,30 +96,21 @@ export default function CrewCutSchedulePage() {
     return () => document.removeEventListener('visibilitychange', onVisible)
   }, [load])
 
-  // Head-count / weight stats dedupe by carcass so a split animal counts once.
-  const uniqueCarcasses = Array.from(new Map(entries.map(e => [e.harvest_log_id, e])).values())
-  const totalLbs      = uniqueCarcasses.reduce((s, e) => s + (e.hot_carcass_weight_lbs ?? 0), 0)
+  // Everything below derives from `sections` — one source of truth.
+  const entries       = sections.flatMap(s => s.entries)
+  const totals        = carcassTotals(entries)
   const missingSheets = entries.filter(e => !e.has_instructions).length
   const todayISO      = isoDate()
+  // Rail-order number per row, precomputed so rendering never mutates state.
+  const orderNo       = new Map(entries.map((e, i) => [e.key, i + 1]))
 
   const dayLabel = (date: string | null, isFirst: boolean): string => {
     // Only the leading section is "up first" — a saved break the planner never
     // dated must not masquerade as it.
     if (!date) return isFirst ? 'Up first' : 'Date not set'
-    const label = new Date(date + 'T12:00:00')
-      .toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
+    const label = dateLabel(date)
     return date === todayISO ? `Today — ${label}` : label
   }
-
-  const sectionTotals = (sec: Section) => {
-    const seen = new Map<string, number>()
-    for (const e of sec.entries) {
-      if (!seen.has(e.harvest_log_id)) seen.set(e.harvest_log_id, e.hot_carcass_weight_lbs ?? 0)
-    }
-    return { head: seen.size, lbs: Array.from(seen.values()).reduce((s, v) => s + v, 0) }
-  }
-
-  let carcassNo = 0
 
   return (
     <div style={{ minHeight: '100vh', background: C.darkBrown, color: C.cream, paddingBottom: '2rem' }}>
@@ -169,7 +131,7 @@ export default function CrewCutSchedulePage() {
           <div style={{ fontSize: '0.7rem', color: C.lightBrown, marginTop: 2 }}>
             {updatedAt ? `Updated ${updatedAt}` : 'Loading…'}
             {planDate && (
-              <> · plan saved {new Date(planDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</>
+              <> · plan saved {dateLabel(planDate, { month: 'short', day: 'numeric' })}</>
             )}
             {loadError && entries.length > 0 && (
               <span style={{ color: C.red, fontWeight: 700 }}> · ⚠ last refresh failed</span>
@@ -196,8 +158,8 @@ export default function CrewCutSchedulePage() {
         {!loading && entries.length > 0 && (
           <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
             {[
-              { label: 'head', value: String(uniqueCarcasses.length), color: C.tan },
-              { label: 'lb hanging', value: Math.round(totalLbs).toLocaleString(), color: C.cream },
+              { label: 'head', value: String(totals.head), color: C.tan },
+              { label: 'lb hanging', value: Math.round(totals.lbs).toLocaleString(), color: C.cream },
               { label: 'no sheet', value: String(missingSheets), color: missingSheets > 0 ? C.red : C.green },
             ].map(s => (
               <div key={s.label} style={{
@@ -254,7 +216,7 @@ export default function CrewCutSchedulePage() {
 
         {/* Day sections */}
         {!loading && sections.map(sec => {
-          const totals = sectionTotals(sec)
+          const secTotals = carcassTotals(sec.entries)
           return (
             <section key={sec.key} style={{ marginBottom: '1.1rem' }}>
               <div style={{
@@ -269,13 +231,13 @@ export default function CrewCutSchedulePage() {
                   ▸ {dayLabel(sec.date, sec.key === 'first')}
                 </span>
                 <span style={{ color: C.lightBrown, fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
-                  {totals.head} head · {Math.round(totals.lbs).toLocaleString()} lb
+                  {secTotals.head} head · {Math.round(secTotals.lbs).toLocaleString()} lb
                 </span>
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
                 {sec.entries.map(entry => {
-                  carcassNo++
+                  const no        = orderNo.get(entry.key) ?? 0
                   const pb        = portionBadge(entry.portion)
                   const spColor   = speciesColor(entry.species)
                   const hangColor = entry.days_hanging >= 10 ? C.red : entry.days_hanging >= 6 ? C.amber : C.green
@@ -290,9 +252,9 @@ export default function CrewCutSchedulePage() {
                       <div style={{
                         display: 'flex', alignItems: 'center', flexShrink: 0,
                         fontFamily: 'Georgia, serif', fontSize: '1.3rem', fontWeight: 700,
-                        color: carcassNo <= 3 ? C.amber : C.lightBrown, minWidth: 26, justifyContent: 'center',
+                        color: no <= 3 ? C.amber : C.lightBrown, minWidth: 26, justifyContent: 'center',
                       }}>
-                        {carcassNo}
+                        {no}
                       </div>
 
                       {/* Who + what */}
