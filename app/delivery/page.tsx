@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { DeliveryScan } from '@/lib/types'
+import { isoDateTime } from '@/lib/dates'
 
 type Tab = 'new' | 'log'
 type LogFilter = 'all' | 'pending' | 'reviewed'
@@ -106,7 +107,7 @@ function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Reco
   const [success, setSuccess] = useState(false)
 
   const [form, setForm] = useState({
-    delivered_at: new Date().toISOString().slice(0, 16),
+    delivered_at: isoDateTime(),
     driver:       '',
     customer:     '',
     notes:        '',
@@ -146,11 +147,13 @@ function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Reco
     await fetch('/api/delivery', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...form, barcodes }),
+      // delivered_at is a datetime-local wall-time string — store a real
+      // instant so it sorts consistently with API-defaulted UTC rows.
+      body: JSON.stringify({ ...form, delivered_at: new Date(form.delivered_at).toISOString(), barcodes }),
     })
     setSaving(false)
     setSuccess(true)
-    setForm({ delivered_at: new Date().toISOString().slice(0, 16), driver: '', customer: '', notes: '' })
+    setForm({ delivered_at: isoDateTime(), driver: '', customer: '', notes: '' })
     setBarcodes([])
     onSaved()
     setTimeout(() => setSuccess(false), 4000)

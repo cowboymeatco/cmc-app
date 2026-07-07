@@ -3,9 +3,24 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
 // GET /api/cut-schedule?date=YYYY-MM-DD
+// GET /api/cut-schedule?latest=1 — the most recently saved plan, whatever date
+// it was saved under. Both the planner and the crew view load latest and apply
+// lib/cutSchedule's planIsLive() so a plan with day breaks laid out ahead
+// survives the date rollover, but a plan past its last day is ignored.
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
-  const date = searchParams.get('date')
+  let date = searchParams.get('date')
+
+  if (searchParams.get('latest')) {
+    const { data: newest, error: newestError } = await supabase
+      .from('cut_schedule_items')
+      .select('schedule_date')
+      .order('schedule_date', { ascending: false })
+      .limit(1)
+    if (newestError || !newest?.length) return NextResponse.json([])
+    date = newest[0].schedule_date
+  }
+
   if (!date) return NextResponse.json({ error: 'date required' }, { status: 400 })
 
   const { data, error } = await supabase

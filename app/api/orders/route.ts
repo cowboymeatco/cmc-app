@@ -1,6 +1,7 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { isoDate } from '@/lib/dates'
 
 export const dynamic = 'force-dynamic'
 
@@ -43,7 +44,7 @@ export async function POST(req: NextRequest) {
       customer_name:    orderFields.customer_name,
       customer_phone:   orderFields.customer_phone  ?? '',
       taken_by:         orderFields.taken_by         ?? '',
-      order_date:       orderFields.order_date       ?? new Date().toISOString().slice(0, 10),
+      order_date:       orderFields.order_date       ?? isoDate(),
       due_date:         orderFields.due_date,
       fresh_or_frozen:  orderFields.fresh_or_frozen  ?? 'frozen',
       fulfillment_type: orderFields.fulfillment_type ?? 'pickup',

@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import type { CapacityResponse, CapacitySettings } from '@/app/api/capacity/route'
+import { isoDate } from '@/lib/dates'
 
 const C = {
   dark:       '#1A0A04',
@@ -103,7 +104,7 @@ export default function CapacityPage() {
   })
 
   // Quick-add to cooler
-  const today = new Date().toISOString().slice(0, 10)
+  const today = isoDate()
   const emptyEntry = () => ({ species: 'Beef', carcass_tag: '', producer: '', harvest_date: today, sex: 'Steer', ear_tag: '', hot_carcass_weight_lbs: '', over_30_months: false })
   const [addModal,   setAddModal]   = useState(false)
   const [addEntries, setAddEntries] = useState([emptyEntry()])

@@ -2,8 +2,9 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
+import { isoDate } from '@/lib/dates'
 
-type Tab        = 'new' | 'open' | 'fulfilled'
+type Tab       = 'new' | 'open' | 'fulfilled'
 type Fulfillment = 'pickup' | 'delivery' | 'shipping'
 type FreshFrozen = 'fresh' | 'frozen'
 type OrderStatus = 'pending' | 'in_progress' | 'ready' | 'fulfilled'
@@ -154,7 +155,7 @@ function NewOrderTab({ onSaved, pluList }: { onSaved: () => void; pluList: PluIt
     customer_name:    '',
     customer_phone:   '',
     taken_by:         '',
-    order_date:       new Date().toISOString().slice(0, 10),
+    order_date:       isoDate(),
     due_date:         '',
     fresh_or_frozen:  'frozen' as FreshFrozen,
     fulfillment_type: 'pickup' as Fulfillment,

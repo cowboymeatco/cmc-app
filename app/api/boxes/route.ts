@@ -1,6 +1,7 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { isoDate } from '@/lib/dates'
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -24,14 +25,14 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await req.json()
-  const dateStr = new Date().toISOString().slice(2, 10).replace(/-/g, '')
+  const dateStr = isoDate().slice(2).replace(/-/g, '')
   const rand = Math.random().toString(36).substring(2, 6).toUpperCase()
   const serial_number = `CMC${dateStr}${rand}`
   const { data, error } = await supabase
     .from('boxes')
     .insert([{
       customer_name: body.customer_name ?? '',
-      pack_date:     body.pack_date ?? new Date().toISOString().slice(0, 10),
+      pack_date:     body.pack_date ?? isoDate(),
       box_number:    body.box_number ?? 1,
       is_closed:     false,
       is_final:      body.is_final ?? false,

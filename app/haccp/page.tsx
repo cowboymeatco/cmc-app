@@ -2,6 +2,7 @@
 import { useState, useCallback } from 'react'
 import Link from 'next/link'
 import { HarvestAppointment, AnimalReceivingLog, HarvestLog, ChillLog } from '@/lib/types'
+import { isoDate } from '@/lib/dates'
 
 const C = {
   dark:       '#1A0A04',
@@ -345,7 +346,7 @@ function printChillingForm(data: HACCPData, date: string) {
 
 // ── HACCP Hub Page ────────────────────────────────────────────────────────────
 export default function HACCPPage() {
-  const today = new Date().toISOString().slice(0, 10)
+  const today = isoDate()
   const [date,    setDate]    = useState(today)
   const [data,    setData]    = useState<HACCPData | null>(null)
   const [loading, setLoading] = useState(false)

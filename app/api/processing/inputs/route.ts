@@ -1,6 +1,7 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { isoDate } from '@/lib/dates'
 
 export const dynamic = 'force-dynamic'
 
@@ -92,7 +93,7 @@ export async function POST(req: NextRequest) {
   const { data, error } = await supabase
     .from('processing_inputs')
     .insert([{
-      session_date:          body.session_date          ?? new Date().toISOString().slice(0, 10),
+      session_date:          body.session_date          ?? isoDate(),
       customer_name:         body.customer_name         ?? null,
       pack_date:             body.pack_date             ?? null,
       description,

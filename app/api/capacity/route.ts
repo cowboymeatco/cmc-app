@@ -1,6 +1,7 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { isoDate, daysBetweenISO } from '@/lib/dates'
 
 export interface CapacitySettings {
   hogs_per_beef:    number   // how many hogs equal 1 beef (e.g. 4)
@@ -50,15 +51,12 @@ function speciesEq(species: string, settings: CapacitySettings): number {
 }
 
 function daysBetween(dateStr: string): number {
-  const harvest = new Date(dateStr + 'T12:00:00')
-  const today   = new Date()
-  today.setHours(12, 0, 0, 0)
-  return Math.max(0, Math.round((today.getTime() - harvest.getTime()) / 86400000))
+  return Math.max(0, daysBetweenISO(dateStr, isoDate()))
 }
 
 // GET /api/capacity
 export async function GET() {
-  const today = new Date().toISOString().slice(0, 10)
+  const today = isoDate()
 
   // Fetch settings, chill log, and upcoming appointments in parallel
   const [settingsRes, coolerRes, upcomingRes] = await Promise.all([

@@ -1,6 +1,7 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { isoDate } from '@/lib/dates'
 
 // GET /api/receiving?type=animal|box
 export async function GET(req: NextRequest) {
@@ -80,7 +81,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Box product â€” auto-generate CMC-YYYYMMDD-NNN identifier
-  const today    = new Date().toISOString().slice(0, 10).replace(/-/g, '')  // e.g. "20260503"
+  const today    = isoDate().replace(/-/g, '')  // e.g. "20260503"
   const prefix   = `CMC-${today}-`
   const { count } = await supabase
     .from('box_receiving_log')
@@ -92,7 +93,7 @@ export async function POST(req: NextRequest) {
   const { data, error } = await supabase
     .from('box_receiving_log')
     .insert([{
-      received_at:    fields.received_at ?? new Date().toISOString().slice(0, 10),
+      received_at:    fields.received_at ?? isoDate(),
       vendor:         fields.vendor      ?? '',
       product:        fields.product     ?? '',
       quantity:       fields.quantity    ?? 1,

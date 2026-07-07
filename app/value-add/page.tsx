@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
+import { isoDate } from '@/lib/dates'
 
 type JobStatus = 'pending' | 'in_progress' | 'complete'
 type JobType   = 'smokehouse' | 'patties' | 'sausage' | 'other'
@@ -267,7 +268,7 @@ function NewJobTab({ onSaved, orders, cuttingInstructions, pluList }: { onSaved:
     output_item_name: '',
     weight_in_lbs:    '',
     assigned_to:      '',
-    requested_date:   new Date().toISOString().slice(0, 10),
+    requested_date:   isoDate(),
     notes:            '',
   })
 

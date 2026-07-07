@@ -2,6 +2,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import type { ProcessingInput } from '@/lib/types'
+import { isoDate } from '@/lib/dates'
 
 const C = {
   dark:       '#1A0A04',
@@ -334,7 +335,7 @@ export default function ScannerPage() {
 
   // ── Session ──────────────────────────────────────────────────────────────────
   const [customer, setCustomer] = useState('')
-  const [date,     setDate]     = useState(new Date().toISOString().slice(0, 10))
+  const [date,     setDate]     = useState(isoDate())
   const [started,  setStarted]  = useState(false)
 
   // ── Boxes / scans ────────────────────────────────────────────────────────────
@@ -685,7 +686,7 @@ export default function ScannerPage() {
   async function startSessionFromOrder(order: RetailOrderLite) {
     if (!pluLoaded) return
     const cust = order.customer_name
-    const dt   = new Date().toISOString().slice(0, 10)   // pack date = today
+    const dt   = isoDate()   // pack date = today
     setCustomer(cust)
     setDate(dt)
     setStarted(true)

@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { isoDate } from '@/lib/dates'
 
 const C = {
   dark:       '#1A0A04',
@@ -23,7 +24,7 @@ interface ModuleDef {
 
 export default function Dashboard() {
   const today    = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
-  const todayISO = new Date().toISOString().slice(0, 10)
+  const todayISO = isoDate()
 
   const [schedule,   setSchedule]   = useState<number | null>(null)
   const [receiving,  setReceiving]  = useState<number | null>(null)

@@ -1,6 +1,7 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { isoDate } from '@/lib/dates'
 
 export const dynamic = 'force-dynamic'
 
@@ -40,7 +41,7 @@ export async function POST(req: NextRequest) {
       weight_in_lbs:                 body.weight_in_lbs                 ?? null,
       weight_out_lbs:                body.weight_out_lbs                ?? null,
       assigned_to:                   body.assigned_to                   ?? '',
-      requested_date:                body.requested_date                ?? new Date().toISOString().slice(0, 10),
+      requested_date:                body.requested_date                ?? isoDate(),
       completed_date:                body.completed_date                ?? null,
       status:                        'pending',
       notes:                         body.notes                         ?? '',
@@ -59,7 +60,7 @@ export async function PATCH(req: NextRequest) {
 
   // Auto-set completed_date when status flips to complete
   if (updates.status === 'complete' && !updates.completed_date) {
-    updates.completed_date = new Date().toISOString().slice(0, 10)
+    updates.completed_date = isoDate()
   }
 
   const { data, error } = await supabase

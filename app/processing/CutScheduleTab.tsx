@@ -1,7 +1,14 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
+import Link from 'next/link'
 import { HarvestAppointment, HarvestLog, CarcassAssignment } from '@/lib/types'
 import AssignCarcassesModal from './AssignCarcassesModal'
+import {
+  type PriorityWeights, type ScheduleEntry, type BreakItem, type ListItem, type SavedItem,
+  DEFAULT_WEIGHTS, WEIGHT_LABELS, buildEntries, planIsLive,
+  calcScore, speciesColor, speciesIcon, portionBadge,
+} from '@/lib/cutSchedule'
+import { isoDate } from '@/lib/dates'
 
 const C = {
   dark:       '#1A0A04',
@@ -15,131 +22,12 @@ const C = {
   amber:      '#F59E0B',
 }
 
-interface PriorityWeights {
-  days_hanging:     number
-  has_instructions: number
-  portion_size:     number
-}
-
-// Portion → fraction of one whole carcass (a carcass is "assigned" once its
-// portions sum to a whole).
-const FRACTION: Record<string, number> = { Whole: 1, Half: 0.5, Quarter: 0.25 }
-
-interface ScheduleEntry {
-  type:                      'carcass'
-  key:                       string
-  harvest_log_id:            string
-  appointment_id:            string   // = harvest_log_id (the saved-schedule key; kept for back-compat)
-  source_appointment_id:     string | null  // the REAL harvest appointment id (drives the assign modal)
-  appointment_customer_id:   string
-  customer_name:             string
-  producer:                  string
-  species:                   string
-  portion:                   string
-  harvest_date:              string
-  carcass_tag:               string
-  hot_carcass_weight_lbs:    number | null
-  has_instructions:          boolean
-  cutting_instruction_id:    string | null
-  days_hanging:              number
-  priority_score:            number
-  rank:                      number
-  locked:                    boolean
-  entry_notes:               string
-  customer_count:            number   // # of cut customers on the appointment (>1 & unassigned = collapsed, see buildEntries)
-  assigned:                  boolean  // true = this row is a real carcass→customer assignment (one cut job per portion)
-  appt_assigned_carcasses:   number   // # of this appointment's carcasses fully assigned (portions sum to a whole)
-  appt_total_carcasses:      number   // # of this appointment's carcasses currently in the cooler
-}
-
-// A moveable "day break" divider the crew inserts between carcasses to mark
-// where one day of cutting ends and the next begins. Lives in the same ordered
-// list as carcasses (one manual_rank sequence) so it keeps its relative spot.
-interface BreakItem {
-  type:       'break'
-  key:        string
-  rank:       number
-  break_date: string  // ISO 'YYYY-MM-DD', or '' when not yet chosen
-}
-
-type ListItem = ScheduleEntry | BreakItem
-
-const DEFAULT_WEIGHTS: PriorityWeights = {
-  days_hanging:     5,
-  has_instructions: 8,
-  portion_size:     3,
-}
-
-const WEIGHT_LABELS: Record<keyof PriorityWeights, string> = {
-  days_hanging:     'Days Hanging',
-  has_instructions: 'Instructions Ready',
-  portion_size:     'Portion Size',
-}
-
-type SavedItem = {
-  id?:                     string
-  kind?:                   'carcass' | 'break'
-  appointment_id:          string | null
-  appointment_customer_id: string | null
-  manual_rank:             number
-  locked:                  boolean
-  notes:                   string
-  break_date?:             string | null
-}
-
-function calcDaysHanging(harvestDate: string): number {
-  const harvest = new Date(harvestDate + 'T12:00:00')
-  const today   = new Date()
-  today.setHours(12, 0, 0, 0)
-  return Math.max(0, Math.floor((today.getTime() - harvest.getTime()) / 86400000))
-}
-
-function calcScore(
-  entry: Pick<ScheduleEntry, 'days_hanging' | 'has_instructions' | 'portion'>,
-  w: PriorityWeights
-): number {
-  let score = 0
-  score += Math.min(entry.days_hanging, 14) * w.days_hanging
-  if (!entry.has_instructions) score -= w.has_instructions * 10
-  const portionScore = entry.portion === 'Whole' ? 3 : entry.portion === 'Half' ? 2 : 1
-  score += portionScore * w.portion_size
-  return score
-}
-
-function speciesColor(s: string): string {
-  switch (s) {
-    case 'Beef': return '#A78BFA'
-    case 'Hog':  return '#F59E0B'
-    case 'Lamb': return '#60A5FA'
-    case 'Goat': return '#4CAF50'
-    default:     return C.tan
-  }
-}
-
-function speciesIcon(s: string): string {
-  switch (s) {
-    case 'Beef': return '🐄'
-    case 'Hog':  return '🐖'
-    case 'Lamb': return '🐑'
-    case 'Goat': return '🐐'
-    default:     return '🏷'
-  }
-}
-
-function portionBadge(p: string): { label: string; color: string } {
-  switch (p) {
-    case 'Whole':   return { label: 'Whole', color: '#EF4444' }
-    case 'Half':    return { label: '½',     color: '#F97316' }
-    case 'Quarter': return { label: '¼',     color: C.amber }
-    default:        return { label: p,       color: C.tan }
-  }
-}
-
 export default function CutScheduleTab() {
   const [entries,     setEntries]     = useState<ListItem[]>([])
   const [weights,     setWeights]     = useState<PriorityWeights>(DEFAULT_WEIGHTS)
   const [showWeights, setShowWeights] = useState(false)
   const [loading,     setLoading]     = useState(true)
+  const [loadError,   setLoadError]   = useState(false)
   const [saving,      setSaving]      = useState(false)
   const [savedAt,     setSavedAt]     = useState<string | null>(null)
   const [dragging,    setDragging]    = useState<string | null>(null)
@@ -153,169 +41,7 @@ export default function CutScheduleTab() {
   const [assignments, setAssignments] = useState<CarcassAssignment[]>([])
   const [assignModal, setAssignModal] = useState<{ appointment: HarvestAppointment; carcasses: HarvestLog[] } | null>(null)
 
-  const todayISO = new Date().toISOString().slice(0, 10)
-
-  // ── Build ranked list from cooler inventory ───────────────────────────────────
-  const buildEntries = useCallback((
-    harvestLogs:    HarvestLog[],
-    apptMap:        Map<string, HarvestAppointment>,
-    instructionIds: Set<string>,
-    savedItems:     SavedItem[],
-    assignments:    CarcassAssignment[],
-    w:              PriorityWeights
-  ): ListItem[] => {
-    const raw: Omit<ScheduleEntry, 'type' | 'priority_score' | 'rank'>[] = []
-
-    // Group assignments by the carcass they belong to.
-    const assignByLog = new Map<string, CarcassAssignment[]>()
-    for (const a of assignments) {
-      const bucket = assignByLog.get(a.harvest_log_id)
-      if (bucket) bucket.push(a); else assignByLog.set(a.harvest_log_id, [a])
-    }
-
-    // Per-appointment progress: how many of its cooler carcasses are FULLY
-    // assigned (portions sum to a whole) out of the total in the cooler.
-    const fillByLog = new Map<string, number>()
-    for (const a of assignments) {
-      fillByLog.set(a.harvest_log_id, (fillByLog.get(a.harvest_log_id) ?? 0) + (FRACTION[a.portion] ?? 0))
-    }
-    const apptStats = new Map<string, { total: number; assigned: number }>()
-    for (const log of harvestLogs) {
-      const apptId = log.appointment_id ?? ''
-      const s = apptStats.get(apptId) ?? { total: 0, assigned: 0 }
-      s.total++
-      if ((fillByLog.get(log.id) ?? 0) >= 0.999) s.assigned++
-      apptStats.set(apptId, s)
-    }
-
-    for (const log of harvestLogs) {
-      const appt      = log.appointment_id ? apptMap.get(log.appointment_id) : undefined
-      const customers = appt?.customers ?? []
-      const daysHanging = calcDaysHanging(log.harvest_date)
-      const logAssigns  = assignByLog.get(log.id) ?? []
-
-      if (logAssigns.length > 0) {
-        // ── REAL FIX: this carcass is assigned to one or more cut customers.
-        // Emit one cut job per assigned portion (a true split → two rows that
-        // share harvest_log_id, so the head count / day totals still count the
-        // carcass once — those dedupe by harvest_log_id).
-        for (const asg of logAssigns) {
-          const cust    = customers.find(c => c.id === asg.appointment_customer_id)
-          const instrId = cust?.linked_cutting_instruction_id || asg.linked_cutting_instruction_id || null
-          const saved   = savedItems.find(
-            s => s.appointment_id === log.id && s.appointment_customer_id === asg.appointment_customer_id
-          )
-          raw.push({
-            key:                     `${log.id}__${asg.appointment_customer_id}`,
-            harvest_log_id:          log.id,
-            appointment_id:          log.id,
-            source_appointment_id:   appt?.id ?? log.appointment_id ?? null,
-            appointment_customer_id: asg.appointment_customer_id,
-            customer_name:           cust?.customer_name || asg.customer_name || 'Unknown',
-            producer:                log.producer ?? '',
-            species:                 log.species,
-            portion:                 asg.portion || cust?.portion || 'Whole',
-            harvest_date:            log.harvest_date,
-            carcass_tag:             log.carcass_tag,
-            hot_carcass_weight_lbs:  log.hot_carcass_weight_lbs,
-            has_instructions:        !!(instrId && instructionIds.has(instrId)),
-            cutting_instruction_id:  instrId,
-            days_hanging:            daysHanging,
-            locked:                  saved?.locked ?? false,
-            entry_notes:             saved?.notes  ?? '',
-            customer_count:          customers.length,
-            assigned:                true,
-            appt_assigned_carcasses: apptStats.get(log.appointment_id ?? '')?.assigned ?? 0,
-            appt_total_carcasses:    apptStats.get(log.appointment_id ?? '')?.total ?? 0,
-          })
-        }
-        continue
-      }
-
-      // INTERIM (2026-06-26): ONE row per carcass, so the head count stays true.
-      // This loop used to emit one row per customer on the appointment, so an
-      // appointment with N carcasses and M customers produced N×M rows — a
-      // cross-join — because the data records WHO the buyers are but not WHICH
-      // carcass is whose. We collapse to the carcass and tie it to the producer.
-      // This is now the FALLBACK for carcasses with no assignments yet; once the
-      // crew assigns them (Assign button → modal), the branch above takes over.
-      const single = customers.length === 1 ? customers[0] : null
-      const custId = single ? single.id : 'standalone'
-      const hasInstructions = single
-        ? !!(single.linked_cutting_instruction_id && instructionIds.has(single.linked_cutting_instruction_id))
-        : customers.some(c => c.linked_cutting_instruction_id && instructionIds.has(c.linked_cutting_instruction_id))
-      const saved = savedItems.find(
-        s => s.appointment_id === log.id && s.appointment_customer_id === custId
-      )
-      raw.push({
-        key:                     `${log.id}__${custId}`,
-        harvest_log_id:          log.id,
-        appointment_id:          log.id,
-        source_appointment_id:   appt?.id ?? log.appointment_id ?? null,
-        appointment_customer_id: custId,
-        customer_name:           single ? single.customer_name : (log.producer || appt?.source || 'Unknown'),
-        producer:                log.producer ?? '',
-        species:                 log.species,
-        portion:                 single ? single.portion : 'Whole',
-        harvest_date:            log.harvest_date,
-        carcass_tag:             log.carcass_tag,
-        hot_carcass_weight_lbs:  log.hot_carcass_weight_lbs,
-        has_instructions:        hasInstructions,
-        cutting_instruction_id:  single?.linked_cutting_instruction_id || null,
-        days_hanging:            daysHanging,
-        locked:                  saved?.locked ?? false,
-        entry_notes:             saved?.notes  ?? '',
-        customer_count:          customers.length,
-        assigned:                false,
-        appt_assigned_carcasses: apptStats.get(log.appointment_id ?? '')?.assigned ?? 0,
-        appt_total_carcasses:    apptStats.get(log.appointment_id ?? '')?.total ?? 0,
-      })
-    }
-
-    const scored: ScheduleEntry[] = raw.map(e => ({
-      type: 'carcass' as const,
-      ...e,
-      priority_score: calcScore(e, w),
-      rank: 0,
-    }))
-
-    // Saved manual ranks for carcasses (keyed by appointment + customer).
-    const savedRank = new Map(
-      savedItems
-        .filter(s => s.kind !== 'break')
-        .map(s => [`${s.appointment_id}__${s.appointment_customer_id}`, s.manual_rank])
-    )
-
-    // Day-break dividers come straight from saved rows (they aren't re-derived
-    // from inventory). Each carries its own saved rank so it slots back in place.
-    const breakWraps = savedItems
-      .filter(s => s.kind === 'break')
-      .map(s => ({
-        item:  { type: 'break' as const, key: `break_${s.id ?? s.manual_rank}`, rank: 0, break_date: s.break_date ?? '' } as ListItem,
-        saved: s.manual_rank,
-        score: 0,
-      }))
-
-    const carcassWraps = scored.map(e => ({
-      item:  e as ListItem,
-      saved: savedRank.get(e.key),
-      score: e.priority_score,
-    }))
-
-    const combined = [...carcassWraps, ...breakWraps]
-    const useSaved = savedItems.length > 0
-
-    combined.sort((a, b) => {
-      if (useSaved) {
-        const ra = a.saved ?? 9999
-        const rb = b.saved ?? 9999
-        if (ra !== rb) return ra - rb
-      }
-      return b.score - a.score
-    })
-
-    return combined.map((c, i) => ({ ...c.item, rank: i + 1 }))
-  }, [])
+  const todayISO = isoDate()
 
   // ── Load from cooler inventory ────────────────────────────────────────────────
   const loadAll = useCallback(async () => {
@@ -325,10 +51,17 @@ export default function CutScheduleTab() {
         fetch('/api/harvest?status=chilling').then(r => r.json()),
         fetch('/api/appointments').then(r => r.json()),
         fetch('/api/cutting-instructions').then(r => r.json()),
-        fetch(`/api/cut-schedule?date=${todayISO}`).then(r => r.json()).catch(() => []),
+        // Latest saved plan, same as the crew view — a plan saved yesterday
+        // with day breaks covering today must survive the date rollover.
+        fetch('/api/cut-schedule?latest=1').then(r => r.json()).catch(() => []),
       ])
-      const loadedLogs = Array.isArray(harvestData) ? (harvestData as HarvestLog[]) : []
-      const loadedAppts = Array.isArray(apptData)    ? (apptData    as HarvestAppointment[]) : []
+      // A non-array is an API error body, not an empty cooler — bail to the
+      // catch so we show an error instead of a silently empty schedule.
+      if (!Array.isArray(harvestData) || !Array.isArray(apptData) || !Array.isArray(instrData)) {
+        throw new Error('unexpected API response')
+      }
+      const loadedLogs  = harvestData as HarvestLog[]
+      const loadedAppts = apptData    as HarvestAppointment[]
 
       // Assignments for exactly the carcasses currently in the cooler.
       const logIds = loadedLogs.map(l => l.id)
@@ -339,20 +72,23 @@ export default function CutScheduleTab() {
       const loadedAssigns = Array.isArray(assignData) ? assignData : []
 
       const apptMap  = new Map(loadedAppts.map(a => [a.id, a]))
-      const instrIds = new Set<string>(
-        Array.isArray(instrData) ? instrData.map((i: { id: string }) => i.id) : []
-      )
-      const saved = Array.isArray(savedData) ? (savedData as SavedItem[]) : []
+      const instrIds = new Set<string>(instrData.map((i: { id: string }) => i.id))
+      const savedAll = Array.isArray(savedData) ? (savedData as SavedItem[]) : []
+      // A plan that no longer covers today is stale — start from priority order.
+      const saved = planIsLive(savedAll, todayISO) ? savedAll : []
 
       setLogs(loadedLogs)
       setAppts(loadedAppts)
       setAssignments(loadedAssigns)
       setEntries(buildEntries(loadedLogs, apptMap, instrIds, saved, loadedAssigns, weights))
+      setLoadError(false)
+    } catch {
+      setLoadError(true)
     } finally {
       setLoading(false)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [todayISO, buildEntries])
+  }, [todayISO])
 
   useEffect(() => { loadAll() }, [loadAll])
 
@@ -433,6 +169,21 @@ export default function CutScheduleTab() {
 
   // Called here and will also be called by the processing scanner
   const handleMarkCut = async (entry: ScheduleEntry) => {
+    // Cut status lives on the harvest log (the physical carcass), so a split
+    // animal can only be marked cut as a whole — warn before taking the other
+    // customer's half off the schedule with it.
+    const siblings = entries.filter(
+      (e): e is ScheduleEntry =>
+        e.type === 'carcass' && e.harvest_log_id === entry.harvest_log_id && e.key !== entry.key
+    )
+    if (siblings.length > 0) {
+      const others = siblings.map(s => s.customer_name).join(', ')
+      const ok = window.confirm(
+        `This carcass${entry.carcass_tag ? ` (tag ${entry.carcass_tag})` : ''} is split with ${others}. ` +
+        `Marking it cut removes ALL of its cut jobs from the schedule. Only continue if every portion has been cut.`
+      )
+      if (!ok) return
+    }
     setCutting(prev => new Set(prev).add(entry.key))
     try {
       await fetch('/api/harvest', {
@@ -440,7 +191,11 @@ export default function CutScheduleTab() {
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ id: entry.harvest_log_id, status: 'cut' }),
       })
-      setEntries(prev => prev.filter(e => e.key !== entry.key))
+      // Drop every row of this carcass and re-rank, so stale rank gaps can't
+      // corrupt the anchor math in handleRecalculate.
+      setEntries(prev => prev
+        .filter(e => !(e.type === 'carcass' && e.harvest_log_id === entry.harvest_log_id))
+        .map((e, i) => ({ ...e, rank: i + 1 })))
     } finally {
       setCutting(prev => { const s = new Set(prev); s.delete(entry.key); return s })
     }
@@ -492,6 +247,26 @@ export default function CutScheduleTab() {
   return (
     <div style={{ maxWidth: 900 }}>
 
+      {loadError && (
+        <div style={{
+          background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.45)',
+          borderRadius: 4, padding: '0.6rem 1rem', marginBottom: '1rem',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem',
+          color: C.red, fontSize: '0.85rem', fontWeight: 700,
+        }}>
+          <span>⚠ Couldn&apos;t load the cooler — the schedule below may be incomplete.</span>
+          <button
+            onClick={loadAll}
+            style={{
+              background: 'transparent', border: `1px solid rgba(239,68,68,0.45)`, color: C.red,
+              borderRadius: 4, padding: '0.3rem 0.9rem', fontWeight: 700, fontSize: '0.8rem', cursor: 'pointer',
+            }}
+          >
+            ↻ Retry
+          </button>
+        </div>
+      )}
+
       {/* Toolbar */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
@@ -512,6 +287,19 @@ export default function CutScheduleTab() {
         </div>
 
         <div style={{ display: 'flex', gap: '0.6rem' }}>
+          <Link
+            href="/cut-schedule"
+            title="Read-only phone view of this schedule — send this link to the crew"
+            style={{
+              background: 'rgba(59,130,246,0.12)', color: '#3B82F6',
+              border: '1px solid rgba(59,130,246,0.45)', borderRadius: 4,
+              padding: '0.5rem 1rem', fontWeight: 700, fontSize: '0.85rem',
+              textDecoration: 'none', whiteSpace: 'nowrap',
+              display: 'inline-flex', alignItems: 'center',
+            }}
+          >
+            📱 Crew View ↗
+          </Link>
           <button
             onClick={handleAddBreak}
             disabled={loading || carcasses.length === 0}

@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { HarvestAppointment, BoxReceivingLog } from '@/lib/types'
+import { isoDate, isoDateTime, addDaysISO, mondayOfISO } from '@/lib/dates'
 
 type Tab = 'animal' | 'box'
 
@@ -285,7 +286,7 @@ function AnimalTab() {
   const [dateFilter,    setDateFilter]    = useState('')
 
   const [shared, setShared] = useState({
-    received_at:    new Date().toISOString().slice(0, 16),
+    received_at:    isoDateTime(),
     received_by:    '',
     actual_producer: '',
     health_cert_no: '',
@@ -325,7 +326,7 @@ function AnimalTab() {
     setSelected(a)
     setSuccess(false)
     setShared({
-      received_at:     new Date().toISOString().slice(0, 16),
+      received_at:     isoDateTime(),
       received_by:     '',
       actual_producer: a.source || a.customers?.[0]?.customer_name || '',
       health_cert_no:  '',
@@ -377,7 +378,9 @@ function AnimalTab() {
         body: JSON.stringify({
           type:           'animal',
           appointment_id: selected.id,
-          received_at:    shared.received_at,
+          // datetime-local wall time → real instant, so timestamptz storage
+          // and UTC API-default rows stay consistent
+          received_at:    new Date(shared.received_at).toISOString(),
           received_by:    shared.received_by,
           health_cert_no: shared.health_cert_no,
           brand_insp_no:  shared.brand_insp_no,
@@ -764,14 +767,10 @@ function AnimalCard({ index, total, species, slot, onChange, onPhotoChange, appo
 // BOX PRODUCT TAB
 // ══════════════════════════════════════════════════════════════════════════════
 function getWeekRange() {
-  const today = new Date()
-  const day   = today.getDay()                        // 0=Sun
-  const diff  = day === 0 ? -6 : 1 - day             // back to Monday
-  const mon   = new Date(today); mon.setDate(today.getDate() + diff)
-  const sun   = new Date(mon);   sun.setDate(mon.getDate() + 6)
+  const mon = mondayOfISO(isoDate())
   return {
-    start: mon.toISOString().slice(0, 10),
-    end:   sun.toISOString().slice(0, 10),
+    start: mon,
+    end:   addDaysISO(mon, 6),
   }
 }
 
@@ -785,7 +784,7 @@ function BoxTab() {
   const [reportRange, setReportRange] = useState(getWeekRange)
 
   const empty = {
-    received_at: new Date().toISOString().slice(0, 10),
+    received_at: isoDate(),
     vendor: '', product: '', quantity: '1', weight_lbs: '',
     invoice_no: '', lot_no: '', temp_f: '', received_by: '', notes: '',
   }
@@ -794,7 +793,7 @@ function BoxTab() {
 
   function duplicateEntry(log: BoxReceivingLog) {
     setForm({
-      received_at: new Date().toISOString().slice(0, 10),
+      received_at: isoDate(),
       vendor:      log.vendor      ?? '',
       product:     log.product     ?? '',
       quantity:    String(log.quantity ?? 1),

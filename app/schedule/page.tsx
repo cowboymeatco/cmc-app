@@ -2,6 +2,7 @@
 import { useEffect, useState, useRef } from 'react'
 import Link from 'next/link'
 import type { HarvestAppointment, AppointmentCustomer, Customer } from '@/lib/types'
+import { isoDate, addDaysISO, dayOfWeekISO } from '@/lib/dates'
 
 const SPECIES  = ['Beef', 'Hog', 'Lamb', 'Goat']
 const PORTIONS = ['Whole', 'Half', 'Quarter']
@@ -65,16 +66,13 @@ function decodeBlock(reason: string): { type: 'full' | 'closed'; note: string } 
 
 // Find the next weekday that isn't blocked or a federal holiday
 function findNextOpen(blockedSet: Record<string, string>): string {
-  const dt = new Date()
-  dt.setHours(12, 0, 0, 0)
-  dt.setDate(dt.getDate() + 1)
+  let ds = addDaysISO(isoDate(), 1)
   for (let i = 0; i < 365; i++) {
-    const ds  = dt.toISOString().slice(0, 10)
-    const dow = dt.getDay()
+    const dow = dayOfWeekISO(ds)
     if (dow !== 0 && dow !== 6 && !blockedSet[ds] && !HOLIDAYS[ds]) return ds
-    dt.setDate(dt.getDate() + 1)
+    ds = addDaysISO(ds, 1)
   }
-  return new Date().toISOString().slice(0, 10)
+  return isoDate()
 }
 
 function abbrevProducer(source: string): string {
@@ -145,7 +143,7 @@ function blankCustomer() {
   return { id: crypto.randomUUID(), customer_name: '', portion: 'Whole', contact_preference: 'Email', contact_value: '', linked_cutting_instruction_id: '', reminder_last_sent_at: null, reminder_count: 0 }
 }
 function blankAppt(date?: string): Partial<HarvestAppointment> {
-  return { harvest_date: date ?? new Date().toISOString().slice(0,10), species: 'Beef', head_count: 1, source: '', notes: '', status: 'Booked', linked_carcass_id: '', customers: [blankCustomer()] }
+  return { harvest_date: date ?? isoDate(), species: 'Beef', head_count: 1, source: '', notes: '', status: 'Booked', linked_carcass_id: '', customers: [blankCustomer()] }
 }
 
 interface BlockedDate { date: string; reason: string }
@@ -491,7 +489,7 @@ function CalendarView({
   onBlock:     (date: string, reason: string) => void
   onUnblock:   (date: string) => void
 }) {
-  const today    = new Date().toISOString().slice(0, 10)
+  const today    = isoDate()
   const firstDow = startOfMonth(year, month).getDay()
   const numDays  = daysInMonth(year, month)
   const cells: (number|null)[] = [...Array(firstDow).fill(null), ...Array.from({length: numDays}, (_,i)=>i+1)]

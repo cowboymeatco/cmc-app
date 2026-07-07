@@ -5,6 +5,7 @@ import Link from 'next/link'
 import CutScheduleTab from './CutScheduleTab'
 import CloverTab from './CloverTab'
 import { buildHtFile, type HobartPlu } from '@/lib/hobart'
+import { isoDate } from '@/lib/dates'
 
 type Tab = 'browser' | 'upload' | 'export' | 'cleanup' | 'cut-schedule' | 'box-labels' | 'clover'
 
@@ -1068,7 +1069,7 @@ function BoxLabelsTab() {
   const weightRef = useRef<HTMLInputElement>(null)
 
   const [customer, setCustomer]   = useState('')
-  const [date, setDate]           = useState(new Date().toISOString().slice(0, 10))
+  const [date, setDate]           = useState(isoDate())
   const [boxes, setBoxes]         = useState<BoxRecord[]>([])
   const [scans, setScans]         = useState<Record<string, BoxScan[]>>({})
   const [activeBox, setActiveBox] = useState<BoxRecord | null>(null)
@@ -1141,7 +1142,7 @@ function BoxLabelsTab() {
     if (!customer.trim()) { alert('Enter customer name first'); return }
     setSaving(true)
     const nextNum = boxes.length + 1
-    const dateStr = new Date().toISOString().slice(2, 10).replace(/-/g, '')
+    const dateStr = isoDate().slice(2).replace(/-/g, '')
     const rand = Math.random().toString(36).substring(2, 6).toUpperCase()
     const serial_number = `CMC${dateStr}${rand}`
     const res  = await fetch('/api/boxes', {

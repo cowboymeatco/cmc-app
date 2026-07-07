@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { ColdStorageLog } from '@/lib/types'
+import { isoDate, addDaysISO, mondayOfISO } from '@/lib/dates'
 
 const C = {
   dark:       '#1A0A04',
@@ -142,7 +143,7 @@ function printColdStorageReport(logs: ColdStorageLog[], start: string, end: stri
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function ColdStoragePage() {
-  const today = new Date().toISOString().slice(0, 10)
+  const today = isoDate()
   const nowTime = new Date().toTimeString().slice(0, 5)  // HH:MM
 
   const emptyForm = () => ({
@@ -163,19 +164,12 @@ export default function ColdStoragePage() {
   const [saving,      setSaving]      = useState(false)
   const [success,     setSuccess]     = useState(false)
   const [reportModal, setReportModal] = useState(false)
-  const [rStart,      setRStart]      = useState(() => {
-    // Default to current week Mon
-    const d = new Date(); const day = d.getDay()
-    const diff = day === 0 ? -6 : 1 - day
-    const m = new Date(d); m.setDate(d.getDate() + diff)
-    return m.toISOString().slice(0, 10)
-  })
+  const [rStart,      setRStart]      = useState(() => mondayOfISO(isoDate()))
   const [rEnd, setREnd] = useState(today)
 
   const load = useCallback(async () => {
     // Load last 60 days
-    const start = new Date(); start.setDate(start.getDate() - 60)
-    const s = start.toISOString().slice(0, 10)
+    const s = addDaysISO(isoDate(), -60)
     const res = await fetch(`/api/cold-storage?start=${s}`)
     setLogs(await res.json().catch(() => []))
   }, [])

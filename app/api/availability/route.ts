@@ -1,6 +1,7 @@
 ﻿export const runtime = 'edge'
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { isoDate, addDaysISO, mondayOfISO } from '@/lib/dates'
 
 // GET /api/availability
 // Public endpoint â€” returns next 12 weeks with booking availability.
@@ -25,24 +26,14 @@ function speciesEq(species: string, s: typeof DEFAULTS): number {
   }
 }
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10)
-}
-
-// Returns the Monday of the week containing `date`
-function mondayOf(date: Date): Date {
-  const d = new Date(date)
-  d.setHours(12, 0, 0, 0)
-  const dow = d.getDay()                  // 0=Sun â€¦ 6=Sat
-  d.setDate(d.getDate() - (dow === 0 ? 6 : dow - 1))
-  return d
+// "Jul 6" style label for a YYYY-MM-DD (noon-UTC anchor keeps the day stable)
+function weekLabel(iso: string): string {
+  return new Date(iso + 'T12:00:00Z')
+    .toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
 
 export async function GET() {
-  const today = new Date()
-  today.setHours(12, 0, 0, 0)
-
-  const todayStr = isoDate(today)
+  const todayStr = isoDate()
 
   const [settingsRes, apptRes, coolerRes] = await Promise.all([
     supabase.from('capacity_settings').select('*').eq('id', 1).single(),
@@ -80,14 +71,12 @@ export async function GET() {
   type ApptRow = { harvest_date: string; species: string; head_count: number; status: string }
   const byWeek: Record<string, number> = {}
   for (const a of (apptRes.data ?? []) as ApptRow[]) {
-    const mon = isoDate(mondayOf(new Date(a.harvest_date + 'T12:00:00')))
+    const mon = mondayOfISO(a.harvest_date)
     byWeek[mon] = (byWeek[mon] ?? 0) + a.head_count * speciesEq(a.species, cfg)
   }
 
   // Build 12-week rolling window starting from NEXT Monday
-  const thisMonday = mondayOf(today)
-  const startMonday = new Date(thisMonday)
-  startMonday.setDate(startMonday.getDate() + 7)   // always start from next week
+  const startMonday = addDaysISO(mondayOfISO(todayStr), 7)   // always start from next week
 
   // Running simulation of cooler load going forward
   let runningEq = coolerEq
@@ -95,13 +84,8 @@ export async function GET() {
   const weeks = []
 
   for (let i = 0; i < 12; i++) {
-    const mon = new Date(startMonday)
-    mon.setDate(mon.getDate() + i * 7)
-    const fri = new Date(mon)
-    fri.setDate(fri.getDate() + 4)
-
-    const monStr = isoDate(mon)
-    const friStr = isoDate(fri)
+    const monStr = addDaysISO(startMonday, i * 7)
+    const friStr = addDaysISO(monStr, 4)
     const weekBooked = byWeek[monStr] ?? 0
 
     // How much room is left in the cooler when this week arrives?
@@ -121,8 +105,8 @@ export async function GET() {
     weeks.push({
       week_start:      monStr,
       week_end:        friStr,
-      label:           mon.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-      label_end:       fri.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      label:           weekLabel(monStr),
+      label_end:       weekLabel(friStr),
       status:          killStatus,
       available_beef:  Math.max(0, Math.floor(availableEq)),
       available_hogs:  Math.max(0, Math.floor(availableEq * cfg.hogs_per_beef)),

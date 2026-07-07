@@ -1,6 +1,7 @@
 'use client'
 import { useState } from 'react'
 import Link from 'next/link'
+import { isoDate } from '@/lib/dates'
 
 const C = {
   dark:       '#1A0A04',
@@ -138,7 +139,7 @@ function ExportCard({ icon, title, desc, color, fields, type, from, to }: Export
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function ReportsPage() {
-  const today    = new Date().toISOString().slice(0, 10)
+  const today    = isoDate()
   const firstOfMonth = today.slice(0, 8) + '01'
 
   const [from, setFrom] = useState(firstOfMonth)

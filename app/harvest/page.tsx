@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { HarvestAppointment, HarvestLog, ChillLog, AnimalReceivingLog, CorrectiveAction } from '@/lib/types'
 import { setFeedbackContext, clearFeedbackContext } from '@/lib/feedbackTelemetry'
+import { isoDate, isoDateTime, addDaysISO } from '@/lib/dates'
 
 type Tab = 'parta' | 'partb' | 'worksheet' | 'harvestlog' | 'chill'
 
@@ -1019,7 +1020,7 @@ const SEX_ORDER: Record<string, string[]> = {
 const SPECIES_ORDER = ['Beef', 'Hog', 'Lamb', 'Goat']
 
 function HarvestLogTab() {
-  const todayStr = new Date().toISOString().slice(0, 10)
+  const todayStr = isoDate()
   const [date, setDate]     = useState(todayStr)
   const [logs, setLogs]     = useState<HarvestLog[]>([])
   const [cars, setCars]     = useState<CorrectiveAction[]>([])
@@ -1041,8 +1042,7 @@ function HarvestLogTab() {
   useEffect(() => { load() }, [load])
 
   function shiftDate(d: number) {
-    const dt = new Date(date + 'T12:00:00'); dt.setDate(dt.getDate() + d)
-    setDate(dt.toISOString().slice(0, 10))
+    setDate(addDaysISO(date, d))
   }
 
   // Delete a single harvest record (e.g. a leftover duplicate carcass row).
@@ -1258,7 +1258,7 @@ interface WSRow { ear_tag: string; sex: string; breed: string; over_30_months: b
 interface WSGroup { producer: string; species: string; rows: WSRow[] }
 
 function WorksheetTab({ date }: { date: string }) {
-  const todayStr = new Date().toISOString().slice(0, 10)
+  const todayStr = isoDate()
   const [d, setD]           = useState(date)
   const [groups, setGroups] = useState<WSGroup[]>([])
   const [loading, setLoad]  = useState(false)
@@ -1307,8 +1307,7 @@ function WorksheetTab({ date }: { date: string }) {
   useEffect(() => { load() }, [load])
 
   function shiftDate(n: number) {
-    const dt = new Date(d + 'T12:00:00'); dt.setDate(dt.getDate() + n)
-    setD(dt.toISOString().slice(0, 10))
+    setD(addDaysISO(d, n))
   }
 
   const totalHead = groups.reduce((s, g) => s + g.rows.length, 0)
@@ -1644,7 +1643,7 @@ function ChillTab() {
   const [chillLogs, setChillLogs] = useState<ChillLog[]>([])
   const [selected, setSelected]   = useState<HarvestLog | null>(null)
   const [saving, setSaving]       = useState(false)
-  const [form, setForm] = useState({ checked_at: new Date().toISOString().slice(0, 16), carcass_temp_f: '', cooler_temp_f: '', checked_by: '', notes: '' })
+  const [form, setForm] = useState({ checked_at: isoDateTime(), carcass_temp_f: '', cooler_temp_f: '', checked_by: '', notes: '' })
 
   const load = useCallback(async () => {
     const [cRes, lRes] = await Promise.all([fetch('/api/harvest?type=log'), fetch('/api/harvest?type=chill')])
@@ -1672,7 +1671,10 @@ function ChillTab() {
     setSaving(true)
     await fetch('/api/harvest', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'chill', harvest_log_id: selected.id, carcass_tag: selected.carcass_tag, checked_at: form.checked_at, carcass_temp_f: form.carcass_temp_f ? parseFloat(form.carcass_temp_f) : null, cooler_temp_f: form.cooler_temp_f ? parseFloat(form.cooler_temp_f) : null, checked_by: form.checked_by, notes: form.notes }),
+      // checked_at is a datetime-local wall-time string; the column is
+      // timestamptz, so convert to a real instant or Postgres reads it as UTC
+      // and every chill check displays 6-7 hours early.
+      body: JSON.stringify({ type: 'chill', harvest_log_id: selected.id, carcass_tag: selected.carcass_tag, checked_at: new Date(form.checked_at).toISOString(), carcass_temp_f: form.carcass_temp_f ? parseFloat(form.carcass_temp_f) : null, cooler_temp_f: form.cooler_temp_f ? parseFloat(form.cooler_temp_f) : null, checked_by: form.checked_by, notes: form.notes }),
     })
     const hrs = parseFloat(hoursAgo(selected.created_at))
     const temp = parseFloat(form.carcass_temp_f)
@@ -1681,7 +1683,7 @@ function ChillTab() {
     }
     setSaving(false)
     setSelected(null)
-    setForm({ checked_at: new Date().toISOString().slice(0, 16), carcass_temp_f: '', cooler_temp_f: '', checked_by: '', notes: '' })
+    setForm({ checked_at: isoDateTime(), carcass_temp_f: '', cooler_temp_f: '', checked_by: '', notes: '' })
     load()
   }
 
@@ -1789,7 +1791,7 @@ function ChillTab() {
 // MAIN PAGE
 // ══════════════════════════════════════════════════════════════════════════════
 export default function HarvestPage() {
-  const todayStr = new Date().toISOString().slice(0, 10)
+  const todayStr = isoDate()
   const [tab, setTab]             = useState<Tab>('parta')
   const [harvestDate, setDate]    = useState(todayStr)
   const [appointments, setAppts]  = useState<HarvestAppointment[]>([])
@@ -1828,8 +1830,7 @@ export default function HarvestPage() {
   }, [harvestDate, tab, selectedAppt])
 
   function shiftDate(d: number) {
-    const dt = new Date(harvestDate + 'T12:00:00'); dt.setDate(dt.getDate() + d)
-    setDate(dt.toISOString().slice(0, 10))
+    setDate(addDaysISO(harvestDate, d))
   }
 
   const showApptBar = tab === 'parta' || tab === 'partb'
