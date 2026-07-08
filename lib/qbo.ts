@@ -52,7 +52,10 @@ async function tokenRequest(body: URLSearchParams): Promise<TokenResponse> {
     },
     body,
   })
-  if (!res.ok) throw new Error(`QBO token request failed (${res.status}): ${await res.text()}`)
+  if (!res.ok) {
+    // intuit_tid identifies the request in Intuit's logs for support cases
+    throw new Error(`QBO token request failed (${res.status}, intuit_tid=${res.headers.get('intuit_tid') ?? 'n/a'}): ${await res.text()}`)
+  }
   return res.json()
 }
 
@@ -139,6 +142,11 @@ export async function qboFetch<T = unknown>(path: string, init?: RequestInit): P
       ...init?.headers,
     },
   })
-  if (!res.ok) throw new Error(`QBO API ${path} failed (${res.status}): ${await res.text()}`)
+  if (!res.ok) {
+    const tid = res.headers.get('intuit_tid') ?? 'n/a'
+    const body = await res.text()
+    console.error(`QBO API error: ${path} status=${res.status} intuit_tid=${tid} body=${body}`)
+    throw new Error(`QBO API ${path} failed (${res.status}, intuit_tid=${tid}): ${body}`)
+  }
   return res.json()
 }
