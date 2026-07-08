@@ -1450,6 +1450,11 @@ function BoxLabelsTab() {
 export default function ProcessingPage() {
   const [tab, setTab] = useState<Tab>('browser')
 
+  // Land on the QuickBooks tab when returning from the QBO OAuth redirect
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).has('qbo')) setTab('quickbooks')
+  }, [])
+
   const tabs: { id: Tab; label: string }[] = [
     { id: 'cut-schedule', label: '📋 Cut Schedule' },
     { id: 'box-labels',   label: '🏷️ Box Labels' },

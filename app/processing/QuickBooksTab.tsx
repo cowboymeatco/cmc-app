@@ -57,6 +57,12 @@ interface LinksData {
   unclaimedQbo: QboLite[]
   syncedAt: string | null
 }
+interface QboStatus {
+  configured: boolean
+  connected: boolean
+  realmId: string | null
+  refreshExpiresAt: string | null
+}
 
 const money = (v: number | null) => (v != null ? `$${v.toFixed(2)}` : '—')
 // 'RETAIL SALES:RETAIL CUTS:Beef Trim' -> 'RETAIL SALES : RETAIL CUTS' for the group column
@@ -64,9 +70,11 @@ const groupOf = (fullName: string) => fullName.split(':').slice(0, -1).join(' : 
 
 export default function QuickBooksTab() {
   const [data, setData] = useState<LinksData | null>(null)
+  const [status, setStatus] = useState<QboStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null) // pluId being linked
+  const [oauthMsg, setOauthMsg] = useState<string | null>(null)
 
   // manual link picker
   const [pickerFor, setPickerFor] = useState<PluLite | null>(null)
@@ -76,10 +84,12 @@ export default function QuickBooksTab() {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch('/api/qbo/links')
-      const json = await res.json()
-      if (!res.ok || json.error) throw new Error(json.error ?? 'Load failed')
+      const [linksRes, statusRes] = await Promise.all([fetch('/api/qbo/links'), fetch('/api/qbo/status')])
+      const json = await linksRes.json()
+      if (!linksRes.ok || json.error) throw new Error(json.error ?? 'Load failed')
       setData(json)
+      const st = await statusRes.json()
+      if (statusRes.ok && !st.error) setStatus(st)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -87,6 +97,17 @@ export default function QuickBooksTab() {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  // One-time banner after the OAuth redirect lands back on /processing?qbo=…
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const qbo = params.get('qbo')
+    if (!qbo) return
+    setOauthMsg(qbo === 'connected'
+      ? '✓ QuickBooks connected.'
+      : `QuickBooks connection failed (${params.get('reason') ?? 'unknown'}) — try again.`)
+    window.history.replaceState(null, '', '/processing')
+  }, [])
 
   async function link(plu: PluLite, qboId: string) {
     setBusy(plu.id)
@@ -142,10 +163,27 @@ export default function QuickBooksTab() {
               Prices shown are QuickBooks&apos; and are reference-only; the app stays the source of truth.
             </div>
           </div>
-          <div style={{ color: C.lightBrown, fontSize: '0.78rem', textAlign: 'right' }}>
-            {data.linked.length} linked · {data.suggestions.length} suggested · {data.unclaimedQbo.length} unclaimed QBO items
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.4rem' }}>
+            <div style={{ color: C.lightBrown, fontSize: '0.78rem', textAlign: 'right' }}>
+              {data.linked.length} linked · {data.suggestions.length} suggested · {data.unclaimedQbo.length} unclaimed QBO items
+            </div>
+            {status && (
+              status.connected ? (
+                <span style={{ color: C.green, fontSize: '0.78rem' }}>✓ Connected to QuickBooks</span>
+              ) : status.configured ? (
+                <a href="/api/qbo/oauth/start" style={{ ...BTN(C.green), textDecoration: 'none', padding: '0.35rem 0.9rem', fontSize: '0.78rem' }}>
+                  Connect QuickBooks
+                </a>
+              ) : (
+                <span style={{ color: C.lightBrown, fontSize: '0.75rem' }}>Live connection not set up (app keys pending)</span>
+              )
+            )}
           </div>
         </div>
+      )}
+
+      {oauthMsg && (
+        <div style={{ ...CARD, color: oauthMsg.startsWith('✓') ? C.green : C.red, fontSize: '0.85rem' }}>{oauthMsg}</div>
       )}
 
       {/* ── Suggested links ────────────────────────────────────────── */}
