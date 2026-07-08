@@ -5,10 +5,11 @@ import Link from 'next/link'
 import CutScheduleTab from './CutScheduleTab'
 import CloverTab from './CloverTab'
 import QuickBooksTab from './QuickBooksTab'
+import AlignmentTab from './AlignmentTab'
 import { buildHtFile, type HobartPlu } from '@/lib/hobart'
 import { isoDate } from '@/lib/dates'
 
-type Tab = 'browser' | 'upload' | 'export' | 'cleanup' | 'cut-schedule' | 'box-labels' | 'clover' | 'quickbooks'
+type Tab = 'browser' | 'upload' | 'export' | 'cleanup' | 'cut-schedule' | 'box-labels' | 'clover' | 'quickbooks' | 'alignment'
 
 interface PluItem {
   id:                 string
@@ -486,6 +487,16 @@ function ExportTab() {
   const [count, setCount]         = useState<number | null>(null)
   const [pushing, setPushing]     = useState(false)
   const [pushLog, setPushLog]     = useState<PushReq[]>([])
+  // Deleted PLUs — HCT imports merge, so these stay on the scale until someone
+  // deletes them at the scale itself. Shown as a standing removal checklist.
+  const [retired, setRetired]     = useState<PluItem[]>([])
+
+  useEffect(() => {
+    fetch('/api/processing?active=false')
+      .then(r => r.json())
+      .then(d => setRetired(Array.isArray(d) ? d : []))
+      .catch(() => {})
+  }, [])
 
   async function fetchCount() {
     const params = new URLSearchParams()
@@ -651,6 +662,27 @@ function ExportTab() {
           <li>HCT <strong>merges</strong> these PLUs into the scale — existing PLUs not in the file are left untouched.</li>
         </ol>
       </div>
+
+      {retired.length > 0 && (
+        <div style={{ background: C.dark, border: `1px solid ${C.yellow}`, borderRadius: 4, padding: '1.25rem 1.5rem', marginTop: '1.25rem' }}>
+          <h3 style={{ color: C.yellow, fontFamily: 'Georgia, serif', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 0.6rem' }}>
+            ⚠ Deleted PLUs — remove from the scale by hand
+          </h3>
+          <p style={{ color: C.tan, fontSize: '0.82rem', lineHeight: 1.6, margin: '0 0 0.85rem' }}>
+            HCT imports can only add or update — they never delete. These {retired.length} PLUs were
+            deleted in the app but stay on the Hobart until removed at the scale
+            (Manager Mode → PLU edit → delete). Scanning one flags it at the scanner box.
+          </p>
+          <div style={{ fontSize: '0.82rem' }}>
+            {retired.map(i => (
+              <div key={i.id} style={{ display: 'flex', gap: '1rem', padding: '0.3rem 0', borderTop: '1px solid rgba(166,120,90,0.12)', color: C.lightBrown }}>
+                <span style={{ fontFamily: 'monospace', color: C.yellow, minWidth: '3.5rem' }}>{i.plu_number}</span>
+                <span>{i.item_name}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1.25rem 1.5rem', marginTop: '1.25rem' }}>
         <h3 style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 0.6rem' }}>
@@ -1459,6 +1491,7 @@ export default function ProcessingPage() {
     { id: 'cut-schedule', label: '📋 Cut Schedule' },
     { id: 'box-labels',   label: '🏷️ Box Labels' },
     { id: 'browser',      label: '🔪 PLU Browser' },
+    { id: 'alignment',    label: '🔗 Alignment' },
     { id: 'clover',       label: '🍀 Clover' },
     { id: 'quickbooks',   label: '📗 QuickBooks' },
     { id: 'export',       label: '📤 Export' },
@@ -1493,6 +1526,7 @@ export default function ProcessingPage() {
         {tab === 'cut-schedule' && <CutScheduleTab />}
         {tab === 'box-labels'   && <BoxLabelsTab />}
         {tab === 'browser'      && <BrowserTab />}
+        {tab === 'alignment'    && <AlignmentTab />}
         {tab === 'clover'       && <CloverTab />}
         {tab === 'quickbooks'   && <QuickBooksTab />}
         {tab === 'export'       && <ExportTab />}
