@@ -1,5 +1,5 @@
 export const runtime = 'edge'
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { getCloverItems, type CloverItem } from '@/lib/clover'
 
@@ -106,6 +106,43 @@ export async function GET() {
     }
 
     return NextResponse.json({ rows, summary, cloverError })
+  } catch (e) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 })
+  }
+}
+
+// POST /api/alignment — accept Clover's price into the app { pluId }.
+// One-time correction path (2026-07-07 drift review): register-side price
+// raises never made it into the app, so Clover's current price becomes the
+// app's retail AND scale price. App stays the source of truth afterward;
+// Clover's price is re-fetched live here so a stale browser tab can't
+// write an outdated number.
+export async function POST(req: NextRequest) {
+  try {
+    const { pluId } = await req.json()
+    if (!pluId) return NextResponse.json({ error: 'pluId required' }, { status: 400 })
+
+    const { data: plu, error } = await supabase
+      .from('plu_items')
+      .select('id, item_name, clover_item_id, price, retail_price')
+      .eq('id', pluId)
+      .single()
+    if (error) throw new Error(error.message)
+    if (!plu.clover_item_id) return NextResponse.json({ error: 'PLU is not linked to Clover' }, { status: 400 })
+
+    const clover = (await getCloverItems()).find(c => c.id === plu.clover_item_id)
+    if (!clover) return NextResponse.json({ error: 'Linked item not found in Clover' }, { status: 404 })
+    if (!(clover.price > 0)) return NextResponse.json({ error: 'Clover has no usable price for this item' }, { status: 400 })
+
+    const dollars = clover.price / 100
+    const { data, error: updErr } = await supabase
+      .from('plu_items')
+      .update({ retail_price: dollars, price: dollars, updated_at: new Date().toISOString() })
+      .eq('id', pluId)
+      .select()
+      .single()
+    if (updErr) throw new Error(updErr.message)
+    return NextResponse.json({ ok: true, applied: dollars, previous: { price: plu.price, retail_price: plu.retail_price }, item: data })
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 })
   }

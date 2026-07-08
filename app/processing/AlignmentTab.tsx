@@ -54,6 +54,7 @@ export default function AlignmentTab() {
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
   const [search, setSearch] = useState('')
+  const [busy, setBusy] = useState<string | null>(null) // pluId being updated
 
   const load = useCallback(async () => {
     setError(null)
@@ -70,6 +71,32 @@ export default function AlignmentTab() {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  // 2026-07 drift review decision: register-side raises are the real price —
+  // Clover's price becomes the app's retail AND scale price. App is the
+  // source of truth from then on.
+  async function useCloverPrice(r: Row) {
+    const cloverPrice = r.clover && !r.clover.missing && r.clover.price != null ? r.clover.price / 100 : null
+    if (cloverPrice == null) return
+    const msg = `${r.plu.item_name}: set app retail + scale price to Clover's $${cloverPrice.toFixed(2)}?`
+      + ` (app is currently retail ${r.plu.retail_price != null ? '$' + r.plu.retail_price.toFixed(2) : '—'}`
+      + ` / scale ${r.plu.price != null ? '$' + r.plu.price.toFixed(2) : '—'})`
+    if (!confirm(msg)) return
+    setBusy(r.plu.id)
+    try {
+      const res = await fetch('/api/alignment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pluId: r.plu.id }),
+      })
+      const json = await res.json()
+      if (!res.ok || json.error) throw new Error(json.error ?? 'Update failed')
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+    setBusy(null)
+  }
 
   const filtered = useMemo(() => {
     if (!rows) return []
@@ -149,6 +176,7 @@ export default function AlignmentTab() {
             <th style={TH}>Scale $</th><th style={TH}>Retail $</th>
             <th style={TH}>Clover</th><th style={TH}>Clover $</th>
             <th style={TH}>QuickBooks</th><th style={TH}>QB $</th>
+            <th style={TH}></th>
           </tr></thead>
           <tbody>
             {filtered.slice(0, 400).map(r => (
@@ -172,6 +200,19 @@ export default function AlignmentTab() {
                 </td>
                 <td style={{ ...TD, color: r.qbo?.priceDrift ? C.yellow : C.cream }}>
                   {r.qbo && !r.qbo.missing ? money(r.qbo.salesPrice) : '—'}
+                </td>
+                <td style={{ ...TD, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  {r.clover?.priceDrift && (
+                    <button onClick={() => useCloverPrice(r)} disabled={busy === r.plu.id}
+                      title="Copy Clover's price into the app's retail + scale price"
+                      style={{
+                        background: 'transparent', color: C.yellow, border: `1px solid ${C.yellow}`,
+                        borderRadius: 3, padding: '0.2rem 0.55rem', fontSize: '0.72rem',
+                        fontWeight: 600, cursor: 'pointer',
+                      }}>
+                      {busy === r.plu.id ? '…' : '← use Clover $'}
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}
