@@ -331,6 +331,10 @@ function buildPackoutHTML(
 export default function ScannerPage() {
   // ── PLU cache ────────────────────────────────────────────────────────────────
   const [pluMap,    setPluMap]    = useState<Record<string, string>>({})
+  // Deleted PLUs still resident on the Hobart (imports merge — deletions never
+  // propagate to the scale), kept so a scan resolves to a name + warning
+  // instead of "Unknown Item".
+  const [retiredPluMap, setRetiredPluMap] = useState<Record<string, string>>({})
   const [pluLoaded, setPluLoaded] = useState(false)
 
   // ── Session ──────────────────────────────────────────────────────────────────
@@ -357,9 +361,9 @@ export default function ScannerPage() {
 
   // ── Scan input ───────────────────────────────────────────────────────────────
   const [scanValue,   setScanValue]   = useState('')
-  const [flash,       setFlash]       = useState<'ok' | 'bad' | null>(null)
+  const [flash,       setFlash]       = useState<'ok' | 'warn' | 'bad' | null>(null)
   const [lastItem,    setLastItem]    = useState('')
-  const [lastKind,    setLastKind]    = useState<'ok' | 'bad'>('ok')   // icon/color for lastItem after the flash fades
+  const [lastKind,    setLastKind]    = useState<'ok' | 'warn' | 'bad'>('ok')   // icon/color for lastItem after the flash fades
   const [processing,  setProcessing]  = useState(false)
   const [labelFlags,  setLabelFlags]  = useState<LabelFlags>(DEFAULT_FLAGS)
 
@@ -397,6 +401,7 @@ export default function ScannerPage() {
   // Stable refs so event listeners don't go stale
   const activeBoxRef  = useRef<BoxRecord | null>(null)
   const pluMapRef     = useRef<Record<string, string>>({})
+  const retiredPluRef = useRef<Record<string, string>>({})
   const processingRef = useRef(false)
   const scansRef      = useRef<ScanLine[]>([])
   const startedRef    = useRef(false)
@@ -404,6 +409,7 @@ export default function ScannerPage() {
 
   activeBoxRef.current  = activeBox
   pluMapRef.current     = pluMap
+  retiredPluRef.current = retiredPluMap
   processingRef.current = processing
   scansRef.current      = scans
   startedRef.current    = started
@@ -424,15 +430,19 @@ export default function ScannerPage() {
   useEffect(() => { loadOrders() }, [loadOrders])
 
   useEffect(() => {
-    fetch('/api/processing?active=true')
+    fetch('/api/processing')
       .then(r => r.json())
       .then((data: unknown) => {
         if (Array.isArray(data)) {
           const map: Record<string, string> = {}
-          for (const item of data as { plu_number?: string; item_name?: string }[]) {
-            if (item.plu_number) map[String(item.plu_number)] = item.item_name ?? ''
+          const retired: Record<string, string> = {}
+          for (const item of data as { plu_number?: string; item_name?: string; active?: boolean }[]) {
+            if (!item.plu_number) continue
+            if (item.active === false) retired[String(item.plu_number)] = item.item_name ?? ''
+            else map[String(item.plu_number)] = item.item_name ?? ''
           }
           setPluMap(map)
+          setRetiredPluMap(retired)
         }
       })
       .catch(() => {})
@@ -477,7 +487,7 @@ export default function ScannerPage() {
       // Check if it's a Hobart-format barcode with a valid PLU but no weight (box/each product)
       const plu = decodePluFromBarcode(raw)
       if (plu) {
-        const itemName = pluMapRef.current[plu] ?? `PLU ${plu}`
+        const itemName = pluMapRef.current[plu] ?? retiredPluRef.current[plu] ?? `PLU ${plu}`
         setWeightModal({ plu, itemName })
         setWeightEntry('')
         setTimeout(() => weightInputRef.current?.focus(), 80)
@@ -492,7 +502,8 @@ export default function ScannerPage() {
     }
 
     const { plu, weightLbs } = decoded
-    const itemName = pluMapRef.current[plu] ?? `Unknown Item (PLU ${plu})`
+    const retiredName = retiredPluRef.current[plu]
+    const itemName = pluMapRef.current[plu] ?? retiredName ?? `Unknown Item (PLU ${plu})`
 
     processingRef.current = true
     setProcessing(true)
@@ -506,10 +517,19 @@ export default function ScannerPage() {
       if (!res.ok) throw new Error(await res.text())
       const scan: ScanLine = await res.json()
       setScans(prev => [scan, ...prev])
-      setLastKind('ok')
-      setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb`)
-      setFlash('ok')
-      setTimeout(() => setFlash(null), 2000)
+      if (retiredName || !pluMapRef.current[plu]) {
+        // Scan is saved (the meat is in the box), but this PLU was deleted from
+        // the app — the scale should no longer have it.
+        setLastKind('warn')
+        setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb  —  DELETED PLU ${plu}: remove it from the scale`)
+        setFlash('warn')
+        setTimeout(() => setFlash(null), 4000)
+      } else {
+        setLastKind('ok')
+        setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb`)
+        setFlash('ok')
+        setTimeout(() => setFlash(null), 2000)
+      }
     } catch {
       setFlash('bad')
       setLastKind('bad')
@@ -931,10 +951,17 @@ export default function ScannerPage() {
       if (!res.ok) throw new Error(await res.text())
       const scan: ScanLine = await res.json()
       setScans(prev => [scan, ...prev])
-      setLastKind('ok')
-      setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb`)
-      setFlash('ok')
-      setTimeout(() => setFlash(null), 2000)
+      if (!pluMapRef.current[plu]) {
+        setLastKind('warn')
+        setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb  —  DELETED PLU ${plu}: remove it from the scale`)
+        setFlash('warn')
+        setTimeout(() => setFlash(null), 4000)
+      } else {
+        setLastKind('ok')
+        setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb`)
+        setFlash('ok')
+        setTimeout(() => setFlash(null), 2000)
+      }
     } catch {
       setFlash('bad')
       setLastKind('bad')
@@ -1081,7 +1108,7 @@ export default function ScannerPage() {
   const totalWeight    = scans.reduce((s, sc) => s + (Number(sc.weight_lbs) || 0), 0)
   const isOpen         = activeBox && !activeBox.is_closed
   const closedWeight   = boxes.filter(b => b.is_closed).reduce((s, b) => s + (Number(b.total_weight_lbs) || 0), 0)
-  const borderColor    = flash === 'ok' ? C.green : flash === 'bad' ? C.red : isOpen ? 'rgba(201,168,130,0.5)' : 'rgba(166,120,90,0.2)'
+  const borderColor    = flash === 'ok' ? C.green : flash === 'warn' ? C.yellow : flash === 'bad' ? C.red : isOpen ? 'rgba(201,168,130,0.5)' : 'rgba(166,120,90,0.2)'
   const totalInputLbs  = inputs.reduce((s, i) => s + (Number(i.weight_lbs) || 0), 0)
   const totalOutputLbs = closedWeight + totalWeight
   const yieldPct       = totalInputLbs > 0 ? (totalOutputLbs / totalInputLbs) * 100 : 0
@@ -1424,7 +1451,7 @@ export default function ScannerPage() {
           }}
         >
           <span style={{ fontSize: '1.6rem', flexShrink: 0, lineHeight: 1 }}>
-            {flash === 'ok' ? '✓' : flash === 'bad' ? '⚠' : processing ? '⟳' : '🔍'}
+            {flash === 'ok' ? '✓' : flash === 'warn' || flash === 'bad' ? '⚠' : processing ? '⟳' : '🔍'}
           </span>
           <input
             ref={scanRef}
@@ -1466,7 +1493,7 @@ export default function ScannerPage() {
         {/* Feedback line */}
         <div style={{ flexShrink: 0, minHeight: '1.9rem', textAlign: 'center' }}>
           {lastItem && (
-            <span style={{ fontSize: '1.05rem', fontWeight: 700, color: lastKind === 'bad' ? C.red : C.green }}>
+            <span style={{ fontSize: '1.05rem', fontWeight: 700, color: lastKind === 'bad' ? C.red : lastKind === 'warn' ? C.yellow : C.green }}>
               {lastKind === 'ok' ? '✓ ' : '⚠ '}{lastItem}
             </span>
           )}
