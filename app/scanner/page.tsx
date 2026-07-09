@@ -60,12 +60,13 @@ interface SessionWithStats {
   id:             string | null
   customer_name:  string
   session_date:   string
-  status:         'scanning' | 'value_add' | 'complete'
+  status:         'scanning' | 'value_add' | 'complete' | 'picked_up'
   notes:          string
   box_count:      number
   closed_count:   number
   total_weight:   number
   total_cuts:     number
+  animals?:       string[]   // carcass input descriptions, e.g. "Beef — Tag 06 (Holdbrook)"
 }
 
 interface BoxRecord {
@@ -99,6 +100,15 @@ interface ScanLine {
   item_name:  string
   weight_lbs: number
   quantity:   number
+}
+
+// Quarter-aware yield: response from /api/processing/yield when this session
+// shares a carcass half (same tag identifier) with other sessions.
+interface SharedYield {
+  partners:           { customer_name: string; session_date: string; output_lbs: number }[]
+  pool_input_lbs:     number
+  other_output_lbs:   number
+  shared_identifiers: Record<string, string[]>
 }
 
 interface LabelFlags { usda_bug: boolean; retail_exempt: boolean; not_for_sale: boolean }
@@ -385,9 +395,11 @@ export default function ScannerPage() {
   const [sessions,         setSessions]         = useState<SessionWithStats[]>([])
   const [sessionsLoading,  setSessionsLoading]  = useState(true)
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
-  const [currentStatus,    setCurrentStatus]    = useState<'scanning' | 'value_add' | 'complete'>('scanning')
+  const [currentStatus,    setCurrentStatus]    = useState<'scanning' | 'value_add' | 'complete' | 'picked_up'>('scanning')
   const [showNewForm,      setShowNewForm]      = useState(false)
-  const [showAllComplete,  setShowAllComplete]  = useState(false)
+  const [showAllFreezer,   setShowAllFreezer]   = useState(false)
+  const [showAllPickedUp,  setShowAllPickedUp]  = useState(false)
+  const [sharedYield,      setSharedYield]      = useState<SharedYield | null>(null)
   const [mergeSource,      setMergeSource]      = useState<SessionWithStats | null>(null)
   const [mergeBusy,        setMergeBusy]        = useState(false)
 
@@ -428,6 +440,19 @@ export default function ScannerPage() {
 
   useEffect(() => { loadSessions() }, [loadSessions])
   useEffect(() => { loadOrders() }, [loadOrders])
+
+  // ── Quarter-aware yield ───────────────────────────────────────────────────────
+  // When a carcass half in this session's inputs is also scanned in another
+  // session (two customers splitting a half into quarters), the per-session
+  // yield double-counts the half. This pulls the pool so we can judge the
+  // half against everything pulling from it.
+  const loadSharedYield = useCallback(async (cust: string, dt: string) => {
+    try {
+      const res = await fetch(`/api/processing/yield?customer_name=${encodeURIComponent(cust)}&session_date=${dt}`)
+      const d   = await res.json()
+      setSharedYield(d?.shared ? d as SharedYield : null)
+    } catch { setSharedYield(null) }
+  }, [])
 
   useEffect(() => {
     fetch('/api/processing')
@@ -585,7 +610,7 @@ export default function ScannerPage() {
     } catch { return null }
   }
 
-  async function updateSessionStatus(status: 'scanning' | 'value_add' | 'complete') {
+  async function updateSessionStatus(status: 'scanning' | 'value_add' | 'complete' | 'picked_up') {
     setCurrentStatus(status)
     await fetch('/api/processing/sessions', {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
@@ -593,7 +618,7 @@ export default function ScannerPage() {
     })
   }
 
-  async function quickStatus(s: SessionWithStats, status: 'scanning' | 'value_add' | 'complete') {
+  async function quickStatus(s: SessionWithStats, status: 'scanning' | 'value_add' | 'complete' | 'picked_up') {
     await fetch('/api/processing/sessions', {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ customer_name: s.customer_name, session_date: s.session_date, status }),
@@ -652,24 +677,30 @@ export default function ScannerPage() {
 
   // ── Start session + auto-create Box 1 ────────────────────────────────────────
   async function startSession() {
-    if (!customer.trim() || !pluLoaded) return
+    const cust = customer.trim()
+    if (!cust || !pluLoaded) return
+    // Normalize the state too — a trailing space typed in the form would
+    // otherwise split every later box/input onto a different session key.
+    setCustomer(cust)
     setStarted(true)
     const res = await fetch('/api/boxes', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ customer_name: customer.trim(), pack_date: date, box_number: 1, is_final: false }),
+      body:    JSON.stringify({ customer_name: cust, pack_date: date, box_number: 1, is_final: false }),
     })
     const box: BoxRecord = await res.json()
     setBoxes([box])
     setActiveBox(box)
     setScans([])
     setCurrentStatus('scanning')
-    const sid = await upsertSession(customer.trim(), date, 'scanning')
+    const sid = await upsertSession(cust, date, 'scanning')
     setCurrentSessionId(sid)
-    fetch(`/api/processing/inputs?customer_name=${encodeURIComponent(customer.trim())}&session_date=${date}`)
+    setSharedYield(null)
+    fetch(`/api/processing/inputs?customer_name=${encodeURIComponent(cust)}&session_date=${date}`)
       .then(r => r.json())
       .then((data: unknown) => { if (Array.isArray(data)) setInputs(data as ProcessingInput[]) })
       .catch(() => {})
+    loadSharedYield(cust, date)
   }
 
   // ── Reopen an existing session ───────────────────────────────────────────────
@@ -694,10 +725,12 @@ export default function ScannerPage() {
       const scanData = await scanRes.json().catch(() => [])
       setScans(Array.isArray(scanData) ? ([...scanData] as ScanLine[]).reverse() : [])
     }
+    setSharedYield(null)
     fetch(`/api/processing/inputs?customer_name=${encodeURIComponent(cust)}&session_date=${dt}`)
       .then(r => r.json())
       .then((d: unknown) => { if (Array.isArray(d)) setInputs(d as ProcessingInput[]) })
       .catch(() => {})
+    loadSharedYield(cust, dt)
   }
 
   // ── Start a scanning session straight from an in-progress retail order ───────
@@ -745,10 +778,12 @@ export default function ScannerPage() {
       setScans([])
     }
     loadOrders()
+    setSharedYield(null)
     fetch(`/api/processing/inputs?customer_name=${encodeURIComponent(cust)}&session_date=${dt}`)
       .then(r => r.json())
       .then((d: unknown) => { if (Array.isArray(d)) setInputs(d as ProcessingInput[]) })
       .catch(() => {})
+    loadSharedYield(cust, dt)
   }
 
   // ── Add new box ───────────────────────────────────────────────────────────────
@@ -997,6 +1032,7 @@ export default function ScannerPage() {
       const inp: ProcessingInput = await res.json()
       setInputs(prev => [...prev, inp])
       setShowInputs(true)
+      loadSharedYield(customer, date)
       // Show what the scan resolved to (weight, producer, cooler pull)
       const resolved = inp.description || identifier
       const wt = inp.weight_lbs != null ? `  ·  ${Number(inp.weight_lbs).toFixed(1)} lb` : ''
@@ -1034,6 +1070,7 @@ export default function ScannerPage() {
       setNewInputDesc('')
       setNewInputWt('')
       setNewInputNotes('')
+      loadSharedYield(customer, date)
     } catch {}
     finally { setAddingInput(false) }
   }
@@ -1042,6 +1079,7 @@ export default function ScannerPage() {
   async function removeInput(id: string) {
     await fetch(`/api/processing/inputs?id=${id}`, { method: 'DELETE' })
     setInputs(prev => prev.filter(i => i.id !== id))
+    loadSharedYield(customer, date)
   }
 
   // ── Split / chub tool ─────────────────────────────────────────────────────────
@@ -1114,9 +1152,17 @@ export default function ScannerPage() {
   const closedWeight   = boxes.filter(b => b.is_closed).reduce((s, b) => s + (Number(b.total_weight_lbs) || 0), 0)
   const borderColor    = flash === 'ok' ? C.green : flash === 'warn' ? C.yellow : flash === 'bad' ? C.red : isOpen ? 'rgba(201,168,130,0.5)' : 'rgba(166,120,90,0.2)'
   const totalInputLbs  = inputs.reduce((s, i) => s + (Number(i.weight_lbs) || 0), 0)
-  const totalOutputLbs = closedWeight + totalWeight
+  // A closed active box is already inside closedWeight — adding its scans
+  // again would double-count it in the yield.
+  const totalOutputLbs = closedWeight + (isOpen ? totalWeight : 0)
   const yieldPct       = totalInputLbs > 0 ? (totalOutputLbs / totalInputLbs) * 100 : 0
   const yieldColor     = yieldPct >= 80 ? C.green : yieldPct >= 65 ? C.yellow : C.red
+  // When a half is shared across sessions (quarters), judge the pool instead:
+  // all sessions' output against the deduped input weight.
+  const sharedActive   = sharedYield !== null && sharedYield.pool_input_lbs > 0
+  const poolYieldPct   = sharedActive ? ((totalOutputLbs + sharedYield.other_output_lbs) / sharedYield.pool_input_lbs) * 100 : 0
+  const poolYieldColor = poolYieldPct >= 80 ? C.green : poolYieldPct >= 65 ? C.yellow : C.red
+  const partnerNames   = sharedActive ? Array.from(new Set(sharedYield.partners.map(p => p.customer_name))).join(', ') : ''
 
   // ══════════════════════════════════════════════════════════════════════════════
   // SETUP SCREEN
@@ -1124,19 +1170,27 @@ export default function ScannerPage() {
   if (!started) {
     const scanning  = sessions.filter(s => s.status === 'scanning')
     const valueAdd  = sessions.filter(s => s.status === 'value_add')
-    const complete  = sessions.filter(s => s.status === 'complete')
+    // Complete = boxed up and in the freezer awaiting pickup. Oldest first —
+    // they've been waiting the longest.
+    const freezer   = sessions.filter(s => s.status === 'complete')
+      .sort((a, b) => a.session_date.localeCompare(b.session_date))
+    const pickedUp  = sessions.filter(s => s.status === 'picked_up')
     // Retail orders Jill marked "In Progress" — ready to pack/scan straight in.
     const inProgressOrders = orders.filter(o => o.status === 'in_progress')
 
     const STATUS_CFG = {
       scanning:  { label: 'Scanning',   color: C.yellow,        dot: '●' },
       value_add: { label: 'Value Add',  color: '#E8883A',       dot: '◆' },
-      complete:  { label: 'Complete',   color: C.green,         dot: '✓' },
+      complete:  { label: 'In Freezer', color: '#7CAFDD',       dot: '🧊' },
+      picked_up: { label: 'Picked Up',  color: C.green,         dot: '✓' },
     }
 
     function SessionCard({ s }: { s: SessionWithStats }) {
       const dateStr = new Date(s.session_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
       const cfg = STATUS_CFG[s.status]
+      const freezerDays = s.status === 'complete'
+        ? Math.max(0, Math.floor((Date.now() - new Date(s.session_date + 'T12:00:00').getTime()) / 86400000))
+        : null
       const btnBase: React.CSSProperties = { borderRadius: 3, padding: '0.3rem 0.75rem', fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer' }
       const isMergeSource = mergeSource !== null
         && mergeSource.customer_name === s.customer_name && mergeSource.session_date === s.session_date
@@ -1146,11 +1200,22 @@ export default function ScannerPage() {
             <span style={{ color: C.cream, fontWeight: 700, fontSize: '0.95rem' }}>{s.customer_name}</span>
             <span style={{ color: C.lightBrown, fontSize: '0.75rem' }}>{dateStr}</span>
           </div>
-          <div style={{ color: C.lightBrown, fontSize: '0.75rem', marginBottom: '0.7rem' }}>
+          <div style={{ color: C.lightBrown, fontSize: '0.75rem', marginBottom: (s.animals?.length ?? 0) > 0 ? '0.25rem' : '0.7rem' }}>
             {s.box_count} box{s.box_count !== 1 ? 'es' : ''}
             {s.closed_count > 0 && ` · ${s.closed_count} closed`}
             {s.total_weight > 0 && ` · ${s.total_weight.toFixed(1)} lbs`}
+            {freezerDays !== null && (
+              <span style={{ color: freezerDays >= 14 ? C.yellow : '#7CAFDD', fontWeight: 600 }}>
+                {` · 🧊 ${freezerDays === 0 ? 'today' : `${freezerDays}d in freezer`}`}
+              </span>
+            )}
           </div>
+          {(s.animals?.length ?? 0) > 0 && (
+            <div style={{ color: C.tan, fontSize: '0.72rem', marginBottom: '0.7rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              title={s.animals!.join('\n')}>
+              🐄 {s.animals!.join(' · ')}
+            </div>
+          )}
           {mergeSource ? (
             // Merge mode: only merge-relevant buttons, so a stray tap can't open a session
             <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
@@ -1193,9 +1258,21 @@ export default function ScannerPage() {
               </button>
             )}
             {s.status === 'complete' && (
+              <button onClick={() => quickStatus(s, 'picked_up')}
+                style={{ ...btnBase, background: C.green, color: C.dark, border: 'none' }}>
+                📦 Picked Up
+              </button>
+            )}
+            {s.status === 'complete' && (
               <button onClick={() => quickStatus(s, 'scanning')}
                 style={{ ...btnBase, background: 'transparent', border: '1px solid rgba(166,120,90,0.3)', color: C.lightBrown }}>
                 ↩ Reopen
+              </button>
+            )}
+            {s.status === 'picked_up' && (
+              <button onClick={() => quickStatus(s, 'complete')}
+                style={{ ...btnBase, background: 'transparent', border: '1px solid rgba(124,175,221,0.4)', color: '#7CAFDD' }}>
+                🧊 Back to Freezer
               </button>
             )}
             <button onClick={() => generatePackoutForSession(s)}
@@ -1310,7 +1387,8 @@ export default function ScannerPage() {
             <>
               <Section title="● Scanning"       color={C.yellow}  items={scanning} />
               <Section title="◆ Value Add Queue" color="#E8883A"   items={valueAdd} />
-              <Section title="✓ Complete"        color={C.green}   items={complete} showAll={showAllComplete} onToggle={() => setShowAllComplete(p => !p)} />
+              <Section title="🧊 Freezer — Ready for Pickup" color="#7CAFDD" items={freezer} showAll={showAllFreezer} onToggle={() => setShowAllFreezer(p => !p)} />
+              <Section title="✓ Picked Up"       color={C.green}   items={pickedUp} showAll={showAllPickedUp} onToggle={() => setShowAllPickedUp(p => !p)} />
             </>
           )}
         </div>
@@ -1382,11 +1460,25 @@ export default function ScannerPage() {
             </>
           )}
           {currentStatus === 'complete' && (
-            <span style={{ fontSize: '0.72rem', fontWeight: 700, color: C.green, background: 'rgba(76,175,80,0.1)', borderRadius: 99, padding: '2px 8px' }}>✓ Complete</span>
+            <>
+              <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#7CAFDD', background: 'rgba(124,175,221,0.12)', borderRadius: 99, padding: '2px 8px' }}>🧊 In Freezer</span>
+              <button onClick={() => updateSessionStatus('picked_up')}
+                style={{ background: 'transparent', border: `1px solid rgba(76,175,80,0.4)`, color: C.green, borderRadius: 3, padding: '0.2rem 0.6rem', fontSize: '0.72rem', cursor: 'pointer', fontWeight: 600 }}>
+                📦 Picked Up
+              </button>
+            </>
+          )}
+          {currentStatus === 'picked_up' && (
+            <span style={{ fontSize: '0.72rem', fontWeight: 700, color: C.green, background: 'rgba(76,175,80,0.1)', borderRadius: 99, padding: '2px 8px' }}>✓ Picked Up</span>
           )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          {totalInputLbs > 0 && totalOutputLbs > 0 && (
+          {sharedActive ? (
+            <span title={`Combined across sessions sharing this carcass: ${partnerNames}`}
+              style={{ fontSize: '0.78rem', fontWeight: 700, color: poolYieldColor, fontFamily: 'monospace' }}>
+              ⋈ {poolYieldPct.toFixed(1)}% combined yield
+            </span>
+          ) : totalInputLbs > 0 && totalOutputLbs > 0 && (
             <span style={{ fontSize: '0.78rem', fontWeight: 700, color: yieldColor, fontFamily: 'monospace' }}>
               {yieldPct.toFixed(1)}% yield
             </span>
@@ -1643,12 +1735,29 @@ export default function ScannerPage() {
               <>
                 <span style={{ fontSize: '0.68rem', color: 'rgba(166,120,90,0.35)' }}>→</span>
                 <span style={{ fontSize: '0.78rem', color: C.cream }}>{totalOutputLbs.toFixed(2)} lbs out</span>
-                <span style={{
-                  fontSize: '0.74rem', fontWeight: 700, borderRadius: 3, padding: '0.1rem 0.45rem', flexShrink: 0,
-                  background: yieldPct >= 80 ? 'rgba(76,175,80,0.18)' : yieldPct >= 65 ? 'rgba(217,119,6,0.18)' : 'rgba(229,62,62,0.18)',
-                  color: yieldColor,
-                }}>
-                  {yieldPct.toFixed(1)}% yield
+                {!sharedActive && (
+                  <span style={{
+                    fontSize: '0.74rem', fontWeight: 700, borderRadius: 3, padding: '0.1rem 0.45rem', flexShrink: 0,
+                    background: yieldPct >= 80 ? 'rgba(76,175,80,0.18)' : yieldPct >= 65 ? 'rgba(217,119,6,0.18)' : 'rgba(229,62,62,0.18)',
+                    color: yieldColor,
+                  }}>
+                    {yieldPct.toFixed(1)}% yield
+                  </span>
+                )}
+              </>
+            )}
+            {sharedActive && (
+              <>
+                <span title={`Half shared with ${partnerNames} — yield is judged against everything pulling from it:\n(${totalOutputLbs.toFixed(1)} + ${sharedYield.other_output_lbs.toFixed(1)} lbs out) ÷ ${sharedYield.pool_input_lbs.toFixed(1)} lbs in`}
+                  style={{
+                    fontSize: '0.74rem', fontWeight: 700, borderRadius: 3, padding: '0.1rem 0.45rem', flexShrink: 0,
+                    background: poolYieldPct >= 80 ? 'rgba(76,175,80,0.18)' : poolYieldPct >= 65 ? 'rgba(217,119,6,0.18)' : 'rgba(229,62,62,0.18)',
+                    color: poolYieldColor,
+                  }}>
+                  ⋈ {poolYieldPct.toFixed(1)}% combined
+                </span>
+                <span style={{ fontSize: '0.7rem', color: C.lightBrown, flexShrink: 0 }}>
+                  shared w/ {partnerNames}
                 </span>
               </>
             )}
@@ -1747,6 +1856,11 @@ export default function ScannerPage() {
                     {inp.box_identifier && (
                       <div style={{ marginLeft: 36, marginTop: '0.1rem', fontSize: '0.66rem', color: 'rgba(166,120,90,0.45)', fontFamily: 'monospace' }}>
                         {inp.box_identifier}
+                        {(sharedYield?.shared_identifiers[inp.box_identifier]?.length ?? 0) > 0 && (
+                          <span style={{ color: '#7CAFDD', marginLeft: 8, fontFamily: 'inherit' }}>
+                            ⋈ shared w/ {sharedYield!.shared_identifiers[inp.box_identifier].join(', ')}
+                          </span>
+                        )}
                       </div>
                     )}
                   </div>

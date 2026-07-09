@@ -31,7 +31,8 @@ export async function POST(req: NextRequest) {
   const { data, error } = await supabase
     .from('boxes')
     .insert([{
-      customer_name: body.customer_name ?? '',
+      // Trim: a stray trailing space would key this box to a phantom session
+      customer_name: (body.customer_name ?? '').trim(),
       pack_date:     body.pack_date ?? isoDate(),
       box_number:    body.box_number ?? 1,
       is_closed:     false,

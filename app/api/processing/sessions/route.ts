@@ -43,25 +43,47 @@ export async function GET() {
     }
   }
 
-  // 3. Merge
+  // 3. Carcass inputs per session — so the freezer list shows which animals
+  // are in each customer's boxes (e.g. "Beef — Tag 06 (Holdbrook)")
+  const { data: carcassRows } = await supabase
+    .from('processing_inputs')
+    .select('customer_name, session_date, description')
+    .eq('input_type', 'carcass')
+    .order('created_at', { ascending: false })
+    .limit(500)
+
+  const animalGroups = new Map<string, string[]>()
+  for (const r of (carcassRows ?? []) as { customer_name: string | null; session_date: string; description: string }[]) {
+    if (!r.customer_name || !r.description) continue
+    const key = `${r.customer_name}|${r.session_date}`
+    if (!animalGroups.has(key)) animalGroups.set(key, [])
+    // Both halves of one animal scan in as the same description bar the side —
+    // collapse "Beef — Tag 06 L Half" / "R Half" into one animal entry.
+    const desc = r.description.replace(/ [LR] Half/, '')
+    const list = animalGroups.get(key)!
+    if (!list.includes(desc)) list.push(desc)
+  }
+
+  // 4. Merge
   const result: Array<{
     id: string | null; customer_name: string; session_date: string
     status: string; notes: string
     box_count: number; closed_count: number; total_weight: number; total_cuts: number
+    animals: string[]
   }> = []
   const seen = new Set<string>()
 
   for (const s of sessions) {
     const key   = `${s.customer_name}|${s.session_date}`
     const stats = boxGroups.get(key) ?? { box_count: 0, closed_count: 0, total_weight: 0, total_cuts: 0 }
-    result.push({ id: s.id, customer_name: s.customer_name, session_date: s.session_date, status: s.status, notes: s.notes, ...stats })
+    result.push({ id: s.id, customer_name: s.customer_name, session_date: s.session_date, status: s.status, notes: s.notes, ...stats, animals: animalGroups.get(key) ?? [] })
     seen.add(key)
   }
   // Box groups with no session record yet â†’ derive status
   for (const [key, stats] of boxGroups) {
     if (!seen.has(key)) {
       const { customer_name, session_date, ...rest } = stats
-      result.push({ id: null, customer_name, session_date, status: 'scanning', notes: '', ...rest })
+      result.push({ id: null, customer_name, session_date, status: 'scanning', notes: '', ...rest, animals: animalGroups.get(key) ?? [] })
     }
   }
 
@@ -72,7 +94,9 @@ export async function GET() {
 // POST â€” upsert session record (by customer_name + session_date)
 export async function POST(req: NextRequest) {
   const body = await req.json()
-  const { customer_name, session_date, status = 'scanning', notes = '' } = body
+  const { session_date, status = 'scanning', notes = '' } = body
+  // Trim: a stray trailing space would upsert a phantom twin session
+  const customer_name = typeof body.customer_name === 'string' ? body.customer_name.trim() : body.customer_name
 
   const { data, error } = await supabase
     .from('processing_sessions')

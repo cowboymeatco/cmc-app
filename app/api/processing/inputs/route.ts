@@ -126,7 +126,8 @@ export async function POST(req: NextRequest) {
     .from('processing_inputs')
     .insert([{
       session_date:          body.session_date          ?? isoDate(),
-      customer_name:         body.customer_name         ?? null,
+      // Trim: must match the session's boxes key exactly for yield math
+      customer_name:         typeof body.customer_name === 'string' ? body.customer_name.trim() : null,
       pack_date:             body.pack_date             ?? null,
       description,
       weight_lbs,
