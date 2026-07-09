@@ -975,7 +975,7 @@ export default function ScannerPage() {
 
   // ── Add input from CMC box scan or carcass tag scan ──────────────────────────
   async function addInput(identifier: string) {
-    const isCarcass = /^CT-/.test(identifier)
+    const isCarcass = /^CT-/.test(identifier) || /^\d{5,6}-\w+(-[LR])?$/i.test(identifier)
     setScanValue('')
     setFlash('ok')
     setLastKind('ok')
@@ -997,6 +997,10 @@ export default function ScannerPage() {
       const inp: ProcessingInput = await res.json()
       setInputs(prev => [...prev, inp])
       setShowInputs(true)
+      // Show what the scan resolved to (weight, producer, cooler pull)
+      const resolved = inp.description || identifier
+      const wt = inp.weight_lbs != null ? `  ·  ${Number(inp.weight_lbs).toFixed(1)} lb` : ''
+      setLastItem(`${isCarcass ? '🐄' : '📦'} ${resolved}${wt}${inp.cooler_pulled ? '  ·  ✓ pulled from cooler' : ''}`)
     } catch {
       setFlash('bad')
       setLastKind('bad')
@@ -1462,8 +1466,10 @@ export default function ScannerPage() {
               if (/^CMC-\d{8}-\d{3}$/.test(raw)) { addInput(raw); return }
               // Carcass tag complete (CT-{uuid} = "CT-" + 36 char UUID = 39 chars)
               if (/^CT-[0-9a-f-]{36}$/.test(raw)) { addInput(raw); return }
-              // Partial CMC or CT prefix — let it build up, don't strip
-              if (/^(CMC|CT)/i.test(raw)) { setScanValue(raw); return }
+              // Carcass half tag complete (YYDDD-TAG-SIDE or YYMMDD-TAG-SIDE)
+              if (/^\d{5,6}-\w+-[LR]$/i.test(raw)) { addInput(raw.toUpperCase()); return }
+              // Partial CMC/CT prefix or carcass tag building up — don't strip
+              if (/^(CMC|CT)/i.test(raw) || /^\d{5,6}-[\w-]*$/.test(raw)) { setScanValue(raw); return }
               // Hobart EAN-13: digits only — the scan-queue effect fires once 13 arrive
               setScanValue(raw.replace(/\D/g, ''))
             }}
@@ -1471,6 +1477,7 @@ export default function ScannerPage() {
               if (e.key === 'Enter' && scanValue.length > 0 && scanValue.length < 13) {
                 if (/^CMC-\d{8}-\d{3}$/.test(scanValue)) addInput(scanValue)
                 else if (/^CT-[0-9a-f-]{36}$/.test(scanValue)) addInput(scanValue)
+                else if (/^\d{5,6}-\w+(-[LR])?$/i.test(scanValue)) addInput(scanValue.toUpperCase())
                 else { const v = scanValue; setScanValue(''); doScan(v) }
               }
             }}

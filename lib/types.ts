@@ -115,8 +115,10 @@ export interface ProcessingInput {
   linked_order_id:       string | null
   linked_appointment_id: string | null
   linked_box_id:         string | null
+  linked_harvest_id:     string | null
   box_identifier:        string | null
   notes:                 string | null
+  cooler_pulled?:        boolean  // POST response only: this scan pulled the carcass off the rail
 }
 
 // ── Harvest ───────────────────────────────────────────────────────────────────
