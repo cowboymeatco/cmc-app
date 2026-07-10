@@ -4,6 +4,33 @@ Photos taken by Charlie of the smokehouse control cabinet and related hardware, 
 live data collection (and eventually command push) into cmc-app. This documents what we
 have, what it means, and the candidate integration paths.
 
+## Update (second photo set, 7/10)
+
+A second batch of photos (emailed in) confirms:
+
+- **The HMI is physically on the network.** The grey patch cable is seated in the
+  HMI's RJ45 with an amber link LED lit. The Ethernet path from Option A is live at
+  layer 1 — remaining unknowns are just IP config and which services are enabled.
+- **The runtime is FDC's nCompass/Orion-style touchscreen software** (View / Setup /
+  Email / Help menu bar). Screens photographed:
+  - **User security**: Add User / Users / User Rights / Security Options tabs. One
+    account exists — UserID `ENVIROPAK`, group Administrator. Grantable rights include
+    *Trend Setup, Email Settings, Make Process Changes, Open/Save/Delete Schedules,
+    Open Audit Trail, Open Alarm History* — i.e. the runtime has trend logging, an
+    audit trail, and schedule (recipe) management built in. On the Security Options
+    screen the *Enable Security* and *Audit Trail* boxes appear **unchecked** (security
+    not currently enforced).
+  - **Email/SMS alerting is built in and partially configured**: Email Settings has
+    SMTP `smtp.office365.com:587` with a cowboymeats.com login, subject
+    "SMOKEHOUSE ALERT"; the address book has Charlie's email plus a T-Mobile
+    SMS gateway address. Caveat: Office365 requires "authenticated SMTP" enabled on
+    that mailbox (Microsoft has been phasing out basic SMTP AUTH), so send may fail
+    until that's verified — do a test send from the Email menu.
+- This nCompass-class firmware ships with network services (FTP/file transfer, VNC
+  remote view, Modbus TCP, and sometimes a web/data server) that are enabled per-service
+  in the Setup/Comms screens — exactly what Option A needs. Next photo target: the
+  **Setup menu → Network/Comms screens** showing IP address and service toggles.
+
 ## Hardware inventory (from photos)
 
 ### 1. FDC-2110i HMI (Future Design Controls) — the smokehouse brain
