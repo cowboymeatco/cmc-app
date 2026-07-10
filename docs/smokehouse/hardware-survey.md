@@ -31,6 +31,28 @@ A second batch of photos (emailed in) confirms:
   in the Setup/Comms screens — exactly what Option A needs. Next photo target: the
   **Setup menu → Network/Comms screens** showing IP address and service toggles.
 
+## Update 2 (Datalogging → FTP \ WAN Setup screen, 7/10)
+
+The decisive screen. The HMI is an **FTP client that pushes its data-log files to
+an FTP server on the LAN**:
+
+- `FTP IP Add: 192.168.1.119`, `Server Dir: Oven1`, blank user/password
+  ("left blank for anonymus logins"), **Auto Backup (2:00AM)** checked,
+  **Delete Internal Data Files After FTP** unchecked, plus a **Backup Now** button.
+- Status bar: **`DATA LOGGER IS OFF`** — nothing is being recorded right now.
+  Turning the logger on is a prerequisite for everything else.
+
+So Option A refines to: we don't pull from the HMI at all — we stand up a tiny
+FTP server on the shop PC (the one already running the ThermoWorks sync) and the
+smokehouse delivers its own cook logs nightly, with Backup Now for on-demand tests.
+
+**Implementation lives in `scripts/smokehouse/`** (FTP receiver + Supabase
+ingestion, same deployment pattern as `scripts/thermoworks/`): see its README for
+the PC-side and HMI-side checklists. Tables: `smokehouse_cook`, `smokehouse_reading`.
+
+Open question: what device currently holds `192.168.1.119`? Either give the sync
+PC that address (DHCP reservation) or update the HMI field to the PC's real IP.
+
 ## Hardware inventory (from photos)
 
 ### 1. FDC-2110i HMI (Future Design Controls) — the smokehouse brain

@@ -1,0 +1,5 @@
+.env
+incoming/
+processed/
+*.log
+__pycache__/
