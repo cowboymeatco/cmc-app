@@ -47,8 +47,8 @@ const HOG_SECTIONS = [
     ['deliveryDate','Delivery Date'],
   ]},
   { label: 'Hog Cuts', fields: [
-    ['hogChops','Chops'],['hogSpareRibs','Spare Ribs'],['hogHam','Ham'],['hogHamCut','Ham Cut'],
-    ['hogBelly','Belly'],['hogBostonButt','Boston Butt'],['hogShoulderBacon','Shoulder Bacon'],['hogHocks','Hocks'],
+    ['hogChops','Chops'],['hogSpareRibs','Spare Ribs'],['hogHam','Ham 1'],['hogHam2','Ham 2'],
+    ['hogHamCut','Ham Cut'],['hogBelly','Belly'],['hogBostonButt','Boston Butt'],
   ]},
   { label: 'Sausage', fields: [
     ['hogSausage1Type','Sausage 1 Type'],['hogSausage1Format','Sausage 1 Format'],
@@ -250,8 +250,13 @@ function renderV2Detail(ci: RawInstruction) {
             <V2Field label="Cut" value={v2fmt(d.belly?.cut)} />
           </V2Section>
           <V2Section title="Ham">
-            <V2Field label="Style" value={v2fmt(d.ham?.style)} />
+            <V2Field label="Style" value={
+              d.ham?.style2
+                ? `1: ${v2fmt(d.ham.style)} / 2: ${v2fmt(d.ham.style2)}`
+                : v2fmt(d.ham?.style)
+            } />
             {d.ham?.style !== 'grind' && <V2Field label="Cut" value={v2fmt(d.ham?.cut ?? '')} />}
+            {d.ham?.style && !d.hocks?.cut && <V2Field label="Hocks" value="Same as hams — fresh if ordered fresh, cured if ordered cured" />}
           </V2Section>
           <V2Section title="Hocks & Spare Ribs">
             <V2Field label="Hocks" value={v2fmt(d.hocks?.cut)} />
@@ -393,8 +398,9 @@ function printV2CutCard(ci: RawInstruction) {
     ].join(''))
     cutSections += sec('Belly', [row('Cut', fmt(d.belly?.cut))].join(''))
     cutSections += sec('Ham', [
-      row('Style', fmt(d.ham?.style)),
+      row('Style', d.ham?.style2 ? `1: ${fmt(d.ham.style)} / 2: ${fmt(d.ham.style2)}` : fmt(d.ham?.style)),
       d.ham?.style !== 'grind' ? row('Cut', fmt(d.ham?.cut ?? '')) : '',
+      d.ham?.style && !d.hocks?.cut ? row('Hocks', 'Same as hams — fresh if ordered fresh, cured if ordered cured') : '',
     ].join(''))
     cutSections += sec('Hocks & Spare Ribs', [
       row('Hocks', fmt(d.hocks?.cut)),
@@ -541,11 +547,15 @@ function printV2CutCard(ci: RawInstruction) {
     if (d.belly?.cut) { d.belly.cut === 'grind' ? pg('Belly') : pc('Belly / Bacon', fmt(d.belly.cut)) }
     ps('Ham')
     if (d.ham?.style) {
-      if (d.ham.style === 'grind') pg('Ham')
-      else pc('Ham', [fmt(d.ham.style), d.ham.cut ? fmt(d.ham.cut) : ''].filter(Boolean).join(' · '))
+      if (d.ham.style === 'grind' && !d.ham.style2) pg('Ham')
+      else pc('Ham', [
+        d.ham.style2 ? `1: ${fmt(d.ham.style)} / 2: ${fmt(d.ham.style2)}` : fmt(d.ham.style),
+        d.ham.cut ? fmt(d.ham.cut) : '',
+      ].filter(Boolean).join(' · '))
     }
     ps('Hocks & Spare Ribs')
-    if (d.hocks?.cut)    pc('Hocks',      fmt(d.hocks.cut))
+    if (d.hocks?.cut)     pc('Hocks', fmt(d.hocks.cut))
+    else if (d.ham?.style) pc('Hocks', 'Match ham style — fresh with fresh, cured with cured')
     if (d.spareRibs?.cut) pc('Spare Ribs', fmt(d.spareRibs.cut))
   }
 
@@ -1145,9 +1155,9 @@ function printCutCard(ci: RawInstruction) {
     ].join(''))
   } else if (species === 'Hog') {
     body += section('Hog Cuts', [
-      row('Chops', d.hogChops), row('Spare Ribs', d.hogSpareRibs), row('Ham', d.hogHam),
-      row('Ham Cut', d.hogHamCut), row('Belly', d.hogBelly), row('Boston Butt', d.hogBostonButt),
-      row('Shoulder Bacon', d.hogShoulderBacon), row('Hocks', d.hogHocks),
+      row('Chops', d.hogChops), row('Spare Ribs', d.hogSpareRibs), row('Ham 1', d.hogHam),
+      row('Ham 2', d.hogHam2), row('Ham Cut', d.hogHamCut), row('Belly', d.hogBelly),
+      row('Boston Butt', d.hogBostonButt), row('Shoulder Bacon', d.hogShoulderBacon), row('Hocks', d.hogHocks),
     ].join(''))
     body += section('Sausage', [
       row('Sausage 1', `${d.hogSausage1Type} / ${d.hogSausage1Format}`),
