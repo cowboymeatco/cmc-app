@@ -1,7 +1,7 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
-import { killFeeCharge, cutWrapCharge, PORTION_FRACTION, type BillingCharge } from '@/lib/billingRules'
+import { killFeeCharge, cutWrapCharge, isExcludedProducer, PORTION_FRACTION, type BillingCharge } from '@/lib/billingRules'
 import type { AppointmentCustomer } from '@/lib/types'
 
 // Billing detector: scans operational records and writes pending rows into
@@ -103,7 +103,11 @@ export async function POST(req: NextRequest) {
     const unbillable: string[] = []
     const today = new Date().toISOString().slice(0, 10)
 
+    let excluded = 0
+    const supersededLambIds: string[] = []
     for (const h of rows) {
+      // Own animals (producer CMC) are opportunity cost, never invoiced.
+      if (isExcludedProducer(h.producer!)) { excluded++; continue }
       const tag = h.carcass_tag || h.id.slice(0, 8)
       const shares = payerShares(h.producer!, h.appointment_id ? apptById.get(h.appointment_id) ?? [] : [])
 
@@ -139,6 +143,9 @@ export async function POST(req: NextRequest) {
 
       // cut & wrap — only once the carcass is cut
       if (h.status === 'cut') {
+        // fully processed lamb: the $175 all-in fee replaces the $50
+        // kill-only fee, so retire any still-pending kill fee for it
+        if (h.species === 'Lamb') supersededLambIds.push(h.id)
         const cutDate = (h.appointment_id && cutDateByAppt.get(h.appointment_id)) || today
         for (const p of shares) {
           // beef quarters bill at the quarters rate; a payer with mixed
@@ -162,9 +169,26 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Drop lamb kill-fee candidates for lambs that reached full processing,
+    // and retire any previously detected pending ones.
+    const supersededSet = new Set(supersededLambIds)
+    const finalEvents = events.filter(e => !(e.rule_key === 'kill_fee' && supersededSet.has(e.source_id)))
+    let superseded = 0
+    if (supersededLambIds.length > 0) {
+      const { data: sup, error: supErr } = await supabase
+        .from('billable_events')
+        .update({ status: 'superseded' })
+        .eq('rule_key', 'kill_fee')
+        .in('source_id', supersededLambIds)
+        .eq('status', 'pending')
+        .select('id')
+      if (supErr) throw new Error(supErr.message)
+      superseded = sup?.length ?? 0
+    }
+
     let created = 0
-    for (let i = 0; i < events.length; i += 200) {
-      const batch = events.slice(i, i + 200)
+    for (let i = 0; i < finalEvents.length; i += 200) {
+      const batch = finalEvents.slice(i, i + 200)
       const { data, error } = await supabase
         .from('billable_events')
         .upsert(batch, { onConflict: 'rule_key,source_table,source_id,customer_name', ignoreDuplicates: true })
@@ -176,9 +200,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       scanned: rows.length,
-      candidates: events.length,
+      excluded,                  // own animals (CMC)
+      supersededLambKillFees: superseded,
+      candidates: finalEvents.length,
       created,
-      alreadyDetected: events.length - created,
+      alreadyDetected: finalEvents.length - created,
       unbillable: [...new Set(unbillable)],
       since,
     })

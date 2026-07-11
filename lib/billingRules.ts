@@ -37,8 +37,16 @@ export const PORTION_FRACTION: Record<string, number> = {
 
 const round2 = (n: number) => Math.round(n * 100) / 100
 
+// Producers whose animals are never invoiced (own animals — opportunity
+// cost, not a receivable). Compared on normalized name.
+export const EXCLUDED_PRODUCERS = ['CMC']
+export const isExcludedProducer = (name: string) =>
+  EXCLUDED_PRODUCERS.includes(name.toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim())
+
 // Kill fee for one carcass share. Beef/hog are $/lb on carcass weight;
-// lamb is flat per head. Goat kill is inside the flat processing fee -> null.
+// lamb is flat per head — the $50 applies to KILL-ONLY lambs; when a lamb
+// is fully processed the detector supersedes it with the $175 all-in flat
+// fee at cut time. Goat kill is inside the flat processing fee -> null.
 export function killFeeCharge(species: string, carcassLbs: number | null, fraction: number, tag: string): BillingCharge | null {
   const frac = ` (${fraction === 1 ? 'whole' : fraction === 0.5 ? 'half' : fraction === 0.25 ? 'quarter' : fraction} share)`
   if (species === 'Beef' || species === 'Hog') {
