@@ -50,8 +50,13 @@ smokehouse delivers its own cook logs nightly, with Backup Now for on-demand tes
 ingestion, same deployment pattern as `scripts/thermoworks/`): see its README for
 the PC-side and HMI-side checklists. Tables: `smokehouse_cook`, `smokehouse_reading`.
 
-Open question: what device currently holds `192.168.1.119`? Either give the sync
-PC that address (DHCP reservation) or update the HMI field to the PC's real IP.
+~~Open question: what device currently holds `192.168.1.119`?~~ **Resolved 7/11:**
+ping from the sync PC returned "Destination host unreachable" — nothing is at
+`.119`; the HMI's FTP target was pointing at a vacant address. The sync PC is at
+`192.168.1.167` (Wi-Fi, gateway `192.168.1.1`), so the plan is to update the HMI's
+"FTP IP Add" field to `.167`, then later lock that address in with a DHCP
+reservation on the router (and ideally move the PC to wired Ethernet — its
+Ethernet adapter is currently disconnected).
 
 ## Hardware inventory (from photos)
 
