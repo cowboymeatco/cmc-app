@@ -1,6 +1,7 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { getCachedQboItems, type QboCacheRow } from '@/lib/qboSync'
 
 // Linking layer between plu_items (master) and the cached QuickBooks catalog
 // (qbo_items — refreshed via scripts/qbo/import-items.mjs; no app-side OAuth yet).
@@ -18,39 +19,21 @@ interface PluRow {
   active: boolean
 }
 
-export interface QboRow {
-  qbo_id: string
-  full_name: string
-  name: string
-  type: string | null
-  sales_price: number | null
-  taxable: boolean | null
-  active: boolean
-  synced_at: string
-}
-
 // GET /api/qbo/links — current links + name-match suggestions
 export async function GET() {
   try {
-    const [{ data: plus, error: pluErr }, { data: qbo, error: qboErr }] = await Promise.all([
+    const [{ data: plus, error: pluErr }, qboItems] = await Promise.all([
       supabase
         .from('plu_items')
         .select('id, plu_number, item_name, retail_price, quickbooks_item_id, active')
         .eq('active', true)
         .order('item_name'),
-      supabase
-        .from('qbo_items')
-        .select('qbo_id, full_name, name, type, sales_price, taxable, active, synced_at')
-        .not('qbo_id', 'is', null)
-        .order('full_name'),
+      getCachedQboItems(), // paged — the cache exceeds Supabase's 1000-row read cap
     ])
     if (pluErr) throw new Error(pluErr.message)
-    if (qboErr) throw new Error(qboErr.message)
-
-    const qboItems = (qbo ?? []) as QboRow[]
     const activeQbo = qboItems.filter(q => q.active)
     const linkedIds = new Set((plus as PluRow[]).map(p => p.quickbooks_item_id).filter(Boolean))
-    const byNorm = new Map<string, QboRow[]>()
+    const byNorm = new Map<string, QboCacheRow[]>()
     for (const q of activeQbo) {
       const k = norm(q.name)
       byNorm.set(k, [...(byNorm.get(k) ?? []), q])

@@ -2,6 +2,7 @@ export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { getCloverItems, type CloverItem } from '@/lib/clover'
+import { getCachedQboItems } from '@/lib/qboSync'
 
 // Cross-system catalog alignment: for every active PLU, where it stands on
 // the scale (plu_items IS the Hobart book), in Clover (live), and in
@@ -21,14 +22,6 @@ interface PluRow {
   quickbooks_item_id: string
 }
 
-interface QboRow {
-  qbo_id: string
-  name: string
-  full_name: string
-  sales_price: number | null
-  active: boolean
-}
-
 export async function GET() {
   try {
     const pluPromise = supabase
@@ -36,25 +29,22 @@ export async function GET() {
       .select('id, plu_number, item_name, price, retail_price, is_retail, clover_item_id, quickbooks_item_id')
       .eq('active', true)
       .order('item_name')
-    const qboPromise = supabase
-      .from('qbo_items')
-      .select('qbo_id, name, full_name, sales_price, active')
-      .not('qbo_id', 'is', null)
+    // paged — the cache exceeds Supabase's 1000-row read cap
+    const qboPromise = getCachedQboItems()
 
     // Clover is a live API call — degrade to cache-only alignment if it's down
     let cloverItems: CloverItem[] | null = null
     let cloverError: string | null = null
-    const [{ data: plus, error: pluErr }, { data: qbo, error: qboErr }, cloverResult] = await Promise.all([
+    const [{ data: plus, error: pluErr }, qbo, cloverResult] = await Promise.all([
       pluPromise,
       qboPromise,
       getCloverItems().catch((e: unknown) => { cloverError = e instanceof Error ? e.message : String(e); return null }),
     ])
     if (pluErr) throw new Error(pluErr.message)
-    if (qboErr) throw new Error(qboErr.message)
     cloverItems = cloverResult
 
     const cloverById = new Map((cloverItems ?? []).map(c => [c.id, c]))
-    const qboById = new Map(((qbo ?? []) as QboRow[]).map(q => [q.qbo_id, q]))
+    const qboById = new Map(qbo.map(q => [q.qbo_id, q]))
 
     const rows = (plus as PluRow[]).map(p => {
       const clover = p.clover_item_id ? cloverById.get(p.clover_item_id) ?? null : null

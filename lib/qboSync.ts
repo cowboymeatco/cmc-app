@@ -47,6 +47,36 @@ export async function updateQboItem(item: QboApiItem, changes: { Name?: string; 
   return res.Item
 }
 
+// The cache holds ~1300 rows but Supabase caps reads at 1000/request —
+// page through so late-alphabet items don't silently vanish from views.
+export interface QboCacheRow {
+  qbo_id: string
+  full_name: string
+  name: string
+  type: string | null
+  sales_price: number | null
+  taxable: boolean | null
+  active: boolean
+  synced_at: string
+}
+
+export async function getCachedQboItems(): Promise<QboCacheRow[]> {
+  const rows: QboCacheRow[] = []
+  const page = 1000
+  for (let from = 0; ; from += page) {
+    const { data, error } = await supabase
+      .from('qbo_items')
+      .select('qbo_id, full_name, name, type, sales_price, taxable, active, synced_at')
+      .not('qbo_id', 'is', null)
+      .order('full_name')
+      .range(from, from + page - 1)
+    if (error) throw new Error(error.message)
+    rows.push(...((data ?? []) as QboCacheRow[]))
+    if (!data || data.length < page) break
+  }
+  return rows
+}
+
 // Rewrite the qbo_items cache from the live catalog (replace-all; links are
 // unaffected — they live on plu_items.quickbooks_item_id). Categories are
 // excluded: they're folder nodes, not invoiceable items.
