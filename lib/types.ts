@@ -32,6 +32,10 @@ export interface AppointmentCustomer {
   customer_id?:                string | null   // FK to customers table (optional — backward compat)
   customer_name:               string
   portion:                     string   // 'Whole' | 'Half' | 'Quarter'
+  // Who gets invoiced for this portion's services (kill share, cut & wrap,
+  // value-add). Missing on older records = 'producer'. This is the billing
+  // branch trigger: 'customer' means this portion accumulates its own invoice.
+  payment_responsibility?:     'producer' | 'customer'
   contact_preference:          string   // 'Email' | 'Text Message' | 'Phone Call'
   contact_value:               string
   linked_cutting_instruction_id: string

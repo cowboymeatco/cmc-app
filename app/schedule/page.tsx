@@ -131,7 +131,7 @@ function daysOut(dateStr: string) {
 }
 
 function blankCustomer() {
-  return { id: crypto.randomUUID(), customer_name: '', portion: 'Whole', contact_preference: 'Email', contact_value: '', linked_cutting_instruction_id: '', reminder_last_sent_at: null, reminder_count: 0 }
+  return { id: crypto.randomUUID(), customer_name: '', portion: 'Whole', payment_responsibility: 'producer' as const, contact_preference: 'Email', contact_value: '', linked_cutting_instruction_id: '', reminder_last_sent_at: null, reminder_count: 0 }
 }
 function blankAppt(date?: string): Partial<HarvestAppointment> {
   return { harvest_date: date ?? isoDate(), species: 'Beef', head_count: 1, source: '', notes: '', status: 'Booked', linked_carcass_id: '', customers: [blankCustomer()] }
@@ -738,7 +738,7 @@ function CalendarView({
                     {a.source && <div style={{ fontSize: '0.75rem', color: 'var(--tan)', marginBottom: '0.25rem' }}>📍 {a.source}</div>}
                     {a.customers?.map(c => (
                       <div key={c.id} style={{ fontSize: '0.75rem', color: 'var(--off-white)', display: 'flex', justifyContent: 'space-between' }}>
-                        <span>{c.customer_name} <span style={{ color: 'var(--tan)' }}>({c.portion})</span></span>
+                        <span>{c.customer_name} <span style={{ color: 'var(--tan)' }}>({c.portion})</span>{c.payment_responsibility === 'customer' && <span title="This customer pays for processing" style={{ marginLeft: '0.35rem' }}>💳</span>}</span>
                         <span>{c.linked_cutting_instruction_id ? <span style={{ color: '#6dbf6d' }}>✅</span> : <span style={{ color: '#f0c040' }}>⚠</span>}</span>
                       </div>
                     ))}
@@ -875,6 +875,12 @@ function Modal({ editing, saving, onChange, onSave, onClose }: {
                 <Field label="Portion">
                   <select value={c.portion} onChange={e=>{const cs=[...(editing.customers??[])];cs[idx]={...c,portion:e.target.value};onChange({...editing,customers:cs})}} style={inputStyle()}>
                     {PORTIONS.map(p=><option key={p}>{p}</option>)}
+                  </select>
+                </Field>
+                <Field label="Who Pays for Processing">
+                  <select value={c.payment_responsibility ?? 'producer'} onChange={e=>{const cs=[...(editing.customers??[])];cs[idx]={...c,payment_responsibility:e.target.value as 'producer'|'customer'};onChange({...editing,customers:cs})}} style={inputStyle()}>
+                    <option value="producer">Producer pays</option>
+                    <option value="customer">This customer pays</option>
                   </select>
                 </Field>
                 <Field label="Contact">
