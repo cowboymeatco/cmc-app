@@ -42,10 +42,18 @@ if errorlevel 1 (
 
 echo.
 
-:: Find Python executable
-for /f "delims=" %%i in ('where python') do set PYTHON_EXE=%%i
+:: Find Python executable (python.org install required — the Microsoft
+:: Store version cannot be launched by a SYSTEM scheduled task)
+set PYTHON_EXE=
+for %%v in (314 313 312 311) do (
+    if not defined PYTHON_EXE if exist "C:\Program Files\Python%%v\python.exe" set "PYTHON_EXE=C:\Program Files\Python%%v\python.exe"
+    if not defined PYTHON_EXE if exist "%LocalAppData%\Programs\Python\Python%%v\python.exe" set "PYTHON_EXE=%LocalAppData%\Programs\Python\Python%%v\python.exe"
+)
+if not defined PYTHON_EXE for /f "delims=" %%i in ('where python 2^>nul') do if not defined PYTHON_EXE set "PYTHON_EXE=%%i"
+if defined PYTHON_EXE echo %PYTHON_EXE% | find /i "WindowsApps" >nul && set "PYTHON_EXE="
 if not defined PYTHON_EXE (
-    echo ERROR: python not found in PATH.
+    echo ERROR: no usable Python found. Install from python.org/downloads
+    echo        and check "Add python.exe to PATH" during install.
     pause
     exit /b 1
 )
