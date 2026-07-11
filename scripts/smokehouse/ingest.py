@@ -88,7 +88,8 @@ class SupabaseClient:
 
 def supabase() -> SupabaseClient:
     url = os.environ.get('SUPABASE_URL')
-    key = os.environ.get('SUPABASE_SERVICE_KEY')
+    # accept either name so the thermoworks .env lines can be pasted verbatim
+    key = os.environ.get('SUPABASE_SERVICE_KEY') or os.environ.get('SUPABASE_KEY')
     if not url or not key:
         raise RuntimeError('SUPABASE_URL / SUPABASE_SERVICE_KEY missing — edit .env')
     return SupabaseClient(url, key)
