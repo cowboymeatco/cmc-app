@@ -36,6 +36,26 @@ const TD: React.CSSProperties = {
 }
 
 interface Producer { name: string; harvestCount: number }
+interface BillableEvent {
+  id: string
+  service_date: string
+  rule_key: string
+  customer_name: string
+  qbo_customer_id: string
+  description: string
+  qty: number
+  unit: string
+  rate: number
+  amount: number
+}
+interface EventsData {
+  events: BillableEvent[]
+  totals: {
+    amount: number
+    byDay: { day: string; amount: number }[]
+    byCustomer: { name: string; amount: number }[]
+  }
+}
 interface QboCust { qbo_id: string; display_name: string; company_name?: string | null; phone?: string | null; balance: number | null }
 interface LinksData {
   linked: { producer: Producer; qbo: QboCust }[]
@@ -56,17 +76,52 @@ export default function BillingPage() {
   const [pickerSearch, setPickerSearch] = useState('')
   const [pickerResults, setPickerResults] = useState<QboCust[]>([])
 
+  // charges
+  const [charges, setCharges] = useState<EventsData | null>(null)
+  const [detecting, setDetecting] = useState(false)
+  const [detectMsg, setDetectMsg] = useState<string | null>(null)
+  const [eventBusy, setEventBusy] = useState<string | null>(null)
+
   const load = useCallback(async () => {
     setError(null)
     try {
-      const res = await fetch('/api/qbo/customers')
-      const json = await res.json()
-      if (!res.ok || json.error) throw new Error(json.error ?? 'Load failed')
+      const [custRes, evRes] = await Promise.all([fetch('/api/qbo/customers'), fetch('/api/billing/events')])
+      const json = await custRes.json()
+      if (!custRes.ok || json.error) throw new Error(json.error ?? 'Load failed')
       setData(json)
+      const ev = await evRes.json()
+      if (evRes.ok && !ev.error) setCharges(ev)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
   }, [])
+
+  async function detect() {
+    setDetecting(true)
+    setDetectMsg(null)
+    try {
+      const res = await fetch('/api/billing/detect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      const json = await res.json()
+      if (!res.ok || json.error) throw new Error(json.error ?? 'Detect failed')
+      setDetectMsg(`Scanned ${json.scanned} harvests since ${json.since}: ${json.created} new charge(s), ${json.alreadyDetected} already detected.`
+        + (json.unbillable.length ? ` ⚠ ${json.unbillable.length} unbillable: ${json.unbillable.slice(0, 3).join('; ')}${json.unbillable.length > 3 ? '…' : ''}` : ''))
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+    setDetecting(false)
+  }
+
+  async function skipEvent(ev: BillableEvent, restore = false) {
+    setEventBusy(ev.id)
+    await fetch('/api/billing/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: restore ? 'restore' : 'skip', id: ev.id }),
+    })
+    await load()
+    setEventBusy(null)
+  }
 
   useEffect(() => { load() }, [load])
 
@@ -157,6 +212,72 @@ export default function BillingPage() {
         </div>
 
         {!data && !error && <div style={{ color: C.lightBrown, padding: '2rem' }}>Loading producers…</div>}
+
+        {/* ── Pending charges ────────────────────────────────────────── */}
+        <div style={CARD}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <div>
+              <div style={{ color: C.tan, fontWeight: 700, fontSize: '0.95rem' }}>
+                Pending Charges{charges && charges.events.length > 0 && (
+                  <span style={{ color: C.green, fontWeight: 400, marginLeft: '0.5rem' }}>
+                    ${charges.totals.amount.toFixed(2)} across {charges.events.length} service(s)
+                  </span>
+                )}
+              </div>
+              <div style={{ color: C.lightBrown, fontSize: '0.78rem' }}>
+                Services detected from harvests and cutting since 7/11 — kill fees split across paying portions, cut &amp; wrap at carcass weight.
+              </div>
+              {detectMsg && <div style={{ color: C.green, fontSize: '0.78rem', marginTop: '0.3rem' }}>{detectMsg}</div>}
+            </div>
+            <button onClick={detect} disabled={detecting} style={BTN(C.green)}>
+              {detecting ? 'Scanning…' : '⚡ Detect New Charges'}
+            </button>
+          </div>
+
+          {charges && charges.totals.byDay.length > 0 && (
+            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', margin: '0.5rem 0 0.75rem' }}>
+              {charges.totals.byDay.map(d => (
+                <span key={d.day} style={{ background: 'rgba(76,175,80,0.12)', border: '1px solid rgba(76,175,80,0.35)', borderRadius: 3, color: C.green, padding: '0.2rem 0.6rem', fontSize: '0.75rem' }}>
+                  {new Date(d.day + 'T12:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}: ${d.amount.toFixed(2)}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {(!charges || charges.events.length === 0) ? (
+            <div style={{ color: C.lightBrown, fontSize: '0.83rem' }}>
+              No pending charges. Hit ⚡ Detect after harvests are logged or carcasses marked cut.
+            </div>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr>
+                <th style={TH}>Service Day</th><th style={TH}>Bill To</th><th style={TH}>Service</th>
+                <th style={TH}>Qty</th><th style={TH}>Rate</th><th style={TH}>Amount</th><th style={TH}></th>
+              </tr></thead>
+              <tbody>
+                {charges.events.map(ev => (
+                  <tr key={ev.id}>
+                    <td style={{ ...TD, fontFamily: 'monospace', color: C.lightBrown }}>{ev.service_date}</td>
+                    <td style={TD}>
+                      {ev.customer_name}
+                      {!ev.qbo_customer_id && <span title="Not linked to a QuickBooks customer yet" style={{ color: C.yellow, marginLeft: '0.35rem' }}>⚠</span>}
+                    </td>
+                    <td style={{ ...TD, fontSize: '0.78rem' }}>{ev.description}</td>
+                    <td style={TD}>{Number(ev.qty)}{ev.unit === 'lb' ? ' lb' : ''}</td>
+                    <td style={{ ...TD, color: C.lightBrown }}>${Number(ev.rate).toFixed(2)}{ev.unit === 'lb' ? '/lb' : ''}</td>
+                    <td style={{ ...TD, color: C.green }}>${Number(ev.amount).toFixed(2)}</td>
+                    <td style={{ ...TD, textAlign: 'right' }}>
+                      <button onClick={() => skipEvent(ev)} disabled={eventBusy === ev.id}
+                        style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.35)', padding: '0.2rem 0.6rem', fontSize: '0.72rem' }}>
+                        skip
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
 
         {/* ── Suggestions ────────────────────────────────────────────── */}
         {data && data.suggestions.length > 0 && (
