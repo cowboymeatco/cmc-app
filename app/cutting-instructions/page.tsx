@@ -235,7 +235,7 @@ function renderV2Detail(ci: RawInstruction) {
           </V2Section>
           <V2Section title="Loin">
             <V2Field label="Cut" value={v2fmt(d.loin?.cut)} />
-            {(d.loin?.cut === 'bone-in-chops' || d.loin?.cut === 'boneless-chops') && (
+            {(d.loin?.cut === 'bone-in-chops' || d.loin?.cut === 'boneless-chops' || d.loin?.cut === 'smoked-chops') && (
               <>
                 <V2Field label="Chop Thickness" value={v2thick(d.loin?.chopThickness)} />
                 <V2Field label="Per Pack" value={d.loin?.chopPack} />
@@ -389,8 +389,8 @@ function printV2CutCard(ci: RawInstruction) {
     ].join(''))
     cutSections += sec('Loin', [
       row('Cut', fmt(loin.cut)),
-      (loin.cut === 'bone-in-chops' || loin.cut === 'boneless-chops') ? row('Chop Thickness', thick(loin.chopThickness ?? '')) : '',
-      (loin.cut === 'bone-in-chops' || loin.cut === 'boneless-chops') ? row('Per Pack', loin.chopPack) : '',
+      (loin.cut === 'bone-in-chops' || loin.cut === 'boneless-chops' || loin.cut === 'smoked-chops') ? row('Chop Thickness', thick(loin.chopThickness ?? '')) : '',
+      (loin.cut === 'bone-in-chops' || loin.cut === 'boneless-chops' || loin.cut === 'smoked-chops') ? row('Per Pack', loin.chopPack) : '',
       loin.cut === 'boneless-chops' ? row('Baby Back Ribs', fmt(loin.babyBack ?? '')) : '',
       loin.cut === 'loin-roast' ? row('Roast Size', fmt(loin.roastSize ?? '')) : '',
       row('Tenderloin', fmt(loin.tenderloin)),
@@ -533,7 +533,7 @@ function printV2CutCard(ci: RawInstruction) {
     ps('Loin')
     if (loin.cut === 'grind') { pg('Loin') }
     else if (loin.cut) {
-      if (loin.cut === 'bone-in-chops' || loin.cut === 'boneless-chops') {
+      if (loin.cut === 'bone-in-chops' || loin.cut === 'boneless-chops' || loin.cut === 'smoked-chops') {
         pc('Chops', [fmt(loin.cut), thick(loin.chopThickness ?? ''), loin.chopPack ? `${loin.chopPack}/pkg` : ''].filter(Boolean).join(' · '))
         if (loin.cut === 'boneless-chops' && loin.babyBack) pc('Baby Back Ribs', fmt(loin.babyBack))
       } else if (loin.cut === 'loin-roast') {
