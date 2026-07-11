@@ -63,6 +63,18 @@ interface QboStatus {
   realmId: string | null
   refreshExpiresAt: string | null
 }
+interface Change {
+  key: string
+  pluId: string | null
+  pluNumber: string
+  itemName: string
+  qboItemId: string
+  qboName: string
+  field: 'price' | 'name'
+  from: string
+  to: string
+  sweep: boolean
+}
 
 const money = (v: number | null) => (v != null ? `$${v.toFixed(2)}` : '—')
 // 'RETAIL SALES:RETAIL CUTS:Beef Trim' -> 'RETAIL SALES : RETAIL CUTS' for the group column
@@ -79,6 +91,16 @@ export default function QuickBooksTab() {
   // manual link picker
   const [pickerFor, setPickerFor] = useState<PluLite | null>(null)
   const [pickerSearch, setPickerSearch] = useState('')
+
+  // push panel
+  const [diff, setDiff] = useState<{ changes: Change[]; skipped: string[] } | null>(null)
+  const [diffLoading, setDiffLoading] = useState(false)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [pushNames, setPushNames] = useState(false)
+  const [includeSweep, setIncludeSweep] = useState(false)
+  const [pushing, setPushing] = useState(false)
+  const [pushResult, setPushResult] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -133,7 +155,78 @@ export default function QuickBooksTab() {
     setBusy(plu.id)
     await fetch(`/api/qbo/links?pluId=${plu.id}`, { method: 'DELETE' })
     await load()
+    setDiff(null)
     setBusy(null)
+  }
+
+  async function refreshCatalog() {
+    setRefreshing(true)
+    setPushResult(null)
+    try {
+      const res = await fetch('/api/qbo/refresh', { method: 'POST' })
+      const json = await res.json()
+      if (!res.ok || json.error) throw new Error(json.error ?? 'Refresh failed')
+      setPushResult(`Catalog refreshed from QuickBooks: ${json.total} items (${json.active} active).`)
+      await load()
+      setDiff(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+    setRefreshing(false)
+  }
+
+  async function runDryRun() {
+    setDiffLoading(true)
+    setPushResult(null)
+    try {
+      const res = await fetch('/api/qbo/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dryRun: true }),
+      })
+      const json = await res.json()
+      if (!res.ok || json.error) throw new Error(json.error ?? 'Dry run failed')
+      setDiff(json)
+      // prices default-selected; names wait for their opt-ins
+      setSelected(new Set(json.changes.filter((c: Change) => c.field === 'price').map((c: Change) => c.key)))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+    setDiffLoading(false)
+  }
+
+  function pushableCount() {
+    if (!diff) return 0
+    return diff.changes.filter(c =>
+      (c.field === 'price' && selected.has(c.key))
+      || (c.field === 'name' && pushNames && (!c.sweep || includeSweep) && selected.has(c.key))
+    ).length
+  }
+
+  async function push() {
+    if (!diff) return
+    const active = diff.changes.filter(c =>
+      (c.field === 'price' && selected.has(c.key))
+      || (c.field === 'name' && pushNames && (!c.sweep || includeSweep) && selected.has(c.key)))
+    if (active.length === 0) return
+    if (!confirm(`Push ${active.length} change(s) to the LIVE QuickBooks catalog?`)) return
+    setPushing(true)
+    setPushResult(null)
+    try {
+      const res = await fetch('/api/qbo/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dryRun: false, keys: active.map(c => c.key), pushNames }),
+      })
+      const json = await res.json()
+      if (!res.ok || json.error) throw new Error(json.error ?? 'Push failed')
+      setPushResult(`Pushed ${json.pushed} change(s)${json.failed ? `, ${json.failed} FAILED — see push log` : ''}.${json.logWarning ? ` ⚠ ${json.logWarning}` : ''}`)
+      await load()
+      await runDryRun()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+    setPushing(false)
   }
 
   if (loading && !data) return <div style={{ color: C.lightBrown, padding: '2rem' }}>Loading QuickBooks catalog…</div>
@@ -169,7 +262,13 @@ export default function QuickBooksTab() {
             </div>
             {status && (
               status.connected ? (
-                <span style={{ color: C.green, fontSize: '0.78rem' }}>✓ Connected to QuickBooks</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                  <span style={{ color: C.green, fontSize: '0.78rem' }}>✓ Connected to QuickBooks</span>
+                  <button onClick={refreshCatalog} disabled={refreshing}
+                    style={{ ...BTN(C.tan), padding: '0.3rem 0.8rem', fontSize: '0.74rem' }}>
+                    {refreshing ? 'Refreshing…' : '⟳ Refresh Catalog'}
+                  </button>
+                </span>
               ) : status.configured ? (
                 <a href="/api/qbo/oauth/start" style={{ ...BTN(C.green), textDecoration: 'none', padding: '0.35rem 0.9rem', fontSize: '0.78rem' }}>
                   Connect QuickBooks
@@ -184,6 +283,93 @@ export default function QuickBooksTab() {
 
       {oauthMsg && (
         <div style={{ ...CARD, color: oauthMsg.startsWith('✓') ? C.green : C.red, fontSize: '0.85rem' }}>{oauthMsg}</div>
+      )}
+
+      {/* ── Push panel ─────────────────────────────────────────────── */}
+      {status?.connected && (
+        <div style={CARD}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <div>
+              <div style={{ color: C.tan, fontWeight: 700, fontSize: '0.95rem' }}>Push to QuickBooks</div>
+              <div style={{ color: C.lightBrown, fontSize: '0.78rem' }}>
+                Preview is always a dry run — nothing touches QuickBooks until you hit Push.
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <label style={{ color: C.lightBrown, fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '0.3rem', cursor: 'pointer' }}>
+                <input type="checkbox" checked={pushNames} onChange={e => setPushNames(e.target.checked)} />
+                also push names (ALL CAPS)
+              </label>
+              <label style={{ color: C.lightBrown, fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '0.3rem', cursor: pushNames ? 'pointer' : 'not-allowed', opacity: pushNames ? 1 : 0.4 }}>
+                <input type="checkbox" disabled={!pushNames} checked={includeSweep} onChange={e => setIncludeSweep(e.target.checked)} />
+                include unlinked QB items (full ALL-CAPS sweep)
+              </label>
+              <button onClick={runDryRun} disabled={diffLoading} style={BTN(C.tan)}>
+                {diffLoading ? 'Comparing…' : 'Preview Changes'}
+              </button>
+            </div>
+          </div>
+
+          {pushResult && <div style={{ color: C.green, fontSize: '0.85rem', margin: '0.5rem 0' }}>{pushResult}</div>}
+
+          {diff && (
+            <>
+              {diff.changes.length === 0 ? (
+                <div style={{ color: C.green, fontSize: '0.85rem', padding: '0.5rem 0' }}>✓ QuickBooks matches the app — nothing to push.</div>
+              ) : (
+                <>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '0.5rem' }}>
+                    <thead><tr>
+                      <th style={TH}></th><th style={TH}>PLU</th><th style={TH}>Item</th>
+                      <th style={TH}>Field</th><th style={TH}>QuickBooks now</th><th style={TH}>Will become</th>
+                    </tr></thead>
+                    <tbody>
+                      {diff.changes.map(ch => {
+                        const inactive = ch.field === 'name' && (!pushNames || (ch.sweep && !includeSweep))
+                        return (
+                          <tr key={ch.key} style={{ opacity: inactive ? 0.35 : 1 }}>
+                            <td style={TD}>
+                              <input
+                                type="checkbox"
+                                disabled={inactive}
+                                checked={selected.has(ch.key) && !inactive}
+                                onChange={e => setSelected(prev => {
+                                  const next = new Set(prev)
+                                  if (e.target.checked) next.add(ch.key); else next.delete(ch.key)
+                                  return next
+                                })}
+                              />
+                            </td>
+                            <td style={{ ...TD, fontFamily: 'monospace', color: C.lightBrown }}>{ch.pluNumber}</td>
+                            <td style={TD}>{ch.itemName}{ch.sweep && <span style={{ color: C.lightBrown, fontSize: '0.7rem' }}> (sweep)</span>}</td>
+                            <td style={{ ...TD, color: ch.field === 'price' ? C.tan : C.yellow }}>{ch.field}</td>
+                            <td style={{ ...TD, color: C.red }}>{ch.from}</td>
+                            <td style={{ ...TD, color: C.green }}>{ch.to}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.75rem' }}>
+                    <button onClick={push} disabled={pushing || pushableCount() === 0} style={BTN(C.green)}>
+                      {pushing ? 'Pushing…' : `Push ${pushableCount()} Change(s) to QuickBooks`}
+                    </button>
+                  </div>
+                </>
+              )}
+              {diff.skipped.length > 0 && (
+                <details style={{ marginTop: '0.6rem' }}>
+                  <summary style={{ color: C.lightBrown, fontSize: '0.78rem', cursor: 'pointer' }}>
+                    {diff.skipped.length} linked item(s) skipped
+                  </summary>
+                  <ul style={{ color: C.lightBrown, fontSize: '0.78rem', margin: '0.4rem 0 0 1rem' }}>
+                    {diff.skipped.map((s, i) => <li key={i}>{s}</li>)}
+                  </ul>
+                </details>
+              )}
+            </>
+          )}
+        </div>
       )}
 
       {/* ── Suggested links ────────────────────────────────────────── */}
