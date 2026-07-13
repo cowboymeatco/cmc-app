@@ -15,8 +15,9 @@
 //     CENTS), ta0 (tare in GRAMS), up100 (UPC). This matches parseHobartDat()
 //     in app/processing/page.tsx, which reads price via /\$(\d+)/ ÷ 100 and
 //     tare via /ta(\d+)/ ÷ 453.592.
-//   • The "NOT FOR HUMAN CONSUMPTION" style message rides INSIDE dt as a 2nd
-//     line joined by \n (0x0A): dt<name>\n<message>.
+//   • Extra label text (ingredient statement, "NOT FOR HUMAN CONSUMPTION" style
+//     message) rides INSIDE dt as additional lines joined by \n (0x0A):
+//     dt<name>\n<ingredients>\n<message>. Empty extras are omitted.
 //
 // We generate by CLONING the canonical 105-field skeleton (captured from PLU
 // 100) and overwriting only the mapped fields. Every other field keeps the
@@ -35,6 +36,7 @@ export interface HobartPlu {
   upc?: string | null           // → up; defaults to plu_number (matches 360/367 on scale)
   unit?: string | null          // → u#; defaults to '02' (weight-embedded)
   department?: string | null    // → d#; defaults to '0'
+  ingredients?: string | null   // ingredient statement → appended to dt as a \n line
   label_message?: string | null // appended to dt as a \n line (e.g. NOT FOR HUMAN CONSUMPTION)
 }
 
@@ -81,10 +83,13 @@ function tareToGrams(lbs: number | null | undefined): string {
   return String(Math.round(lbs * LB_TO_G))
 }
 
-function buildDt(name: string, msg?: string | null): string {
-  const base = sanitize((name || '').trim(), false)
-  const m = sanitize((msg || '').trim(), false)
-  return m ? `${base}\n${m}` : base
+// dt = item name plus any extra label lines (ingredient statement, label
+// message), each sanitized to a single line and joined by \n. Blank extras are
+// dropped so we never emit a trailing empty line.
+function buildDt(name: string, ...extras: (string | null | undefined)[]): string {
+  const base  = sanitize((name || '').trim(), false)
+  const lines = extras.map(e => sanitize((e || '').trim(), false)).filter(Boolean)
+  return [base, ...lines].join('\n')
 }
 
 // Build one RT89 PLU record body (no trailing RS).
@@ -93,7 +98,7 @@ export function buildRT89(plu: HobartPlu): string {
   const overrides: Record<string, string> = {
     'd#': sanitize(String(plu.department ?? '0').trim()) || '0',
     'p#': pluNo,
-    'dt': buildDt(plu.item_name, plu.label_message),
+    'dt': buildDt(plu.item_name, plu.ingredients, plu.label_message),
     'u#': sanitize(String(plu.unit ?? '02').trim()) || '02',
     'up': sanitize(String(plu.upc ?? '').trim()) || pluNo,
     'u$': priceToCents(plu.price),
