@@ -26,6 +26,7 @@ const items: HobartPlu[] = rows.map((r) => ({
   upc: (r.upc as string) ?? '',
   unit: (r.unit as string) ?? '02',
   department: (r.department as string) ?? '0',
+  ingredients: (r.ingredients as string) ?? '',
   label_message: (r.label_message as string) ?? '',
 }))
 

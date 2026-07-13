@@ -28,6 +28,7 @@ interface PluItem {
   clover_item_id:     string
   quickbooks_item_id: string
   upc:                string
+  ingredients:        string
   label_message:      string
   sell_by_weight:     boolean
   active:             boolean
@@ -263,6 +264,9 @@ function EditPanel({ item, onSaved, onDeleted, onClose }: {
             <Field label="Tare Weight (lbs)">
               <input type="number" step="0.01" style={INPUT} value={form.tare_weight ?? ''} onChange={num('tare_weight')} />
             </Field>
+            <Field label="Ingredient Statement" span2>
+              <textarea style={{ ...INPUT, height: 80, resize: 'vertical' }} value={form.ingredients} onChange={f('ingredients')} placeholder="Ingredients printed on scale label (e.g. PORK, WATER, SALT, SPICES)" />
+            </Field>
             <Field label="Label Message" span2>
               <textarea style={{ ...INPUT, height: 80, resize: 'vertical' }} value={form.label_message} onChange={f('label_message')} placeholder="Message printed on scale label" />
             </Field>
@@ -373,7 +377,7 @@ function BrowserTab() {
     setSelected({
       id: '', plu_number: '', item_name: '', price: null, retail_price: null, wholesale_price: null,
       tare_weight: 0, department: '0', unit: '02', species: '', description: '',
-      is_retail: false, is_wholesale: false, clover_item_id: '', quickbooks_item_id: '', upc: '', label_message: '',
+      is_retail: false, is_wholesale: false, clover_item_id: '', quickbooks_item_id: '', upc: '', ingredients: '', label_message: '',
       sell_by_weight: true, active: true, notes: '', updated_at: '', raw_data: {},
     })
   }
@@ -520,7 +524,7 @@ function ExportTab() {
     const headers = [
       'PLU_NO','ITEM_NAME','PRICE1','PRICE2','PRICE3',
       'TARE','DEPT','UNIT','DESCRIPTION','UPC',
-      'SELL_BY_WEIGHT','LABEL_MSG','ACTIVE',
+      'SELL_BY_WEIGHT','INGREDIENTS','LABEL_MSG','ACTIVE',
       'RETAIL_PRICE','WHOLESALE_PRICE','SPECIES',
     ]
 
@@ -536,6 +540,7 @@ function ExportTab() {
       `"${(i.description ?? '').replace(/"/g, '—')}"`,
       i.upc ?? '',
       i.sell_by_weight ? '1' : '0',
+      `"${(i.ingredients ?? '').replace(/"/g, '—')}"`,
       `"${(i.label_message ?? '').replace(/"/g, '—')}"`,
       i.active ? '1' : '0',
       i.retail_price?.toFixed(2) ?? '',
@@ -570,6 +575,7 @@ function ExportTab() {
       upc:           i.upc,
       unit:          i.unit,
       department:    i.department,
+      ingredients:   i.ingredients,
       label_message: i.label_message,
     }))
     const ht = buildHtFile(plus)
