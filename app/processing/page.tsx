@@ -50,6 +50,14 @@ const C = {
   blue:       '#3B82F6',
 }
 
+// The PLU browser and box-labels views are two-pane (list on the left, detail on
+// the right). Pin the grid to a definite viewport height so each pane scrolls on
+// its own — the detail pane stays put (frozen) while the list free-scrolls —
+// instead of the whole page scrolling as one (which is what happens when the grid
+// is height:100% under a min-height:100vh ancestor: 100% collapses to auto).
+// 64px = fixed header height; 3rem = <main>'s vertical padding.
+const TWO_PANE_HEIGHT = 'calc(100dvh - 64px - 3rem)'
+
 const INPUT: React.CSSProperties = {
   width: '100%', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.35)',
   borderRadius: 3, padding: '0.45rem 0.7rem', color: C.cream, fontSize: '0.85rem',
@@ -389,7 +397,7 @@ function BrowserTab() {
   }, {})
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: '1.5rem', height: '100%' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: '1.5rem', height: TWO_PANE_HEIGHT, minHeight: 0 }}>
       {/* Left — list */}
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {/* Search + filters */}
@@ -1293,7 +1301,7 @@ function BoxLabelsTab() {
   const activeTotal = activeScans.reduce((s, sc) => s + (Number(sc.weight_lbs) || 0), 0)
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: '1.5rem', height: '100%' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: '1.5rem', height: TWO_PANE_HEIGHT, minHeight: 0 }}>
       {/* Left — session + box list */}
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ padding: '1rem', borderBottom: '1px solid rgba(166,120,90,0.2)' }}>
