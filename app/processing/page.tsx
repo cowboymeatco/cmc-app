@@ -6,7 +6,7 @@ import CutScheduleTab from './CutScheduleTab'
 import CloverTab from './CloverTab'
 import QuickBooksTab from './QuickBooksTab'
 import AlignmentTab from './AlignmentTab'
-import { buildHtFile, type HobartPlu } from '@/lib/hobart'
+import { buildHtFile, buildExptxtCsv, type HobartPlu, type ExpandedText } from '@/lib/hobart'
 import { isoDate } from '@/lib/dates'
 
 type Tab = 'browser' | 'upload' | 'export' | 'cleanup' | 'cut-schedule' | 'box-labels' | 'clover' | 'quickbooks' | 'alignment'
@@ -49,6 +49,14 @@ const C = {
   yellow:     '#D97706',
   blue:       '#3B82F6',
 }
+
+// The PLU browser and box-labels views are two-pane (list on the left, detail on
+// the right). Pin the grid to a definite viewport height so each pane scrolls on
+// its own — the detail pane stays put (frozen) while the list free-scrolls —
+// instead of the whole page scrolling as one (which is what happens when the grid
+// is height:100% under a min-height:100vh ancestor: 100% collapses to auto).
+// 64px = fixed header height; 3rem = <main>'s vertical padding.
+const TWO_PANE_HEIGHT = 'calc(100dvh - 64px - 3rem)'
 
 const INPUT: React.CSSProperties = {
   width: '100%', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.35)',
@@ -389,7 +397,7 @@ function BrowserTab() {
   }, {})
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: '1.5rem', height: '100%' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: '1.5rem', height: TWO_PANE_HEIGHT, minHeight: 0 }}>
       {/* Left — list */}
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {/* Search + filters */}
@@ -488,6 +496,7 @@ function ExportTab() {
   const [activeOnly, setActiveOnly] = useState(true)
   const [exporting, setExporting] = useState(false)
   const [exportingHt, setExportingHt] = useState(false)
+  const [exportingExptxt, setExportingExptxt] = useState(false)
   const [count, setCount]         = useState<number | null>(null)
   const [pushing, setPushing]     = useState(false)
   const [pushLog, setPushLog]     = useState<PushReq[]>([])
@@ -575,8 +584,8 @@ function ExportTab() {
       upc:           i.upc,
       unit:          i.unit,
       department:    i.department,
-      ingredients:   i.ingredients,
       label_message: i.label_message,
+      ingredients:   i.ingredients, // drives the Ec "Expanded text" reference
     }))
     const ht = buildHtFile(plus)
     // Encode latin-1 (one byte per char) so the 0x1E/0x1F framing bytes match
@@ -591,6 +600,28 @@ function ExportTab() {
     a.click()
     URL.revokeObjectURL(url)
     setExportingHt(false)
+  }
+
+  // Ingredient statements → EXPTXT.DAT "Import CSV". HCT keeps ingredient text
+  // in a separate Expanded Text file keyed by Text number; we key each by its
+  // PLU number (app owns the library). Only PLUs that actually have an
+  // ingredient statement are written, so we never blank an existing record.
+  async function handleExportExptxt() {
+    setExportingExptxt(true)
+    const items = await fetchCount()
+    const rows: ExpandedText[] = items
+      .filter(i => (i.ingredients ?? '').trim() !== '')
+      .map(i => ({ text_number: i.plu_number, text: i.ingredients, department: 0 }))
+    const csv = buildExptxtCsv(rows)
+    // Plain text, CRLF, no BOM — mirrors HCT's own EXPTXT.DAT CSV export.
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href     = url
+    a.download = `EXPTXT_Export_${new Date().toISOString().slice(0,10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+    setExportingExptxt(false)
   }
 
   // Push to scales: queue a request; the shop kiosk (watch mode) picks it up
@@ -651,6 +682,13 @@ function ExportTab() {
           {exportingHt ? 'Generating…' : '⬇ Download .ht for Hobart (HCT)'}
         </button>
         <button
+          style={{ ...BTN(count ? C.tan : C.medBrown), marginTop: '0.6rem' }}
+          onClick={handleExportExptxt}
+          disabled={exportingExptxt || !count}
+        >
+          {exportingExptxt ? 'Generating…' : '⬇ Download Ingredients (EXPTXT CSV for HCT)'}
+        </button>
+        <button
           style={{ ...BTN(C.medBrown), marginTop: '0.6rem', fontSize: '0.78rem', opacity: 0.8 }}
           onClick={handleExport}
           disabled={exporting || !count}
@@ -666,6 +704,13 @@ function ExportTab() {
           <li>Open HCT (Hobart Communication Tool).</li>
           <li>Choose <em>Import HT File</em> and select this file.</li>
           <li>HCT <strong>merges</strong> these PLUs into the scale — existing PLUs not in the file are left untouched.</li>
+        </ol>
+        <strong style={{ color: C.tan, display: 'block', margin: '0.85rem 0 0.5rem' }}>To load ingredient statements:</strong>
+        <ol style={{ margin: 0, paddingLeft: '1.25rem' }}>
+          <li>Download the <strong>Ingredients (EXPTXT CSV)</strong> file above.</li>
+          <li>In HCT, open the <em>EXPTXT.DAT</em> (Expanded Text) tab.</li>
+          <li>Click <em>Import CSV</em> and select this file. Each statement is keyed by its PLU number.</li>
+          <li>HCT merges by Text number — statements not in the file are left untouched.</li>
         </ol>
       </div>
 
@@ -1256,7 +1301,7 @@ function BoxLabelsTab() {
   const activeTotal = activeScans.reduce((s, sc) => s + (Number(sc.weight_lbs) || 0), 0)
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: '1.5rem', height: '100%' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: '1.5rem', height: TWO_PANE_HEIGHT, minHeight: 0 }}>
       {/* Left — session + box list */}
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ padding: '1rem', borderBottom: '1px solid rgba(166,120,90,0.2)' }}>

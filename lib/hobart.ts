@@ -15,9 +15,11 @@
 //     CENTS), ta0 (tare in GRAMS), up100 (UPC). This matches parseHobartDat()
 //     in app/processing/page.tsx, which reads price via /\$(\d+)/ ÷ 100 and
 //     tare via /ta(\d+)/ ÷ 453.592.
-//   • Extra label text (ingredient statement, "NOT FOR HUMAN CONSUMPTION" style
-//     message) rides INSIDE dt as additional lines joined by \n (0x0A):
-//     dt<name>\n<ingredients>\n<message>. Empty extras are omitted.
+//   • The "NOT FOR HUMAN CONSUMPTION" style message rides INSIDE dt as a 2nd
+//     line joined by \n (0x0A): dt<name>\n<message>.
+//   • Ingredient statements are NOT stored on the PLU record. HCT keeps them in
+//     a separate Expanded Text file (EXPTXT.DAT), each keyed by a Text number,
+//     and the PLU references one by number. See buildExptxtCsv() below.
 //
 // We generate by CLONING the canonical 105-field skeleton (captured from PLU
 // 100) and overwriting only the mapped fields. Every other field keeps the
@@ -36,8 +38,10 @@ export interface HobartPlu {
   upc?: string | null           // → up; defaults to plu_number (matches 360/367 on scale)
   unit?: string | null          // → u#; defaults to '02' (weight-embedded)
   department?: string | null    // → d#; defaults to '0'
-  ingredients?: string | null   // ingredient statement → appended to dt as a \n line
   label_message?: string | null // appended to dt as a \n line (e.g. NOT FOR HUMAN CONSUMPTION)
+  ingredients?: string | null   // if non-empty → sets Ec (the "Expanded text" ref) = plu_number,
+                                //   linking this PLU to its EXPTXT record. The text itself lives
+                                //   in EXPTXT.DAT (see buildExptxtCsv), never on the PLU record.
 }
 
 // Canonical RT89 skeleton: [code, defaultValue] in exact on-scale order (PLU 100).
@@ -83,13 +87,13 @@ function tareToGrams(lbs: number | null | undefined): string {
   return String(Math.round(lbs * LB_TO_G))
 }
 
-// dt = item name plus any extra label lines (ingredient statement, label
-// message), each sanitized to a single line and joined by \n. Blank extras are
-// dropped so we never emit a trailing empty line.
-function buildDt(name: string, ...extras: (string | null | undefined)[]): string {
-  const base  = sanitize((name || '').trim(), false)
-  const lines = extras.map(e => sanitize((e || '').trim(), false)).filter(Boolean)
-  return [base, ...lines].join('\n')
+// dt = item name plus an optional label-message 2nd line (e.g. NOT FOR HUMAN
+// CONSUMPTION), joined by \n. A blank message is dropped so we never emit a
+// trailing empty line.
+function buildDt(name: string, msg?: string | null): string {
+  const base = sanitize((name || '').trim(), false)
+  const m = sanitize((msg || '').trim(), false)
+  return m ? `${base}\n${m}` : base
 }
 
 // Build one RT89 PLU record body (no trailing RS).
@@ -98,12 +102,16 @@ export function buildRT89(plu: HobartPlu): string {
   const overrides: Record<string, string> = {
     'd#': sanitize(String(plu.department ?? '0').trim()) || '0',
     'p#': pluNo,
-    'dt': buildDt(plu.item_name, plu.ingredients, plu.label_message),
+    'dt': buildDt(plu.item_name, plu.label_message),
     'u#': sanitize(String(plu.unit ?? '02').trim()) || '02',
     'up': sanitize(String(plu.upc ?? '').trim()) || pluNo,
     'u$': priceToCents(plu.price),
     'ta': tareToGrams(plu.tare_weight),
   }
+  // Link to the ingredient statement: Ec ("Expanded text" number) = this PLU's
+  // number, matching the EXPTXT record buildExptxtCsv() emits. Only set when the
+  // PLU actually has a statement, so we never blank an existing reference.
+  if (String(plu.ingredients ?? '').trim() !== '') overrides['Ec'] = pluNo
   const fields = RT89_TEMPLATE.map(([code, def]) =>
     code + (code in overrides ? overrides[code] : def),
   )
@@ -114,4 +122,53 @@ export function buildRT89(plu: HobartPlu): string {
 // by RS (including the last), matching backup.ht's framing.
 export function buildHtFile(plus: HobartPlu[]): string {
   return plus.map((p) => buildRT89(p) + RS).join('')
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Expanded Text (EXPTXT.DAT) — the ingredient-statement library. HCT stores
+// these separately from PLUs and each PLU references one by its Text number.
+// Format VERIFIED against the shop's real HCT "Export CSV" of EXPTXT.DAT
+// (export_exptxt.csv, 2026-07, 218 records):
+//   • Header row: `Text number,Departmentnumber,Expanded Text,` (note: no space
+//     in "Departmentnumber", trailing comma).
+//   • Each row: `<textNumber>,<dept>,<text>,` — UNQUOTED. The text keeps its own
+//     commas raw; the parser takes the first two comma fields as number + dept
+//     and everything after (up to the trailing comma) as the text. Every dept in
+//     the shop's export is 0.
+//   • `|` inside the text is a label line break; `<ESC>…` prefixes are font/size
+//     codes. We emit neither automatically — a caller may include `|` in text.
+//   • CRLF line endings (Windows / HCT).
+// ──────────────────────────────────────────────────────────────────────────────
+
+export const EXPTXT_HEADER = 'Text number,Departmentnumber,Expanded Text,'
+
+export interface ExpandedText {
+  text_number: string | number      // → Text number (we key by PLU number)
+  text: string                       // → Expanded Text (the ingredient statement)
+  department?: string | number | null // → Departmentnumber; defaults to '0'
+}
+
+// A row's text must stay on ONE physical line (the format is line-delimited and
+// unquoted). Real newlines become `|`, HCT's label-line-break convention; tabs
+// and any other control bytes collapse to spaces so framing can't break.
+function sanitizeExpText(v: string): string {
+  return (v ?? '')
+    .replace(/\r\n?|\n/g, '|')          // hard line breaks → label line break
+    .replace(/[\x00-\x1f\x7f]/g, ' ')   // tabs / stray controls → space
+    .replace(/[ \t]+$/g, '')            // trim trailing spaces
+    .trim()
+}
+
+// Build an EXPTXT.DAT "Import CSV" body from expanded-text records. Rows with an
+// empty number are skipped; empty text is allowed (emits `<num>,<dept>,,`).
+export function buildExptxtCsv(rows: ExpandedText[]): string {
+  const lines = rows
+    .filter((r) => String(r.text_number ?? '').trim() !== '')
+    .map((r) => {
+      const num  = String(r.text_number).trim()
+      const dept = String(r.department ?? '0').trim() || '0'
+      const text = sanitizeExpText(String(r.text ?? ''))
+      return `${num},${dept},${text},`
+    })
+  return [EXPTXT_HEADER, ...lines].join('\r\n') + '\r\n'
 }
