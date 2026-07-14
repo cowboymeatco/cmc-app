@@ -577,6 +577,7 @@ function ExportTab() {
       unit:          i.unit,
       department:    i.department,
       label_message: i.label_message,
+      ingredients:   i.ingredients, // drives the Ec "Expanded text" reference
     }))
     const ht = buildHtFile(plus)
     // Encode latin-1 (one byte per char) so the 0x1E/0x1F framing bytes match

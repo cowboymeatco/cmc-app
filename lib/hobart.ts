@@ -39,6 +39,9 @@ export interface HobartPlu {
   unit?: string | null          // → u#; defaults to '02' (weight-embedded)
   department?: string | null    // → d#; defaults to '0'
   label_message?: string | null // appended to dt as a \n line (e.g. NOT FOR HUMAN CONSUMPTION)
+  ingredients?: string | null   // if non-empty → sets Ec (the "Expanded text" ref) = plu_number,
+                                //   linking this PLU to its EXPTXT record. The text itself lives
+                                //   in EXPTXT.DAT (see buildExptxtCsv), never on the PLU record.
 }
 
 // Canonical RT89 skeleton: [code, defaultValue] in exact on-scale order (PLU 100).
@@ -105,6 +108,10 @@ export function buildRT89(plu: HobartPlu): string {
     'u$': priceToCents(plu.price),
     'ta': tareToGrams(plu.tare_weight),
   }
+  // Link to the ingredient statement: Ec ("Expanded text" number) = this PLU's
+  // number, matching the EXPTXT record buildExptxtCsv() emits. Only set when the
+  // PLU actually has a statement, so we never blank an existing reference.
+  if (String(plu.ingredients ?? '').trim() !== '') overrides['Ec'] = pluNo
   const fields = RT89_TEMPLATE.map(([code, def]) =>
     code + (code in overrides ? overrides[code] : def),
   )

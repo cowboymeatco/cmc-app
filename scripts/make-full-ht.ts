@@ -27,6 +27,7 @@ const items: HobartPlu[] = rows.map((r) => ({
   unit: (r.unit as string) ?? '02',
   department: (r.department as string) ?? '0',
   label_message: (r.label_message as string) ?? '',
+  ingredients: (r.ingredients as string) ?? '', // drives the Ec "Expanded text" reference
 }))
 
 const ht = buildHtFile(items)
