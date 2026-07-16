@@ -230,7 +230,7 @@ function stdThick(cut?: string, primal?: string): string {
 
 // Bone-in short loin still yields filets: the tenderloin head runs past the
 // last rib, so 3–4 filet mignons come off before the T-bones start
-const BONE_IN_FILET_NOTE = '2" — 3–4 filets from the tenderloin head'
+const BONE_IN_FILET_NOTE = '2" — 3–4 filets'
 function v2thick(v: string): string { return v ? `${v}"` : '' }
 function v2withT(cut: string, t: string): string { return [v2fmt(cut), v2thick(t)].filter(Boolean).join(' — ') }
 function v2adds(arr: string[]): string { return arr?.length ? arr.map(v2fmt).join(', ') : '' }
