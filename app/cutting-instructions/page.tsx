@@ -299,11 +299,33 @@ function renderV2Detail(ci: RawInstruction) {
             } />
             <V2Field label="Shank" value={v2fmt(d.shank?.cut)} />
             <V2Field label="Shank Add-ons" value={v2adds(d.shank?.addons)} addon />
-            <V2Field label="Arm Roast" value={v2withT(d.armRoast?.cut ?? '', stdThick(d.armRoast?.cut))} />
-            <V2Field label="Arm Add-ons" value={v2adds(d.armRoast?.addons)} addon />
+            <V2Field label="Arm Roast" value={
+              d.armRoast?.arm2
+                ? `1: ${v2withT(d.armRoast.cut ?? '', stdThick(d.armRoast.cut))} / 2: ${v2withT(d.armRoast.arm2.cut ?? '', stdThick(d.armRoast.arm2.cut))}`
+                : v2withT(d.armRoast?.cut ?? '', stdThick(d.armRoast?.cut))
+            } />
+            {d.armRoast?.arm2 ? (
+              <>
+                <V2Field label="Arm 1 Add-ons" value={v2adds(d.armRoast.addons)} addon />
+                <V2Field label="Arm 2 Add-ons" value={v2adds(d.armRoast.arm2.addons)} addon />
+              </>
+            ) : (
+              <V2Field label="Arm Add-ons" value={v2adds(d.armRoast?.addons)} addon />
+            )}
             <V2Field label="Flat Iron" value={v2withT(d.flatIron?.cut ?? '', stdThick(d.flatIron?.cut, 'flat-iron'))} />
-            <V2Field label="Chuck Roll" value={v2withT(d.chuckRoll?.cut ?? '', stdThick(d.chuckRoll?.cut))} />
-            <V2Field label="Chuck Roll Add-ons" value={v2adds(d.chuckRoll?.addons)} addon />
+            <V2Field label="Chuck Roll" value={
+              d.chuckRoll?.cut2
+                ? `1: ${v2withT(d.chuckRoll.cut ?? '', stdThick(d.chuckRoll.cut))} / 2: ${v2withT(d.chuckRoll.cut2, stdThick(d.chuckRoll.cut2))}`
+                : v2withT(d.chuckRoll?.cut ?? '', stdThick(d.chuckRoll?.cut))
+            } />
+            {d.chuckRoll?.cut2 ? (
+              <>
+                <V2Field label="Chuck Roll 1 Add-ons" value={v2adds(d.chuckRoll.addons)} addon />
+                <V2Field label="Chuck Roll 2 Add-ons" value={v2adds(d.chuckRoll.addons2)} addon />
+              </>
+            ) : (
+              <V2Field label="Chuck Roll Add-ons" value={v2adds(d.chuckRoll?.addons)} addon />
+            )}
           </V2Section>
           <V2Section title="Plate & Short Ribs">
             <V2Field label="Short Ribs" value={v2fmt(d.shortRibs?.cut)} />
@@ -483,11 +505,25 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
       d.brisket?.fat ? row('  Brisket Fat', fmt(d.brisket.fat)) : '',
       row('Shank', fmt(d.shank?.cut)),
       d.shank?.addons?.length ? row('  Add-ons', adds(d.shank.addons), true) : '',
-      row('Arm Roast', withT(d.armRoast?.cut ?? '', stdThick(d.armRoast?.cut))),
-      d.armRoast?.addons?.length ? row('  Add-ons', adds(d.armRoast.addons), true) : '',
+      row('Arm Roast', d.armRoast?.arm2
+        ? `1: ${withT(d.armRoast.cut ?? '', stdThick(d.armRoast.cut))} / 2: ${withT(d.armRoast.arm2.cut ?? '', stdThick(d.armRoast.arm2.cut))}`
+        : withT(d.armRoast?.cut ?? '', stdThick(d.armRoast?.cut))),
+      d.armRoast?.arm2
+        ? [
+            d.armRoast.addons?.length ? row('  Add-ons (1)', adds(d.armRoast.addons), true) : '',
+            d.armRoast.arm2.addons?.length ? row('  Add-ons (2)', adds(d.armRoast.arm2.addons), true) : '',
+          ].join('')
+        : (d.armRoast?.addons?.length ? row('  Add-ons', adds(d.armRoast.addons), true) : ''),
       row('Flat Iron', withT(d.flatIron?.cut ?? '', stdThick(d.flatIron?.cut, 'flat-iron'))),
-      row('Chuck Roll', withT(d.chuckRoll?.cut ?? '', stdThick(d.chuckRoll?.cut))),
-      d.chuckRoll?.addons?.length ? row('  Add-ons', adds(d.chuckRoll.addons), true) : '',
+      row('Chuck Roll', d.chuckRoll?.cut2
+        ? `1: ${withT(d.chuckRoll.cut ?? '', stdThick(d.chuckRoll.cut))} / 2: ${withT(d.chuckRoll.cut2, stdThick(d.chuckRoll.cut2))}`
+        : withT(d.chuckRoll?.cut ?? '', stdThick(d.chuckRoll?.cut))),
+      d.chuckRoll?.cut2
+        ? [
+            d.chuckRoll.addons?.length ? row('  Add-ons (1)', adds(d.chuckRoll.addons), true) : '',
+            d.chuckRoll.addons2?.length ? row('  Add-ons (2)', adds(d.chuckRoll.addons2), true) : '',
+          ].join('')
+        : (d.chuckRoll?.addons?.length ? row('  Add-ons', adds(d.chuckRoll.addons), true) : ''),
     ].join(''))
     cutSections += sec('Plate & Short Ribs', [
       row('Short Ribs', fmt(d.shortRibs?.cut)),
@@ -612,12 +648,22 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
       } else { pc('Shank', fmt(d.shank.cut)) }
       if (d.shank.addons?.length) pc('  Add-on', adds(d.shank.addons), true)
     }
-    if (d.armRoast?.cut) {
+    if (d.armRoast?.arm2) {
+      if (d.armRoast.cut === 'grind') pg('Arm Roast (1)')
+      else if (d.armRoast.cut) { pc('Arm Roast (1)', withT(d.armRoast.cut, stdThick(d.armRoast.cut))); if (d.armRoast.addons?.length) pc('  Add-on', adds(d.armRoast.addons), true) }
+      if (d.armRoast.arm2.cut === 'grind') pg('Arm Roast (2)')
+      else if (d.armRoast.arm2.cut) { pc('Arm Roast (2)', withT(d.armRoast.arm2.cut, stdThick(d.armRoast.arm2.cut))); if (d.armRoast.arm2.addons?.length) pc('  Add-on', adds(d.armRoast.arm2.addons), true) }
+    } else if (d.armRoast?.cut) {
       if (d.armRoast.cut === 'grind') pg('Arm Roast')
       else { pc('Arm Roast', withT(d.armRoast.cut, stdThick(d.armRoast.cut))); if (d.armRoast.addons?.length) pc('  Add-on', adds(d.armRoast.addons), true) }
     }
     if (d.flatIron?.cut) { d.flatIron.cut === 'grind' ? pg('Flat Iron') : pc('Flat Iron', withT(d.flatIron.cut, stdThick(d.flatIron.cut, 'flat-iron'))) }
-    if (d.chuckRoll?.cut) {
+    if (d.chuckRoll?.cut2) {
+      if (d.chuckRoll.cut === 'grind') pg('Chuck Roll (1)')
+      else if (d.chuckRoll.cut) { pc('Chuck Roll (1)', withT(d.chuckRoll.cut, stdThick(d.chuckRoll.cut))); if (d.chuckRoll.addons?.length) pc('  Add-on', adds(d.chuckRoll.addons), true) }
+      if (d.chuckRoll.cut2 === 'grind') pg('Chuck Roll (2)')
+      else { pc('Chuck Roll (2)', withT(d.chuckRoll.cut2, stdThick(d.chuckRoll.cut2))); if (d.chuckRoll.addons2?.length) pc('  Add-on', adds(d.chuckRoll.addons2), true) }
+    } else if (d.chuckRoll?.cut) {
       if (d.chuckRoll.cut === 'grind') pg('Chuck Roll')
       else { pc('Chuck Roll', withT(d.chuckRoll.cut, stdThick(d.chuckRoll.cut))); if (d.chuckRoll.addons?.length) pc('  Add-on', adds(d.chuckRoll.addons), true) }
     }
@@ -890,9 +936,9 @@ const FAKE_CI: RawInstruction = {
     organs: { heart: 'keep', liver: 'keep', tongue: 'no', oxtail: 'yes' },
     brisket:   { cut: 'packer-half', fat: 'fat-on' },
     shank:     { cut: 'osso-bucco', addons: [] },
-    armRoast:  { cut: 'thirds', addons: ['seasoned'] },
+    armRoast:  { cut: 'thirds', addons: ['seasoned'], arm2: { cut: 'rancher-steaks', addons: [] } },
     flatIron:  { cut: 'steaks' },
-    chuckRoll: { cut: 'thirds', addons: ['seasoned'] },
+    chuckRoll: { cut: 'chuck-steaks', addons: [], cut2: 'half', addons2: ['seasoned'] },
     shortRibs: { cut: 'flanken' },
     plate:     { cut: 'beef-bacon' },
     ribeye:    { style: 'boneless', cut: 'steaks', thickness: '1', addons: [] },
