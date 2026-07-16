@@ -19,6 +19,7 @@ export async function GET(req: NextRequest) {
   // harvest log
   const status = searchParams.get('status')
   const date   = searchParams.get('date')
+  const apptId = searchParams.get('appointment_id')
   let query = supabase
     .from('harvest_log')
     .select('*')
@@ -26,6 +27,7 @@ export async function GET(req: NextRequest) {
     .order('carcass_tag',  { ascending: true })
   if (status) query = query.eq('status', status)
   if (date)   query = query.eq('harvest_date', date)
+  if (apptId) query = query.eq('appointment_id', apptId)
 
   const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

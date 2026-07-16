@@ -173,6 +173,29 @@ function fmtShortDate(v?: string | null): string {
   return d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' })
 }
 
+// Carcass tag for a linked instruction: exact carcass assignment first
+// (Cut Schedule's carcass_assignments), else the appointment's only animal,
+// else '' → the printed card keeps its blank handwriting line
+async function carcassTagFor(ci: RawInstruction, appointments: HarvestAppointment[]): Promise<string> {
+  const appt = appointments.find(a => a.customers?.some(c => c.linked_cutting_instruction_id === ci.id))
+  if (!appt) return ''
+  try {
+    const [logsRes, asgRes] = await Promise.all([
+      fetch(`/api/harvest?appointment_id=${encodeURIComponent(appt.id)}`),
+      fetch(`/api/carcass-assignments?appointment_id=${encodeURIComponent(appt.id)}`),
+    ])
+    const logs = await logsRes.json()
+    const asgs = await asgRes.json()
+    if (!Array.isArray(logs) || logs.length === 0) return ''
+    const asg = Array.isArray(asgs) ? asgs.find((a: any) => a.linked_cutting_instruction_id === ci.id) : null
+    if (asg) return logs.find((l: any) => l.id === asg.harvest_log_id)?.carcass_tag ?? ''
+    if (logs.length === 1) return logs[0].carcass_tag ?? ''
+    return ''  // multiple animals, no assignment yet — ambiguous, leave blank
+  } catch {
+    return ''
+  }
+}
+
 // Scheduled slaughter date: linked appointment's harvest date wins,
 // otherwise the kill date the customer picked on the form (v2)
 function slaughterDateFor(ci: RawInstruction, appointments: HarvestAppointment[]): string | null {
@@ -373,7 +396,7 @@ function renderV2Detail(ci: RawInstruction) {
   )
 }
 
-function printV2CutCard(ci: RawInstruction) {
+function printV2CutCard(ci: RawInstruction, carcassTag = '') {
   const d = ci.data ?? {}
   const species = ci.data?.species ?? ci.species ?? 'Beef'
   const name = d.customerName ?? '—'
@@ -767,7 +790,7 @@ function printV2CutCard(ci: RawInstruction) {
        </div>
        <div style="padding:7px 12px">
          <div style="font-size:8px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Lot / Tag #</div>
-         <div style="font-size:16px;font-weight:bold;border-bottom:2px solid #1A0A04;min-height:24px;padding-bottom:2px">&nbsp;</div>
+         <div style="font-size:16px;font-weight:bold;border-bottom:2px solid #1A0A04;min-height:24px;padding-bottom:2px">${carcassTag || '&nbsp;'}</div>
        </div>
      </div>`
 
@@ -802,7 +825,7 @@ function printV2CutCard(ci: RawInstruction) {
   ${hdr('Packaging Sheet')}
   <div style="font-size:11px;color:#555;margin-bottom:8px">
     <strong>${d.customerName ?? '—'}</strong>${d.portion ? ' · ' + fmt(d.portion) : ''} · Kill Date: ${d.killDate ?? '—'}
-    <span style="margin-left:14px">Lot / Tag: <span style="display:inline-block;width:110px;border-bottom:1px solid #888">&nbsp;</span></span>
+    <span style="margin-left:14px">Lot / Tag: <span style="display:inline-block;min-width:110px;border-bottom:1px solid #888;font-weight:bold">${carcassTag || '&nbsp;'}</span></span>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
     <div>${buildPackTable(leftPrs)}</div>
@@ -992,7 +1015,7 @@ export default function CuttingInstructionsPage() {
             ✏️ New Cutting Card →
           </a>
           <button
-            onClick={() => printV2CutCard(FAKE_CI)}
+            onClick={() => printV2CutCard(FAKE_CI, '26153-2-R')}
             style={{ background: 'transparent', color: 'var(--tan)', border: '1px solid rgba(166,120,90,0.4)', borderRadius: '6px', padding: '0.4rem 0.9rem', fontWeight: 600, fontSize: '0.8rem', cursor: 'pointer', whiteSpace: 'nowrap' }}
           >
             🧪 Test Card
@@ -1078,7 +1101,7 @@ export default function CuttingInstructionsPage() {
                 {selected.status === 'pending' && (
                   <button onClick={() => markStatus([selected.id], 'imported')} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>✓ Mark Imported</button>
                 )}
-                <button onClick={() => isV2 ? printV2CutCard(selected) : printCutCard(selected)} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>🖨 Print Cut Card</button>
+                <button onClick={async () => isV2 ? printV2CutCard(selected, await carcassTagFor(selected, appointments)) : printCutCard(selected)} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>🖨 Print Cut Card</button>
                 <button onClick={() => setSelected(null)} style={btnStyle('transparent', 'var(--tan)')}>✕</button>
               </div>
             </div>
