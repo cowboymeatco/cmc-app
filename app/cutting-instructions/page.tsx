@@ -263,6 +263,28 @@ function V2Section({ title, children }: { title: string; children: React.ReactNo
   )
 }
 
+// One short-loin side's fields; sfx labels the side when a whole/three-quarter
+// order splits the two short loins (e.g. " (1)" / " (2)")
+function V2ShortLoinFields({ sl, sfx = '' }: { sl: any; sfx?: string }) {
+  if (!sl) return null
+  return (
+    <>
+      {sl.path === 'bone-in' && (
+        <>
+          <V2Field label={`T-Bone / Porterhouse${sfx}`} value={v2thick(sl.tBoneThickness)} />
+          <V2Field label={`Filet Mignon${sfx}`} value={BONE_IN_FILET_NOTE} />
+        </>
+      )}
+      {sl.path === 'boneless' && (
+        <>
+          <V2Field label={`Tenderloin${sfx}`} value={sl.tenderloin?.cut === 'filet' ? 'Filet Mignon — 2"' : v2fmt(sl.tenderloin?.cut ?? '')} />
+          <V2Field label={`Strip Loin${sfx}`} value={v2withT(sl.stripLoin?.cut ?? '', sl.stripLoin?.thickness ?? '')} />
+        </>
+      )}
+    </>
+  )
+}
+
 function renderV2Detail(ci: RawInstruction) {
   const d = ci.data ?? {}
   const sp = speciesOf(ci).toLowerCase()
@@ -333,22 +355,29 @@ function renderV2Detail(ci: RawInstruction) {
             <V2Field label="Plate" value={v2fmt(d.plate?.cut)} />
           </V2Section>
           <V2Section title="Ribeye">
-            <V2Field label="Style" value={v2fmt(d.ribeye?.style)} />
-            <V2Field label="Cut" value={v2withT(d.ribeye?.cut ?? '', d.ribeye?.thickness ?? '')} />
+            <V2Field label="Style" value={
+              d.ribeye?.ribeye2
+                ? `1: ${v2fmt(d.ribeye.style)} / 2: ${v2fmt(d.ribeye.ribeye2.style)}`
+                : v2fmt(d.ribeye?.style)
+            } />
+            <V2Field label="Cut" value={
+              d.ribeye?.ribeye2
+                ? [
+                    d.ribeye.cut ? `1: ${v2withT(d.ribeye.cut, d.ribeye.thickness ?? '')}` : '',
+                    d.ribeye.ribeye2.cut ? `2: ${v2withT(d.ribeye.ribeye2.cut, d.ribeye.ribeye2.thickness ?? '')}` : '',
+                  ].filter(Boolean).join(' / ')
+                : v2withT(d.ribeye?.cut ?? '', d.ribeye?.thickness ?? '')
+            } />
             <V2Field label="Add-ons" value={v2adds(d.ribeye?.addons)} addon />
           </V2Section>
           <V2Section title="Short Loin">
-            {d.shortLoin?.path === 'bone-in' && (
+            {d.shortLoin?.loin2 ? (
               <>
-                <V2Field label="T-Bone / Porterhouse" value={v2thick(d.shortLoin.tBoneThickness)} />
-                <V2Field label="Filet Mignon" value={BONE_IN_FILET_NOTE} />
+                <V2ShortLoinFields sl={d.shortLoin} sfx=" (1)" />
+                <V2ShortLoinFields sl={d.shortLoin.loin2} sfx=" (2)" />
               </>
-            )}
-            {d.shortLoin?.path === 'boneless' && (
-              <>
-                <V2Field label="Tenderloin" value={d.shortLoin.tenderloin?.cut === 'filet' ? 'Filet Mignon — 2"' : v2fmt(d.shortLoin.tenderloin?.cut ?? '')} />
-                <V2Field label="Strip Loin" value={v2withT(d.shortLoin.stripLoin?.cut ?? '', d.shortLoin.stripLoin?.thickness ?? '')} />
-              </>
+            ) : (
+              <V2ShortLoinFields sl={d.shortLoin} />
             )}
           </V2Section>
           <V2Section title="Sirloin">
@@ -531,18 +560,26 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
       row('Plate', fmt(d.plate?.cut)),
     ].join(''))
     cutSections += sec('Ribeye', [
-      row('Style', fmt(d.ribeye?.style)),
-      row('Cut', withT(d.ribeye?.cut ?? '', d.ribeye?.thickness ?? '')),
+      row('Style', d.ribeye?.ribeye2
+        ? `1: ${fmt(d.ribeye.style)} / 2: ${fmt(d.ribeye.ribeye2.style)}`
+        : fmt(d.ribeye?.style)),
+      row('Cut', d.ribeye?.ribeye2
+        ? [
+            d.ribeye.cut ? `1: ${withT(d.ribeye.cut, d.ribeye.thickness ?? '')}` : '',
+            d.ribeye.ribeye2.cut ? `2: ${withT(d.ribeye.ribeye2.cut, d.ribeye.ribeye2.thickness ?? '')}` : '',
+          ].filter(Boolean).join(' / ')
+        : withT(d.ribeye?.cut ?? '', d.ribeye?.thickness ?? '')),
       d.ribeye?.addons?.length ? row('  Add-ons', adds(d.ribeye.addons), true) : '',
     ].join(''))
     const sl = d.shortLoin ?? {}
-    cutSections += sec('Short Loin', sl.path === 'bone-in' ? [
-      row('T-Bone / Porterhouse', thick(sl.tBoneThickness)),
-      row('Filet Mignon', BONE_IN_FILET_NOTE),
-    ].join('') : sl.path === 'boneless' ? [
-      row('Tenderloin', sl.tenderloin?.cut === 'filet' ? 'Filet Mignon — 2"' : fmt(sl.tenderloin?.cut ?? '')),
-      row('Strip Loin', withT(sl.stripLoin?.cut ?? '', sl.stripLoin?.thickness ?? '')),
-    ].join('') : '')
+    const slRows = (s: any, sfx: string): string => s?.path === 'bone-in' ? [
+      row(`T-Bone / Porterhouse${sfx}`, thick(s.tBoneThickness)),
+      row(`Filet Mignon${sfx}`, BONE_IN_FILET_NOTE),
+    ].join('') : s?.path === 'boneless' ? [
+      row(`Tenderloin${sfx}`, s.tenderloin?.cut === 'filet' ? 'Filet Mignon — 2"' : fmt(s.tenderloin?.cut ?? '')),
+      row(`Strip Loin${sfx}`, withT(s.stripLoin?.cut ?? '', s.stripLoin?.thickness ?? '')),
+    ].join('') : ''
+    cutSections += sec('Short Loin', sl.loin2 ? slRows(sl, ' (1)') + slRows(sl.loin2, ' (2)') : slRows(sl, ''))
     cutSections += sec('Sirloin', [
       row('Top Sirloin', withT(d.topSirloin?.cut ?? '', d.topSirloin?.thickness ?? '')),
       row('Tri Tip', fmt(d.triTip?.cut)),
@@ -674,25 +711,35 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
     }
     if (d.plate?.cut) { d.plate.cut === 'grind' ? pg('Plate') : pc('Plate / Beef Bacon', fmt(d.plate.cut)) }
     ps('Ribeye')
-    if (d.ribeye?.cut) {
-      if (d.ribeye.cut === 'grind') pg('Ribeye')
-      else {
-        pc('Ribeye', [fmt(d.ribeye.style), withT(d.ribeye.cut, d.ribeye.thickness ?? '')].filter(Boolean).join(' · '))
-        if (d.ribeye.addons?.length) pc('  Add-on', adds(d.ribeye.addons), true)
-      }
+    // grind lives at the style level for ribeye (the wizard clears cut when style is grind)
+    const packRibeye = (r: any, sfx: string) => {
+      if (r.style === 'grind' || r.cut === 'grind') pg(`Ribeye${sfx}`)
+      else if (r.cut) pc(`Ribeye${sfx}`, [fmt(r.style), withT(r.cut, r.thickness ?? '')].filter(Boolean).join(' · '))
+    }
+    if (d.ribeye?.ribeye2) {
+      packRibeye(d.ribeye, ' (1)')
+      if (d.ribeye.style !== 'grind' && d.ribeye.cut && d.ribeye.cut !== 'grind' && d.ribeye.addons?.length) pc('  Add-on', adds(d.ribeye.addons), true)
+      packRibeye(d.ribeye.ribeye2, ' (2)')
+    } else if (d.ribeye?.style || d.ribeye?.cut) {
+      packRibeye(d.ribeye, '')
+      if (d.ribeye.style !== 'grind' && d.ribeye.cut && d.ribeye.cut !== 'grind' && d.ribeye.addons?.length) pc('  Add-on', adds(d.ribeye.addons), true)
     }
     ps('Short Loin')
     const sl = d.shortLoin ?? {}
-    if (sl.path === 'bone-in') {
-      if (sl.tBoneThickness) pc('T-Bone / Porterhouse', thick(sl.tBoneThickness))
-      pc('Filet Mignon', BONE_IN_FILET_NOTE)
+    const packShortLoin = (s: any, sfx: string) => {
+      if (s.path === 'bone-in') {
+        if (s.tBoneThickness) pc(`T-Bone / Porterhouse${sfx}`, thick(s.tBoneThickness))
+        pc(`Filet Mignon${sfx}`, BONE_IN_FILET_NOTE)
+      }
+      if (s.path === 'boneless') {
+        if (s.tenderloin?.cut === 'grind') pg(`Tenderloin${sfx}`)
+        else if (s.tenderloin?.cut) pc(`Tenderloin${sfx}`, s.tenderloin.cut === 'filet' ? 'Filet Mignon — 2"' : fmt(s.tenderloin.cut))
+        if (s.stripLoin?.cut === 'grind') pg(`Strip Loin${sfx}`)
+        else if (s.stripLoin?.cut) pc(`Strip Loin (NY Strip)${sfx}`, withT(s.stripLoin.cut, s.stripLoin.thickness ?? ''))
+      }
     }
-    if (sl.path === 'boneless') {
-      if (sl.tenderloin?.cut === 'grind') pg('Tenderloin')
-      else if (sl.tenderloin?.cut) pc('Tenderloin', sl.tenderloin.cut === 'filet' ? 'Filet Mignon — 2"' : fmt(sl.tenderloin.cut))
-      if (sl.stripLoin?.cut === 'grind') pg('Strip Loin')
-      else if (sl.stripLoin?.cut) pc('Strip Loin (NY Strip)', withT(sl.stripLoin.cut, sl.stripLoin.thickness ?? ''))
-    }
+    if (sl.loin2) { packShortLoin(sl, ' (1)'); packShortLoin(sl.loin2, ' (2)') }
+    else packShortLoin(sl, '')
     ps('Sirloin')
     if (d.topSirloin?.cut) { d.topSirloin.cut === 'grind' ? pg('Top Sirloin') : pc('Top Sirloin', withT(d.topSirloin.cut, d.topSirloin.thickness ?? '')) }
     if (d.triTip?.cut)     { d.triTip.cut    === 'grind' ? pg('Tri Tip')     : pc('Tri Tip',     fmt(d.triTip.cut)) }
@@ -941,8 +988,8 @@ const FAKE_CI: RawInstruction = {
     chuckRoll: { cut: 'chuck-steaks', addons: [], cut2: 'half', addons2: ['seasoned'] },
     shortRibs: { cut: 'flanken' },
     plate:     { cut: 'beef-bacon' },
-    ribeye:    { style: 'boneless', cut: 'steaks', thickness: '1', addons: [] },
-    shortLoin: { path: 'bone-in', tBoneThickness: '1.25' },
+    ribeye:    { style: 'boneless', cut: 'steaks', thickness: '1', addons: [], ribeye2: { style: 'bone-in', cut: 'rib-roast-half', thickness: '', seasoned: true } },
+    shortLoin: { path: 'bone-in', tBoneThickness: '1.25', loin2: { path: 'boneless', tenderloin: { cut: 'filet', thickness: '2"' }, stripLoin: { cut: 'ny-strip', thickness: '1' } } },
     topSirloin:{ cut: 'steaks', thickness: '0.75' },
     triTip:    { cut: 'grind' },
     skirt:     { cut: 'cut-half' },
