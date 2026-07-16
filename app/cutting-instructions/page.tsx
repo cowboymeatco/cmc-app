@@ -18,12 +18,16 @@ function speciesOf(ci: RawInstruction): string {
   return ci.data?.species ?? ci.species ?? '—'
 }
 
-// v2 beef `trim` object → display rows (grind blend, loose pack size, patties)
-function beefTrimRows(t: any): Array<[string, string]> {
+// v2 beef `trim` prefs split by audience: the blend is the cutters' call
+// (cut card), packaging style & size is the packaging side's (packaging sheet)
+function beefTrimCutterRows(t: any): Array<[string, string]> {
+  return t?.fatPct ? [['Grind Blend', t.fatPct]] : []
+}
+
+function beefTrimPackRows(t: any): Array<[string, string]> {
   if (!t) return []
   const rows: Array<[string, string]> = []
   const pattyPct = Number(t.pattyPct ?? 0)
-  if (t.fatPct) rows.push(['Grind Blend', t.fatPct])
   if (pattyPct < 100) {
     const parts = [
       t.loose?.packSize ? `${t.loose.packSize} lb ${t.loose?.rollstock ? 'rollstock' : 'packs'}` : '',
@@ -42,7 +46,21 @@ function beefTrimRows(t: any): Array<[string, string]> {
   return rows
 }
 
-// v2 pork `trim` object (sausage flavors/formats) → display rows
+// Office detail view shows the whole picture
+function beefTrimRows(t: any): Array<[string, string]> {
+  return [...beefTrimCutterRows(t), ...beefTrimPackRows(t)]
+}
+
+// v2 pork sausage: flavor is a processing decision, format is packaging —
+// the packaging rows keep the flavor so each format is tied to its sausage
+function porkTrimCutterRows(t: any, f: (s: string) => string): Array<[string, string]> {
+  if (!t) return []
+  const rows: Array<[string, string]> = []
+  if (t.flavor1) rows.push(['Sausage 1', f(t.flavor1)])
+  if (t.split === 'yes' && t.flavor2) rows.push(['Sausage 2', f(t.flavor2)])
+  return rows
+}
+
 function porkTrimRows(t: any, f: (s: string) => string): Array<[string, string]> {
   if (!t) return []
   const rows: Array<[string, string]> = []
@@ -461,7 +479,7 @@ function printV2CutCard(ci: RawInstruction) {
       d.topRound?.addons?.length ? row('  Add-ons', adds(d.topRound.addons), true) : '',
       row('Round Shank / Marrow', fmt(d.roundShank?.marrow)),
     ].join(''))
-    cutSections += sec('Trim & Ground Beef', beefTrimRows(d.trim).map(([l, v]) => row(l, v)).join(''))
+    cutSections += sec('Trim & Ground Beef', beefTrimCutterRows(d.trim).map(([l, v]) => row(l, v)).join(''))
   }
 
   if (isPork) {
@@ -491,7 +509,7 @@ function printV2CutCard(ci: RawInstruction) {
       row('Hocks', fmt(d.hocks?.cut)),
       row('Spare Ribs', fmt(d.spareRibs?.cut)),
     ].join(''))
-    cutSections += sec('Sausage / Trim', porkTrimRows(d.trim, fmt).map(([l, v]) => row(l, v)).join(''))
+    cutSections += sec('Sausage / Trim', porkTrimCutterRows(d.trim, fmt).map(([l, v]) => row(l, v)).join(''))
   }
 
   if (isLG) {
@@ -663,8 +681,8 @@ function printV2CutCard(ci: RawInstruction) {
   })
   const filteredPrs = prs.filter((pr, i) => !pr.sectionTitle || activeSectionIdxs.has(i))
 
-  // Ground/trim section: packaging prefs from the v2 trim step, plus which cuts went to grind
-  const trimPrs = isBeef ? beefTrimRows(d.trim) : isPork ? porkTrimRows(d.trim, fmt) : []
+  // Ground/trim section: packaging style & size from the v2 trim step, plus which cuts went to grind
+  const trimPrs = isBeef ? beefTrimPackRows(d.trim) : isPork ? porkTrimRows(d.trim, fmt) : []
   if (trimPrs.length || grindFrom.length) {
     filteredPrs.push({ sectionTitle: isPork ? 'Sausage / Trim' : `Ground ${species}` })
     trimPrs.forEach(([l, v]) => filteredPrs.push({ cut: l, spec: v }))
