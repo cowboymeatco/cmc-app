@@ -18,6 +18,39 @@ function speciesOf(ci: RawInstruction): string {
   return ci.data?.species ?? ci.species ?? '—'
 }
 
+// v2 beef `trim` object → display rows (grind blend, loose pack size, patties)
+function beefTrimRows(t: any): Array<[string, string]> {
+  if (!t) return []
+  const rows: Array<[string, string]> = []
+  const pattyPct = Number(t.pattyPct ?? 0)
+  if (t.fatPct) rows.push(['Grind Blend', t.fatPct])
+  if (pattyPct < 100) {
+    const parts = [
+      t.loose?.packSize ? `${t.loose.packSize} lb ${t.loose?.rollstock ? 'rollstock' : 'packs'}` : '',
+      pattyPct > 0 ? `${100 - pattyPct}% of trim` : '',
+    ].filter(Boolean)
+    if (parts.length) rows.push(['Loose Grind', parts.join(' · ')])
+  }
+  if (pattyPct > 0) {
+    const parts = [
+      t.patties?.size ?? '',
+      t.patties?.pkg === '1lb' ? '1 lb pkgs' : t.patties?.pkg === '10lb' ? '10 lb box' : '',
+      pattyPct < 100 ? `${pattyPct}% of trim` : 'all trim',
+    ].filter(Boolean)
+    rows.push(['Patties', parts.join(' · ')])
+  }
+  return rows
+}
+
+// v2 pork `trim` object (sausage flavors/formats) → display rows
+function porkTrimRows(t: any, f: (s: string) => string): Array<[string, string]> {
+  if (!t) return []
+  const rows: Array<[string, string]> = []
+  if (t.flavor1) rows.push(['Sausage 1', [f(t.flavor1), f(t.format1 ?? '')].filter(Boolean).join(' · ')])
+  if (t.split === 'yes' && t.flavor2) rows.push(['Sausage 2', [f(t.flavor2), f(t.format2 ?? '')].filter(Boolean).join(' · ')])
+  return rows
+}
+
 // ── Cut card field definitions by species ─────────────────────────────────────
 
 const BEEF_SECTIONS = [
@@ -249,6 +282,11 @@ function renderV2Detail(ci: RawInstruction) {
             <V2Field label="Top Round Add-ons" value={v2adds(d.topRound?.addons)} addon />
             <V2Field label="Round Shank / Marrow" value={v2fmt(d.roundShank?.marrow)} />
           </V2Section>
+          {beefTrimRows(d.trim).length > 0 && (
+            <V2Section title="Trim & Ground Beef">
+              {beefTrimRows(d.trim).map(([label, value]) => <V2Field key={label} label={label} value={value} />)}
+            </V2Section>
+          )}
         </>
       )}
 
@@ -289,6 +327,11 @@ function renderV2Detail(ci: RawInstruction) {
             <V2Field label="Hocks" value={v2fmt(d.hocks?.cut)} />
             <V2Field label="Spare Ribs" value={v2fmt(d.spareRibs?.cut)} />
           </V2Section>
+          {porkTrimRows(d.trim, v2fmt).length > 0 && (
+            <V2Section title="Sausage / Trim">
+              {porkTrimRows(d.trim, v2fmt).map(([label, value]) => <V2Field key={label} label={label} value={value} />)}
+            </V2Section>
+          )}
         </>
       )}
 
@@ -326,6 +369,18 @@ function printV2CutCard(ci: RawInstruction) {
   const withT = (cut: string, t: string) => [fmt(cut), thick(t)].filter(Boolean).join(' — ')
   const adds  = (arr: string[]) => arr?.length ? arr.map(fmt).join(', ') : ''
 
+  // Primal color coding for the cutting table (Chris): chuck green,
+  // rib & plate yellow, rest of the beef red
+  const PRIMAL_COLORS: Record<string, { bar: string; text: string; tint: string }> = {
+    'Chuck':              { bar: '#2e7d32', text: '#ffffff', tint: '#edf5ee' },
+    'Plate & Short Ribs': { bar: '#f2c200', text: '#4a3800', tint: '#fdf8e0' },
+    'Ribeye':             { bar: '#f2c200', text: '#4a3800', tint: '#fdf8e0' },
+    'Short Loin':         { bar: '#b71c1c', text: '#ffffff', tint: '#fbecec' },
+    'Sirloin':            { bar: '#b71c1c', text: '#ffffff', tint: '#fbecec' },
+    'Flank':              { bar: '#b71c1c', text: '#ffffff', tint: '#fbecec' },
+    'Round':              { bar: '#b71c1c', text: '#ffffff', tint: '#fbecec' },
+  }
+
   // ── Page 1: Cut Card ──────────────────────────────────────────────────────
   // Compact rows + sections wrapped in break-inside:avoid for 2-column CSS layout
   const row = (label: string, value: any, addon = false): string => {
@@ -339,13 +394,14 @@ function printV2CutCard(ci: RawInstruction) {
     </tr>`
   }
   // Each section is a single div with break-inside:avoid so CSS columns won't split it mid-section
-  const sec = (title: string, rows: string): string =>
-    rows.trim()
-      ? `<div style="break-inside:avoid;margin-top:8px">
-           <div style="background:#351E0E;color:#F2E8D9;padding:5px 10px;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;font-weight:bold">${title}</div>
-           <table style="width:100%;border-collapse:collapse;border:1px solid #e0d5c8">${rows}</table>
+  const sec = (title: string, rows: string): string => {
+    if (!rows.trim()) return ''
+    const c = PRIMAL_COLORS[title]
+    return `<div style="break-inside:avoid;margin-top:8px">
+           <div style="background:${c?.bar ?? '#351E0E'};color:${c?.text ?? '#F2E8D9'};padding:5px 10px;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;font-weight:bold">${title}</div>
+           <table style="width:100%;border-collapse:collapse;border:1px solid #e0d5c8;${c ? `background:${c.tint}` : ''}">${rows}</table>
          </div>`
-      : ''
+  }
 
   let cutSections = ''
 
@@ -405,6 +461,7 @@ function printV2CutCard(ci: RawInstruction) {
       d.topRound?.addons?.length ? row('  Add-ons', adds(d.topRound.addons), true) : '',
       row('Round Shank / Marrow', fmt(d.roundShank?.marrow)),
     ].join(''))
+    cutSections += sec('Trim & Ground Beef', beefTrimRows(d.trim).map(([l, v]) => row(l, v)).join(''))
   }
 
   if (isPork) {
@@ -434,6 +491,7 @@ function printV2CutCard(ci: RawInstruction) {
       row('Hocks', fmt(d.hocks?.cut)),
       row('Spare Ribs', fmt(d.spareRibs?.cut)),
     ].join(''))
+    cutSections += sec('Sausage / Trim', porkTrimRows(d.trim, fmt).map(([l, v]) => row(l, v)).join(''))
   }
 
   if (isLG) {
@@ -605,7 +663,13 @@ function printV2CutCard(ci: RawInstruction) {
   })
   const filteredPrs = prs.filter((pr, i) => !pr.sectionTitle || activeSectionIdxs.has(i))
 
-  if (grindFrom.length) filteredPrs.push({ cut: `Ground ${species}`, spec: `From: ${grindFrom.join(', ')}`, isGrind: true })
+  // Ground/trim section: packaging prefs from the v2 trim step, plus which cuts went to grind
+  const trimPrs = isBeef ? beefTrimRows(d.trim) : isPork ? porkTrimRows(d.trim, fmt) : []
+  if (trimPrs.length || grindFrom.length) {
+    filteredPrs.push({ sectionTitle: isPork ? 'Sausage / Trim' : `Ground ${species}` })
+    trimPrs.forEach(([l, v]) => filteredPrs.push({ cut: l, spec: v }))
+    if (grindFrom.length) filteredPrs.push({ cut: `Ground ${species}`, spec: `From: ${grindFrom.join(', ')}`, isGrind: true })
+  }
 
   // ── Split packaging rows into two balanced columns ────────────────────────
   const nonSectionCount = filteredPrs.filter(pr => !pr.sectionTitle).length
@@ -630,7 +694,8 @@ function printV2CutCard(ci: RawInstruction) {
     for (const pr of prs) {
       if (pr.sectionTitle) {
         rowCount = 0
-        tbody += `<tr><td colspan="5" style="background:#351E0E;color:#F2E8D9;padding:4px 8px;font-size:9px;letter-spacing:0.12em;text-transform:uppercase;font-weight:bold">${pr.sectionTitle}</td></tr>`
+        const c = PRIMAL_COLORS[pr.sectionTitle]
+        tbody += `<tr><td colspan="5" style="background:${c?.bar ?? '#351E0E'};color:${c?.text ?? '#F2E8D9'};padding:4px 8px;font-size:9px;letter-spacing:0.12em;text-transform:uppercase;font-weight:bold">${pr.sectionTitle}</td></tr>`
         continue
       }
       const bg  = pr.isGrind ? '#fff8e6' : pr.isAddon ? '#fffbe8' : rowCount % 2 === 0 ? '#fff' : '#faf6f1'
@@ -773,6 +838,7 @@ const FAKE_CI: RawInstruction = {
     bottomRound: { cut: 'steaks', thickness: '0.75', addons: ['jerky'] },
     topRound:    { cut: 'cubed-steak' },
     roundShank:  { marrow: 'canoe' },
+    trim:        { fatPct: '85/15', pattyPct: 30, patties: { size: '4:1', pkg: '1lb' }, loose: { packSize: '1.5', rollstock: false } },
     specialty: { interest: 'yes', notes: 'Interested in smoked brisket and beef sticks' },
   },
 }
