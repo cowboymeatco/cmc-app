@@ -408,8 +408,19 @@ function renderV2Detail(ci: RawInstruction) {
             <V2Field label="Flank Steak" value={v2fmt(d.flank?.cut)} />
           </V2Section>
           <V2Section title="Round">
-            <V2Field label="Sirloin Tip" value={v2withT(d.sirloinTip?.cut ?? '', d.sirloinTip?.thickness ?? '')} />
-            <V2Field label="Sirloin Tip Add-ons" value={v2adds(d.sirloinTip?.addons)} addon />
+            <V2Field label="Sirloin Tip" value={
+              d.sirloinTip?.tip2
+                ? `1: ${v2withT(d.sirloinTip.cut ?? '', d.sirloinTip.thickness ?? '')} / 2: ${v2withT(d.sirloinTip.tip2.cut ?? '', d.sirloinTip.tip2.thickness ?? '')}`
+                : v2withT(d.sirloinTip?.cut ?? '', d.sirloinTip?.thickness ?? '')
+            } />
+            {d.sirloinTip?.tip2 ? (
+              <>
+                <V2Field label="Sirloin Tip 1 Add-ons" value={v2adds(d.sirloinTip.addons)} addon />
+                <V2Field label="Sirloin Tip 2 Add-ons" value={v2adds(d.sirloinTip.tip2.addons)} addon />
+              </>
+            ) : (
+              <V2Field label="Sirloin Tip Add-ons" value={v2adds(d.sirloinTip?.addons)} addon />
+            )}
             <V2Field label="Bottom Round" value={v2withT(d.bottomRound?.cut ?? '', d.bottomRound?.thickness ?? '')} />
             <V2Field label="Bottom Round Add-ons" value={v2adds(d.bottomRound?.addons)} addon />
             <V2Field label="Top Round" value={v2withT(d.topRound?.cut ?? '', d.topRound?.thickness ?? '')} />
@@ -616,8 +627,15 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
       row('Flank Steak', fmt(d.flank?.cut)),
     ].join(''))
     cutSections += sec('Round', [
-      row('Sirloin Tip', withT(d.sirloinTip?.cut ?? '', d.sirloinTip?.thickness ?? '')),
-      d.sirloinTip?.addons?.length ? row('  Add-ons', adds(d.sirloinTip.addons), true) : '',
+      row('Sirloin Tip', d.sirloinTip?.tip2
+        ? `1: ${withT(d.sirloinTip.cut ?? '', d.sirloinTip.thickness ?? '')} / 2: ${withT(d.sirloinTip.tip2.cut ?? '', d.sirloinTip.tip2.thickness ?? '')}`
+        : withT(d.sirloinTip?.cut ?? '', d.sirloinTip?.thickness ?? '')),
+      d.sirloinTip?.tip2
+        ? [
+            d.sirloinTip.addons?.length ? row('  Add-ons (1)', adds(d.sirloinTip.addons), true) : '',
+            d.sirloinTip.tip2.addons?.length ? row('  Add-ons (2)', adds(d.sirloinTip.tip2.addons), true) : '',
+          ].join('')
+        : (d.sirloinTip?.addons?.length ? row('  Add-ons', adds(d.sirloinTip.addons), true) : ''),
       row('Bottom Round', withT(d.bottomRound?.cut ?? '', d.bottomRound?.thickness ?? '')),
       d.bottomRound?.addons?.length ? row('  Add-ons', adds(d.bottomRound.addons), true) : '',
       d.eyeOfRound?.cut ? row('Eye of Round', withT(d.eyeOfRound.cut, d.eyeOfRound.thickness ?? '')) : '',
@@ -782,9 +800,17 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
     if (d.skirt?.cut)  { d.skirt.cut  === 'grind' ? pg('Skirt')       : pc('Skirt Steak',  fmt(d.skirt.cut)) }
     if (d.flank?.cut)  { d.flank.cut  === 'grind' ? pg('Flank Steak') : pc('Flank Steak',  fmt(d.flank.cut)) }
     ps('Round')
-    if (d.sirloinTip?.cut) {
-      if (d.sirloinTip.cut === 'grind') pg('Sirloin Tip')
-      else { pc('Sirloin Tip', withT(d.sirloinTip.cut, d.sirloinTip.thickness ?? '')); if (d.sirloinTip.addons?.length) pc('  Add-on', adds(d.sirloinTip.addons), true) }
+    const packSirloinTip = (t: { cut?: string; thickness?: string; addons?: string[] }, sfx: string) => {
+      if (t.cut === 'grind') { pg(`Sirloin Tip${sfx}`); return }
+      if (!t.cut) return
+      pc(`Sirloin Tip${sfx}`, withT(t.cut, t.thickness ?? ''))
+      if (t.addons?.length) pc('  Add-on', adds(t.addons), true)
+    }
+    if (d.sirloinTip?.tip2) {
+      packSirloinTip(d.sirloinTip, ' (1)')
+      packSirloinTip(d.sirloinTip.tip2, ' (2)')
+    } else if (d.sirloinTip?.cut) {
+      packSirloinTip(d.sirloinTip, '')
     }
     if (d.bottomRound?.cut) {
       if (d.bottomRound.cut === 'grind') pg('Bottom Round')
@@ -1032,7 +1058,7 @@ const FAKE_CI: RawInstruction = {
     triTip:    { cut: 'grind', addons: [] },
     skirt:     { cut: 'cut-half' },
     flank:     { cut: 'keep-whole' },
-    sirloinTip:  { cut: 'roast-half', thickness: '', addons: ['seasoned'] },
+    sirloinTip:  { mode: 'split', cut: 'roast-half', thickness: '', addons: ['seasoned'], tip2: { cut: 'steaks', thickness: '1', addons: [] } },
     bottomRound: { cut: 'jerky' },
     topRound:    { cut: 'cubed-steak' },
     roundShank:  { marrow: 'canoe' },
