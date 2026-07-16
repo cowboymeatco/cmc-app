@@ -9,7 +9,13 @@ interface RawInstruction {
   id:         string
   created_at: string
   status:     string
+  species?:   string   // top-level column — v2 wizard writes species here, not in data
   data:       Record<string, any>
+}
+
+// v1 stores species in data; v2 stores it as a top-level column
+function speciesOf(ci: RawInstruction): string {
+  return ci.data?.species ?? ci.species ?? '—'
 }
 
 // ── Cut card field definitions by species ─────────────────────────────────────
@@ -108,6 +114,26 @@ function isEmpty(v: any): boolean {
   return false
 }
 
+// Compact date for the list table — handles ISO timestamps, YYYY-MM-DD, or free text
+function fmtShortDate(v?: string | null): string {
+  if (!v || v === 'Unknown') return '—'
+  const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(v) ? v + 'T12:00:00' : v)
+  if (isNaN(d.getTime())) return v
+  return d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' })
+}
+
+// Scheduled slaughter date: linked appointment's harvest date wins,
+// otherwise the kill date the customer picked on the form (v2)
+function slaughterDateFor(ci: RawInstruction, appointments: HarvestAppointment[]): string | null {
+  const appt = appointments.find(a => a.customers?.some(c => c.linked_cutting_instruction_id === ci.id))
+  if (appt?.harvest_date) return appt.harvest_date
+  const kd = ci.data?.killDate
+  if (kd && kd !== 'Unknown') return kd
+  return null
+}
+
+const LIST_GRID_COLS = 'minmax(0,1fr) 54px 70px 70px 76px'
+
 // ── V2 form helpers ───────────────────────────────────────────────────────────
 
 function v2fmt(val: string): string {
@@ -148,9 +174,10 @@ function V2Section({ title, children }: { title: string; children: React.ReactNo
 
 function renderV2Detail(ci: RawInstruction) {
   const d = ci.data ?? {}
-  const isBeef = (d.species ?? '').toLowerCase() === 'beef'
-  const isPork = (d.species ?? '').toLowerCase() === 'pork'
-  const isLG = (d.species ?? '').toLowerCase() === 'lamb' || (d.species ?? '').toLowerCase() === 'goat'
+  const sp = speciesOf(ci).toLowerCase()
+  const isBeef = sp === 'beef'
+  const isPork = sp === 'pork' || sp === 'hog'
+  const isLG = sp === 'lamb' || sp === 'goat'
   return (
     <>
       <V2Section title="Customer Info">
@@ -287,11 +314,12 @@ function renderV2Detail(ci: RawInstruction) {
 
 function printV2CutCard(ci: RawInstruction) {
   const d = ci.data ?? {}
-  const species = d.species ?? 'Beef'
+  const species = ci.data?.species ?? ci.species ?? 'Beef'
   const name = d.customerName ?? '—'
-  const isBeef = species.toLowerCase() === 'beef'
-  const isPork = species.toLowerCase() === 'pork'
-  const isLG   = species.toLowerCase() === 'lamb' || species.toLowerCase() === 'goat'
+  const sp = species.toLowerCase()
+  const isBeef = sp === 'beef'
+  const isPork = sp === 'pork' || sp === 'hog'
+  const isLG   = sp === 'lamb' || sp === 'goat'
 
   const fmt   = (v: string) => v ? v.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : ''
   const thick = (v: string) => v ? `${v}"` : ''
@@ -781,9 +809,13 @@ export default function CuttingInstructionsPage() {
   useEffect(() => { load() }, [])
 
   const filtered = instructions.filter(i => {
-    const species = i.data?.species ?? ''
-    if (filterStatus  !== 'all' && i.status  !== filterStatus)  return false
-    if (filterSpecies !== 'all' && species    !== filterSpecies) return false
+    const species = speciesOf(i)
+    if (filterStatus !== 'all' && i.status !== filterStatus) return false
+    if (filterSpecies !== 'all') {
+      // v2 wizard says "Pork", the filter button says "Hog" — treat them as the same animal
+      const match = filterSpecies === 'Hog' ? (species === 'Hog' || species === 'Pork') : species === filterSpecies
+      if (!match) return false
+    }
     return true
   })
 
@@ -840,7 +872,7 @@ export default function CuttingInstructionsPage() {
     a.customers?.some(c => !c.linked_cutting_instruction_id)
   ).sort((a, b) => a.harvest_date.localeCompare(b.harvest_date))
 
-  const selectedSpecies = selected?.data?.species ?? 'Beef'
+  const selectedSpecies = selected ? speciesOf(selected) : 'Beef'
   const sections = sectionsFor(selectedSpecies)
   const isV2 = selected?.data?.formVersion === 'v2'
 
@@ -916,25 +948,31 @@ export default function CuttingInstructionsPage() {
                 <p style={{ fontSize: '0.8rem', marginTop: '0.5rem', opacity: 0.7 }}>Submissions from cowboymeats.com will appear here.</p>
               </div>
             ) : (
-              filtered.map(ci => {
-                const d       = ci.data ?? {}
-                const name    = d.customerName ?? '—'
-                const species = d.species ?? '—'
-                const isSel   = selected?.id === ci.id
-                return (
-                  <div key={ci.id} onClick={() => setSelected(isSel ? null : ci)}
-                    style={{ padding: '0.9rem 1.1rem', borderBottom: '1px solid rgba(166,120,90,0.1)', cursor: 'pointer', background: isSel ? 'rgba(117,71,27,0.3)' : 'transparent', transition: 'background 0.15s', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 600, color: 'var(--cream)', fontSize: '0.9rem', marginBottom: '0.2rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--tan)' }}>
-                        {species} · {new Date(ci.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                        {d.deliveryDate && d.deliveryDate !== 'Unknown' && ` · Delivery ${d.deliveryDate}`}
-                      </div>
+              <>
+                {/* Column headers */}
+                <div style={{ display: 'grid', gridTemplateColumns: LIST_GRID_COLS, gap: '0.5rem', padding: '0.5rem 1.1rem', borderBottom: '1px solid rgba(166,120,90,0.2)', background: 'var(--dark-brown)', position: 'sticky', top: 0, zIndex: 1 }}>
+                  {['Customer','Species','Submitted','Slaughter','Status'].map(h => (
+                    <div key={h} style={{ fontSize: '0.62rem', color: 'var(--light-brown)', textTransform: 'uppercase', letterSpacing: '0.1em', whiteSpace: 'nowrap' }}>{h}</div>
+                  ))}
+                </div>
+                {filtered.map(ci => {
+                  const d         = ci.data ?? {}
+                  const name      = d.customerName ?? '—'
+                  const species   = speciesOf(ci)
+                  const isSel     = selected?.id === ci.id
+                  const slaughter = slaughterDateFor(ci, appointments)
+                  return (
+                    <div key={ci.id} onClick={() => setSelected(isSel ? null : ci)}
+                      style={{ display: 'grid', gridTemplateColumns: LIST_GRID_COLS, gap: '0.5rem', alignItems: 'center', padding: '0.7rem 1.1rem', borderBottom: '1px solid rgba(166,120,90,0.1)', cursor: 'pointer', background: isSel ? 'rgba(117,71,27,0.3)' : 'transparent', transition: 'background 0.15s' }}>
+                      <div style={{ fontWeight: 600, color: 'var(--cream)', fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
+                      <div style={{ fontSize: '0.78rem', color: 'var(--tan)' }}>{species}</div>
+                      <div style={{ fontSize: '0.78rem', color: 'var(--tan)', whiteSpace: 'nowrap' }}>{fmtShortDate(ci.created_at)}</div>
+                      <div style={{ fontSize: '0.78rem', color: slaughter ? 'var(--cream)' : 'rgba(166,120,90,0.5)', whiteSpace: 'nowrap' }}>{fmtShortDate(slaughter)}</div>
+                      <div><StatusBadge status={ci.status} /></div>
                     </div>
-                    <StatusBadge status={ci.status} />
-                  </div>
-                )
-              })
+                  )
+                })}
+              </>
             )}
           </div>
         </div>
