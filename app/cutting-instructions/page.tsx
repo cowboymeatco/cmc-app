@@ -229,8 +229,9 @@ function stdThick(cut?: string, primal?: string): string {
 }
 
 // Bone-in short loin still yields filets: the tenderloin head runs past the
-// last rib, so 3–4 filet mignons come off before the T-bones start
-const BONE_IN_FILET_NOTE = '2" — 3–4 filets'
+// last rib, so 3–4 filet mignons come off before the T-bones start. That's why
+// the row prints at all on a bone-in loin — the cutter only needs the thickness.
+const BONE_IN_FILET_THICKNESS = '2"'
 function v2thick(v: string): string { return v ? `${v}"` : '' }
 function v2withT(cut: string, t: string): string { return [v2fmt(cut), v2thick(t)].filter(Boolean).join(' — ') }
 function v2adds(arr: string[]): string { return arr?.length ? arr.map(v2fmt).join(', ') : '' }
@@ -282,7 +283,7 @@ function V2ShortLoinFields({ sl, sfx = '' }: { sl: any; sfx?: string }) {
       {sl.path === 'bone-in' && (
         <>
           <V2Field label={`T-Bone / Porterhouse${sfx}`} value={v2thick(sl.tBoneThickness)} />
-          <V2Field label={`Filet Mignon${sfx}`} value={BONE_IN_FILET_NOTE} />
+          <V2Field label={`Filet Mignon${sfx}`} value={BONE_IN_FILET_THICKNESS} />
         </>
       )}
       {sl.path === 'boneless' && (
@@ -610,7 +611,7 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
     const sl = d.shortLoin ?? {}
     const slRows = (s: any, sfx: string): string => s?.path === 'bone-in' ? [
       row(`T-Bone / Porterhouse${sfx}`, thick(s.tBoneThickness)),
-      row(`Filet Mignon${sfx}`, BONE_IN_FILET_NOTE),
+      row(`Filet Mignon${sfx}`, BONE_IN_FILET_THICKNESS),
     ].join('') : s?.path === 'boneless' ? [
       row(`Tenderloin${sfx}`, s.tenderloin?.cut === 'filet' ? 'Filet Mignon — 2"' : fmt(s.tenderloin?.cut ?? '')),
       row(`Strip Loin${sfx}`, withT(s.stripLoin?.cut ?? '', s.stripLoin?.thickness ?? '')),
@@ -776,7 +777,7 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
     const packShortLoin = (s: any, sfx: string) => {
       if (s.path === 'bone-in') {
         if (s.tBoneThickness) pc(`T-Bone / Porterhouse${sfx}`, thick(s.tBoneThickness))
-        pc(`Filet Mignon${sfx}`, BONE_IN_FILET_NOTE)
+        pc(`Filet Mignon${sfx}`, BONE_IN_FILET_THICKNESS)
       }
       if (s.path === 'boneless') {
         if (s.tenderloin?.cut === 'grind') pg(`Tenderloin${sfx}`)
