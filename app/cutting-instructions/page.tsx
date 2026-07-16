@@ -214,6 +214,18 @@ function v2fmt(val: string): string {
   if (!val) return ''
   return val.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
+
+// Shop-standard steak thicknesses the wizard states in its labels but doesn't
+// store — printed on the cards so new cutters don't have to ask
+const STEAK_STANDARDS: Record<string, string> = {
+  'chuck-steaks':   '1',     // wizard label: Chuck Steaks (1")
+  'rancher-steaks': '0.75',  // wizard label: Rancher Steaks (¾")
+}
+function stdThick(cut?: string): string { return (cut && STEAK_STANDARDS[cut]) || '' }
+
+// Bone-in short loin still yields filets: the tenderloin head runs past the
+// last rib, so 3–4 filet mignons come off before the T-bones start
+const BONE_IN_FILET_NOTE = '2" — 3–4 filets from the tenderloin head'
 function v2thick(v: string): string { return v ? `${v}"` : '' }
 function v2withT(cut: string, t: string): string { return [v2fmt(cut), v2thick(t)].filter(Boolean).join(' — ') }
 function v2adds(arr: string[]): string { return arr?.length ? arr.map(v2fmt).join(', ') : '' }
@@ -282,10 +294,10 @@ function renderV2Detail(ci: RawInstruction) {
             } />
             <V2Field label="Shank" value={v2fmt(d.shank?.cut)} />
             <V2Field label="Shank Add-ons" value={v2adds(d.shank?.addons)} addon />
-            <V2Field label="Arm Roast" value={v2fmt(d.armRoast?.cut)} />
+            <V2Field label="Arm Roast" value={v2withT(d.armRoast?.cut ?? '', stdThick(d.armRoast?.cut))} />
             <V2Field label="Arm Add-ons" value={v2adds(d.armRoast?.addons)} addon />
             <V2Field label="Flat Iron" value={v2fmt(d.flatIron?.cut)} />
-            <V2Field label="Chuck Roll" value={v2fmt(d.chuckRoll?.cut)} />
+            <V2Field label="Chuck Roll" value={v2withT(d.chuckRoll?.cut ?? '', stdThick(d.chuckRoll?.cut))} />
             <V2Field label="Chuck Roll Add-ons" value={v2adds(d.chuckRoll?.addons)} addon />
           </V2Section>
           <V2Section title="Plate & Short Ribs">
@@ -299,7 +311,12 @@ function renderV2Detail(ci: RawInstruction) {
             <V2Field label="Add-ons" value={v2adds(d.ribeye?.addons)} addon />
           </V2Section>
           <V2Section title="Short Loin">
-            {d.shortLoin?.path === 'bone-in' && <V2Field label="T-Bone / Porterhouse" value={v2thick(d.shortLoin.tBoneThickness)} />}
+            {d.shortLoin?.path === 'bone-in' && (
+              <>
+                <V2Field label="T-Bone / Porterhouse" value={v2thick(d.shortLoin.tBoneThickness)} />
+                <V2Field label="Filet Mignon" value={BONE_IN_FILET_NOTE} />
+              </>
+            )}
             {d.shortLoin?.path === 'boneless' && (
               <>
                 <V2Field label="Tenderloin" value={d.shortLoin.tenderloin?.cut === 'filet' ? 'Filet Mignon — 2"' : v2fmt(d.shortLoin.tenderloin?.cut ?? '')} />
@@ -461,10 +478,10 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
       d.brisket?.fat ? row('  Brisket Fat', fmt(d.brisket.fat)) : '',
       row('Shank', fmt(d.shank?.cut)),
       d.shank?.addons?.length ? row('  Add-ons', adds(d.shank.addons), true) : '',
-      row('Arm Roast', fmt(d.armRoast?.cut)),
+      row('Arm Roast', withT(d.armRoast?.cut ?? '', stdThick(d.armRoast?.cut))),
       d.armRoast?.addons?.length ? row('  Add-ons', adds(d.armRoast.addons), true) : '',
       row('Flat Iron', fmt(d.flatIron?.cut)),
-      row('Chuck Roll', fmt(d.chuckRoll?.cut)),
+      row('Chuck Roll', withT(d.chuckRoll?.cut ?? '', stdThick(d.chuckRoll?.cut))),
       d.chuckRoll?.addons?.length ? row('  Add-ons', adds(d.chuckRoll.addons), true) : '',
     ].join(''))
     cutSections += sec('Plate & Short Ribs', [
@@ -480,6 +497,7 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
     const sl = d.shortLoin ?? {}
     cutSections += sec('Short Loin', sl.path === 'bone-in' ? [
       row('T-Bone / Porterhouse', thick(sl.tBoneThickness)),
+      row('Filet Mignon', BONE_IN_FILET_NOTE),
     ].join('') : sl.path === 'boneless' ? [
       row('Tenderloin', sl.tenderloin?.cut === 'filet' ? 'Filet Mignon — 2"' : fmt(sl.tenderloin?.cut ?? '')),
       row('Strip Loin', withT(sl.stripLoin?.cut ?? '', sl.stripLoin?.thickness ?? '')),
@@ -591,12 +609,12 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
     }
     if (d.armRoast?.cut) {
       if (d.armRoast.cut === 'grind') pg('Arm Roast')
-      else { pc('Arm Roast', fmt(d.armRoast.cut)); if (d.armRoast.addons?.length) pc('  Add-on', adds(d.armRoast.addons), true) }
+      else { pc('Arm Roast', withT(d.armRoast.cut, stdThick(d.armRoast.cut))); if (d.armRoast.addons?.length) pc('  Add-on', adds(d.armRoast.addons), true) }
     }
     if (d.flatIron?.cut) { d.flatIron.cut === 'grind' ? pg('Flat Iron') : pc('Flat Iron', fmt(d.flatIron.cut)) }
     if (d.chuckRoll?.cut) {
       if (d.chuckRoll.cut === 'grind') pg('Chuck Roll')
-      else { pc('Chuck Roll', fmt(d.chuckRoll.cut)); if (d.chuckRoll.addons?.length) pc('  Add-on', adds(d.chuckRoll.addons), true) }
+      else { pc('Chuck Roll', withT(d.chuckRoll.cut, stdThick(d.chuckRoll.cut))); if (d.chuckRoll.addons?.length) pc('  Add-on', adds(d.chuckRoll.addons), true) }
     }
     ps('Plate & Short Ribs')
     if (d.shortRibs?.cut) {
@@ -614,7 +632,10 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
     }
     ps('Short Loin')
     const sl = d.shortLoin ?? {}
-    if (sl.path === 'bone-in' && sl.tBoneThickness) pc('T-Bone / Porterhouse', thick(sl.tBoneThickness))
+    if (sl.path === 'bone-in') {
+      if (sl.tBoneThickness) pc('T-Bone / Porterhouse', thick(sl.tBoneThickness))
+      pc('Filet Mignon', BONE_IN_FILET_NOTE)
+    }
     if (sl.path === 'boneless') {
       if (sl.tenderloin?.cut === 'grind') pg('Tenderloin')
       else if (sl.tenderloin?.cut) pc('Tenderloin', sl.tenderloin.cut === 'filet' ? 'Filet Mignon — 2"' : fmt(sl.tenderloin.cut))
