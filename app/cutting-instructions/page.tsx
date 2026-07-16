@@ -235,6 +235,16 @@ function v2thick(v: string): string { return v ? `${v}"` : '' }
 function v2withT(cut: string, t: string): string { return [v2fmt(cut), v2thick(t)].filter(Boolean).join(' — ') }
 function v2adds(arr: string[]): string { return arr?.length ? arr.map(v2fmt).join(', ') : '' }
 
+// The ribeye's only value-add is Seasoned (roast cuts only), and the wizard
+// stores it as a boolean rather than the addons array every other primal uses.
+// Older saved forms carry an addons array instead, so merge both shapes and let
+// the ribeye print under the same add-on rows as the rest of the card.
+function ribeyeAdds(r?: { addons?: string[]; seasoned?: boolean } | null): string[] {
+  const a: string[] = [...(r?.addons ?? [])]
+  if (r?.seasoned && !a.includes('seasoned')) a.push('seasoned')
+  return a
+}
+
 const V2_CELL: React.CSSProperties = { background: 'rgba(0,0,0,0.25)', borderRadius: '3px', padding: '0.5rem 0.75rem' }
 const V2_ADDON_CELL: React.CSSProperties = { background: 'rgba(240,192,64,0.08)', border: '1px solid rgba(240,192,64,0.2)', borderRadius: '3px', padding: '0.5rem 0.75rem' }
 const V2_LBL: React.CSSProperties = { fontSize: '0.67rem', color: 'var(--light-brown)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: '0.2rem' }
@@ -368,7 +378,14 @@ function renderV2Detail(ci: RawInstruction) {
                   ].filter(Boolean).join(' / ')
                 : v2withT(d.ribeye?.cut ?? '', d.ribeye?.thickness ?? '')
             } />
-            <V2Field label="Add-ons" value={v2adds(d.ribeye?.addons)} addon />
+            {d.ribeye?.ribeye2 ? (
+              <>
+                <V2Field label="Ribeye 1 Add-ons" value={v2adds(ribeyeAdds(d.ribeye))} addon />
+                <V2Field label="Ribeye 2 Add-ons" value={v2adds(ribeyeAdds(d.ribeye.ribeye2))} addon />
+              </>
+            ) : (
+              <V2Field label="Add-ons" value={v2adds(ribeyeAdds(d.ribeye))} addon />
+            )}
           </V2Section>
           <V2Section title="Short Loin">
             {d.shortLoin?.loin2 ? (
@@ -569,7 +586,12 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
             d.ribeye.ribeye2.cut ? `2: ${withT(d.ribeye.ribeye2.cut, d.ribeye.ribeye2.thickness ?? '')}` : '',
           ].filter(Boolean).join(' / ')
         : withT(d.ribeye?.cut ?? '', d.ribeye?.thickness ?? '')),
-      d.ribeye?.addons?.length ? row('  Add-ons', adds(d.ribeye.addons), true) : '',
+      d.ribeye?.ribeye2
+        ? [
+            ribeyeAdds(d.ribeye).length ? row('  Add-ons (1)', adds(ribeyeAdds(d.ribeye)), true) : '',
+            ribeyeAdds(d.ribeye.ribeye2).length ? row('  Add-ons (2)', adds(ribeyeAdds(d.ribeye.ribeye2)), true) : '',
+          ].join('')
+        : (ribeyeAdds(d.ribeye).length ? row('  Add-ons', adds(ribeyeAdds(d.ribeye)), true) : ''),
     ].join(''))
     const sl = d.shortLoin ?? {}
     const slRows = (s: any, sfx: string): string => s?.path === 'bone-in' ? [
@@ -713,16 +735,17 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
     ps('Ribeye')
     // grind lives at the style level for ribeye (the wizard clears cut when style is grind)
     const packRibeye = (r: any, sfx: string) => {
-      if (r.style === 'grind' || r.cut === 'grind') pg(`Ribeye${sfx}`)
-      else if (r.cut) pc(`Ribeye${sfx}`, [fmt(r.style), withT(r.cut, r.thickness ?? '')].filter(Boolean).join(' · '))
+      if (r.style === 'grind' || r.cut === 'grind') { pg(`Ribeye${sfx}`); return }
+      if (!r.cut) return
+      pc(`Ribeye${sfx}`, [fmt(r.style), withT(r.cut, r.thickness ?? '')].filter(Boolean).join(' · '))
+      const a = ribeyeAdds(r)
+      if (a.length) pc('  Add-on', adds(a), true)
     }
     if (d.ribeye?.ribeye2) {
       packRibeye(d.ribeye, ' (1)')
-      if (d.ribeye.style !== 'grind' && d.ribeye.cut && d.ribeye.cut !== 'grind' && d.ribeye.addons?.length) pc('  Add-on', adds(d.ribeye.addons), true)
       packRibeye(d.ribeye.ribeye2, ' (2)')
     } else if (d.ribeye?.style || d.ribeye?.cut) {
       packRibeye(d.ribeye, '')
-      if (d.ribeye.style !== 'grind' && d.ribeye.cut && d.ribeye.cut !== 'grind' && d.ribeye.addons?.length) pc('  Add-on', adds(d.ribeye.addons), true)
     }
     ps('Short Loin')
     const sl = d.shortLoin ?? {}
@@ -988,7 +1011,7 @@ const FAKE_CI: RawInstruction = {
     chuckRoll: { cut: 'chuck-steaks', addons: [], cut2: 'half', addons2: ['seasoned'] },
     shortRibs: { cut: 'flanken' },
     plate:     { cut: 'beef-bacon' },
-    ribeye:    { style: 'boneless', cut: 'steaks', thickness: '1', addons: [], ribeye2: { style: 'bone-in', cut: 'rib-roast-half', thickness: '', seasoned: true } },
+    ribeye:    { style: 'boneless', cut: 'steaks', thickness: '1', seasoned: false, ribeye2: { style: 'bone-in', cut: 'rib-roast-half', thickness: '', seasoned: true } },
     shortLoin: { path: 'bone-in', tBoneThickness: '1.25', loin2: { path: 'boneless', tenderloin: { cut: 'filet', thickness: '2"' }, stripLoin: { cut: 'ny-strip', thickness: '1' } } },
     topSirloin:{ cut: 'steaks', thickness: '0.75' },
     triTip:    { cut: 'grind' },
