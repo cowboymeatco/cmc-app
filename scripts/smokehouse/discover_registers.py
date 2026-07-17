@@ -29,12 +29,29 @@ except ImportError:
     sys.exit("pymodbus not installed — run:  pip install pymodbus")
 
 
+# pymodbus renamed the unit-id keyword across versions (slave / device_id / unit).
+# Detect which one this install accepts, once, then reuse it.
+_READ_KW = None
+
+def _call_read(fn, start, count, unit):
+    global _READ_KW
+    if _READ_KW is not None:
+        kw = {_READ_KW: unit} if _READ_KW else {}
+        return fn(start, count=count, **kw)
+    for cand in ('slave', 'device_id', 'unit', ''):
+        try:
+            kw = {cand: unit} if cand else {}
+            rr = fn(start, count=count, **kw)
+            _READ_KW = cand
+            return rr
+        except TypeError:
+            continue
+    raise RuntimeError("no compatible pymodbus read signature found")
+
+
 def read_block(client, kind, start, count, unit):
     fn = client.read_holding_registers if kind == 'holding' else client.read_input_registers
-    try:
-        rr = fn(start, count=count, slave=unit)
-    except TypeError:
-        rr = fn(start, count, unit=unit)  # older pymodbus keyword
+    rr = _call_read(fn, start, count, unit)
     if rr is None or rr.isError():
         return None
     return rr.registers
