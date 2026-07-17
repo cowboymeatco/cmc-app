@@ -1101,7 +1101,14 @@ export default function CuttingInstructionsPage() {
 
   const filtered = instructions.filter(i => {
     const species = speciesOf(i)
-    if (filterStatus !== 'all' && i.status !== filterStatus) return false
+    // Archived cards are hidden everywhere except the "archived" tab
+    if (filterStatus === 'archived') {
+      if (i.status !== 'archived') return false
+    } else if (filterStatus === 'all') {
+      if (i.status === 'archived') return false
+    } else if (i.status !== filterStatus) {
+      return false
+    }
     if (filterSpecies !== 'all') {
       // v2 wizard says "Pork", the filter button says "Hog" — treat them as the same animal
       const match = filterSpecies === 'Hog' ? (species === 'Hog' || species === 'Pork') : species === filterSpecies
@@ -1110,8 +1117,9 @@ export default function CuttingInstructionsPage() {
     return true
   })
 
-  const pendingCount = instructions.filter(i => i.status === 'pending').length
-  const linkedCount  = instructions.filter(i => i.status === 'linked').length
+  const pendingCount  = instructions.filter(i => i.status === 'pending').length
+  const linkedCount   = instructions.filter(i => i.status === 'linked').length
+  const activeCount   = instructions.filter(i => i.status !== 'archived').length
 
   async function markStatus(ids: string[], status: string) {
     await fetch('/api/cutting-instructions', {
@@ -1123,6 +1131,23 @@ export default function CuttingInstructionsPage() {
     if (selected && ids.includes(selected.id)) {
       setSelected(prev => prev ? { ...prev, status } : null)
     }
+  }
+
+  // Archive: soft-hide a card (reversible via the Archived tab → Restore)
+  async function archiveSelected() {
+    if (!selected) return
+    await markStatus([selected.id], 'archived')
+    setSelected(null)
+  }
+
+  // Delete: permanent hard delete, for junk like test cards
+  async function deleteSelected() {
+    if (!selected) return
+    const who = selected.data?.customerName ?? 'this'
+    if (!confirm(`Permanently delete ${who}'s cutting card? This cannot be undone.`)) return
+    await fetch(`/api/cutting-instructions?id=${encodeURIComponent(selected.id)}`, { method: 'DELETE' })
+    setSelected(null)
+    load()
   }
 
   async function linkToCustomer(apptId: string, customerIdx: number) {
@@ -1178,7 +1203,7 @@ export default function CuttingInstructionsPage() {
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '1.5rem', fontSize: '0.8rem' }}>
           {pendingCount > 0 && <span style={{ color: '#f0c040' }}>⚠ {pendingCount} pending review</span>}
           {linkedCount  > 0 && <span style={{ color: '#6dbf6d' }}>✅ {linkedCount} linked</span>}
-          <span style={{ color: 'var(--tan)' }}>{instructions.length} total</span>
+          <span style={{ color: 'var(--tan)' }}>{activeCount} total</span>
           <a
             href={process.env.NEXT_PUBLIC_CUTTING_FORM_URL ?? 'http://localhost:3003/order'}
             target="_blank"
@@ -1215,7 +1240,7 @@ export default function CuttingInstructionsPage() {
           {/* Filters */}
           <div style={{ padding: '1rem', borderBottom: '1px solid rgba(166,120,90,0.15)', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', background: 'rgba(0,0,0,0.2)' }}>
             <div style={{ display: 'flex', gap: '0', border: '1px solid rgba(166,120,90,0.3)', borderRadius: '3px', overflow: 'hidden' }}>
-              {['all','pending','linked','imported'].map(s => (
+              {['all','pending','linked','imported','archived'].map(s => (
                 <button key={s} onClick={() => setFilterStatus(s)} style={{ ...tabBtn(filterStatus === s), textTransform: 'capitalize' }}>{s}</button>
               ))}
             </div>
@@ -1279,13 +1304,19 @@ export default function CuttingInstructionsPage() {
                 <span style={{ color: 'var(--tan)', fontSize: '0.82rem', marginLeft: '0.75rem' }}>{selectedSpecies} · submitted {new Date(selected.created_at).toLocaleDateString()}</span>
               </div>
               <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                {selected.status !== 'linked' && (
+                {selected.status !== 'linked' && selected.status !== 'archived' && (
                   <button onClick={() => setShowLinkPicker(true)} style={btnStyle('var(--med-brown)')}>🔗 Link to Appointment</button>
                 )}
                 {selected.status === 'pending' && (
                   <button onClick={() => markStatus([selected.id], 'imported')} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>✓ Mark Imported</button>
                 )}
                 <button onClick={async () => isV2 ? printV2CutCard(selected, await carcassTagFor(selected, appointments)) : printCutCard(selected)} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>🖨 Print Cut Card</button>
+                {selected.status === 'archived' ? (
+                  <button onClick={() => markStatus([selected.id], 'pending')} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>↩ Restore</button>
+                ) : (
+                  <button onClick={archiveSelected} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>🗄 Archive</button>
+                )}
+                <button onClick={deleteSelected} style={btnStyle('rgba(150,40,40,0.22)', '#e69a9a')}>🗑 Delete</button>
                 <button onClick={() => setSelected(null)} style={btnStyle('transparent', 'var(--tan)')}>✕</button>
               </div>
             </div>
@@ -1531,6 +1562,7 @@ function StatusBadge({ status }: { status: string }) {
     pending:  ['rgba(240,192,64,0.2)',  '#f0c040'],
     linked:   ['rgba(109,191,109,0.2)', '#6dbf6d'],
     imported: ['rgba(100,100,100,0.2)', '#aaa'],
+    archived: ['rgba(120,120,120,0.15)', '#888'],
   }
   const [bg, fg] = colors[status] ?? ['rgba(166,120,90,0.2)', 'var(--tan)']
   return (
