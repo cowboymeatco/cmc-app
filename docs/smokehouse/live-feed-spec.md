@@ -139,6 +139,58 @@ set, but the TCP slave service isn't enabled/running. Resolution options:
    machine-readable data endpoint (root showed the default Windows CE
    placeholder, so unlikely without a specific data URL).
 
+## Option A (CHOSEN) — serial Modbus, bridged to the network
+
+Confirmed 7/17: the HMI's Web Server/Modbus/VNC screen has *toggles* for Web
+Server and VNC but **no Modbus-TCP on/off** — Modbus is only a "Slave Address: 1"
+field, and port 502 is closed. So the HMI's Modbus is **serial (RTU)**, which is
+what the loose **SNA10A** RS-232/485 converter is for.
+
+Key constraint: the HMI masters its loop controllers on one serial bus — we must
+NOT add a second master there (RTU allows one master). Instead we talk to the
+HMI's own **Modbus slave** serial port (address 1), where our side is master.
+
+Distance problem + fix: the shop PC (running everything) isn't next to the
+smokehouse, and RS-232/485 is a physical cable. So rather than run serial all the
+way to the shop PC, put a small **Modbus RTU→TCP serial gateway** at the
+smokehouse; it bridges the HMI's serial Modbus onto the LAN as Modbus TCP, and
+the shop PC polls it over the network — **our existing TCP poller/dashboard
+design works unchanged**, just pointed at the gateway's IP.
+
+```
+[HMI Modbus slave serial port]
+   → [SNA10A, only if that port is RS-485]
+   → [Modbus RTU→TCP gateway on the LAN]     ← e.g. USR-TCP232-304 / Waveshare RS485-to-ETH
+   → shop PC (Modbus TCP poll, 60s) → Supabase → cmc-app dashboard (phone, anywhere)
+```
+
+### Staged plan
+1. **Identify the HMI's Modbus slave port + serial settings** (the #1 unknown):
+   which COM port is the slave, RS-232 or RS-485, and baud/parity/stopbits. From
+   the HMI comms setup screen (try Setup → Offline System Setup) or FDC docs for
+   this nCompass build. Back-panel ports seen: COM1 RS485 2/4W, COM3 RS485,
+   COM3 RS232, COM1 RS232, COM2 RS232 (black DB9 = the master link to controllers,
+   leave it alone).
+2. **Validate cheaply first** — laptop + USB-serial adapter at the smokehouse,
+   straight into the HMI slave port (via SNA10A if RS-485). Run
+   `discover_registers.py --serial COM3 --baud 9600 --unit 1` (now supports
+   serial). Confirms the HMI answers as a Modbus slave, and gives us the **RTU
+   register map** by matching Main View values — before spending on a gateway.
+3. **Permanent install** — drop in the RTU→TCP gateway on the smokehouse's network
+   drop; point the shop-PC poller at the gateway IP:502.
+4. **Build** `poll_live.py` (Modbus TCP → `smokehouse_live`) + the `/smokehouse`
+   dashboard + `/api/smokehouse-live`, using the register map from step 2.
+
+### Shopping list
+- **USB-to-serial adapter**, FTDI chipset (~$15) — for the step-2 laptop test and
+  general use. Get one with a DB9 connector.
+- Already on hand: **SNA10A** (RS-232↔RS-485) — needed only if the HMI slave port
+  is RS-485; re-terminate that frayed orange cable first.
+- **Modbus RTU→TCP serial gateway** (~$25–50) for the permanent install, e.g.
+  USR-TCP232-304 (RS-485) or a Waveshare RS485-to-ETH. Pick RS-485 or RS-232 to
+  match the HMI slave port identified in step 1.
+- DB9 serial cable / RS-485 twisted pair as needed.
+
 ## Open prerequisites (need from the plant)
 1. ~~HMI IP + Modbus config~~ — DONE (see Connection details above).
 2. The **Modbus register map** for this nCompass build (register numbers +

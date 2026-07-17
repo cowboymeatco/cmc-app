@@ -24,7 +24,7 @@ import argparse
 import sys
 
 try:
-    from pymodbus.client import ModbusTcpClient
+    from pymodbus.client import ModbusTcpClient, ModbusSerialClient
 except ImportError:
     sys.exit("pymodbus not installed — run:  pip install pymodbus")
 
@@ -73,8 +73,16 @@ def scan(client, kind, first, last, unit):
 
 def main():
     ap = argparse.ArgumentParser()
+    # TCP mode (default): poll a Modbus TCP endpoint (HMI or a serial->TCP gateway)
     ap.add_argument('--host', default='192.168.1.176')
     ap.add_argument('--port', type=int, default=502)
+    # Serial (RTU) mode: --serial COM3  (for a USB-serial adapter into the HMI's
+    # Modbus slave port, via the SNA10A if that port is RS-485)
+    ap.add_argument('--serial', metavar='COMx', help='use Modbus RTU on this serial port instead of TCP')
+    ap.add_argument('--baud', type=int, default=9600)
+    ap.add_argument('--parity', default='N', choices=['N', 'E', 'O'])
+    ap.add_argument('--stopbits', type=int, default=1)
+    ap.add_argument('--bytesize', type=int, default=8)
     ap.add_argument('--unit', type=int, default=1)
     ap.add_argument('--first', type=int, default=0)
     ap.add_argument('--last', type=int, default=511)
@@ -90,12 +98,21 @@ def main():
         ('damper', args.damper), ('blower', args.blower),
     ) if v is not None}
 
-    client = ModbusTcpClient(args.host, port=args.port)
-    if not client.connect():
-        sys.exit(f"Could not connect to {args.host}:{args.port} — check the IP, "
-                 f"the network, and that Modbus TCP is enabled on the HMI.")
+    if args.serial:
+        client = ModbusSerialClient(port=args.serial, baudrate=args.baud,
+                                    parity=args.parity, stopbits=args.stopbits,
+                                    bytesize=args.bytesize)
+        where = f"{args.serial} @ {args.baud} {args.bytesize}{args.parity}{args.stopbits}"
+        hint = "check the COM port, the SNA10A wiring, and the serial settings (baud/parity)."
+    else:
+        client = ModbusTcpClient(args.host, port=args.port)
+        where = f"{args.host}:{args.port}"
+        hint = "check the IP, the network, and that Modbus TCP is enabled/reachable."
 
-    print(f"Connected to {args.host}:{args.port} unit {args.unit}\n")
+    if not client.connect():
+        sys.exit(f"Could not connect to {where} — {hint}")
+
+    print(f"Connected to {where}, unit {args.unit}\n")
     for kind in ('holding', 'input'):
         regs = scan(client, kind, args.first, args.last, args.unit)
         label = 'HOLDING (4xxxx)' if kind == 'holding' else 'INPUT (3xxxx)'
