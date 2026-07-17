@@ -109,14 +109,27 @@ scheduled Supabase function.
   over HTTPS. HMI is never exposed to the internet.
 - Phone/laptop reaches only the cmc-app (already authenticated + internet-facing).
 
+## Connection details (CONFIRMED 7/17 from Setup → System Settings →
+##   Web Server/Modbus/VNC)
+- **HMI IP address: `192.168.1.176`** (also verified — this is the source IP of
+  the FTP uploads in the ingest log). Give it a DHCP reservation so it stays put.
+- **Modbus Slave / Unit ID: `1`**
+- **Modbus TCP port: 502** (standard; not shown on-screen, assumed default)
+- **Web Server: ON** — the in-plant browser view (`http://192.168.1.176`) is
+  live; this is Macey's remote view, still enabled.
+- **VNC Server: Off** (Web Server covers the same need).
+
+So the poller target is `192.168.1.176:502`, unit id `1`.
+
 ## Open prerequisites (need from the plant)
-1. Photo of **Setup → Comms** (confirm Modbus TCP available + port) and
-   **Setup → Network** (the HMI's IP address).
+1. ~~HMI IP + Modbus config~~ — DONE (see Connection details above).
 2. The **Modbus register map** for this nCompass build (register numbers +
-   scaling for dry bulb, RH, core, setpoints, damper). From FDC docs for the
-   model, or read from the controller config.
-3. Confirm whether Macey's old VNC/web screen view is still enabled (nice
-   in-plant bonus; separate from this app dashboard).
+   scaling for dry bulb, RH, core, setpoints, damper). Two ways to get it:
+   (a) FDC's nCompass communications manual (register list), or
+   (b) **empirical discovery** — scan the holding registers and match values to
+   the known Main View readings (e.g. find the register reading `810` or `81`
+   for the 81°F dry bulb, `620`/`62` for 62% RH, `830`/`83` for 83°F core).
+   The `IO Monitor` setup screen may also list live I/O with addresses.
 
 ## Rollout steps (once prerequisites are in hand)
 1. Add `smokehouse_live` table (SQL snippet, like the cook tables).
