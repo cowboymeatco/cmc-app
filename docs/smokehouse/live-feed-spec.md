@@ -1,0 +1,128 @@
+# Smokehouse Live Feed — Build Spec
+
+Goal: see the smokehouse's **current** state (temps, RH, core probe, setpoints,
+damper) from any phone or laptop, anywhere, via the cmc-app — updating about once
+a minute. Complements the existing cook-log pipeline (which is a *historical*
+record pushed nightly/on-demand over FTP); this adds a *real-time* view.
+
+## Why not just expose the HMI
+
+The FDC nCompass HMI has a built-in VNC/web screen mirror (this is almost
+certainly what "Macey got it on a laptop anywhere in the plant" was). But it's
+**LAN-only**, and exposing an unauthenticated cook controller to the internet is
+a hard no. Instead we pull the live values *out* to Supabase and render them in
+the cmc-app, which is already internet-facing and authenticated. The HMI is never
+exposed; the phone talks only to our app.
+
+## Architecture
+
+```
+[FDC nCompass HMI] ──Modbus TCP (port 502, LAN)──▶ [shop PC: poll_live.py, every 60s]
+                                                          │ read registers, scale,
+                                                          │ compute wet bulb
+                                                          ▼
+                                                     [Supabase: smokehouse_live]
+                                                          ▼
+                                              [cmc-app /smokehouse live dashboard]
+                                                          ▼
+                                                   phone / laptop, anywhere
+```
+
+Reuses everything already standing: the shop PC, Supabase, the app. Modbus **TCP**
+allows multiple masters, so our poller reading the HMI does **not** conflict with
+the HMI's own RTU mastering of the loop controllers — no bus contention.
+
+## Components
+
+### 1. HMI configuration (one-time, on the touchscreen)
+- Enable **Modbus TCP slave** (Setup → Comms). Confirm port (default **502**).
+- Record the **HMI's own IP address** (Setup → Network). NOTE: this is *not*
+  `192.168.1.119` — that was the (vacant) FTP push target. We need the HMI's
+  actual address on the LAN; give it a DHCP reservation so it never moves.
+
+### 2. Modbus register map (the key unknown)
+Which register holds which value, and its scaling. FDC publishes an nCompass
+Modbus register map; values are typically 16-bit integers scaled ×10
+(e.g. register value `1512` = `151.2°F`). We need, at minimum:
+- Dry bulb (oven) temp + setpoint
+- Relative humidity + setpoint
+- Core probe 1 (and 2 if present)
+- Damper % output
+- (optional) run/idle status, active alarm flags
+Wet bulb is **not** read — it's derived from dry bulb + RH in code (same
+`calcWetBulb` the HACCP HTSS page uses), so no extra register needed.
+
+### 3. Shop PC poller — `scripts/smokehouse/poll_live.py`
+- Library: `pymodbus` (add to requirements; bundle wheel in the USB kit).
+- Every 60s: open Modbus TCP to the HMI, read the mapped registers, apply scaling,
+  compute wet bulb, insert one row into `smokehouse_live`, close.
+- Deployment: a Windows Scheduled Task **every 1 minute** (`/sc minute /mo 1`),
+  same pattern as the ThermoWorks sync — each run is a quick connect/read/write/exit,
+  restart-safe. (Alternative: a background thread inside the existing FTP receiver
+  service; separate task chosen for independent restart + simpler mental model.)
+- Config via the existing `.env` (add `HMI_HOST`, `HMI_PORT=502`,
+  `HMI_UNIT_ID`, and the register map or a reference to a `registers.json`).
+- Reuses the same Supabase creds already in `scripts/smokehouse/.env`.
+
+### 4. Supabase — `smokehouse_live` table
+```
+smokehouse_live (
+  id           uuid PK default gen_random_uuid(),
+  read_at      timestamptz not null default now(),
+  oven         text not null default 'Oven1',
+  dry_bulb_f   numeric,
+  dry_bulb_sp_f numeric,
+  rh_pct       numeric,
+  rh_sp_pct    numeric,
+  wet_bulb_f   numeric,        -- derived
+  core_f       numeric,
+  damper_pct   numeric,
+  cooking      boolean,        -- inferred (dry bulb over idle threshold / SP active)
+  created_at   timestamptz default now()
+)
+-- index on (oven, read_at desc) for "latest" + trend queries
+```
+Kept separate from `smokehouse_reading` (the authoritative FTP cook record). The
+dashboard reads the newest row for "now" and the last few hours for the trend.
+
+### 5. cmc-app — live dashboard
+- Page: **`/smokehouse`** (mobile-first; big tiles + one trend chart).
+- API: **`GET /api/smokehouse-live`** → latest reading + recent trend rows.
+- Tiles: oven temp, wet bulb, RH, core probe, each vs. setpoint; damper %.
+- Live trend: last few hours, dry bulb / wet bulb / core on one chart.
+- **Freshness indicator**: if newest `read_at` is older than ~3 min, show
+  "Smokehouse offline / not reporting" instead of stale numbers.
+- **Cook status**: idle vs. active cook (inferred from temp/SP).
+- **CL check** (during a cook): reuse HTSS CCP-2B logic — wet bulb ≥ 125°F,
+  RH ≥ 30%, core ≥ 145°F — surfaced as green/red chips.
+- Client auto-refreshes every ~60s.
+
+## Phase 2 (later) — alerts
+Text/email if an active cook goes out of spec (wet bulb below CL, core stalls,
+smokehouse stops reporting). Note: the HMI already has its own "SMOKEHOUSE ALERT"
+email/SMS on its alarms, so app alerts are supplementary — good for reaching
+phones and for conditions the HMI doesn't alarm on. Could run in the poller or a
+scheduled Supabase function.
+
+## Security posture
+- Poller runs on the shop PC (LAN); reads HMI over LAN Modbus; pushes to Supabase
+  over HTTPS. HMI is never exposed to the internet.
+- Phone/laptop reaches only the cmc-app (already authenticated + internet-facing).
+
+## Open prerequisites (need from the plant)
+1. Photo of **Setup → Comms** (confirm Modbus TCP available + port) and
+   **Setup → Network** (the HMI's IP address).
+2. The **Modbus register map** for this nCompass build (register numbers +
+   scaling for dry bulb, RH, core, setpoints, damper). From FDC docs for the
+   model, or read from the controller config.
+3. Confirm whether Macey's old VNC/web screen view is still enabled (nice
+   in-plant bonus; separate from this app dashboard).
+
+## Rollout steps (once prerequisites are in hand)
+1. Add `smokehouse_live` table (SQL snippet, like the cook tables).
+2. Add `pymodbus` to requirements + USB wheels; write `poll_live.py` with the
+   register map; test-read against the HMI on the shop PC.
+3. Register the 1-minute scheduled task (fold into the smokehouse setup).
+4. Build `/api/smokehouse-live` + the `/smokehouse` dashboard page in cmc-app.
+5. Verify end-to-end: watch a live cook update on a phone off the plant network.
+6. (Phase 2) wire up out-of-spec alerts.
