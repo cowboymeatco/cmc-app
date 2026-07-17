@@ -41,7 +41,20 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-LOCAL_TZ = ZoneInfo(os.environ.get('SMOKEHOUSE_TZ', 'America/Denver'))
+# Prefer the explicit zone (needs the `tzdata` package on Windows). If it isn't
+# available, fall back to the OS local timezone rather than crashing the whole
+# receiver — a missing tzdata must not take the service down.
+try:
+    LOCAL_TZ = ZoneInfo(os.environ.get('SMOKEHOUSE_TZ', 'America/Denver'))
+except Exception:  # ZoneInfoNotFoundError, or tzdata missing entirely
+    LOCAL_TZ = None
+
+
+def _localize(dt: datetime) -> datetime:
+    """Attach the smokehouse's local timezone to a naive datetime."""
+    if LOCAL_TZ is not None:
+        return dt.replace(tzinfo=LOCAL_TZ)
+    return dt.astimezone()  # OS local tz (DST-aware), no tzdata needed
 
 DATETIME_FORMATS = (
     '%m/%d/%Y %H:%M:%S',
@@ -101,7 +114,7 @@ def _parse_datetime(date_s: str, time_s: str) -> datetime | None:
     stamp = f'{date_s.strip()} {time_s.strip()}'
     for fmt in DATETIME_FORMATS:
         try:
-            return datetime.strptime(stamp, fmt).replace(tzinfo=LOCAL_TZ)
+            return _localize(datetime.strptime(stamp, fmt))
         except ValueError:
             continue
     return None
