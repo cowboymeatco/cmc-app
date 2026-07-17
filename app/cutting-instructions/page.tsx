@@ -215,6 +215,19 @@ function v2fmt(val: string): string {
   return val.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
 
+// Hocks follow the ham style (the wizard leaves hocks.cut empty). The cutter
+// only needs the word: Fresh or Smoked. Whole-hog split hams (style2) can
+// differ, so print both when they do; grind hams get no hock line.
+function hockStyle(ham?: { style?: string | null; style2?: string | null }): string {
+  const word = (s?: string | null) => (s === 'fresh' ? 'Fresh' : s === 'cured-smoked' ? 'Smoked' : '')
+  if (!ham?.style) return ''
+  if (ham.style2) {
+    const parts = [word(ham.style), word(ham.style2)]
+    return parts.every(Boolean) ? `1: ${parts[0]} / 2: ${parts[1]}` : parts.filter(Boolean).join(' / ')
+  }
+  return word(ham.style)
+}
+
 // Shop-standard steak thicknesses the wizard states in its labels but doesn't
 // store — printed on the cards so new cutters don't have to ask
 const STEAK_STANDARDS: Record<string, string> = {
@@ -467,7 +480,7 @@ function renderV2Detail(ci: RawInstruction) {
                 : v2fmt(d.ham?.style)
             } />
             {d.ham?.style !== 'grind' && <V2Field label="Cut" value={v2fmt(d.ham?.cut ?? '')} />}
-            {d.ham?.style && !d.hocks?.cut && <V2Field label="Hocks" value="Same as hams — fresh if ordered fresh, cured if ordered cured" />}
+            {!d.hocks?.cut && hockStyle(d.ham) && <V2Field label="Hocks" value={hockStyle(d.ham)} />}
           </V2Section>
           <V2Section title="Hocks & Spare Ribs">
             <V2Field label="Hocks" value={v2fmt(d.hocks?.cut)} />
@@ -669,7 +682,7 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
     cutSections += sec('Ham', [
       row('Style', d.ham?.style2 ? `1: ${fmt(d.ham.style)} / 2: ${fmt(d.ham.style2)}` : fmt(d.ham?.style)),
       d.ham?.style !== 'grind' ? row('Cut', fmt(d.ham?.cut ?? '')) : '',
-      d.ham?.style && !d.hocks?.cut ? row('Hocks', 'Same as hams — fresh if ordered fresh, cured if ordered cured') : '',
+      !d.hocks?.cut && hockStyle(d.ham) ? row('Hocks', hockStyle(d.ham)) : '',
     ].join(''))
     cutSections += sec('Hocks & Spare Ribs', [
       row('Hocks', fmt(d.hocks?.cut)),
@@ -866,7 +879,7 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
     }
     ps('Hocks & Spare Ribs')
     if (d.hocks?.cut)     pc('Hocks', fmt(d.hocks.cut))
-    else if (d.ham?.style) pc('Hocks', 'Match ham style — fresh with fresh, cured with cured')
+    else if (hockStyle(d.ham)) pc('Hocks', hockStyle(d.ham))
     if (d.spareRibs?.cut) pc('Spare Ribs', fmt(d.spareRibs.cut))
   }
 
