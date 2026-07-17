@@ -121,6 +121,24 @@ scheduled Supabase function.
 
 So the poller target is `192.168.1.176:502`, unit id `1`.
 
+### Modbus TCP status — BLOCKED (7/17)
+Port scan of `192.168.1.176` from the shop PC: only **:80 (web) open**; **:502
+and :1502 (Modbus TCP) refused**, :5900 (VNC) closed. So Modbus TCP is **not
+currently listening** — the "Modbus Slave Address: 1" on the setup screen is
+set, but the TCP slave service isn't enabled/running. Resolution options:
+1. **Enable Modbus TCP on the HMI** (preferred, keeps this whole design). Need
+   to find the enable — re-check Web Server/Modbus/VNC and "Offline System
+   Setup" screens; may need a reboot after enabling. Confirm the nCompass build
+   actually supports Modbus *TCP* (some expose Modbus *RTU/serial* only).
+2. **Modbus RTU over serial via the SNA10A** converter (the loose RS-232/485
+   unit from the first hardware photos — this may be the *intended* data path).
+   More wiring: re-terminate the orange cable, land it on the controller's
+   RS-485, USB-serial adapter into the shop PC, poll Modbus RTU. Fallback if the
+   HMI has no Modbus TCP.
+3. **Web-scrape port 80** — only if the nCompass web server exposes a
+   machine-readable data endpoint (root showed the default Windows CE
+   placeholder, so unlikely without a specific data URL).
+
 ## Open prerequisites (need from the plant)
 1. ~~HMI IP + Modbus config~~ — DONE (see Connection details above).
 2. The **Modbus register map** for this nCompass build (register numbers +
