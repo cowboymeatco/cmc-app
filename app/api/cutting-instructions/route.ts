@@ -35,13 +35,21 @@ export async function POST(req: NextRequest) {
 
 // PATCH /api/cutting-instructions â€” update status
 // (also used to archive: status='archived' / restore: status='pending')
+//
+// customer_id (optional) ties the card to a customers-table row so it shows
+// in that customer's history on /customers. It's set when linking to an
+// appointment and intentionally never cleared here â€” an unlinked or archived
+// card still belongs to the same person.
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
-  const { ids, status } = body as { ids: string[]; status: string }
+  const { ids, status, customer_id } = body as { ids: string[]; status: string; customer_id?: string }
+
+  const updates: { status: string; customer_id?: string } = { status }
+  if (customer_id) updates.customer_id = customer_id
 
   const { error } = await supabase
     .from('cutting_instructions')
-    .update({ status })
+    .update(updates)
     .in('id', ids)
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

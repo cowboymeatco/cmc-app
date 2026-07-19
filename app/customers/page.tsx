@@ -184,14 +184,20 @@ function CustomerDetail({
                 <span style={{ color: C.lightBrown, fontSize: '0.75rem' }}>
                   {new Date(ci.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                 </span>
-                <span style={{
-                  fontSize: '0.72rem', fontWeight: 600, padding: '1px 8px', borderRadius: 99,
-                  background: ci.status === 'imported' ? 'rgba(76,175,80,0.15)' : 'rgba(245,158,11,0.15)',
-                  color: ci.status === 'imported' ? C.green : '#F59E0B',
-                  border: `1px solid ${ci.status === 'imported' ? 'rgba(76,175,80,0.3)' : 'rgba(245,158,11,0.3)'}`,
-                }}>
-                  {ci.status === 'imported' ? 'On file' : 'Pending'}
-                </span>
+                {(() => {
+                  // [label, text color, bg, border] per status; anything unknown reads as Pending
+                  const badge: Record<string, [string, string, string, string]> = {
+                    imported: ['On file',  C.green,    'rgba(76,175,80,0.15)',   'rgba(76,175,80,0.3)'],
+                    linked:   ['Linked',   '#2DD4BF',  'rgba(45,212,191,0.12)',  'rgba(45,212,191,0.3)'],
+                    archived: ['Archived', '#9CA3AF',  'rgba(156,163,175,0.12)', 'rgba(156,163,175,0.3)'],
+                  }
+                  const [label, color, bg, border] = badge[ci.status] ?? ['Pending', '#F59E0B', 'rgba(245,158,11,0.15)', 'rgba(245,158,11,0.3)']
+                  return (
+                    <span style={{ fontSize: '0.72rem', fontWeight: 600, padding: '1px 8px', borderRadius: 99, background: bg, color, border: `1px solid ${border}` }}>
+                      {label}
+                    </span>
+                  )
+                })()}
               </div>
             ))}
           </div>
@@ -325,7 +331,9 @@ export default function CustomersPage() {
                     <div style={{ color: C.tan, fontSize: '0.83rem', alignSelf: 'center' }}>{c.phone || <span style={{ color: 'rgba(166,120,90,0.4)' }}>—</span>}</div>
                     <div style={{ color: C.tan, fontSize: '0.83rem', alignSelf: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.email || <span style={{ color: 'rgba(166,120,90,0.4)' }}>—</span>}</div>
                     <div style={{ textAlign: 'right', alignSelf: 'center' }}>
-                      <span style={{ fontSize: '0.75rem', color: C.lightBrown }}>—</span>
+                      {c.cut_sheet_count
+                        ? <span style={{ fontSize: '0.8rem', color: C.green, fontWeight: 600 }}>📋 {c.cut_sheet_count}</span>
+                        : <span style={{ fontSize: '0.75rem', color: 'rgba(166,120,90,0.4)' }}>—</span>}
                     </div>
                   </div>
                 )

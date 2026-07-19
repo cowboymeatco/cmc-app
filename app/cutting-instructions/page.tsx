@@ -1171,12 +1171,22 @@ export default function CuttingInstructionsPage() {
     const customers = appt.customers.map((c, i) =>
       i === customerIdx ? { ...c, linked_cutting_instruction_id: selected.id } : c
     )
-    await fetch('/api/appointments', {
+    const res = await fetch('/api/appointments', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: apptId, customers }),
     })
-    await markStatus([selected.id], 'linked')
+    // The PATCH resolves customer_id for typed names on save, so read it off
+    // the response — the local copy may predate that linking. Carrying it onto
+    // the card is what makes it show in the customer's history on /customers.
+    const saved = await res.json().catch(() => null)
+    const customerId = saved?.customers?.[customerIdx]?.customer_id ?? null
+    await fetch('/api/cutting-instructions', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [selected.id], status: 'linked', ...(customerId ? { customer_id: customerId } : {}) }),
+    })
+    setSelected(prev => prev ? { ...prev, status: 'linked' } : null)
     setLinking(false)
     setShowLinkPicker(false)
     load()

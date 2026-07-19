@@ -43,7 +43,24 @@ export async function GET(req: NextRequest) {
 
   const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json(data)
+
+  // Cut-sheet counts for the list's Cut Sheets column. Secondary: if this
+  // read fails the list still serves, just without counts.
+  const rows = (data ?? []) as (Record<string, unknown> & { id: string })[]
+  if (rows.length > 0) {
+    const { data: cis } = await supabase
+      .from('cutting_instructions')
+      .select('customer_id')
+      .not('customer_id', 'is', null)
+    const counts = new Map<string, number>()
+    for (const ci of cis ?? []) {
+      const cid = ci.customer_id as string
+      counts.set(cid, (counts.get(cid) ?? 0) + 1)
+    }
+    for (const c of rows) c.cut_sheet_count = counts.get(c.id) ?? 0
+  }
+
+  return NextResponse.json(rows)
 }
 
 // POST /api/customers â€” create a new customer record
