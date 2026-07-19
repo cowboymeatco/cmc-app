@@ -32,9 +32,12 @@ export async function GET(req: NextRequest) {
     .limit(200)
 
   if (search) {
-    // ilike search across name, ranch_name, phone, email
+    // ilike search across name, ranch_name, phone, email.
+    // The value is double-quoted so commas and parens in a customer name
+    // ("Larsen Ranch, Inc.") can't be parsed as filter syntax and break the query.
+    const pattern = `"%${search.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}%"`
     query = query.or(
-      `name.ilike.%${search}%,ranch_name.ilike.%${search}%,phone.ilike.%${search}%,email.ilike.%${search}%`
+      `name.ilike.${pattern},ranch_name.ilike.${pattern},phone.ilike.${pattern},email.ilike.${pattern}`
     )
   }
 
