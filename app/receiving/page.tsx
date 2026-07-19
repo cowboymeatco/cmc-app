@@ -273,6 +273,19 @@ function printHACCPReport(logs: BoxReceivingLog[], reportStart: string, reportEn
   if (w) { w.document.write(html); w.document.close() }
 }
 
+// Whatever was typed into the appointment's notes back on the schedule, ready
+// to show at check-in. Appointments that came from a booking request carry
+// machine-written "Phone:" / "Email:" lines the schedule strips before display
+// (see the Booking Requests panel there) — strip them here too so the crew sees
+// the actual instruction, not contact metadata they already have above.
+function scheduleNote(raw: string | null | undefined): string {
+  return (raw ?? '')
+    .split('\n')
+    .filter(l => !/^\s*(phone|email)\s*:/i.test(l))
+    .join(' ')
+    .trim()
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // LIVE ANIMAL TAB
 // ══════════════════════════════════════════════════════════════════════════════
@@ -489,6 +502,15 @@ function AnimalTab() {
                   {a.customers.map(c => c.customer_name).join(', ')}
                 </div>
               )}
+              {/* Marker only — the column is 320px and notes are free text, so
+                  the note itself reads in the banner once the row is picked.
+                  Without this you'd have to click every row to find the ones
+                  carrying an instruction. */}
+              {scheduleNote(a.notes) && (
+                <div title={scheduleNote(a.notes)} style={{ fontSize: '0.72rem', color: C.tan, marginTop: '0.2rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  📋 {scheduleNote(a.notes)}
+                </div>
+              )}
             </div>
           ))}
 
@@ -528,6 +550,19 @@ function AnimalTab() {
               {selected.customers?.length > 0 && (
                 <div style={{ color: C.lightBrown, fontSize: '0.8rem', marginTop: '0.1rem' }}>
                   Customers: {selected.customers.map(c => c.customer_name).join(', ')}
+                </div>
+              )}
+              {/* Whatever was noted when the animal was booked. Labelled
+                  "From the schedule" so it can't be mistaken for the Notes
+                  textarea below, which is for what you see at the dock. */}
+              {scheduleNote(selected.notes) && (
+                <div style={{ marginTop: '0.7rem', paddingTop: '0.6rem', borderTop: '1px solid rgba(166,120,90,0.25)' }}>
+                  <div style={{ color: C.tan, fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.2rem' }}>
+                    📋 From the schedule
+                  </div>
+                  <div style={{ color: C.cream, fontSize: '0.85rem', whiteSpace: 'pre-wrap' }}>
+                    {scheduleNote(selected.notes)}
+                  </div>
                 </div>
               )}
             </div>
