@@ -943,7 +943,7 @@ function Modal({ editing, saving, onChange, onSave, onClose }: {
         </div>
 
         <Field label="Source / Ranch / Producer">
-          <input value={editing.source??''} onChange={e=>onChange({...editing,source:e.target.value})} style={inputStyle()} placeholder="Ranch or producer name (shown on calendar)" />
+          <SourceInput value={editing.source??''} onChange={v=>onChange({...editing,source:v})} />
         </Field>
         <div style={{height:'0.75rem'}}/>
         <Field label="Notes">
@@ -1075,6 +1075,75 @@ function CustomerNameInput({
               <div style={{ color: 'var(--light-brown)', fontSize: '0.75rem' }}>
                 {[c.ranch_name, c.phone, c.email].filter(Boolean).join(' · ')}
               </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Source / ranch / producer autocomplete ───────────────────────────────────
+// Free text, unlike the customer field — there is no producers table to link
+// to. Suggestions come from names already in use, so variants like "Coffee
+// Cattle Co" vs "Coffee Cattle Company" stop multiplying.
+function SourceInput({
+  value, onChange,
+}: {
+  value: string
+  onChange: (val: string) => void
+}) {
+  const [suggestions, setSuggestions] = useState<{ name: string; uses: number }[]>([])
+  const [open,        setOpen]        = useState(false)
+  const [timer,       setTimer]       = useState<ReturnType<typeof setTimeout> | null>(null)
+  const wrapRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [])
+
+  function handleInput(val: string) {
+    onChange(val)
+    if (timer) clearTimeout(timer)
+    if (val.trim().length < 2) { setSuggestions([]); setOpen(false); return }
+    const t = setTimeout(async () => {
+      const data = await fetch(`/api/producers?search=${encodeURIComponent(val)}`).then(r => r.json()).catch(() => [])
+      setSuggestions(Array.isArray(data) ? data : [])
+      setOpen(true)
+    }, 220)
+    setTimer(t)
+  }
+
+  // An exact match is already the canonical spelling — nothing left to pick.
+  const exact = suggestions.length === 1 && suggestions[0].name.toLowerCase() === value.trim().toLowerCase()
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative' }}>
+      <input
+        value={value}
+        onChange={e => handleInput(e.target.value)}
+        onFocus={() => { if (suggestions.length) setOpen(true) }}
+        style={inputStyle()}
+        placeholder="Ranch or producer name (shown on calendar)"
+      />
+      {open && suggestions.length > 0 && !exact && (
+        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100, background: '#2A1408', border: '1px solid rgba(166,120,90,0.4)', borderRadius: '0 0 4px 4px', boxShadow: '0 4px 16px rgba(0,0,0,0.5)', maxHeight: 220, overflowY: 'auto' }}>
+          {suggestions.map(s => (
+            <div
+              key={s.name}
+              onMouseDown={() => { onChange(s.name); setOpen(false); setSuggestions([]) }}
+              style={{ padding: '0.55rem 0.85rem', cursor: 'pointer', borderBottom: '1px solid rgba(166,120,90,0.1)', display: 'flex', justifyContent: 'space-between', gap: '0.5rem' }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(232,136,58,0.1)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+            >
+              <span style={{ color: 'var(--cream)', fontSize: '0.85rem', fontWeight: 600 }}>{s.name}</span>
+              <span style={{ color: 'var(--light-brown)', fontSize: '0.75rem', whiteSpace: 'nowrap' }}>
+                {s.uses}×
+              </span>
             </div>
           ))}
         </div>
