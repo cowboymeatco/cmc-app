@@ -96,17 +96,39 @@ async function linkCustomers(list: unknown): Promise<unknown> {
   return out
 }
 
-// Resolve the source (ranch / producer name) to a customers-table row.
-// producer_id is what makes the animal show up on that producer's portal
-// dashboard. Match-only — producers get created when they sign up or staff
-// adds them, so an unknown name resolves to null rather than a new record.
+// Resolve the source (ranch / producer name) to a customers-table row,
+// creating one (role 'producer') when the name is new — same treatment the
+// buying customers get. producer_id is what puts the record on the /customers
+// Producers tab and the animal on that producer's portal dashboard. A match
+// on an existing customer-role record upgrades it to 'both': same name typed
+// as a source means they're producing too.
 async function resolveProducerId(source: unknown): Promise<string | null> {
   const name = typeof source === 'string' ? source.trim() : ''
   if (!name) return null
   try {
     // ilike with no wildcards is a case-insensitive exact match.
-    const { data } = await supabase.from('customers').select('id').ilike('name', name).limit(1)
-    return (data?.[0]?.id as string | undefined) ?? null
+    const { data } = await supabase.from('customers').select('id, role').ilike('name', name).limit(1)
+    const found = data?.[0]
+    if (found) {
+      if (found.role === 'customer') {
+        await supabase.from('customers').update({ role: 'both' }).eq('id', found.id)
+      }
+      return found.id as string
+    }
+    const { data: created } = await supabase
+      .from('customers')
+      .insert([{
+        name,
+        ranch_name: '',
+        phone: '',
+        email: '',
+        preferred_contact: 'Phone Call',
+        notes: 'Auto-created from schedule source',
+        role: 'producer',
+      }])
+      .select('id')
+      .single()
+    return (created?.id as string | undefined) ?? null
   } catch {
     return null
   }
