@@ -909,21 +909,27 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
     if (grindFrom.length) filteredPrs.push({ cut: `Ground ${species}`, spec: `From: ${grindFrom.join(', ')}`, isGrind: true })
   }
 
-  // ── Split packaging rows into two balanced columns ────────────────────────
-  const nonSectionCount = filteredPrs.filter(pr => !pr.sectionTitle).length
-  const halfTarget = Math.ceil(nonSectionCount / 2)
-  let seenRows = 0
-  let splitIdx = filteredPrs.length
-  for (let i = 0; i < filteredPrs.length; i++) {
-    if (!filteredPrs[i].sectionTitle) seenRows++
-    // Split at the next section boundary after hitting the halfway mark
-    if (seenRows >= halfTarget && i + 1 < filteredPrs.length && filteredPrs[i + 1].sectionTitle) {
-      splitIdx = i + 1
-      break
+  // ── Split packaging rows into balanced columns (at section boundaries) ────
+  // Landscape fits three tables across; splits only ever land where a new
+  // section starts so a primal's rows never straddle columns.
+  const PACK_COLS = 3
+  const packCols: (typeof filteredPrs)[] = []
+  let remaining = filteredPrs
+  for (let c = PACK_COLS; c > 1; c--) {
+    const target = Math.ceil(remaining.filter(pr => !pr.sectionTitle).length / c)
+    let seen = 0
+    let idx = remaining.length
+    for (let i = 0; i < remaining.length; i++) {
+      if (!remaining[i].sectionTitle) seen++
+      if (seen >= target && i + 1 < remaining.length && remaining[i + 1].sectionTitle) {
+        idx = i + 1
+        break
+      }
     }
+    packCols.push(remaining.slice(0, idx))
+    remaining = remaining.slice(idx)
   }
-  const leftPrs  = filteredPrs.slice(0, splitIdx)
-  const rightPrs = filteredPrs.slice(splitIdx)
+  packCols.push(remaining)
 
   // Renders an array of PR rows into a complete packaging table (thead + tbody)
   const buildPackTable = (prs: typeof filteredPrs) => {
@@ -998,7 +1004,9 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
   <style>
     * { box-sizing: border-box; }
     body { font-family: Arial, sans-serif; color: #1A0A04; margin: 0; padding: 18px; }
-    @page { margin: 0.4in; size: letter portrait; }
+    /* Landscape: matches the wall monitors these cards are headed for, and
+       three columns across beats two tall ones on paper too. */
+    @page { margin: 0.4in; size: letter landscape; }
     @media print {
       body { padding: 0; }
       .pagebreak { page-break-after: always; }
@@ -1008,25 +1016,24 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
 </head>
 <body>
 
-<!-- PAGE 1: CUT CARD — 2-column section layout -->
+<!-- PAGE 1: CUT CARD — 3-column section layout -->
 <div class="pagebreak">
   ${hdr('Cut Card')}
   ${infoGrid}
-  <div style="column-count:2;column-gap:16px">
+  <div style="column-count:3;column-gap:16px">
     ${cutSections}
   </div>
 </div>
 
-<!-- PAGE 2: PACKAGING SHEET — 2-column table layout -->
+<!-- PAGE 2: PACKAGING SHEET — 3-column table layout -->
 <div>
   ${hdr('Packaging Sheet')}
   <div style="font-size:11px;color:#555;margin-bottom:8px">
     <strong>${d.customerName ?? '—'}</strong>${d.portion ? ' · ' + fmt(d.portion) : ''} · Kill Date: ${d.killDate ?? '—'}
     <span style="margin-left:14px">Lot / Tag: <span style="display:inline-block;min-width:110px;border-bottom:1px solid #888;font-weight:bold">${carcassTag || '&nbsp;'}</span></span>
   </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-    <div>${buildPackTable(leftPrs)}</div>
-    <div>${buildPackTable(rightPrs)}</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+    ${packCols.map(col => `<div>${col.length ? buildPackTable(col) : ''}</div>`).join('')}
   </div>
   ${d.notes ? `<div style="margin-top:10px;border:1px solid #C9A882;padding:8px"><div style="font-size:8px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px">Special Notes</div><div style="font-size:12px">${d.notes}</div></div>` : ''}
   <div style="margin-top:18px;display:grid;grid-template-columns:1fr 1fr;gap:20px">
