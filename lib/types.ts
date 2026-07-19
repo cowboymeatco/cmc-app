@@ -10,6 +10,7 @@ export interface Customer {
   preferred_contact: string   // 'Phone Call' | 'Text Message' | 'Email'
   notes:             string
   auth_user_id?:     string | null   // reserved for portal login
+  role?:             string   // 'producer' | 'customer' | 'both'
   cut_sheet_count?:  number   // attached by GET /api/customers (list only)
 }
 

@@ -35,8 +35,15 @@ function btn(bg: string, color = C.dark): React.CSSProperties {
 
 const CONTACTS = ['Phone Call', 'Text Message', 'Email']
 
-function blankCustomer(): Partial<Customer> {
-  return { name: '', ranch_name: '', phone: '', email: '', preferred_contact: 'Phone Call', notes: '' }
+// A record's role decides which tab(s) it shows on. Missing/legacy = customer.
+type Tab = 'producer' | 'customer'
+function onTab(c: Customer, tab: Tab) {
+  const role = c.role === 'producer' || c.role === 'both' || c.role === 'customer' ? c.role : 'customer'
+  return role === 'both' || role === tab
+}
+
+function blankCustomer(role: string = 'customer'): Partial<Customer> {
+  return { name: '', ranch_name: '', phone: '', email: '', preferred_contact: 'Phone Call', notes: '', role }
 }
 
 // ── Customer form modal ───────────────────────────────────────────────────────
@@ -83,6 +90,13 @@ function CustomerModal({
               {CONTACTS.map(c => <option key={c}>{c}</option>)}
             </select>
           </Field>
+          <Field label="Role">
+            <select style={INPUT} value={form.role ?? 'customer'} onChange={e => set('role', e.target.value)}>
+              <option value="producer">🐄 Producer</option>
+              <option value="customer">🛒 Customer</option>
+              <option value="both">↕ Both</option>
+            </select>
+          </Field>
         </div>
         <Field label="Notes">
           <textarea rows={2} style={{ ...INPUT, resize: 'vertical' }} value={form.notes ?? ''} onChange={e => set('notes', e.target.value)} placeholder="Any standing preferences, special instructions, etc." />
@@ -107,14 +121,19 @@ function CustomerDetail({
   onClose: () => void
 }) {
   const [cutInstrs, setCutInstrs] = useState<CuttingInstruction[]>([])
+  const [animals,   setAnimals]   = useState<{ id: string; harvest_date: string; species: string; head_count: number; status: string; animal_description: string }[]>([])
   const [loading, setLoading]     = useState(true)
 
   useEffect(() => {
     fetch(`/api/customers?id=${customer.id}`)
       .then(r => r.json())
-      .then(d => { setCutInstrs(d.cutting_instructions ?? []); setLoading(false) })
+      .then(d => { setCutInstrs(d.cutting_instructions ?? []); setAnimals(d.appointments ?? []); setLoading(false) })
       .catch(() => setLoading(false))
   }, [customer.id])
+
+  const role = customer.role === 'producer' || customer.role === 'both' ? customer.role : 'customer'
+  const showAnimals = role === 'producer' || role === 'both'
+  const showCuts    = role === 'customer' || role === 'both'
 
   return (
     <div style={{ background: C.darkBrown, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 6, padding: '1.5rem' }}>
@@ -123,6 +142,9 @@ function CustomerDetail({
         <div>
           <h2 style={{ fontFamily: 'Georgia, serif', color: C.cream, fontSize: '1.15rem', margin: '0 0 0.2rem' }}>
             {customer.name}
+            <span style={{ marginLeft: '0.55rem', fontSize: '0.7rem', fontWeight: 600, padding: '2px 9px', borderRadius: 99, background: 'rgba(166,120,90,0.18)', color: C.tan, verticalAlign: 'middle' }}>
+              {role === 'both' ? '↕ Both' : role === 'producer' ? '🐄 Producer' : '🛒 Customer'}
+            </span>
           </h2>
           {customer.ranch_name && (
             <div style={{ color: C.tan, fontSize: '0.85rem' }}>{customer.ranch_name}</div>
@@ -159,7 +181,44 @@ function CustomerDetail({
         </div>
       )}
 
-      {/* Cutting instructions */}
+      {/* Live animals — the producer side of the record */}
+      {showAnimals && (
+        <div style={{ marginBottom: '1.25rem' }}>
+          <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.6rem' }}>
+            Live Animals ({loading ? '…' : animals.length})
+          </div>
+          {loading ? (
+            <p style={{ color: C.lightBrown, fontSize: '0.82rem' }}>Loading…</p>
+          ) : animals.length === 0 ? (
+            <p style={{ color: C.lightBrown, fontSize: '0.82rem', fontStyle: 'italic' }}>
+              No animals on the schedule yet.{' '}
+              <Link href="/schedule" style={{ color: C.orange }}>Book one →</Link>
+            </p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: 300, overflowY: 'auto' }}>
+              {animals.map(a => (
+                <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: 3, padding: '0.55rem 0.85rem', fontSize: '0.83rem' }}>
+                  <span style={{ color: C.cream, flex: 1 }}>
+                    {a.species}{a.head_count > 1 ? ` ×${a.head_count}` : ''}
+                    {a.animal_description && (
+                      <span style={{ color: C.lightBrown, marginLeft: '0.4rem' }}>· {a.animal_description}</span>
+                    )}
+                  </span>
+                  <span style={{ color: C.lightBrown, fontSize: '0.75rem' }}>
+                    {new Date(a.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  </span>
+                  <span style={{ fontSize: '0.72rem', fontWeight: 600, padding: '1px 8px', borderRadius: 99, background: 'rgba(0,0,0,0.3)', color: C.tan }}>
+                    {a.status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Cutting instructions — the buyer side of the record */}
+      {showCuts && (
       <div>
         <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.6rem' }}>
           Cutting Instructions ({loading ? '…' : cutInstrs.length})
@@ -203,6 +262,7 @@ function CustomerDetail({
           </div>
         )}
       </div>
+      )}
 
       <div style={{ marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid rgba(166,120,90,0.12)', fontSize: '0.72rem', color: 'rgba(166,120,90,0.5)' }}>
         Customer since {new Date(customer.created_at).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
@@ -217,6 +277,7 @@ export default function CustomersPage() {
   const [customers,  setCustomers]  = useState<Customer[]>([])
   const [loading,    setLoading]    = useState(true)
   const [search,     setSearch]     = useState('')
+  const [tab,        setTab]        = useState<Tab>('producer')
   const [selected,   setSelected]   = useState<Customer | null>(null)
   const [showModal,  setShowModal]  = useState(false)
   const [editTarget, setEditTarget] = useState<Partial<Customer>>(blankCustomer())
@@ -249,7 +310,8 @@ export default function CustomersPage() {
   }
 
   function openNew() {
-    setEditTarget(blankCustomer())
+    // New records default to the role of the tab you're standing on.
+    setEditTarget(blankCustomer(tab))
     setShowModal(true)
   }
 
@@ -278,6 +340,29 @@ export default function CustomersPage() {
 
       <div style={{ maxWidth: 1100, margin: '0 auto', padding: '1.5rem' }}>
 
+        {/* Producer / Customer tabs — 'both' records show on each */}
+        <div style={{ display: 'flex', gap: 0, marginBottom: '1rem', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 4, overflow: 'hidden', width: 'fit-content' }}>
+          {(['producer', 'customer'] as const).map(t => {
+            const count = customers.filter(c => onTab(c, t)).length
+            const active = tab === t
+            return (
+              <button
+                key={t}
+                onClick={() => { setTab(t); setSelected(null) }}
+                style={{
+                  background: active ? C.medBrown : 'transparent',
+                  color: active ? C.cream : C.tan,
+                  border: 'none', padding: '0.55rem 1.4rem', fontSize: '0.85rem',
+                  fontWeight: active ? 700 : 400, cursor: 'pointer',
+                  borderLeft: t === 'customer' ? '1px solid rgba(166,120,90,0.3)' : 'none',
+                }}
+              >
+                {t === 'producer' ? '🐄 Producers' : '🛒 Customers'} ({loading ? '…' : count})
+              </button>
+            )
+          })}
+        </div>
+
         {/* Search */}
         <div style={{ marginBottom: '1.25rem', position: 'relative' }}>
           <span style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: C.lightBrown, pointerEvents: 'none' }}>🔍</span>
@@ -303,12 +388,14 @@ export default function CustomersPage() {
 
             {loading ? (
               <div style={{ padding: '2.5rem', textAlign: 'center', color: C.lightBrown, fontSize: '0.88rem' }}>Loading…</div>
-            ) : customers.length === 0 ? (
+            ) : customers.filter(c => onTab(c, tab)).length === 0 ? (
               <div style={{ padding: '2.5rem', textAlign: 'center', color: C.lightBrown, fontSize: '0.88rem' }}>
-                {search ? `No customers match "${search}"` : 'No customers yet — add your first one.'}
+                {search
+                  ? `No ${tab}s match "${search}"`
+                  : `No ${tab}s yet — add your first one.`}
               </div>
             ) : (
-              customers.map(c => {
+              customers.filter(c => onTab(c, tab)).map(c => {
                 const isSelected = selected?.id === c.id
                 return (
                   <div
@@ -325,7 +412,12 @@ export default function CustomersPage() {
                     }}
                   >
                     <div>
-                      <div style={{ color: C.cream, fontWeight: 600, fontSize: '0.88rem' }}>{c.name}</div>
+                      <div style={{ color: C.cream, fontWeight: 600, fontSize: '0.88rem' }}>
+                        {c.name}
+                        {c.role === 'both' && (
+                          <span title="Shows on both tabs" style={{ marginLeft: '0.45rem', fontSize: '0.68rem', color: C.lightBrown, fontWeight: 400 }}>↕ both</span>
+                        )}
+                      </div>
                       {c.ranch_name && <div style={{ color: C.lightBrown, fontSize: '0.76rem', marginTop: '0.1rem' }}>{c.ranch_name}</div>}
                     </div>
                     <div style={{ color: C.tan, fontSize: '0.83rem', alignSelf: 'center' }}>{c.phone || <span style={{ color: 'rgba(166,120,90,0.4)' }}>—</span>}</div>

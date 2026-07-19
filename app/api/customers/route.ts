@@ -10,18 +10,28 @@ export async function GET(req: NextRequest) {
   const search = searchParams.get('search')?.trim()
   const id     = searchParams.get('id')
 
-  // Single customer detail
+  // Single customer detail. appointments = ones where they're the producer
+  // (live-animal side); cutting_instructions = their cut sheets (buyer side).
   if (id) {
-    const [custRes, ciRes] = await Promise.all([
+    const [custRes, ciRes, apptRes] = await Promise.all([
       supabase.from('customers').select('*').eq('id', id).single(),
       supabase
         .from('cutting_instructions')
         .select('*')
         .eq('customer_id', id)
         .order('created_at', { ascending: false }),
+      supabase
+        .from('harvest_appointments')
+        .select('id, harvest_date, species, head_count, status, animal_description')
+        .eq('producer_id', id)
+        .order('harvest_date', { ascending: false }),
     ])
     if (custRes.error) return NextResponse.json({ error: custRes.error.message }, { status: 404 })
-    return NextResponse.json({ customer: custRes.data, cutting_instructions: ciRes.data ?? [] })
+    return NextResponse.json({
+      customer: custRes.data,
+      cutting_instructions: ciRes.data ?? [],
+      appointments: apptRes.data ?? [],
+    })
   }
 
   // Search / list
