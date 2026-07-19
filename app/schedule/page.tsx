@@ -130,6 +130,19 @@ function daysOut(dateStr: string) {
   return `${d} days`
 }
 
+// Ask history who pays for processing. Returns null when there's no clear
+// pattern — the caller leaves the field alone in that case.
+async function fetchPayerPrediction(customer: string, producer: string): Promise<'producer' | 'customer' | null> {
+  const params = new URLSearchParams()
+  if (customer.trim()) params.set('customer', customer.trim())
+  if (producer.trim()) params.set('producer', producer.trim())
+  if (![...params.keys()].length) return null
+  try {
+    const d = await fetch(`/api/appointments/predict-payer?${params}`).then(r => r.json())
+    return d?.prediction === 'customer' || d?.prediction === 'producer' ? d.prediction : null
+  } catch { return null }
+}
+
 function blankCustomer() {
   return { id: crypto.randomUUID(), customer_name: '', portion: 'Whole', payment_responsibility: 'producer' as const, contact_preference: 'Email', contact_value: '', linked_cutting_instruction_id: '', reminder_last_sent_at: null, reminder_count: 0 }
 }
@@ -912,10 +925,30 @@ function ListView({ filtered, onEdit, onDelete, onNew }: {
 function Modal({ editing, saving, onChange, onSave, onClose }: {
   editing:  Partial<HarvestAppointment>
   saving:   boolean
-  onChange: (a: Partial<HarvestAppointment>) => void
+  // Dispatch (not a plain setter) so async who-pays predictions can merge via
+  // functional updates without clobbering fields typed in the meantime.
+  onChange: React.Dispatch<React.SetStateAction<Partial<HarvestAppointment> | null>>
   onSave:   () => void
   onClose:  () => void
 }) {
+  // Producer-level who-pays default, learned from this producer's history.
+  // Applied to rows with no name yet and to newly added rows; a named row
+  // either carries its own history or a deliberate choice.
+  const [producerDefault, setProducerDefault] = useState<'producer' | 'customer' | null>(null)
+  const src = (editing.source ?? '').trim()
+  useEffect(() => {
+    if (src.length < 2) { setProducerDefault(null); return }
+    const t = setTimeout(async () => {
+      const p = await fetchPayerPrediction('', src)
+      setProducerDefault(p)
+      if (!p) return
+      onChange(prev => prev
+        ? { ...prev, customers: (prev.customers ?? []).map(c => c.customer_name.trim() === '' ? { ...c, payment_responsibility: p } : c) }
+        : prev)
+    }, 400)
+    return () => clearTimeout(t)
+  }, [src, onChange])
+
   return (
     <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:50, padding:'1rem' }} onClick={onClose}>
       <div style={{ background:'var(--dark)', border:'1px solid rgba(166,120,90,0.3)', borderRadius:'6px', padding:'2rem', width:'100%', maxWidth:'640px', maxHeight:'90vh', overflowY:'auto' }} onClick={e=>e.stopPropagation()}>
@@ -954,7 +987,7 @@ function Modal({ editing, saving, onChange, onSave, onClose }: {
         <div style={{ marginTop:'1.5rem' }}>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'0.75rem' }}>
             <span style={{ color:'var(--light-brown)', fontSize:'0.73rem', letterSpacing:'0.12em', textTransform:'uppercase' }}>Customers</span>
-            <button onClick={()=>onChange({...editing,customers:[...(editing.customers??[]),blankCustomer()]})} style={smallBtn()}>+ Add</button>
+            <button onClick={()=>onChange({...editing,customers:[...(editing.customers??[]),{...blankCustomer(),payment_responsibility:producerDefault ?? 'producer'}]})} style={smallBtn()}>+ Add</button>
           </div>
           {(editing.customers??[]).map((c,idx)=>(
             <div key={c.id} style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(166,120,90,0.15)', borderRadius:'4px', padding:'1rem', marginBottom:'0.75rem' }}>
@@ -962,7 +995,8 @@ function Modal({ editing, saving, onChange, onSave, onClose }: {
                 <Field label="Name">
                   <CustomerNameInput
                     customer={c}
-                    onChange={updates=>{const cs=[...(editing.customers??[])];cs[idx]={...c,...updates};onChange({...editing,customers:cs})}}
+                    producerSource={editing.source ?? ''}
+                    onChange={updates=>onChange(prev=>{if(!prev)return prev;const cs=[...(prev.customers??[])];cs[idx]={...cs[idx],...updates};return {...prev,customers:cs}})}
                   />
                 </Field>
                 <Field label="Portion">
@@ -1003,9 +1037,10 @@ function Modal({ editing, saving, onChange, onSave, onClose }: {
 
 // ── Customer name autocomplete ────────────────────────────────────────────────
 function CustomerNameInput({
-  customer, onChange,
+  customer, producerSource, onChange,
 }: {
   customer: AppointmentCustomer
+  producerSource: string
   onChange: (updated: Partial<AppointmentCustomer>) => void
 }) {
   const [suggestions, setSuggestions] = useState<Customer[]>([])
@@ -1043,6 +1078,11 @@ function CustomerNameInput({
     })
     setOpen(false)
     setSuggestions([])
+    // Predict who pays from this customer's history (falling back to the
+    // producer's pattern). Safe to land late: the parent merges functionally.
+    fetchPayerPrediction(c.name, producerSource).then(p => {
+      if (p) onChange({ payment_responsibility: p })
+    })
   }
 
   return (
