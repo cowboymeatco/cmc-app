@@ -96,6 +96,22 @@ async function linkCustomers(list: unknown): Promise<unknown> {
   return out
 }
 
+// Resolve the source (ranch / producer name) to a customers-table row.
+// producer_id is what makes the animal show up on that producer's portal
+// dashboard. Match-only — producers get created when they sign up or staff
+// adds them, so an unknown name resolves to null rather than a new record.
+async function resolveProducerId(source: unknown): Promise<string | null> {
+  const name = typeof source === 'string' ? source.trim() : ''
+  if (!name) return null
+  try {
+    // ilike with no wildcards is a case-insensitive exact match.
+    const { data } = await supabase.from('customers').select('id').ilike('name', name).limit(1)
+    return (data?.[0]?.id as string | undefined) ?? null
+  } catch {
+    return null
+  }
+}
+
 // POST /api/appointments â€” create a new appointment
 export async function POST(req: NextRequest) {
   const body = await req.json()
@@ -110,6 +126,7 @@ export async function POST(req: NextRequest) {
       status:            body.status ?? 'Booked',
       linked_carcass_id: body.linked_carcass_id ?? '',
       customers:         await linkCustomers(body.customers),
+      producer_id:       body.producer_id ?? await resolveProducerId(body.source),
     }])
     .select()
     .single()
@@ -126,6 +143,13 @@ export async function PATCH(req: NextRequest) {
   // Only touch `customers` when the edit actually carries it.
   if ('customers' in updates) {
     updates.customers = await linkCustomers(updates.customers)
+  }
+
+  // Keep producer_id mirroring the source name (unless the caller — e.g. the
+  // portal — set it explicitly). Re-resolving on every source edit means a
+  // renamed source can't leave a stale link behind.
+  if ('source' in updates && !('producer_id' in updates)) {
+    updates.producer_id = await resolveProducerId(updates.source)
   }
 
   const { data, error } = await supabase
