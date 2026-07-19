@@ -60,7 +60,7 @@ function findNextOpen(blockedSet: Record<string, string>): string {
   let ds = addDaysISO(isoDate(), 1)
   for (let i = 0; i < 365; i++) {
     const dow = dayOfWeekISO(ds)
-    if (dow !== 0 && dow !== 6 && !blockedSet[ds] && !HOLIDAYS[ds]) return ds
+    if (dow !== 0 && dow !== 6 && blockedSet[ds] === undefined && !HOLIDAYS[ds]) return ds
     ds = addDaysISO(ds, 1)
   }
   return isoDate()
@@ -152,6 +152,10 @@ export default function SchedulePage() {
   const [calYear,      setCalYear]      = useState(new Date().getFullYear())
   const [calMonth,     setCalMonth]     = useState(new Date().getMonth())
   const [selectedDay,  setSelectedDay]  = useState<string | null>(null)
+  const [multiSel,     setMultiSel]     = useState<Set<string>>(new Set())
+  const [rangeAnchor,  setRangeAnchor]  = useState<string | null>(null)
+  const [batchType,    setBatchType]    = useState<'closed' | 'full'>('closed')
+  const [batchReason,  setBatchReason]  = useState('')
   const [capacity,     setCapacity]     = useState<{ days_on_hand: number; max_cooler_days: number; available_eq: number; settings: { hogs_per_beef: number; lambs_per_beef: number } } | null>(null)
   const [confirmingId, setConfirmingId] = useState<string | null>(null)
   const [decliningId,  setDecliningId]  = useState<string | null>(null)
@@ -233,6 +237,44 @@ export default function SchedulePage() {
   async function unblockDate(date: string) {
     await fetch(`/api/schedule/blocked?date=${date}`, { method: 'DELETE' })
     load()
+  }
+
+  async function blockDatesBatch(dates: string[], reason: string) {
+    if (dates.length === 0) return
+    await fetch('/api/schedule/blocked', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dates, reason }) })
+    setMultiSel(new Set()); setRangeAnchor(null); setBatchReason('')
+    load()
+  }
+
+  async function unblockDatesBatch(dates: string[]) {
+    if (dates.length === 0) return
+    await fetch(`/api/schedule/blocked?dates=${dates.join(',')}`, { method: 'DELETE' })
+    setMultiSel(new Set()); setRangeAnchor(null)
+    load()
+  }
+
+  // Ctrl/Cmd+click toggles a day into the batch set; Shift+click extends a
+  // contiguous range from the last click; a plain click is the old single-select.
+  function handleDayClick(ds: string, mods: { toggle: boolean; range: boolean }) {
+    if (mods.toggle) {
+      setMultiSel(prev => {
+        const next = new Set(prev)
+        if (next.has(ds)) next.delete(ds); else next.add(ds)
+        return next
+      })
+      setRangeAnchor(ds)
+      return
+    }
+    if (mods.range && rangeAnchor) {
+      const [a, b] = rangeAnchor <= ds ? [rangeAnchor, ds] : [ds, rangeAnchor]
+      const range: string[] = []
+      for (let cur = a; cur <= b; cur = addDaysISO(cur, 1)) range.push(cur)
+      setMultiSel(prev => new Set([...prev, ...range]))
+      return
+    }
+    setMultiSel(new Set())
+    setRangeAnchor(ds)
+    setSelectedDay(prev => prev === ds ? null : ds)
   }
 
   function openNew(date?: string) {
@@ -425,17 +467,59 @@ export default function SchedulePage() {
           <button onClick={load} style={{ ...btnStyle('transparent','var(--tan)'), marginLeft:'auto', border:'1px solid rgba(166,120,90,0.3)' }}>↺ Refresh</button>
         </div>
 
+        {/* Batch action bar — appears when days are Ctrl/Shift-clicked */}
+        {view === 'calendar' && multiSel.size > 0 && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap',
+            background: 'rgba(117,71,27,0.22)', border: '1px solid rgba(166,120,90,0.4)',
+            borderRadius: '4px', padding: '0.55rem 0.85rem', marginBottom: '0.9rem',
+          }}>
+            <span style={{ fontWeight: 700, color: 'var(--cream)', fontSize: '0.85rem' }}>
+              {multiSel.size} day{multiSel.size === 1 ? '' : 's'} selected
+            </span>
+            <div style={{ display: 'flex', gap: '0.25rem' }}>
+              {(['closed', 'full'] as const).map(t => (
+                <button key={t} onClick={() => setBatchType(t)} style={{
+                  background: batchType === t ? (t === 'full' ? 'rgba(217,119,6,0.3)' : 'rgba(100,100,100,0.3)') : 'rgba(255,255,255,0.04)',
+                  border: `1px solid ${batchType === t ? (t === 'full' ? 'rgba(217,119,6,0.5)' : 'rgba(150,150,150,0.4)') : 'rgba(166,120,90,0.2)'}`,
+                  color: batchType === t ? (t === 'full' ? '#D97706' : '#9CA3AF') : 'var(--tan)',
+                  borderRadius: '3px', padding: '0.25rem 0.65rem', fontSize: '0.73rem', cursor: 'pointer', fontWeight: batchType === t ? 700 : 400,
+                }}>
+                  {t === 'closed' ? '🔒 Closed' : '⚠ Full'}
+                </button>
+              ))}
+            </div>
+            <input
+              value={batchReason} onChange={e => setBatchReason(e.target.value)}
+              placeholder="Note (optional)"
+              style={{ flex: '1 1 140px', minWidth: '120px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: '3px', padding: '0.3rem 0.5rem', color: 'var(--cream)', fontSize: '0.75rem' }}
+            />
+            <button onClick={() => blockDatesBatch([...multiSel], encodeBlock(batchType, batchReason))}
+              style={{ ...btnStyle(batchType === 'full' ? 'rgba(217,119,6,0.25)' : 'rgba(180,60,60,0.3)', batchType === 'full' ? '#D97706' : '#fca5a5'), fontSize: '0.78rem', padding: '0.35rem 0.8rem', whiteSpace: 'nowrap' }}>
+              Mark {multiSel.size}
+            </button>
+            <button onClick={() => unblockDatesBatch([...multiSel])}
+              style={{ ...btnStyle('rgba(100,100,100,0.3)', '#9CA3AF'), fontSize: '0.78rem', padding: '0.35rem 0.8rem', whiteSpace: 'nowrap' }}>
+              ✓ Mark Available
+            </button>
+            <button onClick={() => { setMultiSel(new Set()); setRangeAnchor(null) }}
+              style={{ ...btnStyle('transparent', 'var(--tan)'), fontSize: '0.78rem', padding: '0.35rem 0.7rem', border: '1px solid rgba(166,120,90,0.3)' }}>
+              Clear
+            </button>
+          </div>
+        )}
+
         {loading ? (
           <p style={{ color: 'var(--tan)', textAlign: 'center', padding: '3rem' }}>Loading…</p>
         ) : view === 'calendar' ? (
           <CalendarView
             year={calYear} month={calMonth}
             apptByDate={apptByDate} blockedSet={blockedSet}
-            selectedDay={selectedDay}
+            selectedDay={selectedDay} multiSel={multiSel}
             onPrev={() => { if (calMonth===0){setCalYear(y=>y-1);setCalMonth(11)}else setCalMonth(m=>m-1) }}
             onNext={() => { if (calMonth===11){setCalYear(y=>y+1);setCalMonth(0)}else setCalMonth(m=>m+1) }}
             onToday={() => { setCalYear(new Date().getFullYear()); setCalMonth(new Date().getMonth()) }}
-            onSelectDay={d => setSelectedDay(prev => prev===d ? null : d)}
+            onSelectDay={handleDayClick}
             onNewOnDay={d => openNew(d)}
             dayAppts={dayAppts}
             dayBlocked={dayBlocked}
@@ -462,7 +546,7 @@ export default function SchedulePage() {
 // ── Calendar View ─────────────────────────────────────────────────────────────
 
 function CalendarView({
-  year, month, apptByDate, blockedSet, selectedDay,
+  year, month, apptByDate, blockedSet, selectedDay, multiSel,
   onPrev, onNext, onToday, onSelectDay, onNewOnDay,
   dayAppts, dayBlocked, onEdit, onDelete, onBlock, onUnblock,
 }: {
@@ -470,8 +554,9 @@ function CalendarView({
   apptByDate:  Record<string, HarvestAppointment[]>
   blockedSet:  Record<string, string>
   selectedDay: string | null
+  multiSel:    Set<string>
   onPrev: () => void; onNext: () => void; onToday: () => void
-  onSelectDay:  (d: string) => void
+  onSelectDay:  (d: string, mods: { toggle: boolean; range: boolean }) => void
   onNewOnDay:   (d: string) => void
   dayAppts:    HarvestAppointment[]
   dayBlocked:  string | undefined
@@ -547,8 +632,9 @@ function CalendarView({
             const appts      = apptByDate[ds] ?? []
             const isToday    = ds === today
             const isSel      = ds === selectedDay
+            const isMulti    = multiSel.has(ds)
             const isHoliday  = !!HOLIDAYS[ds]
-            const isBlocked  = !!blockedSet[ds]
+            const isBlocked  = blockedSet[ds] !== undefined
             const blockInfo  = isBlocked ? decodeBlock(blockedSet[ds]) : null
             const isFull     = blockInfo?.type === 'full'
             const isClosed   = isBlocked && !isFull
@@ -567,12 +653,16 @@ function CalendarView({
               : baseBg
 
             return (
-              <div key={ds} onClick={() => onSelectDay(ds)} style={{
+              <div key={ds}
+                onMouseDown={e => { if (e.shiftKey) e.preventDefault() }}
+                onClick={e => onSelectDay(ds, { toggle: e.ctrlKey || e.metaKey, range: e.shiftKey })} style={{
                 minHeight: '95px', padding: '0.35rem 0.4rem',
                 borderRight: '1px solid rgba(166,120,90,0.08)',
                 borderBottom: '1px solid rgba(166,120,90,0.08)',
                 cursor: 'pointer', position: 'relative', transition: 'background 0.15s',
                 background: cellBg,
+                boxShadow: isMulti ? 'inset 0 0 0 2px #4CAF50' : undefined,
+                userSelect: isMulti ? 'none' : undefined,
               }}>
                 {/* Date number */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.2rem' }}>
@@ -756,6 +846,9 @@ function CalendarView({
           <div style={{ padding: '2.5rem 1.5rem', textAlign: 'center', color: 'var(--tan)', fontSize: '0.85rem' }}>
             <div style={{ fontSize: '2rem', marginBottom: '0.75rem' }}>📅</div>
             Click a day to see appointments
+            <div style={{ fontSize: '0.72rem', color: 'var(--light-brown)', marginTop: '0.9rem', lineHeight: 1.5 }}>
+              Tip: <b>Ctrl/⌘-click</b> to pick multiple days,<br/><b>Shift-click</b> for a range — then batch-close them.
+            </div>
           </div>
         )}
       </div>
