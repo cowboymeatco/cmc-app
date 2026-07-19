@@ -228,6 +228,13 @@ function hockStyle(ham?: { style?: string | null; style2?: string | null }): str
   return word(ham.style)
 }
 
+// The wizard's ham-cut buttons say "Cut in Half" / "Cut in Quarters" but store
+// bare values — print the button wording so "Half" can't read as half a ham
+function hamCut(cut?: string | null): string {
+  if (!cut) return ''
+  return cut === 'half' ? 'Cut in Half' : cut === 'quarters' ? 'Cut in Quarters' : v2fmt(cut)
+}
+
 // Shop-standard steak thicknesses the wizard states in its labels but doesn't
 // store — printed on the cards so new cutters don't have to ask
 const STEAK_STANDARDS: Record<string, string> = {
@@ -481,7 +488,7 @@ function renderV2Detail(ci: RawInstruction) {
                 ? `1: ${v2fmt(d.ham.style)} / 2: ${v2fmt(d.ham.style2)}`
                 : v2fmt(d.ham?.style)
             } />
-            {d.ham?.style !== 'grind' && <V2Field label="Cut" value={v2fmt(d.ham?.cut ?? '')} />}
+            {d.ham?.style !== 'grind' && <V2Field label="Cut" value={hamCut(d.ham?.cut)} />}
             <V2Field label="Hocks" value={v2fmt(d.hocks?.cut) || hockStyle(d.ham)} />
           </V2Section>
           <V2Section title="Spare Ribs">
@@ -683,7 +690,7 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
     // Hocks come off the ham, so they share its header; spare ribs stand alone.
     cutSections += sec('Ham & Hocks', [
       row('Style', d.ham?.style2 ? `1: ${fmt(d.ham.style)} / 2: ${fmt(d.ham.style2)}` : fmt(d.ham?.style)),
-      d.ham?.style !== 'grind' ? row('Cut', fmt(d.ham?.cut ?? '')) : '',
+      d.ham?.style !== 'grind' ? row('Cut', hamCut(d.ham?.cut)) : '',
       row('Hocks', fmt(d.hocks?.cut) || hockStyle(d.ham)),
     ].join(''))
     cutSections += sec('Spare Ribs', [
@@ -875,7 +882,7 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
       if (d.ham.style === 'grind' && !d.ham.style2) pg('Ham')
       else pc('Ham', [
         d.ham.style2 ? `1: ${fmt(d.ham.style)} / 2: ${fmt(d.ham.style2)}` : fmt(d.ham.style),
-        d.ham.cut ? fmt(d.ham.cut) : '',
+        d.ham.cut ? hamCut(d.ham.cut) : '',
       ].filter(Boolean).join(' · '))
     }
     if (d.hocks?.cut)     pc('Hocks', fmt(d.hocks.cut))
