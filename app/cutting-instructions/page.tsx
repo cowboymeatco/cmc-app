@@ -473,17 +473,18 @@ function renderV2Detail(ci: RawInstruction) {
           <V2Section title="Belly">
             <V2Field label="Cut" value={v2fmt(d.belly?.cut)} />
           </V2Section>
-          <V2Section title="Ham">
+          {/* Hocks come off the ham, so they share its header (Charlie);
+              spare ribs stand alone. */}
+          <V2Section title="Ham & Hocks">
             <V2Field label="Style" value={
               d.ham?.style2
                 ? `1: ${v2fmt(d.ham.style)} / 2: ${v2fmt(d.ham.style2)}`
                 : v2fmt(d.ham?.style)
             } />
             {d.ham?.style !== 'grind' && <V2Field label="Cut" value={v2fmt(d.ham?.cut ?? '')} />}
-            {!d.hocks?.cut && hockStyle(d.ham) && <V2Field label="Hocks" value={hockStyle(d.ham)} />}
+            <V2Field label="Hocks" value={v2fmt(d.hocks?.cut) || hockStyle(d.ham)} />
           </V2Section>
-          <V2Section title="Hocks & Spare Ribs">
-            <V2Field label="Hocks" value={v2fmt(d.hocks?.cut)} />
+          <V2Section title="Spare Ribs">
             <V2Field label="Spare Ribs" value={v2fmt(d.spareRibs?.cut)} />
           </V2Section>
           {porkTrimRows(d.trim, v2fmt).length > 0 && (
@@ -679,13 +680,13 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
       loin.addons?.length ? row('  Add-ons', adds(loin.addons), true) : '',
     ].join(''))
     cutSections += sec('Belly', [row('Cut', fmt(d.belly?.cut))].join(''))
-    cutSections += sec('Ham', [
+    // Hocks come off the ham, so they share its header; spare ribs stand alone.
+    cutSections += sec('Ham & Hocks', [
       row('Style', d.ham?.style2 ? `1: ${fmt(d.ham.style)} / 2: ${fmt(d.ham.style2)}` : fmt(d.ham?.style)),
       d.ham?.style !== 'grind' ? row('Cut', fmt(d.ham?.cut ?? '')) : '',
-      !d.hocks?.cut && hockStyle(d.ham) ? row('Hocks', hockStyle(d.ham)) : '',
+      row('Hocks', fmt(d.hocks?.cut) || hockStyle(d.ham)),
     ].join(''))
-    cutSections += sec('Hocks & Spare Ribs', [
-      row('Hocks', fmt(d.hocks?.cut)),
+    cutSections += sec('Spare Ribs', [
       row('Spare Ribs', fmt(d.spareRibs?.cut)),
     ].join(''))
     cutSections += sec('Sausage / Trim', porkTrimCutterRows(d.trim, fmt).map(([l, v]) => row(l, v)).join(''))
@@ -869,7 +870,7 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
     }
     ps('Belly')
     if (d.belly?.cut) { d.belly.cut === 'grind' ? pg('Belly') : pc('Belly / Bacon', fmt(d.belly.cut)) }
-    ps('Ham')
+    ps('Ham & Hocks')
     if (d.ham?.style) {
       if (d.ham.style === 'grind' && !d.ham.style2) pg('Ham')
       else pc('Ham', [
@@ -877,9 +878,9 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
         d.ham.cut ? fmt(d.ham.cut) : '',
       ].filter(Boolean).join(' · '))
     }
-    ps('Hocks & Spare Ribs')
     if (d.hocks?.cut)     pc('Hocks', fmt(d.hocks.cut))
     else if (hockStyle(d.ham)) pc('Hocks', hockStyle(d.ham))
+    ps('Spare Ribs')
     if (d.spareRibs?.cut) pc('Spare Ribs', fmt(d.spareRibs.cut))
   }
 
