@@ -209,12 +209,14 @@ async function carcassInfoFor(ci: RawInstruction, appointments: HarvestAppointme
     // Even without a specific carcass, the appointment pins down producer and
     // lot (Julian of the harvest date) — only tag & weight stay handwriting.
     const rawTag: string = log?.carcass_tag ?? ''
+    // Tags print as <julian>-<seq>; Part B usually stores just the seq. Split
+    // out a lot prefix ONLY when it actually looks like a 5-digit Julian —
+    // a side-suffixed tag like "2-R" is a tag alone, not lot-tag.
+    const hasLotPrefix = /^\d{5}-/.test(rawTag)
     const dash = rawTag.indexOf('-')
     return {
-      // Tags print as <julian>-<seq>; Part B usually stores just the seq. If
-      // the stored tag carries the lot prefix, split it out.
-      lot: dash > 0 ? rawTag.slice(0, dash) : julianLot(appt.harvest_date),
-      tag: dash > 0 ? rawTag.slice(dash + 1) : rawTag,
+      lot: hasLotPrefix ? rawTag.slice(0, dash) : julianLot(appt.harvest_date),
+      tag: hasLotPrefix ? rawTag.slice(dash + 1) : rawTag,
       producer: log?.producer || appt.source || '',
       hcw: log?.hot_carcass_weight_lbs ?? null,
     }
@@ -1314,7 +1316,7 @@ export default function CuttingInstructionsPage() {
             ✏️ New Cutting Card →
           </a>
           <button
-            onClick={() => printV2CutCard(FAKE_CI, { lot: '26153', tag: '2-R', producer: 'Test Producer', hcw: 645 })}
+            onClick={() => printV2CutCard(FAKE_CI, { lot: '26153', tag: '02', producer: 'Test Producer', hcw: 645 })}
             style={{ background: 'transparent', color: 'var(--tan)', border: '1px solid rgba(166,120,90,0.4)', borderRadius: '6px', padding: '0.4rem 0.9rem', fontWeight: 600, fontSize: '0.8rem', cursor: 'pointer', whiteSpace: 'nowrap' }}
           >
             🧪 Test Card
