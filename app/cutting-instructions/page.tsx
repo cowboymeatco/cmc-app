@@ -176,9 +176,22 @@ function fmtShortDate(v?: string | null): string {
 // Carcass tag for a linked instruction: exact carcass assignment first
 // (Cut Schedule's carcass_assignments), else the appointment's only animal,
 // else '' → the printed card keeps its blank handwriting line
-async function carcassTagFor(ci: RawInstruction, appointments: HarvestAppointment[]): Promise<string> {
+type CarcassInfo = { tag: string; lot: string; producer: string; hcw: number | string | null }
+const EMPTY_CARCASS: CarcassInfo = { tag: '', lot: '', producer: '', hcw: null }
+
+// Julian lot code YYDDD (e.g. 2026-06-25 → "26176") — matches the pre-printed
+// carcass tags from the harvest worksheet.
+function julianLot(dateISO: string | null | undefined): string {
+  if (!dateISO) return ''
+  const dt = new Date(dateISO + 'T12:00:00')
+  if (isNaN(dt.getTime())) return ''
+  const dayOfYear = Math.floor((dt.getTime() - new Date(dt.getFullYear(), 0, 1).getTime()) / 86400000) + 1
+  return `${String(dt.getFullYear()).slice(-2)}${String(dayOfYear).padStart(3, '0')}`
+}
+
+async function carcassInfoFor(ci: RawInstruction, appointments: HarvestAppointment[]): Promise<CarcassInfo> {
   const appt = appointments.find(a => a.customers?.some(c => c.linked_cutting_instruction_id === ci.id))
-  if (!appt) return ''
+  if (!appt) return EMPTY_CARCASS
   try {
     const [logsRes, asgRes] = await Promise.all([
       fetch(`/api/harvest?appointment_id=${encodeURIComponent(appt.id)}`),
@@ -186,13 +199,27 @@ async function carcassTagFor(ci: RawInstruction, appointments: HarvestAppointmen
     ])
     const logs = await logsRes.json()
     const asgs = await asgRes.json()
-    if (!Array.isArray(logs) || logs.length === 0) return ''
     const asg = Array.isArray(asgs) ? asgs.find((a: any) => a.linked_cutting_instruction_id === ci.id) : null
-    if (asg) return logs.find((l: any) => l.id === asg.harvest_log_id)?.carcass_tag ?? ''
-    if (logs.length === 1) return logs[0].carcass_tag ?? ''
-    return ''  // multiple animals, no assignment yet — ambiguous, leave blank
+    // Exact carcass assignment first (Cut Schedule), else the appointment's
+    // only animal; multiple animals with no assignment is ambiguous.
+    const log = !Array.isArray(logs) || logs.length === 0 ? null
+      : asg ? logs.find((l: any) => l.id === asg.harvest_log_id) ?? null
+      : logs.length === 1 ? logs[0] : null
+
+    // Even without a specific carcass, the appointment pins down producer and
+    // lot (Julian of the harvest date) — only tag & weight stay handwriting.
+    const rawTag: string = log?.carcass_tag ?? ''
+    const dash = rawTag.indexOf('-')
+    return {
+      // Tags print as <julian>-<seq>; Part B usually stores just the seq. If
+      // the stored tag carries the lot prefix, split it out.
+      lot: dash > 0 ? rawTag.slice(0, dash) : julianLot(appt.harvest_date),
+      tag: dash > 0 ? rawTag.slice(dash + 1) : rawTag,
+      producer: log?.producer || appt.source || '',
+      hcw: log?.hot_carcass_weight_lbs ?? null,
+    }
   } catch {
-    return ''
+    return EMPTY_CARCASS
   }
 }
 
@@ -529,7 +556,7 @@ function renderV2Detail(ci: RawInstruction) {
   )
 }
 
-function printV2CutCard(ci: RawInstruction, carcassTag = '') {
+function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS) {
   const d = ci.data ?? {}
   const species = ci.data?.species ?? ci.species ?? 'Beef'
   const name = d.customerName ?? '—'
@@ -542,6 +569,8 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
   const thick = (v: string) => v ? `${v}"` : ''
   const withT = (cut: string, t: string) => [fmt(cut), thick(t)].filter(Boolean).join(' — ')
   const adds  = (arr: string[]) => arr?.length ? arr.map(fmt).join(', ') : ''
+  // Handwriting blank — anything the system doesn't know gets a line to write on
+  const wline = (w: number) => `<span style="display:inline-block;min-width:${w}px;border-bottom:1.5px solid #1A0A04">&nbsp;</span>`
 
   // Primal color coding for the cutting table (Chris): chuck green,
   // rib & plate yellow, rest of the beef red
@@ -1014,8 +1043,10 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
          <div style="font-size:11px;color:#555;margin-top:1px">Kill Date: ${d.killDate ?? '—'}</div>
        </div>
        <div style="padding:7px 12px">
-         <div style="font-size:8px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Lot / Tag #</div>
-         <div style="font-size:16px;font-weight:bold;border-bottom:2px solid #1A0A04;min-height:24px;padding-bottom:2px">${carcassTag || '&nbsp;'}</div>
+         <div style="font-size:8px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Producer · Lot / Tag</div>
+         <div style="font-size:13px;font-weight:bold;line-height:1.2">${carcass.producer || wline(130)}</div>
+         <div style="font-size:12px;font-weight:bold;margin-top:3px">Lot&nbsp;# ${carcass.lot || wline(46)} &nbsp;·&nbsp; Tag&nbsp;# ${carcass.tag || wline(38)}</div>
+         <div style="font-size:12px;margin-top:3px">Hanging Wt: <span style="font-weight:bold">${carcass.hcw != null ? `${carcass.hcw} lbs` : wline(58)}</span></div>
        </div>
      </div>`
 
@@ -1052,7 +1083,9 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
   ${hdr('Packaging Sheet')}
   <div style="font-size:11px;color:#555;margin-bottom:8px">
     <strong>${d.customerName ?? '—'}</strong>${d.portion ? ' · ' + fmt(d.portion) : ''} · Kill Date: ${d.killDate ?? '—'}
-    <span style="margin-left:14px">Lot / Tag: <span style="display:inline-block;min-width:110px;border-bottom:1px solid #888;font-weight:bold">${carcassTag || '&nbsp;'}</span></span>
+    <span style="margin-left:14px">Producer: <span style="font-weight:bold">${carcass.producer || wline(110)}</span></span>
+    <span style="margin-left:14px">Lot # <span style="font-weight:bold">${carcass.lot || wline(46)}</span> · Tag # <span style="font-weight:bold">${carcass.tag || wline(38)}</span></span>
+    <span style="margin-left:14px">Hanging Wt: <span style="font-weight:bold">${carcass.hcw != null ? `${carcass.hcw} lbs` : wline(58)}</span></span>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
     ${packCols.map(col => `<div>${col.length ? buildPackTable(col) : ''}</div>`).join('')}
@@ -1281,7 +1314,7 @@ export default function CuttingInstructionsPage() {
             ✏️ New Cutting Card →
           </a>
           <button
-            onClick={() => printV2CutCard(FAKE_CI, '26153-2-R')}
+            onClick={() => printV2CutCard(FAKE_CI, { lot: '26153', tag: '2-R', producer: 'Test Producer', hcw: 645 })}
             style={{ background: 'transparent', color: 'var(--tan)', border: '1px solid rgba(166,120,90,0.4)', borderRadius: '6px', padding: '0.4rem 0.9rem', fontWeight: 600, fontSize: '0.8rem', cursor: 'pointer', whiteSpace: 'nowrap' }}
           >
             🧪 Test Card
@@ -1374,7 +1407,7 @@ export default function CuttingInstructionsPage() {
                     ✏️ Edit
                   </a>
                 )}
-                <button onClick={async () => isV2 ? printV2CutCard(selected, await carcassTagFor(selected, appointments)) : printCutCard(selected)} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>🖨 Print Cut Card</button>
+                <button onClick={async () => isV2 ? printV2CutCard(selected, await carcassInfoFor(selected, appointments)) : printCutCard(selected)} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>🖨 Print Cut Card</button>
                 {selected.status === 'archived' ? (
                   <button onClick={() => markStatus([selected.id], 'pending')} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>↩ Restore</button>
                 ) : (
