@@ -20,6 +20,9 @@ interface ModuleDef {
   when:  string
   color: string
   count: number | null
+  // iPhone-style red bubble on the tile icon — "things that arrived since you
+  // last looked", as opposed to `count` which is a standing workload number.
+  newCount?: number
 }
 
 export default function Dashboard() {
@@ -32,8 +35,25 @@ export default function Dashboard() {
   const [processing, setProcessing] = useState<number | null>(null)
   const [delivery,   setDelivery]   = useState<number | null>(null)
   const [cutInstr,   setCutInstr]   = useState<number | null>(null)
+  const [newCutInstr, setNewCutInstr] = useState(0)
   const [orders,     setOrders]     = useState<number | null>(null)
   const [valueAdd,   setValueAdd]   = useState<number | null>(null)
+
+  // Red bubble: cutting instructions submitted since the last time the
+  // Cutting Instructions page was opened on this device. First visit just
+  // starts the clock so the bubble only ever counts genuinely new arrivals.
+  useEffect(() => {
+    let seenAt: string | null = null
+    try { seenAt = localStorage.getItem('cutInstrSeenAt') } catch { return }
+    if (!seenAt) {
+      try { localStorage.setItem('cutInstrSeenAt', new Date().toISOString()) } catch { /* private browsing */ }
+      return
+    }
+    fetch(`/api/cutting-instructions?new_since=${encodeURIComponent(seenAt)}`)
+      .then(r => r.json())
+      .then(rows => { if (Array.isArray(rows)) setNewCutInstr(rows.length) })
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     Promise.allSettled([
@@ -85,6 +105,7 @@ export default function Dashboard() {
       desc:  'Customer cut specs',
       when:  'Collect after booking — before harvest',
       count: cutInstr,
+      newCount: newCutInstr,
     },
     {
       href: '/receiving', icon: '📦', color: '#60A5FA',
@@ -298,7 +319,20 @@ function ModuleCard({ mod }: { mod: ModuleDef }) {
     }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '0.6rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-          <span style={{ fontSize: '1.4rem', lineHeight: 1 }}>{mod.icon}</span>
+          <span style={{ position: 'relative', fontSize: '1.4rem', lineHeight: 1 }}>
+            {mod.icon}
+            {(mod.newCount ?? 0) > 0 && (
+              <span title={`${mod.newCount} new since you last looked`} style={{
+                position: 'absolute', top: -7, right: -11,
+                background: '#E53E3E', color: '#fff', borderRadius: 99,
+                fontSize: '0.62rem', fontWeight: 800, lineHeight: '1.4',
+                padding: '1px 5px', minWidth: 10, textAlign: 'center',
+                border: '2px solid var(--dark)', boxSizing: 'content-box',
+              }}>
+                {mod.newCount}
+              </span>
+            )}
+          </span>
           <span style={{
             fontFamily: 'Georgia, serif', fontSize: '1rem', fontWeight: 700,
             color: C.cream, textTransform: 'uppercase', letterSpacing: '0.05em',

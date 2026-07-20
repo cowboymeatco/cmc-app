@@ -1125,7 +1125,12 @@ export default function CuttingInstructionsPage() {
     setLoading(false)
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    // Opening this page marks all submissions as seen — clears the "new
+    // submissions" bubble on the dashboard tile.
+    try { localStorage.setItem('cutInstrSeenAt', new Date().toISOString()) } catch { /* private browsing */ }
+  }, [])
 
   const filtered = instructions.filter(i => {
     const species = speciesOf(i)

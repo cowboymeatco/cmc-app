@@ -10,7 +10,19 @@ export const dynamic = 'force-dynamic'
 //   so this keeps the phone-facing response small as the table grows.
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
-  const idsOnly = searchParams.get('ids_only')
+  const idsOnly  = searchParams.get('ids_only')
+  // ?new_since=<ISO>: just [{ id }] of submissions created after that moment,
+  // for the dashboard's "new submissions" bubble.
+  const newSince = searchParams.get('new_since')
+
+  if (newSince) {
+    const { data, error } = await supabase
+      .from('cutting_instructions')
+      .select('id')
+      .gt('created_at', newSince)
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json(data)
+  }
 
   const { data, error } = await supabase
     .from('cutting_instructions')
