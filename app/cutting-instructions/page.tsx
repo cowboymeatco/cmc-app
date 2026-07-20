@@ -595,9 +595,10 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
     if (!v.trim()) return ''
     const lc = addon ? '#8a6200' : '#75471B'
     const fi = addon ? 'italic'  : 'normal'
+    // 24px values (18px labels) — readable across the cutting room (Charlie)
     return `<tr style="${addon ? 'background:#fffbe8' : ''}">
-      <td style="padding:4px 8px;color:${lc};font-size:10px;width:110px;vertical-align:top">${label}</td>
-      <td style="padding:4px 8px;font-size:12px;font-weight:600;font-style:${fi};vertical-align:top;border-left:1px solid #eee">${v}</td>
+      <td style="padding:4px 8px;color:${lc};font-size:18px;width:150px;vertical-align:top">${label}</td>
+      <td style="padding:4px 8px;font-size:24px;font-weight:600;font-style:${fi};vertical-align:top;border-left:1px solid #eee">${v}</td>
     </tr>`
   }
   // Each section is a single div with break-inside:avoid so CSS columns won't split it mid-section
@@ -605,7 +606,7 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
     if (!rows.trim()) return ''
     const c = PRIMAL_COLORS[title]
     return `<div style="break-inside:avoid;margin-top:8px">
-           <div style="background:${c?.bar ?? '#351E0E'};color:${c?.text ?? '#F2E8D9'};padding:5px 10px;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;font-weight:bold">${title}</div>
+           <div style="background:${c?.bar ?? '#351E0E'};color:${c?.text ?? '#F2E8D9'};padding:5px 10px;font-size:18px;letter-spacing:0.12em;text-transform:uppercase;font-weight:bold">${title}</div>
            <table style="width:100%;border-collapse:collapse;border:1px solid #e0d5c8;${c ? `background:${c.tint}` : ''}">${rows}</table>
          </div>`
   }
@@ -994,7 +995,7 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
       if (pr.sectionTitle) {
         rowCount = 0
         const c = PRIMAL_COLORS[pr.sectionTitle]
-        tbody += `<tr><td colspan="5" style="background:${c?.bar ?? '#351E0E'};color:${c?.text ?? '#F2E8D9'};padding:4px 8px;font-size:9px;letter-spacing:0.12em;text-transform:uppercase;font-weight:bold">${pr.sectionTitle}</td></tr>`
+        tbody += `<tr><td colspan="5" style="background:${c?.bar ?? '#351E0E'};color:${c?.text ?? '#F2E8D9'};padding:4px 8px;font-size:16px;letter-spacing:0.12em;text-transform:uppercase;font-weight:bold">${pr.sectionTitle}</td></tr>`
         continue
       }
       const bg  = pr.isGrind ? '#fff8e6' : pr.isAddon ? '#fffbe8' : rowCount % 2 === 0 ? '#fff' : '#faf6f1'
@@ -1004,14 +1005,14 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
       const pl  = pr.isAddon ? '18px' : '8px'
       const clr = pr.isAddon ? '#8a6200' : '#1A0A04'
       tbody += `<tr style="background:${bg}">
-        <td style="padding:5px ${pl} 5px 8px;font-size:12px;font-weight:${fw};font-style:${fi};color:${clr};vertical-align:top">${pr.cut ?? ''}</td>
-        <td style="padding:5px 8px;font-size:11px;color:#555;vertical-align:top">${pr.spec ?? ''}</td>
-        <td style="padding:5px 4px;width:48px;border-left:1px solid #ddd;text-align:center"> </td>
-        <td style="padding:5px 4px;width:56px;border-left:1px solid #ddd;text-align:center"> </td>
-        <td style="padding:5px 4px;width:30px;border-left:1px solid #ddd;text-align:center;font-size:14px;color:#999">☐</td>
+        <td style="padding:6px ${pl} 6px 8px;font-size:22px;font-weight:${fw};font-style:${fi};color:${clr};vertical-align:top">${pr.cut ?? ''}</td>
+        <td style="padding:6px 8px;font-size:18px;color:#555;vertical-align:top">${pr.spec ?? ''}</td>
+        <td style="padding:6px 4px;width:58px;border-left:1px solid #ddd;text-align:center"> </td>
+        <td style="padding:6px 4px;width:68px;border-left:1px solid #ddd;text-align:center"> </td>
+        <td style="padding:6px 4px;width:36px;border-left:1px solid #ddd;text-align:center;font-size:20px;color:#999">☐</td>
       </tr>`
     }
-    const thStyle = 'padding:6px 8px;text-align:left;color:#F2E8D9;font-size:10px;letter-spacing:0.08em;text-transform:uppercase'
+    const thStyle = 'padding:6px 8px;text-align:left;color:#F2E8D9;font-size:13px;letter-spacing:0.08em;text-transform:uppercase'
     return `<table style="width:100%;border-collapse:collapse;border:1px solid #ddd">
       <thead><tr style="background:#1A0A04">
         <th style="${thStyle}">Cut</th>
@@ -1029,28 +1030,28 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
 
   const hdr = (subtitle: string) =>
     `<div style="background:#1A0A04;color:#F2E8D9;padding:12px 18px;display:flex;align-items:baseline;justify-content:space-between;margin-bottom:12px">
-       <div><span style="font-size:18px;font-weight:bold;letter-spacing:0.1em;text-transform:uppercase">Cowboy Meat Company</span>
-            <span style="font-size:12px;color:#C9A882;margin-left:12px;letter-spacing:0.05em">— ${subtitle}</span></div>
-       <div style="font-size:10px;color:#C9A882">Submitted: ${submittedDate}</div>
+       <div><span style="font-size:24px;font-weight:bold;letter-spacing:0.1em;text-transform:uppercase">Cowboy Meat Company</span>
+            <span style="font-size:16px;color:#C9A882;margin-left:12px;letter-spacing:0.05em">— ${subtitle}</span></div>
+       <div style="font-size:13px;color:#C9A882">Submitted: ${submittedDate}</div>
      </div>`
 
   const infoGrid =
     `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;border:1.5px solid #C9A882;margin-bottom:10px">
        <div style="padding:7px 12px;border-right:1px solid #C9A882">
-         <div style="font-size:8px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Customer</div>
-         <div style="font-size:16px;font-weight:bold">${d.customerName ?? '—'}</div>
-         ${d.customerPhone ? `<div style="font-size:11px;color:#555;margin-top:1px">${d.customerPhone}</div>` : ''}
+         <div style="font-size:12px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Customer</div>
+         <div style="font-size:24px;font-weight:bold">${d.customerName ?? '—'}</div>
+         ${d.customerPhone ? `<div style="font-size:16px;color:#555;margin-top:1px">${d.customerPhone}</div>` : ''}
        </div>
        <div style="padding:7px 12px;border-right:1px solid #C9A882">
-         <div style="font-size:8px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Animal</div>
-         <div style="font-size:16px;font-weight:bold">${species}${d.portion ? ' · ' + fmt(d.portion) : ''}</div>
-         <div style="font-size:11px;color:#555;margin-top:1px">Kill Date: ${d.killDate ?? '—'}</div>
+         <div style="font-size:12px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Animal</div>
+         <div style="font-size:24px;font-weight:bold">${species}${d.portion ? ' · ' + fmt(d.portion) : ''}</div>
+         <div style="font-size:16px;color:#555;margin-top:1px">Kill Date: ${d.killDate ?? '—'}</div>
        </div>
        <div style="padding:7px 12px">
-         <div style="font-size:8px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Producer · Lot / Tag</div>
-         <div style="font-size:13px;font-weight:bold;line-height:1.2">${carcass.producer || wline(130)}</div>
-         <div style="font-size:12px;font-weight:bold;margin-top:3px">Lot&nbsp;# ${carcass.lot || wline(46)} &nbsp;·&nbsp; Tag&nbsp;# ${carcass.tag || wline(38)}</div>
-         <div style="font-size:12px;margin-top:3px">Hanging Wt: <span style="font-weight:bold">${carcass.hcw != null ? `${carcass.hcw} lbs` : wline(58)}</span></div>
+         <div style="font-size:12px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Producer · Lot / Tag</div>
+         <div style="font-size:20px;font-weight:bold;line-height:1.2">${carcass.producer || wline(150)}</div>
+         <div style="font-size:18px;font-weight:bold;margin-top:3px">Lot&nbsp;# ${carcass.lot || wline(56)} &nbsp;·&nbsp; Tag&nbsp;# ${carcass.tag || wline(46)}</div>
+         <div style="font-size:18px;margin-top:3px">Hanging Wt: <span style="font-weight:bold">${carcass.hcw != null ? `${carcass.hcw} lbs` : wline(70)}</span></div>
        </div>
      </div>`
 
@@ -1064,6 +1065,9 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
     /* Landscape: matches the wall monitors these cards are headed for, and
        three columns across beats two tall ones on paper too. */
     @page { margin: 0.4in; size: letter landscape; }
+    /* Big type can push a loaded card past one sheet — keep rows whole when
+       content flows across the page break. */
+    tr { break-inside: avoid; page-break-inside: avoid; }
     @media print {
       body { padding: 0; }
       .pagebreak { page-break-after: always; }
@@ -1085,7 +1089,7 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
 <!-- PAGE 2: PACKAGING SHEET — 3-column table layout -->
 <div>
   ${hdr('Packaging Sheet')}
-  <div style="font-size:11px;color:#555;margin-bottom:8px">
+  <div style="font-size:16px;color:#555;margin-bottom:8px">
     <strong>${d.customerName ?? '—'}</strong>${d.portion ? ' · ' + fmt(d.portion) : ''} · Kill Date: ${d.killDate ?? '—'}
     <span style="margin-left:14px">Producer: <span style="font-weight:bold">${carcass.producer || wline(110)}</span></span>
     <span style="margin-left:14px">Lot # <span style="font-weight:bold">${carcass.lot || wline(46)}</span> · Tag # <span style="font-weight:bold">${carcass.tag || wline(38)}</span></span>
@@ -1094,10 +1098,10 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
   <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
     ${packCols.map(col => `<div>${col.length ? buildPackTable(col) : ''}</div>`).join('')}
   </div>
-  ${d.notes ? `<div style="margin-top:10px;border:1px solid #C9A882;padding:8px"><div style="font-size:8px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px">Special Notes</div><div style="font-size:12px">${d.notes}</div></div>` : ''}
+  ${d.notes ? `<div style="margin-top:10px;border:1px solid #C9A882;padding:8px"><div style="font-size:12px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px">Special Notes</div><div style="font-size:18px">${d.notes}</div></div>` : ''}
   <div style="margin-top:18px;display:grid;grid-template-columns:1fr 1fr;gap:20px">
-    <div style="border-top:1px solid #888;padding-top:5px;font-size:10px;color:#75471B;text-transform:uppercase;letter-spacing:0.08em">Packed by / Date</div>
-    <div style="border-top:1px solid #888;padding-top:5px;font-size:10px;color:#75471B;text-transform:uppercase;letter-spacing:0.08em">Total Boxes</div>
+    <div style="border-top:1px solid #888;padding-top:5px;font-size:13px;color:#75471B;text-transform:uppercase;letter-spacing:0.08em">Packed by / Date</div>
+    <div style="border-top:1px solid #888;padding-top:5px;font-size:13px;color:#75471B;text-transform:uppercase;letter-spacing:0.08em">Total Boxes</div>
   </div>
 </div>
 
@@ -1582,11 +1586,12 @@ function printCutCard(ci: RawInstruction) {
   const row = (label: string, value: any) => {
     const v = formatValue(value)
     if (!v) return ''
-    return `<tr><td style="padding:4px 8px;color:#75471B;font-size:11px;width:160px;vertical-align:top">${label}</td><td style="padding:4px 8px;font-size:12px;vertical-align:top">${v}</td></tr>`
+    // Same cutting-room readability bump as the v2 card
+    return `<tr><td style="padding:4px 8px;color:#75471B;font-size:18px;width:220px;vertical-align:top">${label}</td><td style="padding:4px 8px;font-size:24px;vertical-align:top">${v}</td></tr>`
   }
 
   const section = (title: string, rows: string) =>
-    rows.trim() ? `<h3 style="background:#351E0E;color:#F2E8D9;padding:6px 10px;margin:12px 0 4px;font-size:11px;letter-spacing:0.12em;text-transform:uppercase">${title}</h3><table style="width:100%;border-collapse:collapse">${rows}</table>` : ''
+    rows.trim() ? `<h3 style="background:#351E0E;color:#F2E8D9;padding:6px 10px;margin:12px 0 4px;font-size:18px;letter-spacing:0.12em;text-transform:uppercase">${title}</h3><table style="width:100%;border-collapse:collapse">${rows}</table>` : ''
 
   let body = ''
 
