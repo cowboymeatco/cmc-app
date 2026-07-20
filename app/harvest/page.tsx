@@ -1301,15 +1301,21 @@ function WorksheetTab({ date }: { date: string }) {
     // Animals that are checked in but not yet finished — i.e. "before they're logged".
     const active = (Array.isArray(appts) ? appts : [])
       .filter(a => a.status === 'AnimalIn' || a.status === 'Processing')
-      .sort((a, b) => (a.source || '').localeCompare(b.source || ''))
 
-    const built: WSGroup[] = []
+    const built: { group: WSGroup; producer: string; firstIn: number }[] = []
     for (const a of active) {
       const animals: AnimalReceivingLog[] = await fetch(`/api/receiving?type=animal&appointment_id=${a.id}`).then(r => r.json()).catch(() => [])
       const live = (Array.isArray(animals) ? animals : [])
         .filter(an => an.status !== 'no_show')
         .sort((x, y) => (x.animal_index ?? 0) - (y.animal_index ?? 0))
       if (live.length === 0) continue
+
+      // When this appointment's first animal was checked in at Receiving —
+      // the ordering key for the worksheet (see sort below).
+      const firstIn = Math.min(...live.map(an => {
+        const t = Date.parse(an.received_at ?? an.created_at ?? '')
+        return isNaN(t) ? Infinity : t
+      }))
 
       // Pair each animal to its harvest record (if Part A/B was already saved)
       // using the same bucket-by-ear-tag positional pairing as the Part A tab,
@@ -1325,27 +1331,41 @@ function WorksheetTab({ date }: { date: string }) {
       })
       const tagCursor = new Map<string, number>()
 
+      const producer = a.source || a.customers?.[0]?.customer_name || 'Unknown'
       built.push({
-        producer: a.source || a.customers?.[0]?.customer_name || 'Unknown',
-        species:  a.species,
-        rows: live.map(an => {
-          const key    = an.ear_tag || ''
-          const cursor = tagCursor.get(key) ?? 0
-          const log    = logsByTag.get(key)?.[cursor] ?? null
-          tagCursor.set(key, cursor + 1)
-          return {
-            ear_tag: an.ear_tag || '', sex: an.sex || '', breed: an.breed || '', over_30_months: an.over_30_months,
-            killOrder:  log?.harvest_order ?? null,
-            killType:   log?.kill_type ?? null,
-            half1:      log?.half_1_weight_lbs ?? null,
-            half2:      log?.half_2_weight_lbs ?? null,
-            total:      log?.hot_carcass_weight_lbs ?? null,
-            carcassTag: log?.carcass_tag || null,
-          }
-        }),
+        producer,
+        firstIn,
+        group: {
+          producer,
+          species:  a.species,
+          rows: live.map(an => {
+            const key    = an.ear_tag || ''
+            const cursor = tagCursor.get(key) ?? 0
+            const log    = logsByTag.get(key)?.[cursor] ?? null
+            tagCursor.set(key, cursor + 1)
+            return {
+              ear_tag: an.ear_tag || '', sex: an.sex || '', breed: an.breed || '', over_30_months: an.over_30_months,
+              killOrder:  log?.harvest_order ?? null,
+              killType:   log?.kill_type ?? null,
+              half1:      log?.half_1_weight_lbs ?? null,
+              half2:      log?.half_2_weight_lbs ?? null,
+              total:      log?.hot_carcass_weight_lbs ?? null,
+              carcassTag: log?.carcass_tag || null,
+            }
+          }),
+        },
       })
     }
-    setGroups(built)
+
+    // Worksheet order = check-in order, so carcass ID numbering is append-only:
+    // a late trailer never re-shuffles numbers already written on printed tags.
+    // Appointments checked in before the cutover keep the old
+    // producer-alphabetical order as a block up front — the morning of
+    // 2026-07-20 had tags pre-printed against that ordering.
+    const CUTOVER = Date.parse('2026-07-20T13:30:00Z')
+    const legacy    = built.filter(e => e.firstIn <  CUTOVER).sort((x, y) => x.producer.localeCompare(y.producer))
+    const byCheckIn = built.filter(e => e.firstIn >= CUTOVER).sort((x, y) => x.firstIn - y.firstIn)
+    setGroups([...legacy, ...byCheckIn].map(e => e.group))
     setLoad(false)
   }, [d])
 
@@ -1361,9 +1381,9 @@ function WorksheetTab({ date }: { date: string }) {
 
   function printSheet() {
     const esc = (s: string) => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] as string))
-    // Carcass ID counts up across all animals in producer order, starting at the
-    // same "Start at #" as the pre-printed tags, so each worksheet row's ID matches
-    // its physical tag number.
+    // Carcass ID counts up across all animals in worksheet (check-in) order,
+    // starting at the same "Start at #" as the pre-printed tags, so each
+    // worksheet row's ID matches its physical tag number.
     let cid = parseInt(startNum, 10) || 1
     const rowsHtml = groups.map(g => {
       const head = `<tr class="grp"><td colspan="9">${esc(g.producer)} — ${esc(g.species)} · ${g.rows.length} head</td></tr>`
@@ -1429,8 +1449,8 @@ function WorksheetTab({ date }: { date: string }) {
   }
 
   // Preliminary kill sheet — a flat, ordered run-list to carry to the floor
-  // BEFORE the kill. Animals are enumerated in the same order their tags pre-print
-  // (producer-sorted, then check-in order), each assigned its Julian-date tag #
+  // BEFORE the kill. Animals are enumerated in the same order as the worksheet
+  // (check-in order), each assigned its Julian-date tag #
   // (<julian>-<seq>) so the sheet's order matches the physical tags. Brand owner
   // shows on every line. Blank weight columns are filled in at the rail.
   function printKillSheet() {
