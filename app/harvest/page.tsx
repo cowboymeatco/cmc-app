@@ -702,8 +702,12 @@ function PartBTab({ date }: { date: string }) {
     setLoading(true)
     const res = await fetch(`/api/harvest?type=log&date=${date}`)
     const all: HarvestLog[] = await res.json().catch(() => [])
+    // On the worklist: has a kill order, and NOT (checked into the cooler with
+    // Part B finished). A carcass that got its cooler temp before its weights
+    // were entered stays visible — otherwise it vanishes from the only place
+    // those can be recorded.
     const dayLogs = (Array.isArray(all) ? all : [])
-      .filter(l => l.harvest_order != null && l.initial_cooler_temp_f == null)
+      .filter(l => l.harvest_order != null && !(l.initial_cooler_temp_f != null && l.part_b_complete))
       .sort((a, b) => (a.harvest_order ?? 999) - (b.harvest_order ?? 999))
 
     setRows(dayLogs.map(log => ({
@@ -797,7 +801,7 @@ function PartBTab({ date }: { date: string }) {
     <div>
       {rows.length > 0 && (
         <div style={{ color: C.lightBrown, fontSize: '0.8rem', marginBottom: '0.65rem' }}>
-          {rows.length} carcass{rows.length === 1 ? '' : 'es'} on the rail for this date, in kill order — every producer. Carcasses drop off once checked into the cooler.
+          {rows.length} carcass{rows.length === 1 ? '' : 'es'} on the rail for this date, in kill order — every producer. Carcasses drop off once Part B is complete and they&apos;re checked into the cooler.
         </div>
       )}
       {loading && <div style={{ color: C.lightBrown, textAlign: 'center', padding: '2rem' }}>Loading carcasses…</div>}
