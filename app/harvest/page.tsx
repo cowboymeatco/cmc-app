@@ -689,21 +689,23 @@ interface PartBRow {
   saving:      string | null   // which field group is saving
 }
 
-function PartBTab({ date, appt }: { date: string; appt: HarvestAppointment | null }) {
+// Part B lists EVERY carcass logged for the day, across all appointments, in
+// kill order — the crew works the rail in that order regardless of producer.
+// Scoping this per-appointment hid saved records behind whichever appointment
+// chip happened to be selected.
+function PartBTab({ date }: { date: string }) {
   const [rows, setRows]         = useState<PartBRow[]>([])
   const [loading, setLoading]   = useState(false)
   const [carModal, setCarModal] = useState<{ rowIdx: number; type: 'zero_tolerance' | 'hot_water' } | null>(null)
 
   const load = useCallback(async () => {
-    if (!appt) return
     setLoading(true)
     const res = await fetch(`/api/harvest?type=log&date=${date}`)
     const all: HarvestLog[] = await res.json().catch(() => [])
-    const apptLogs = all
-      .filter(l => l.appointment_id === appt.id)
+    const dayLogs = (Array.isArray(all) ? all : [])
       .sort((a, b) => (a.harvest_order ?? 999) - (b.harvest_order ?? 999))
 
-    setRows(apptLogs.map(log => ({
+    setRows(dayLogs.map(log => ({
       log,
       fields: {
         half1:      log.half_1_weight_lbs != null ? String(log.half_1_weight_lbs) : '',
@@ -721,7 +723,7 @@ function PartBTab({ date, appt }: { date: string; appt: HarvestAppointment | nul
       saving:   null,
     })))
     setLoading(false)
-  }, [appt, date])
+  }, [date])
 
   useEffect(() => { load() }, [load])
 
@@ -790,20 +792,17 @@ function PartBTab({ date, appt }: { date: string; appt: HarvestAppointment | nul
     }
   }
 
-  if (!appt) {
-    return (
-      <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '3rem', textAlign: 'center', color: C.lightBrown, fontSize: '0.9rem' }}>
-        Select an appointment above to log carcass data
-      </div>
-    )
-  }
-
   return (
     <div>
+      {rows.length > 0 && (
+        <div style={{ color: C.lightBrown, fontSize: '0.8rem', marginBottom: '0.65rem' }}>
+          All {rows.length} carcass{rows.length === 1 ? '' : 'es'} logged for this date, in kill order — every producer.
+        </div>
+      )}
       {loading && <div style={{ color: C.lightBrown, textAlign: 'center', padding: '2rem' }}>Loading carcasses…</div>}
       {!loading && rows.length === 0 && (
         <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '2rem', textAlign: 'center', color: C.lightBrown, fontSize: '0.88rem' }}>
-          No records yet — complete Part A first to create carcass records.
+          No carcasses logged for this date yet — save animals in Part A first.
         </div>
       )}
 
@@ -847,6 +846,7 @@ function PartBTab({ date, appt }: { date: string; appt: HarvestAppointment | nul
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ color: C.cream, fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <span>
+                    {row.log.producer && <span style={{ color: C.tan }}>{row.log.producer} · </span>}
                     {row.log.ear_tag ? `ET: ${row.log.ear_tag}` : 'No Ear Tag'}
                     {row.log.carcass_tag ? <span style={{ color: C.tan }}> · Tag {row.log.carcass_tag}</span> : null}
                     <span style={{ color: C.lightBrown, fontWeight: 400 }}> · {row.log.sex}</span>
@@ -854,7 +854,7 @@ function PartBTab({ date, appt }: { date: string; appt: HarvestAppointment | nul
                   <KillTypeBadge killType={row.log.kill_type} />
                 </div>
                 <div style={{ fontSize: '0.78rem', color: C.lightBrown, marginTop: '0.1rem' }}>
-                  {row.log.breed}
+                  {row.log.species}{row.log.breed ? ` · ${row.log.breed}` : ''}
                   {row.log.knock_time && <span style={{ marginLeft: '0.5rem' }}>⏰ {fmt12(row.log.knock_time)}</span>}
                   {row.log.hot_carcass_weight_lbs != null && <span style={{ color: C.tan, marginLeft: '0.5rem' }}>HCW: {row.log.hot_carcass_weight_lbs} lbs</span>}
                 </div>
@@ -1847,11 +1847,23 @@ export default function HarvestPage() {
   const [appointments, setAppts]  = useState<HarvestAppointment[]>([])
   const [selectedAppt, setSelAppt] = useState<HarvestAppointment | null>(null)
   const [loadingAppts, setLoadingAppts] = useState(false)
+  // appointment_id → # of animals with Part A saved, for the ✓ markers on the
+  // appointment chips. Refreshed on tab switch so it stays current after saves.
+  const [partADone, setPartADone] = useState<Record<string, number>>({})
 
   const loadAppts = useCallback(async () => {
     setLoadingAppts(true)
-    const res  = await fetch(`/api/appointments?date=${harvestDate}`)
+    const [res, logRes] = await Promise.all([
+      fetch(`/api/appointments?date=${harvestDate}`),
+      fetch(`/api/harvest?type=log&date=${harvestDate}`),
+    ])
     const data: HarvestAppointment[] = await res.json().catch(() => [])
+    const logs: HarvestLog[]         = await logRes.json().catch(() => [])
+    const done: Record<string, number> = {}
+    ;(Array.isArray(logs) ? logs : []).forEach(l => {
+      if (l.part_a_complete && l.appointment_id) done[l.appointment_id] = (done[l.appointment_id] ?? 0) + 1
+    })
+    setPartADone(done)
     const active = data.filter(a => ['AnimalIn', 'Processing', 'Complete'].includes(a.status))
     setAppts(active)
     // Auto-select if only one; keep selection if still valid
@@ -1863,7 +1875,7 @@ export default function HarvestPage() {
       setSelAppt(null)
     }
     setLoadingAppts(false)
-  }, [harvestDate])
+  }, [harvestDate, tab]) // eslint-disable-line react-hooks/exhaustive-deps -- tab included to refresh the ✓ markers after Part A saves
 
   useEffect(() => { loadAppts() }, [loadAppts])
 
@@ -1883,7 +1895,10 @@ export default function HarvestPage() {
     setDate(addDaysISO(harvestDate, d))
   }
 
-  const showApptBar = tab === 'parta' || tab === 'partb'
+  // Part B covers the whole day (all appointments), so only Part A scopes to an
+  // appointment; both share the header date picker.
+  const showApptBar    = tab === 'parta'
+  const showDatePicker = tab === 'parta' || tab === 'partb'
 
   const NAV: React.CSSProperties = { background: 'rgba(166,120,90,0.12)', border: '1px solid rgba(166,120,90,0.3)', color: C.tan, borderRadius: 3, padding: '0.35rem 0.7rem', fontSize: '1rem', cursor: 'pointer', lineHeight: 1 }
 
@@ -1898,7 +1913,7 @@ export default function HarvestPage() {
         </div>
 
         {/* Date picker (Part A / Part B only) */}
-        {showApptBar && (
+        {showDatePicker && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
             <button onClick={() => shiftDate(-1)} style={NAV}>‹</button>
             <input type="date" value={harvestDate} onChange={e => setDate(e.target.value)} style={{ ...INPUT, width: 'auto', padding: '0.3rem 0.6rem', fontSize: '0.85rem' }} />
@@ -1940,17 +1955,25 @@ export default function HarvestPage() {
           ) : (
             <>
               <span style={{ color: C.lightBrown, fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Appointment:</span>
-              {appointments.map(a => (
-                <button key={a.id} onClick={() => setSelAppt(a)} style={{
-                  padding: '0.3rem 0.85rem', borderRadius: 3, fontSize: '0.83rem', fontWeight: 600, cursor: 'pointer',
-                  background: selectedAppt?.id === a.id ? C.medBrown : 'rgba(166,120,90,0.1)',
-                  border: selectedAppt?.id === a.id ? `1px solid ${C.lightBrown}` : '1px solid rgba(166,120,90,0.3)',
-                  color: selectedAppt?.id === a.id ? C.cream : C.tan,
-                }}>
-                  {a.species} — {a.head_count} head
-                  {a.source && <span style={{ fontWeight: 400, opacity: 0.8 }}> · {a.source}</span>}
-                </button>
-              ))}
+              {appointments.map(a => {
+                const done = partADone[a.id] ?? 0
+                return (
+                  <button key={a.id} onClick={() => setSelAppt(a)} style={{
+                    padding: '0.3rem 0.85rem', borderRadius: 3, fontSize: '0.83rem', fontWeight: 600, cursor: 'pointer',
+                    background: selectedAppt?.id === a.id ? C.medBrown : 'rgba(166,120,90,0.1)',
+                    border: selectedAppt?.id === a.id ? `1px solid ${C.lightBrown}` : '1px solid rgba(166,120,90,0.3)',
+                    color: selectedAppt?.id === a.id ? C.cream : C.tan,
+                  }}>
+                    {a.species} — {a.head_count} head
+                    {a.source && <span style={{ fontWeight: 400, opacity: 0.8 }}> · {a.source}</span>}
+                    {done >= a.head_count && done > 0
+                      ? <span style={{ color: C.green, fontWeight: 700 }}> ✓</span>
+                      : done > 0
+                        ? <span style={{ color: C.yellow, fontWeight: 700 }}> {done}/{a.head_count}</span>
+                        : null}
+                  </button>
+                )
+              })}
             </>
           )}
         </div>
@@ -1959,7 +1982,7 @@ export default function HarvestPage() {
       {/* ── Main content ── */}
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1320px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', overflow: 'auto' }}>
         {tab === 'parta'      && <PartATab      date={harvestDate} appt={selectedAppt} />}
-        {tab === 'partb'      && <PartBTab      date={harvestDate} appt={selectedAppt} />}
+        {tab === 'partb'      && <PartBTab      date={harvestDate} />}
         {tab === 'worksheet'  && <WorksheetTab  date={harvestDate} />}
         {tab === 'harvestlog' && <HarvestLogTab />}
         {tab === 'chill'      && <ChillTab />}
