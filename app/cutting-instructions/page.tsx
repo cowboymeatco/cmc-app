@@ -506,6 +506,12 @@ function renderV2Detail(ci: RawInstruction) {
         <V2Section title="Primals">
           <V2Field label="Rack" value={v2fmt(d.rack?.cut)} />
           <V2Field label="Loin" value={v2fmt(d.loin?.cut)} />
+          {d.loin?.cut === 'loin-chops' && (
+            <>
+              <V2Field label="Chop Thickness" value={v2thick(d.loin?.chopThickness)} />
+              <V2Field label="Per Pack" value={d.loin?.chopPack} />
+            </>
+          )}
           <V2Field label="Leg" value={v2fmt(d.leg?.cut)} />
           <V2Field label="Shoulder" value={v2fmt(d.shoulder?.cut)} />
           <V2Field label="Shank" value={v2fmt(d.shank?.cut)} />
@@ -703,6 +709,8 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
     cutSections += sec('Primals', [
       row('Rack',     fmt(d.rack?.cut)),
       row('Loin',     fmt(d.loin?.cut)),
+      d.loin?.cut === 'loin-chops' && d.loin?.chopThickness ? row('Chop Thickness', thick(d.loin.chopThickness)) : '',
+      d.loin?.cut === 'loin-chops' && d.loin?.chopPack ? row('Per Pack', d.loin.chopPack) : '',
       row('Leg',      fmt(d.leg?.cut)),
       row('Shoulder', fmt(d.shoulder?.cut)),
       row('Shank',    fmt(d.shank?.cut)),
@@ -894,7 +902,10 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
   if (isLG) {
     ps('Primals')
     if (d.rack?.cut)     { d.rack.cut     === 'grind' ? pg('Rack')     : pc('Rack',     fmt(d.rack.cut)) }
-    if (d.loin?.cut)     { d.loin.cut     === 'grind' ? pg('Loin')     : pc('Loin',     fmt(d.loin.cut)) }
+    if (d.loin?.cut) {
+      d.loin.cut === 'grind' ? pg('Loin')
+        : pc('Loin', [fmt(d.loin.cut), thick(d.loin.chopThickness ?? ''), d.loin.chopPack ? `${d.loin.chopPack}/pkg` : ''].filter(Boolean).join(' · '))
+    }
     if (d.leg?.cut)      { d.leg.cut      === 'grind' ? pg('Leg')      : pc('Leg',      fmt(d.leg.cut)) }
     if (d.shoulder?.cut) { d.shoulder.cut === 'grind' ? pg('Shoulder') : pc('Shoulder', fmt(d.shoulder.cut)) }
     if (d.shank?.cut)    { d.shank.cut    === 'grind' ? pg('Shank')    : pc('Shank',    fmt(d.shank.cut)) }
