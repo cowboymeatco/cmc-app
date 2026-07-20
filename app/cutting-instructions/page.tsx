@@ -515,6 +515,7 @@ function renderV2Detail(ci: RawInstruction) {
           <V2Field label="Leg" value={v2fmt(d.leg?.cut)} />
           <V2Field label="Shoulder" value={v2fmt(d.shoulder?.cut)} />
           <V2Field label="Shank" value={v2fmt(d.shank?.cut)} />
+          <V2Field label="Trim" value={d.trim?.style === 'grind' ? 'Ground — 1 lb packs' : d.trim?.style === 'stew' ? 'Stew — 1 lb packs' : undefined} />
         </V2Section>
       )}
 
@@ -714,6 +715,7 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
       row('Leg',      fmt(d.leg?.cut)),
       row('Shoulder', fmt(d.shoulder?.cut)),
       row('Shank',    fmt(d.shank?.cut)),
+      d.trim?.style ? row('Trim', d.trim.style === 'grind' ? 'Ground — 1 lb packs' : 'Stew — 1 lb packs') : '',
     ].join(''))
   }
 
@@ -909,6 +911,7 @@ function printV2CutCard(ci: RawInstruction, carcassTag = '') {
     if (d.leg?.cut)      { d.leg.cut      === 'grind' ? pg('Leg')      : pc('Leg',      fmt(d.leg.cut)) }
     if (d.shoulder?.cut) { d.shoulder.cut === 'grind' ? pg('Shoulder') : pc('Shoulder', fmt(d.shoulder.cut)) }
     if (d.shank?.cut)    { d.shank.cut    === 'grind' ? pg('Shank')    : pc('Shank',    fmt(d.shank.cut)) }
+    if (d.trim?.style)   { d.trim.style   === 'grind' ? pg('Trim')     : pc('Trim',     'Stew — 1 lb packs') }
   }
 
   // Strip section headers that have no cut rows under them
