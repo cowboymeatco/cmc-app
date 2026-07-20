@@ -689,10 +689,10 @@ interface PartBRow {
   saving:      string | null   // which field group is saving
 }
 
-// Part B lists EVERY carcass logged for the day, across all appointments, in
-// kill order — the crew works the rail in that order regardless of producer.
-// Scoping this per-appointment hid saved records behind whichever appointment
-// chip happened to be selected.
+// Part B is the day's rail worklist, across all appointments in kill order —
+// the crew works the rail in that order regardless of producer. A carcass is
+// relevant once Part A assigned it a kill order, and drops off once it's been
+// checked into the cooler (initial cooler temp recorded).
 function PartBTab({ date }: { date: string }) {
   const [rows, setRows]         = useState<PartBRow[]>([])
   const [loading, setLoading]   = useState(false)
@@ -703,6 +703,7 @@ function PartBTab({ date }: { date: string }) {
     const res = await fetch(`/api/harvest?type=log&date=${date}`)
     const all: HarvestLog[] = await res.json().catch(() => [])
     const dayLogs = (Array.isArray(all) ? all : [])
+      .filter(l => l.harvest_order != null && l.initial_cooler_temp_f == null)
       .sort((a, b) => (a.harvest_order ?? 999) - (b.harvest_order ?? 999))
 
     setRows(dayLogs.map(log => ({
@@ -796,13 +797,13 @@ function PartBTab({ date }: { date: string }) {
     <div>
       {rows.length > 0 && (
         <div style={{ color: C.lightBrown, fontSize: '0.8rem', marginBottom: '0.65rem' }}>
-          All {rows.length} carcass{rows.length === 1 ? '' : 'es'} logged for this date, in kill order — every producer.
+          {rows.length} carcass{rows.length === 1 ? '' : 'es'} on the rail for this date, in kill order — every producer. Carcasses drop off once checked into the cooler.
         </div>
       )}
       {loading && <div style={{ color: C.lightBrown, textAlign: 'center', padding: '2rem' }}>Loading carcasses…</div>}
       {!loading && rows.length === 0 && (
         <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '2rem', textAlign: 'center', color: C.lightBrown, fontSize: '0.88rem' }}>
-          No carcasses logged for this date yet — save animals in Part A first.
+          Nothing waiting on Part B — a carcass shows here once Part A assigns its kill order, and drops off once it&apos;s checked into the cooler.
         </div>
       )}
 
