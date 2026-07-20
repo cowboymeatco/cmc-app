@@ -104,7 +104,7 @@ const HOG_SECTIONS = [
     ['deliveryDate','Delivery Date'],
   ]},
   { label: 'Hog Cuts', fields: [
-    ['hogChops','Chops'],['hogSpareRibs','Spare Ribs'],['hogHam','Ham 1'],['hogHam2','Ham 2'],
+    ['hogChops','Chops'],['hogSpareRibs','Country Style Ribs'],['hogHam','Ham 1'],['hogHam2','Ham 2'],
     ['hogHamCut','Ham Cut'],['hogBelly','Belly'],['hogBostonButt','Boston Butt'],
   ]},
   { label: 'Sausage', fields: [
@@ -520,8 +520,8 @@ function renderV2Detail(ci: RawInstruction) {
             {d.ham?.style !== 'grind' && <V2Field label="Cut" value={hamCut(d.ham?.cut)} />}
             <V2Field label="Hocks" value={v2fmt(d.hocks?.cut) || hockStyle(d.ham)} />
           </V2Section>
-          <V2Section title="Spare Ribs">
-            <V2Field label="Spare Ribs" value={v2fmt(d.spareRibs?.cut)} />
+          <V2Section title="Country Style Ribs">
+            <V2Field label="Country Style Ribs" value={v2fmt(d.spareRibs?.cut)} />
           </V2Section>
           {porkTrimRows(d.trim, v2fmt).length > 0 && (
             <V2Section title="Sausage / Trim">
@@ -533,7 +533,7 @@ function renderV2Detail(ci: RawInstruction) {
 
       {isLG && (
         <V2Section title="Primals">
-          <V2Field label="Rack" value={v2fmt(d.rack?.cut)} />
+          <V2Field label="Rack" value={d.rack?.cut === 'whole-rack' ? `Frenched Rack of ${sp === 'goat' ? 'Goat' : 'Lamb'}` : v2fmt(d.rack?.cut)} />
           <V2Field label="Loin" value={v2fmt(d.loin?.cut)} />
           {d.loin?.cut === 'loin-chops' && (
             <>
@@ -573,6 +573,8 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
   const adds  = (arr: string[]) => arr?.length ? arr.map(fmt).join(', ') : ''
   // Handwriting blank — anything the system doesn't know gets a line to write on
   const wline = (w: number) => `<span style="display:inline-block;min-width:${w}px;border-bottom:1.5px solid #1A0A04">&nbsp;</span>`
+  // Jill's wording: a kept-whole rack reads "Frenched Rack of Lamb/Goat"
+  const rackDisplay = (v?: string) => v === 'whole-rack' ? `Frenched Rack of ${sp === 'goat' ? 'Goat' : 'Lamb'}` : fmt(v ?? '')
 
   // Primal color coding for the cutting table (Chris): chuck green,
   // rib & plate yellow, rest of the beef red
@@ -731,15 +733,15 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
       d.ham?.style !== 'grind' ? row('Cut', hamCut(d.ham?.cut)) : '',
       row('Hocks', fmt(d.hocks?.cut) || hockStyle(d.ham)),
     ].join(''))
-    cutSections += sec('Spare Ribs', [
-      row('Spare Ribs', fmt(d.spareRibs?.cut)),
+    cutSections += sec('Country Style Ribs', [
+      row('Country Style Ribs', fmt(d.spareRibs?.cut)),
     ].join(''))
     cutSections += sec('Sausage / Trim', porkTrimCutterRows(d.trim, fmt).map(([l, v]) => row(l, v)).join(''))
   }
 
   if (isLG) {
     cutSections += sec('Primals', [
-      row('Rack',     fmt(d.rack?.cut)),
+      row('Rack',     rackDisplay(d.rack?.cut)),
       row('Loin',     fmt(d.loin?.cut)),
       d.loin?.cut === 'loin-chops' && d.loin?.chopThickness ? row('Chop Thickness', thick(d.loin.chopThickness)) : '',
       d.loin?.cut === 'loin-chops' && d.loin?.chopPack ? row('Per Pack', d.loin.chopPack) : '',
@@ -928,13 +930,13 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
     }
     if (d.hocks?.cut)     pc('Hocks', fmt(d.hocks.cut))
     else if (hockStyle(d.ham)) pc('Hocks', hockStyle(d.ham))
-    ps('Spare Ribs')
-    if (d.spareRibs?.cut) pc('Spare Ribs', fmt(d.spareRibs.cut))
+    ps('Country Style Ribs')
+    if (d.spareRibs?.cut) pc('Country Style Ribs', fmt(d.spareRibs.cut))
   }
 
   if (isLG) {
     ps('Primals')
-    if (d.rack?.cut)     { d.rack.cut     === 'grind' ? pg('Rack')     : pc('Rack',     fmt(d.rack.cut)) }
+    if (d.rack?.cut)     { d.rack.cut     === 'grind' ? pg('Rack')     : pc('Rack',     rackDisplay(d.rack.cut)) }
     if (d.loin?.cut) {
       d.loin.cut === 'grind' ? pg('Loin')
         : pc('Loin', [fmt(d.loin.cut), thick(d.loin.chopThickness ?? ''), d.loin.chopPack ? `${d.loin.chopPack}/pkg` : ''].filter(Boolean).join(' · '))
@@ -1614,7 +1616,7 @@ function printCutCard(ci: RawInstruction) {
     ].join(''))
   } else if (species === 'Hog') {
     body += section('Hog Cuts', [
-      row('Chops', d.hogChops), row('Spare Ribs', d.hogSpareRibs), row('Ham 1', d.hogHam),
+      row('Chops', d.hogChops), row('Country Style Ribs', d.hogSpareRibs), row('Ham 1', d.hogHam),
       row('Ham 2', d.hogHam2), row('Ham Cut', d.hogHamCut), row('Belly', d.hogBelly),
       row('Boston Butt', d.hogBostonButt), row('Shoulder Bacon', d.hogShoulderBacon), row('Hocks', d.hogHocks),
     ].join(''))
