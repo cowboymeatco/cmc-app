@@ -1254,7 +1254,17 @@ function julianCode(dateISO: string): string {
 // ══════════════════════════════════════════════════════════════════════════════
 // WORKSHEET TAB — printable pre-harvest sheet of every checked-in animal for a day
 // ══════════════════════════════════════════════════════════════════════════════
-interface WSRow { ear_tag: string; sex: string; breed: string; over_30_months: boolean }
+interface WSRow {
+  ear_tag: string; sex: string; breed: string; over_30_months: boolean
+  // Pre-filled from this animal's harvest record (Part A/B) when one exists, so
+  // anything already typed into the app shows on the worksheet instead of a blank.
+  killOrder:  number | null
+  killType:   'USDA' | 'Custom' | null
+  half1:      number | null
+  half2:      number | null
+  total:      number | null
+  carcassTag: string | null
+}
 interface WSGroup { producer: string; species: string; rows: WSRow[] }
 
 function WorksheetTab({ date }: { date: string }) {
@@ -1269,7 +1279,12 @@ function WorksheetTab({ date }: { date: string }) {
 
   const load = useCallback(async () => {
     setLoad(true)
-    const appts: HarvestAppointment[] = await fetch(`/api/appointments?date=${d}`).then(r => r.json()).catch(() => [])
+    const [apptsRaw, logsRaw] = await Promise.all([
+      fetch(`/api/appointments?date=${d}`).then(r => r.json()).catch(() => []),
+      fetch(`/api/harvest?type=log&date=${d}`).then(r => r.json()).catch(() => []),
+    ])
+    const appts: HarvestAppointment[] = Array.isArray(apptsRaw) ? apptsRaw : []
+    const allLogs: HarvestLog[]       = Array.isArray(logsRaw)  ? logsRaw  : []
 
     // Expected head for the day (for the default tag count): everything booked
     // through in-progress, excluding cancelled/finished/no-show.
@@ -1294,10 +1309,39 @@ function WorksheetTab({ date }: { date: string }) {
         .filter(an => an.status !== 'no_show')
         .sort((x, y) => (x.animal_index ?? 0) - (y.animal_index ?? 0))
       if (live.length === 0) continue
+
+      // Pair each animal to its harvest record (if Part A/B was already saved)
+      // using the same bucket-by-ear-tag positional pairing as the Part A tab,
+      // so duplicate/blank tags still pair 1:1.
+      const apptLogs = allLogs
+        .filter(l => l.appointment_id === a.id)
+        .sort((x, y) => (x.created_at ?? '').localeCompare(y.created_at ?? ''))
+      const logsByTag = new Map<string, HarvestLog[]>()
+      apptLogs.forEach(l => {
+        const key = l.ear_tag || ''
+        const bucket = logsByTag.get(key)
+        if (bucket) bucket.push(l); else logsByTag.set(key, [l])
+      })
+      const tagCursor = new Map<string, number>()
+
       built.push({
         producer: a.source || a.customers?.[0]?.customer_name || 'Unknown',
         species:  a.species,
-        rows: live.map(an => ({ ear_tag: an.ear_tag || '', sex: an.sex || '', breed: an.breed || '', over_30_months: an.over_30_months })),
+        rows: live.map(an => {
+          const key    = an.ear_tag || ''
+          const cursor = tagCursor.get(key) ?? 0
+          const log    = logsByTag.get(key)?.[cursor] ?? null
+          tagCursor.set(key, cursor + 1)
+          return {
+            ear_tag: an.ear_tag || '', sex: an.sex || '', breed: an.breed || '', over_30_months: an.over_30_months,
+            killOrder:  log?.harvest_order ?? null,
+            killType:   log?.kill_type ?? null,
+            half1:      log?.half_1_weight_lbs ?? null,
+            half2:      log?.half_2_weight_lbs ?? null,
+            total:      log?.hot_carcass_weight_lbs ?? null,
+            carcassTag: log?.carcass_tag || null,
+          }
+        }),
       })
     }
     setGroups(built)
@@ -1324,16 +1368,18 @@ function WorksheetTab({ date }: { date: string }) {
       const head = `<tr class="grp"><td colspan="9">${esc(g.producer)} — ${esc(g.species)} · ${g.rows.length} head</td></tr>`
       const body = g.rows.map(r => {
         const cidStr = String(cid).padStart(2, '0'); cid += 1
+        // Anything already saved in Part A/B prints pre-filled; untouched fields
+        // stay blank for hand-writing at the rail.
         return `<tr>
-        <td class="cid">${cidStr}</td>
-        <td class="ko"></td>
-        <td class="kt"><span class="cb">☐ Custom</span><span class="cb">☐ USDA</span></td>
+        <td class="cid">${r.carcassTag ? esc(r.carcassTag) : cidStr}</td>
+        <td class="ko">${r.killOrder != null ? `<span class="pre">${r.killOrder}</span>` : ''}</td>
+        <td class="kt"><span class="cb">${r.killType === 'Custom' ? '☑' : '☐'} Custom</span><span class="cb">${r.killType === 'USDA' ? '☑' : '☐'} USDA</span></td>
         <td class="id">${r.ear_tag ? esc(r.ear_tag) : '—'}${r.over_30_months ? ' <span class="otm">OTM</span>' : ''}</td>
         <td>${esc(r.sex)}</td>
         <td>${esc(r.breed)}</td>
-        <td class="wt"></td>
-        <td class="wt"></td>
-        <td class="wt"></td>
+        <td class="wt">${r.half1 != null ? `<span class="pre">${r.half1}</span>` : ''}</td>
+        <td class="wt">${r.half2 != null ? `<span class="pre">${r.half2}</span>` : ''}</td>
+        <td class="wt">${r.total != null ? `<span class="pre">${r.total}</span>` : ''}</td>
       </tr>`
       }).join('')
       return head + body
@@ -1355,6 +1401,7 @@ function WorksheetTab({ date }: { date: string }) {
       td.kt { width: 0.9in; padding: 4pt 5pt; }
       td.kt .cb { display: block; font-size: 8pt; white-space: nowrap; line-height: 1.6; }
       td.id { font-weight: 600; }
+      .pre { font-weight: 700; font-size: 11pt; }
       tr.grp td { background: #ddd; font-weight: 700; font-size: 10pt; letter-spacing: 0.03em; }
       .otm { color: #bb0000; font-weight: 700; font-size: 7.5pt; border: 1pt solid #bb0000; padding: 0 2pt; margin-left: 2pt; }
       .sig { margin-top: 24pt; font-size: 9pt; }
@@ -1399,14 +1446,14 @@ function WorksheetTab({ date }: { date: string }) {
     const bodyRows = flat.map(r => `<tr>
       <td class="tag">${r.tag}</td>
       <td class="owner">${esc(r.producer)}</td>
-      <td class="kt"><span class="cb">☐ Custom</span><span class="cb">☐ USDA</span></td>
+      <td class="kt"><span class="cb">${r.killType === 'Custom' ? '☑' : '☐'} Custom</span><span class="cb">${r.killType === 'USDA' ? '☑' : '☐'} USDA</span></td>
       <td>${esc(r.species)}</td>
       <td class="id">${r.ear_tag ? esc(r.ear_tag) : '—'}${r.over_30_months ? ' <span class="otm">OTM</span>' : ''}</td>
       <td>${esc(r.sex)}</td>
       <td>${esc(r.breed)}</td>
-      <td class="wt"></td>
-      <td class="wt"></td>
-      <td class="wt"></td>
+      <td class="wt">${r.half1 != null ? `<span class="pre">${r.half1}</span>` : ''}</td>
+      <td class="wt">${r.half2 != null ? `<span class="pre">${r.half2}</span>` : ''}</td>
+      <td class="wt">${r.total != null ? `<span class="pre">${r.total}</span>` : ''}</td>
     </tr>`).join('')
 
     const css = `
@@ -1425,6 +1472,7 @@ function WorksheetTab({ date }: { date: string }) {
       td.wt { width: 0.85in; height: 26pt; }
       td.kt { width: 0.9in; padding: 3pt 5pt; }
       td.kt .cb { display: block; font-size: 8pt; white-space: nowrap; line-height: 1.6; }
+      .pre { font-weight: 700; font-size: 10.5pt; }
       .otm { color: #bb0000; font-weight: 700; font-size: 7.5pt; border: 1pt solid #bb0000; padding: 0 2pt; margin-left: 2pt; }
       .sig { margin-top: 24pt; font-size: 9pt; }
       .sig span { display: inline-block; border-top: 0.75pt solid #000; padding-top: 2pt; width: 2.4in; margin-right: 0.6in; }
@@ -1617,18 +1665,20 @@ function FragmentGroup({ group, startId }: { group: WSGroup; startId: number }) 
       </tr>
       {group.rows.map((r, i) => (
         <tr key={i} style={{ borderBottom: '1px solid rgba(166,120,90,0.1)' }}>
-          <td style={{ padding: '0.5rem 0.75rem', color: C.tan, fontWeight: 800, fontFamily: 'monospace' }}>{String(startId + i).padStart(2, '0')}</td>
-          <td style={{ padding: '0.5rem 0.75rem' }}>{blank}</td>
-          <td style={{ padding: '0.5rem 0.75rem', color: 'rgba(166,120,90,0.45)', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>☐ Custom &nbsp;☐ USDA</td>
+          <td style={{ padding: '0.5rem 0.75rem', color: C.tan, fontWeight: 800, fontFamily: 'monospace' }}>{r.carcassTag || String(startId + i).padStart(2, '0')}</td>
+          <td style={{ padding: '0.5rem 0.75rem', color: C.cream, fontWeight: 600 }}>{r.killOrder ?? blank}</td>
+          {r.killType
+            ? <td style={{ padding: '0.5rem 0.75rem' }}><KillTypeBadge killType={r.killType} /></td>
+            : <td style={{ padding: '0.5rem 0.75rem', color: 'rgba(166,120,90,0.45)', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>☐ Custom &nbsp;☐ USDA</td>}
           <td style={{ padding: '0.5rem 0.75rem', color: C.cream, fontWeight: 600 }}>
             {r.ear_tag || 'No Ear Tag'}
             {r.over_30_months && <span style={{ color: C.red, fontSize: '0.65rem', fontWeight: 700, border: `1px solid ${C.red}`, borderRadius: 2, padding: '0 3px', marginLeft: 4 }}>OTM</span>}
           </td>
           <td style={{ padding: '0.5rem 0.75rem', color: C.cream }}>{r.sex || blank}</td>
           <td style={{ padding: '0.5rem 0.75rem', color: C.lightBrown }}>{r.breed || blank}</td>
-          <td style={{ padding: '0.5rem 0.75rem' }}>{blank}</td>
-          <td style={{ padding: '0.5rem 0.75rem' }}>{blank}</td>
-          <td style={{ padding: '0.5rem 0.75rem' }}>{blank}</td>
+          <td style={{ padding: '0.5rem 0.75rem', color: C.cream }}>{r.half1 ?? blank}</td>
+          <td style={{ padding: '0.5rem 0.75rem', color: C.cream }}>{r.half2 ?? blank}</td>
+          <td style={{ padding: '0.5rem 0.75rem', color: C.cream, fontWeight: 600 }}>{r.total ?? blank}</td>
         </tr>
       ))}
     </>
