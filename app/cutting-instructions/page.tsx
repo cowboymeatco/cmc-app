@@ -1367,6 +1367,13 @@ export default function CuttingInstructionsPage() {
                 {selected.status === 'pending' && (
                   <button onClick={() => markStatus([selected.id], 'imported')} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>✓ Mark Imported</button>
                 )}
+                {isV2 && (
+                  <a href={`https://cuttinginstructions.cowboymeats.com/edit/${selected.id}`} target="_blank" rel="noreferrer"
+                    style={{ ...btnStyle('rgba(166,120,90,0.2)', 'var(--tan)'), textDecoration: 'none', display: 'inline-block' }}
+                    title="Reopen this card in the cutting form with every answer pre-filled — or text this link to the customer">
+                    ✏️ Edit
+                  </a>
+                )}
                 <button onClick={async () => isV2 ? printV2CutCard(selected, await carcassTagFor(selected, appointments)) : printCutCard(selected)} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>🖨 Print Cut Card</button>
                 {selected.status === 'archived' ? (
                   <button onClick={() => markStatus([selected.id], 'pending')} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>↩ Restore</button>
