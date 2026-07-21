@@ -1295,6 +1295,37 @@ interface WSRow {
 }
 interface WSGroup { producer: string; species: string; rows: WSRow[] }
 
+// Brother QL-810W, 2.4in (62mm DK-2205) continuous roll: one tag per label.
+// Each .tag fills the printable page height so the printer feeds & cuts a
+// SEPARATE label per tag instead of squashing the whole run onto one.
+// Shared by both pre-print flows (per-animal and blank).
+const TAG_CSS = `
+  @page { size: 2.4in 2.5in; margin: 0.1in 0.12in; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { font-family: Arial, sans-serif; color: #000; width: 2.16in; }
+  .tag { width: 2.16in; min-height: 2.3in; page-break-after: always; break-after: page; page-break-inside: avoid; break-inside: avoid; display: flex; flex-direction: column; }
+  .tag:last-child { min-height: 0; page-break-after: auto; break-after: auto; }
+  .co { font-size: 7pt; font-weight: 800; letter-spacing: 0.08em; text-align: center; border-bottom: 0.5pt solid #999; padding-bottom: 2pt; }
+  .half { text-align: center; font-size: 11pt; font-weight: 900; letter-spacing: 0.16em; border: 1.5pt solid #000; padding: 2pt 0; margin-top: 3pt; }
+  .mid { display: flex; justify-content: space-between; align-items: center; margin-top: 3pt; }
+  .jul { line-height: 1.05; }
+  .jl { font-size: 6.5pt; letter-spacing: 0.18em; color: #555; }
+  .jv { font-size: 17pt; font-weight: 900; }
+  .cal { font-size: 7pt; color: #333; }
+  .num { font-size: 36pt; font-weight: 900; letter-spacing: 0.02em; line-height: 1; }
+  .bcwrap { text-align: center; margin: 3pt 0; }
+  .bcwrap svg { max-width: 100%; height: auto; }
+  .lines { margin-top: auto; }
+  .ln { display: flex; align-items: flex-end; gap: 4pt; font-size: 8pt; margin-top: 4pt; }
+  .ln.two { gap: 6pt; }
+  .k { color: #555; white-space: nowrap; }
+  .w { flex: 1; border-bottom: 0.6pt solid #000; min-height: 12pt; }
+  /* Pre-filled value (per-animal tags) — printed, not written in, so it gets a
+     light rule instead of a heavy write-on line. */
+  .v { flex: 1; min-width: 0; font-size: 8.5pt; font-weight: 700; text-align: right; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; border-bottom: 0.4pt solid #ccc; }
+  .otm { font-size: 6.5pt; font-weight: 800; border: 1pt solid #000; padding: 0 2pt; white-space: nowrap; }
+`
+
 function WorksheetTab({ date }: { date: string }) {
   const todayStr = isoDate()
   const [d, setD]           = useState(date)
@@ -1304,6 +1335,14 @@ function WorksheetTab({ date }: { date: string }) {
   const [qty, setQty]       = useState('')   // tags to pre-print (blank → use scheduledHead)
   const [startNum, setStart] = useState('1')
   const [halves, setHalves]  = useState(true) // beef split into sides → one tag per half (2 per head)
+  // Pre-print mode. 'animals' prints a tag per checked-in animal with the
+  // producer / species / ear tag already filled in and the L+R count decided per
+  // head by the split rule; 'blank' is the original numbered write-in run, still
+  // needed to print before anyone is checked in.
+  const [tagMode, setTagMode] = useState<'animals' | 'blank'>('animals')
+  // Animals the crew has UNticked — tracked as exclusions so a newly checked-in
+  // animal is selected by default rather than silently left off the run.
+  const [skipped, setSkipped] = useState<Set<string>>(new Set())
 
   const load = useCallback(async () => {
     setLoad(true)
@@ -1398,11 +1437,42 @@ function WorksheetTab({ date }: { date: string }) {
 
   useEffect(() => { load() }, [load])
 
+  // Selections are per-day: moving to another date starts from "print everything".
+  useEffect(() => { setSkipped(new Set()) }, [d])
+
   function shiftDate(n: number) {
     setD(addDaysISO(d, n))
   }
 
   const totalHead = groups.reduce((s, g) => s + g.rows.length, 0)
+
+  // Every checked-in animal flattened into worksheet (check-in) order, each
+  // carrying the carcass ID it will be tagged with — the same numbering
+  // printSheet and printKillSheet use, so a printed tag always matches its
+  // worksheet row and kill-sheet line.
+  const tagStart = parseInt(startNum, 10) || 1
+  const flatAnimals = groups
+    .flatMap((g, gi) => g.rows.map((r, ri) => ({
+      key:      `${gi}:${ri}`,
+      producer: g.producer,
+      species:  g.species,
+      row:      r,
+      // Beef, sows and boars split into sides and need an L tag and an R tag;
+      // market hogs, lambs and goats hang whole and take a single tag.
+      split:    splitsIntoHalves(g.species, r.sex),
+    })))
+    .map((a, i) => ({ ...a, seq: tagStart + i }))
+
+  const chosen     = flatAnimals.filter(a => !skipped.has(a.key))
+  const chosenTags = chosen.reduce((s, a) => s + (a.split ? 2 : 1), 0)
+
+  function toggleAnimal(key: string) {
+    setSkipped(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+  }
   const fmtDate   = new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
   const NAV: React.CSSProperties = { background: 'rgba(166,120,90,0.12)', border: '1px solid rgba(166,120,90,0.3)', color: C.tan, borderRadius: 3, padding: '0.4rem 0.75rem', fontSize: '1rem', cursor: 'pointer', lineHeight: 1 }
 
@@ -1545,6 +1615,60 @@ function WorksheetTab({ date }: { date: string }) {
     if (w) { w.document.write(html); w.document.close() }
   }
 
+  // Print a tag for each SELECTED checked-in animal. Same physical format as the
+  // blank run below, but producer / species / ear tag print instead of being
+  // hand-written, and each head's tag count comes from the split rule rather than
+  // one day-wide checkbox — so a Sow gets L+R while the market hog behind it gets
+  // one, in the same run. Only the weights are left to write in at the rail.
+  function printAnimalTags() {
+    if (chosen.length === 0) { alert('Pick at least one animal to print tags for.'); return }
+    const esc = (s: string) => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] as string))
+    const jul     = julianCode(d)
+    const calDate = new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+
+    const barcodeCalls: string[] = []
+    const tags = chosen.map(a => {
+      const seq   = String(a.seq).padStart(2, '0')
+      const sides: (('L' | 'R') | null)[] = a.split ? ['L', 'R'] : [null]
+      const ident = [a.row.ear_tag && `ET ${a.row.ear_tag}`, a.row.sex].filter(Boolean).join(' · ')
+      return sides.map(side => {
+        const bcId = `bc${a.seq}${side ?? ''}`
+        const id   = `${jul}-${seq}${side ? `-${side}` : ''}`
+        barcodeCalls.push(`JsBarcode("#${bcId}","${id}",{format:"CODE128",width:1.4,height:30,displayValue:true,fontSize:10,margin:0,textMargin:1});`)
+        const halfBand = side ? `<div class="half">${side === 'L' ? '◀  L HALF' : 'R HALF  ▶'}</div>` : ''
+        // A side tag takes that half's weight; a whole-hanging animal (market hog,
+        // lamb, goat) has ONE carcass weight, not halves — matching Part B, which
+        // shows a single WHOLE_WEIGHT_LABEL field for these.
+        const wtLines  = side
+          ? `<div class="ln"><span class="k">Half Wt</span><span class="w"></span></div>`
+          : `<div class="ln"><span class="k">Carcass Wt</span><span class="w"></span></div>`
+        return `<div class="tag">
+          <div class="co">COWBOY MEAT CO. · FORSYTH, MT</div>
+          ${halfBand}
+          <div class="mid">
+            <div class="jul"><div class="jl">JULIAN</div><div class="jv">${jul}</div><div class="cal">${calDate}</div></div>
+            <div class="num">${seq}</div>
+          </div>
+          <div class="bcwrap"><svg id="${bcId}"></svg></div>
+          <div class="lines">
+            <div class="ln"><span class="k">Producer</span><span class="v">${esc(a.producer)}</span></div>
+            <div class="ln"><span class="k">${esc(a.species)}</span><span class="v">${esc(ident) || '—'}</span>${a.row.over_30_months ? '<span class="otm">OTM</span>' : ''}</div>
+            ${wtLines}
+          </div>
+        </div>`
+      }).join('')
+    }).join('')
+
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+      <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
+      <style>${TAG_CSS}</style></head><body>
+      ${tags}
+      <script>window.onload=function(){${barcodeCalls.join('')}window.print()}<\/script>
+    </body></html>`
+    const w = window.open('', '_blank', 'width=900,height=820')
+    if (w) { w.document.write(html); w.document.close() }
+  }
+
   // Pre-print a sheet of blank tags: Julian date + sequential #, a scannable
   // barcode of "<julian>-<seq>", and blank lines to hand-write producer/weights.
   function printTags() {
@@ -1590,34 +1714,9 @@ function WorksheetTab({ date }: { date: string }) {
       return `JsBarcode("#${bcId}","${id}",{format:"CODE128",width:1.4,height:30,displayValue:true,fontSize:10,margin:0,textMargin:1});`
     }).join('')).join('')
 
-    // Brother QL-810W, 2.4in (62mm DK-2205) continuous roll: one tag per label.
-    // Each .tag fills the printable page height so the printer feeds & cuts a
-    // SEPARATE label per tag instead of squashing the whole run onto one.
-    const css = `
-      @page { size: 2.4in 2.5in; margin: 0.1in 0.12in; }
-      * { box-sizing: border-box; margin: 0; padding: 0; }
-      html, body { font-family: Arial, sans-serif; color: #000; width: 2.16in; }
-      .tag { width: 2.16in; min-height: 2.3in; page-break-after: always; break-after: page; page-break-inside: avoid; break-inside: avoid; display: flex; flex-direction: column; }
-      .tag:last-child { min-height: 0; page-break-after: auto; break-after: auto; }
-      .co { font-size: 7pt; font-weight: 800; letter-spacing: 0.08em; text-align: center; border-bottom: 0.5pt solid #999; padding-bottom: 2pt; }
-      .half { text-align: center; font-size: 11pt; font-weight: 900; letter-spacing: 0.16em; border: 1.5pt solid #000; padding: 2pt 0; margin-top: 3pt; }
-      .mid { display: flex; justify-content: space-between; align-items: center; margin-top: 3pt; }
-      .jul { line-height: 1.05; }
-      .jl { font-size: 6.5pt; letter-spacing: 0.18em; color: #555; }
-      .jv { font-size: 17pt; font-weight: 900; }
-      .cal { font-size: 7pt; color: #333; }
-      .num { font-size: 36pt; font-weight: 900; letter-spacing: 0.02em; line-height: 1; }
-      .bcwrap { text-align: center; margin: 3pt 0; }
-      .bcwrap svg { max-width: 100%; height: auto; }
-      .lines { margin-top: auto; }
-      .ln { display: flex; align-items: flex-end; gap: 4pt; font-size: 8pt; margin-top: 4pt; }
-      .ln.two { gap: 6pt; }
-      .k { color: #555; white-space: nowrap; }
-      .w { flex: 1; border-bottom: 0.6pt solid #000; min-height: 12pt; }
-    `
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
       <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
-      <style>${css}</style></head><body>
+      <style>${TAG_CSS}</style></head><body>
       ${tags}
       <script>window.onload=function(){${barcodeCalls}window.print()}<\/script>
     </body></html>`
@@ -1643,30 +1742,95 @@ function WorksheetTab({ date }: { date: string }) {
         </div>
       </div>
 
-      {/* Pre-print blank tags (interim process before the floor printer is set up) */}
-      <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.3)', borderRadius: 4, padding: '0.85rem 1rem', display: 'flex', alignItems: 'flex-end', gap: '1rem', flexWrap: 'wrap' }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ color: C.cream, fontWeight: 700, fontSize: '0.9rem' }}>🏷 Pre-print blank tags</div>
-          <div style={{ color: C.lightBrown, fontSize: '0.76rem', marginTop: '0.15rem' }}>
-            Julian <strong style={{ color: C.tan }}>{julianCode(d)}</strong> + sequential #, with a scannable barcode. Hand-write producer &amp; weights until the floor printer is set up.
-            {(() => { const heads = (parseInt(qty, 10) || scheduledHead || 0); const labels = heads * (halves ? 2 : 1); return heads > 0 ? <> <strong style={{ color: C.tan }}>{heads} head → {labels} label{labels === 1 ? '' : 's'}{halves ? ' (L + R)' : ''}.</strong></> : null })()}
+      {/* Pre-print tags (interim process before the floor printer is set up) */}
+      <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.3)', borderRadius: 4, padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <div style={{ color: C.cream, fontWeight: 700, fontSize: '0.9rem' }}>🏷 Print tags</div>
+          {/* Mode picker — per-animal needs animals checked in, blank never does. */}
+          <div style={{ display: 'flex', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, overflow: 'hidden' }}>
+            {([['animals', 'Checked-in animals'], ['blank', 'Blank']] as const).map(([m, label]) => (
+              <button
+                key={m}
+                onClick={() => setTagMode(m)}
+                style={{ background: tagMode === m ? C.tan : 'transparent', color: tagMode === m ? C.dark : C.lightBrown, border: 'none', padding: '0.35rem 0.7rem', fontSize: '0.78rem', fontWeight: 700, cursor: 'pointer' }}
+              >{label}</button>
+            ))}
           </div>
+          <span style={{ color: C.lightBrown, fontSize: '0.78rem' }}>Julian <strong style={{ color: C.tan }}>{julianCode(d)}</strong></span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'flex-end', gap: '0.6rem', marginLeft: 'auto', flexWrap: 'wrap' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', color: halves ? C.cream : C.lightBrown, fontSize: '0.82rem', fontWeight: 600, paddingBottom: '0.5rem' }} title="Beef carcasses split into two sides — print an L tag and an R tag for each head">
-            <input type="checkbox" checked={halves} onChange={e => setHalves(e.target.checked)} style={{ width: 16, height: 16, accentColor: C.tan, cursor: 'pointer' }} />
-            2 per head (L + R)
-          </label>
-          <div>
-            <label style={LABEL}>How many head</label>
-            <input type="number" min="1" value={qty} onChange={e => setQty(e.target.value)} placeholder={String(scheduledHead || '')} style={{ ...INPUT, width: '6.5rem' }} />
+
+        {tagMode === 'animals' ? (
+          <>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: '0.6rem', flexWrap: 'wrap' }}>
+              <div style={{ color: C.lightBrown, fontSize: '0.76rem', minWidth: 0, flex: 1 }}>
+                Producer, species &amp; ear tag print on the tag — only weights get written in. Beef, sows &amp; boars get an L and an R tag; market hogs, lambs &amp; goats get one.
+                {flatAnimals.length > 0 && <> <strong style={{ color: C.tan }}>{chosen.length} of {flatAnimals.length} animal{flatAnimals.length === 1 ? '' : 's'} → {chosenTags} label{chosenTags === 1 ? '' : 's'}.</strong></>}
+              </div>
+              {flatAnimals.length > 0 && (
+                <button onClick={() => setSkipped(prev => prev.size > 0 ? new Set() : new Set(flatAnimals.map(a => a.key)))} style={{ ...BTN('rgba(166,120,90,0.12)', C.tan), border: '1px solid rgba(166,120,90,0.3)', fontSize: '0.78rem' }}>
+                  {skipped.size > 0 ? 'Select all' : 'Clear all'}
+                </button>
+              )}
+              <div>
+                <label style={LABEL}>Start at #</label>
+                <input type="number" min="1" value={startNum} onChange={e => setStart(e.target.value)} style={{ ...INPUT, width: '5.5rem' }} />
+              </div>
+              <button onClick={printAnimalTags} disabled={chosen.length === 0} style={{ ...BTN(C.tan, C.dark), opacity: chosen.length === 0 ? 0.5 : 1, cursor: chosen.length === 0 ? 'not-allowed' : 'pointer' }}>🖨 Print Tags</button>
+            </div>
+
+            {flatAnimals.length === 0 ? (
+              <div style={{ color: C.lightBrown, fontSize: '0.78rem', fontStyle: 'italic' }}>
+                Nobody checked in for this date yet — use <strong style={{ color: C.tan }}>Blank</strong> to pre-print a numbered run.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                {flatAnimals.map(a => {
+                  const on = !skipped.has(a.key)
+                  return (
+                    <button
+                      key={a.key}
+                      onClick={() => toggleAnimal(a.key)}
+                      title={`${a.producer} · ${a.species}${a.row.sex ? ` · ${a.row.sex}` : ''} — ${a.split ? '2 tags (L + R)' : '1 tag (hangs whole)'}`}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '0.45rem', textAlign: 'left', cursor: 'pointer',
+                        background: on ? 'rgba(166,120,90,0.16)' : 'transparent',
+                        border: `1px solid ${on ? 'rgba(166,120,90,0.5)' : 'rgba(166,120,90,0.2)'}`,
+                        borderRadius: 3, padding: '0.35rem 0.6rem', opacity: on ? 1 : 0.5,
+                      }}
+                    >
+                      <span style={{ color: on ? C.tan : C.lightBrown, fontWeight: 800, fontSize: '0.85rem', fontVariantNumeric: 'tabular-nums' }}>{String(a.seq).padStart(2, '0')}</span>
+                      <span style={{ color: on ? C.cream : C.lightBrown, fontSize: '0.78rem' }}>
+                        {a.producer} · {a.species}{a.row.ear_tag ? ` · ${a.row.ear_tag}` : ''}
+                      </span>
+                      <span style={{ color: C.lightBrown, fontSize: '0.7rem', fontWeight: 700, whiteSpace: 'nowrap' }}>{a.split ? '2 ×' : '1 ×'}</span>
+                      {a.row.over_30_months && <span style={{ color: '#e08a8a', fontSize: '0.65rem', fontWeight: 800 }}>OTM</span>}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <div style={{ color: C.lightBrown, fontSize: '0.76rem', minWidth: 0, flex: 1 }}>
+              Julian <strong style={{ color: C.tan }}>{julianCode(d)}</strong> + sequential #, with a scannable barcode. Hand-write producer &amp; weights.
+              {(() => { const heads = (parseInt(qty, 10) || scheduledHead || 0); const labels = heads * (halves ? 2 : 1); return heads > 0 ? <> <strong style={{ color: C.tan }}>{heads} head → {labels} label{labels === 1 ? '' : 's'}{halves ? ' (L + R)' : ''}.</strong></> : null })()}
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', color: halves ? C.cream : C.lightBrown, fontSize: '0.82rem', fontWeight: 600, paddingBottom: '0.5rem' }} title="Beef carcasses split into two sides — print an L tag and an R tag for each head">
+              <input type="checkbox" checked={halves} onChange={e => setHalves(e.target.checked)} style={{ width: 16, height: 16, accentColor: C.tan, cursor: 'pointer' }} />
+              2 per head (L + R)
+            </label>
+            <div>
+              <label style={LABEL}>How many head</label>
+              <input type="number" min="1" value={qty} onChange={e => setQty(e.target.value)} placeholder={String(scheduledHead || '')} style={{ ...INPUT, width: '6.5rem' }} />
+            </div>
+            <div>
+              <label style={LABEL}>Start at #</label>
+              <input type="number" min="1" value={startNum} onChange={e => setStart(e.target.value)} style={{ ...INPUT, width: '5.5rem' }} />
+            </div>
+            <button onClick={printTags} style={BTN(C.tan, C.dark)}>🖨 Print Tags</button>
           </div>
-          <div>
-            <label style={LABEL}>Start at #</label>
-            <input type="number" min="1" value={startNum} onChange={e => setStart(e.target.value)} style={{ ...INPUT, width: '5.5rem' }} />
-          </div>
-          <button onClick={printTags} style={BTN(C.tan, C.dark)}>🖨 Print Tags</button>
-        </div>
+        )}
       </div>
 
       <div style={{ color: C.lightBrown, fontSize: '0.8rem' }}>
