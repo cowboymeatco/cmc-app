@@ -282,6 +282,21 @@ function julianLot(dateISO: string | null | undefined): string {
   return `${String(dt.getFullYear()).slice(-2)}${String(dayOfYear).padStart(3, '0')}`
 }
 
+// Appointments are loaded once when the page mounts, so a tab that has been
+// open since before a card was linked — or since the tag and weight were
+// entered in Part B — would print producer, lot, tag and hanging weight as
+// blank handwriting lines (Jill, 2026-07-21). Re-read them at print time and
+// fall back to what's in hand if the refresh fails, so printing never breaks.
+async function freshAppointments(current: HarvestAppointment[]): Promise<HarvestAppointment[]> {
+  try {
+    const res = await fetch('/api/appointments')
+    const data = await res.json()
+    return Array.isArray(data) && data.length ? data as HarvestAppointment[] : current
+  } catch {
+    return current
+  }
+}
+
 // Every carcass this card is linked to. A customer taking more than one
 // animal's worth is linked on several appointments, and each gets its own card.
 async function carcassInfosFor(ci: RawInstruction, appointments: HarvestAppointment[]): Promise<CarcassInfo[]> {
@@ -1645,7 +1660,7 @@ export default function CuttingInstructionsPage() {
                     ✏️ Edit
                   </a>
                 )}
-                <button onClick={async () => isV2 ? printV2CutCard(selected, await carcassInfosFor(selected, appointments)) : printCutCard(selected)} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>🖨 Print Cut Card</button>
+                <button onClick={async () => isV2 ? printV2CutCard(selected, await carcassInfosFor(selected, await freshAppointments(appointments))) : printCutCard(selected)} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>🖨 Print Cut Card</button>
                 {selected.status === 'archived' ? (
                   <button onClick={() => markStatus([selected.id], 'pending')} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>↩ Restore</button>
                 ) : (
