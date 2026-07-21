@@ -517,6 +517,8 @@ function renderV2Detail(ci: RawInstruction) {
         <V2Field label="Email" value={d.customerEmail} />
         <V2Field label="Kill Date" value={d.killDate} />
         <V2Field label="Portion" value={v2fmt(d.portion)} />
+        {/* Asked once for the whole order, so it lives here rather than on each cut. */}
+        <V2Field label="Steaks Per Pack" value={d.steakPack} />
         <V2Field label="Notes" value={d.notes} />
       </V2Section>
 
@@ -736,6 +738,9 @@ function printV2CutCard(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInf
   const isLG   = sp === 'lamb' || sp === 'goat'
 
   const fmt   = (v: string) => v ? v.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : ''
+  // The card is built as an HTML string from a public form's JSONB, so anything
+  // interpolated raw gets escaped first.
+  const esc   = (v: unknown) => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string))
   const thick = (v: string) => v ? `${v}"` : ''
   const withT = (cut: string, t: string) => [fmt(cut), thick(t)].filter(Boolean).join(' — ')
   const adds  = (arr: string[]) => arr?.length ? arr.map(fmt).join(', ') : ''
@@ -1269,6 +1274,9 @@ function printV2CutCard(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInf
          <div style="font-size:12px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Animal</div>
          <div style="font-size:24px;font-weight:bold">${species}${d.portion ? ' · ' + fmt(d.portion) : ''}</div>
          <div style="font-size:16px;color:#555;margin-top:1px">Kill Date: ${d.killDate ?? '—'}</div>
+         ${/* One answer for the whole order, so it rides in the header where it
+              governs every steak below rather than repeating on each row. */
+           d.steakPack ? `<div style="font-size:18px;margin-top:3px">Steaks: <span style="font-weight:bold">${esc(String(d.steakPack))} per pack</span></div>` : ''}
          ${
            // Custom Exempt can never be sold, so it prints loud and inverted;
            // USDA prints as a quieter outline. Unknown gets a line to write on
@@ -1333,6 +1341,7 @@ ${carcasses.map((carcass, ci_) => {
     <span style="margin-left:14px">Producer: <span style="font-weight:bold">${carcass.producer || wline(110)}</span></span>
     <span style="margin-left:14px">Lot # <span style="font-weight:bold">${carcass.lot || wline(46)}</span> · Tag # <span style="font-weight:bold">${carcass.tag || wline(38)}</span></span>
     <span style="margin-left:14px">Hanging Wt: <span style="font-weight:bold">${carcass.hcw != null ? `${carcass.hcw} lbs` : wline(58)}</span></span>
+    ${d.steakPack ? `<span style="margin-left:14px">Steaks: <span style="font-weight:bold">${esc(String(d.steakPack))} per pack</span></span>` : ''}
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
     ${packCols.map(col => `<div>${col.length ? buildPackTable(col) : ''}</div>`).join('')}
