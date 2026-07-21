@@ -69,6 +69,62 @@ function porkTrimRows(t: any, f: (s: string) => string): Array<[string, string]>
   return rows
 }
 
+// Smokehouse orders — what the customer wants built out of their trim. These
+// never reached any printed sheet, so the floor had no way to know how much
+// trim to hold back before the rest went to grind (Charlie, 2026-07-21).
+function smokehouseRows(sm: any, f: (s: string) => string): Array<[string, string]> {
+  if (!sm) return []
+  const rows: Array<[string, string]> = []
+  const add = (label: string, items: any) => {
+    if (!Array.isArray(items)) return
+    for (const it of items) {
+      const spec = [it?.lbs ? `${it.lbs} lbs` : '', f(it?.flavor ?? ''), it?.cheese ? f(it.cheese) : '']
+        .filter(Boolean).join(' · ')
+      if (spec) rows.push([label, spec])
+    }
+  }
+  add('Snack Sticks',   sm.sticks)
+  add('Brats',          sm.brats)
+  add('Summer Sausage', sm.summer)
+  add('Jerky',          sm.jerky)
+  if (sm.hotDogs) {
+    const spec = [sm.hotDogs.lbs ? `${sm.hotDogs.lbs} lbs` : '', sm.hotDogs.cheese ? f(sm.hotDogs.cheese) : '']
+      .filter(Boolean).join(' · ')
+    if (spec) rows.push(['Hot Dogs', spec])
+  }
+  return rows
+}
+
+// Trim committed to the smokehouse, in lbs — the number that decides how much
+// to save back, so the crew doesn't have to add up the lines themselves.
+function smokehouseTotalLbs(sm: any): number {
+  if (!sm) return 0
+  const sum = (items: any) => Array.isArray(items)
+    ? items.reduce((s: number, i: any) => s + (Number(i?.lbs) || 0), 0) : 0
+  return sum(sm.sticks) + sum(sm.brats) + sum(sm.summer) + sum(sm.jerky) + (Number(sm.hotDogs?.lbs) || 0)
+}
+
+// Everything we charge to MAKE — curing (bacon, cured hams) and sausage work.
+// Billing is on the raw weight going in, which nothing captured, so each of
+// these gets a blank to write on. Driven off the order, so a customer who
+// didn't buy bacon never gets a bacon line.
+function rawWeighInRows(d: any, f: (s: string) => string): Array<[string, string]> {
+  const rows: Array<[string, string]> = []
+  const belly = d?.belly
+  if (belly?.cut === 'bacon' || belly?.cut2 === 'bacon') {
+    const both = belly.cut === 'bacon' && belly.cut2 === 'bacon'
+    rows.push(['Bacon', both ? 'Both bellies · cure & smoke' : 'Cure & smoke'])
+  }
+  const ham = d?.ham
+  const curedHams = [ham?.style, ham?.style2].filter(s => s === 'cured-smoked').length
+  if (curedHams > 0) rows.push(['Ham — Cure & Smoke', [curedHams > 1 ? 'Both hams' : '', f(ham?.cut ?? '')].filter(Boolean).join(' · ')])
+  const t = d?.trim
+  if (t?.flavor1) rows.push(['Sausage 1', f(t.flavor1)])
+  if (t?.split === 'yes' && t?.flavor2) rows.push(['Sausage 2', f(t.flavor2)])
+  for (const [label, spec] of smokehouseRows(d?.smokehouse, f)) rows.push([label, spec])
+  return rows
+}
+
 // ── Cut card field definitions by species ─────────────────────────────────────
 
 const BEEF_SECTIONS = [
@@ -576,6 +632,17 @@ function renderV2Detail(ci: RawInstruction) {
         </V2Section>
       )}
 
+      {smokehouseRows(d.smokehouse, v2fmt).length > 0 && (
+        <V2Section title="Smokehouse">
+          {smokehouseRows(d.smokehouse, v2fmt).map(([label, value], i) => (
+            <V2Field key={i} label={label} value={value} />
+          ))}
+          {smokehouseTotalLbs(d.smokehouse) > 0 && (
+            <V2Field label="Trim to save" value={`${+smokehouseTotalLbs(d.smokehouse).toFixed(1)} lbs total`} />
+          )}
+        </V2Section>
+      )}
+
       {d.specialty?.interest && (
         <V2Section title="Specialty Items">
           <V2Field label="Interested" value={d.specialty.interest === 'yes' ? 'Yes — crew will call' : 'No thanks'} />
@@ -775,6 +842,19 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
     ].join(''))
   }
 
+  // Smokehouse on the CUTTER's page too — they're the ones deciding what goes
+  // to the grind bucket, so they need the trim total before it's all ground.
+  {
+    const smokeCardRows = smokehouseRows(d.smokehouse, fmt)
+    if (smokeCardRows.length) {
+      const totalLbs = smokehouseTotalLbs(d.smokehouse)
+      cutSections += sec('Smokehouse', [
+        ...smokeCardRows.map(([l, v]) => row(l, v)),
+        totalLbs > 0 ? row('Trim to save', `${+totalLbs.toFixed(1)} lbs total`) : '',
+      ].join(''))
+    }
+  }
+
   if (d.specialty?.interest) {
     cutSections += sec('Specialty Items', [
       row('Interested', d.specialty.interest === 'yes' ? 'Yes — crew will call' : 'No thanks'),
@@ -784,7 +864,7 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
   if (d.notes) cutSections += sec('Special Notes', row('Notes', d.notes))
 
   // ── Page 2: Packaging Sheet ───────────────────────────────────────────────
-  type PR = { sectionTitle?: string; cut?: string; spec?: string; isGrind?: boolean; isAddon?: boolean }
+  type PR = { sectionTitle?: string; cut?: string; spec?: string; isGrind?: boolean; isAddon?: boolean; writeIn?: boolean }
   const prs: PR[] = []
   const grindFrom: string[] = []
 
@@ -1006,6 +1086,26 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
     if (grindFrom.length) filteredPrs.push({ cut: `Ground ${species}`, spec: `From: ${grindFrom.join(', ')}`, isGrind: true })
   }
 
+  // Smokehouse: what to build from this animal's trim, and the total to hold
+  // back before the rest is ground.
+  const smokeRows = smokehouseRows(d.smokehouse, fmt)
+  if (smokeRows.length) {
+    filteredPrs.push({ sectionTitle: 'Smokehouse' })
+    smokeRows.forEach(([l, v]) => filteredPrs.push({ cut: l, spec: v }))
+    const totalLbs = smokehouseTotalLbs(d.smokehouse)
+    if (totalLbs > 0) {
+      filteredPrs.push({ cut: 'Trim to save', spec: `${+totalLbs.toFixed(1)} lbs total for the smokehouse`, isGrind: true })
+    }
+  }
+
+  // Raw weight in, for billing curing and sausage work. Blank by design — the
+  // Wt (lbs) column is where it gets written as each batch goes in.
+  const weighIn = rawWeighInRows(d, fmt)
+  if (weighIn.length) {
+    filteredPrs.push({ sectionTitle: 'Raw Weight In — Curing & Sausage' })
+    weighIn.forEach(([l, v]) => filteredPrs.push({ cut: l, spec: v, writeIn: true }))
+  }
+
   // ── Split packaging rows into balanced columns (at section boundaries) ────
   // Landscape fits three tables across; splits only ever land where a new
   // section starts so a primal's rows never straddle columns.
@@ -1048,8 +1148,11 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
       tbody += `<tr style="background:${bg}">
         <td style="padding:6px ${pl} 6px 8px;font-size:22px;font-weight:${fw};font-style:${fi};color:${clr};vertical-align:top">${pr.cut ?? ''}</td>
         <td style="padding:6px 8px;font-size:18px;color:#555;vertical-align:top">${pr.spec ?? ''}</td>
-        <td style="padding:6px 4px;width:58px;border-left:1px solid #ddd;text-align:center"> </td>
-        <td style="padding:6px 4px;width:68px;border-left:1px solid #ddd;text-align:center"> </td>
+        <td style="padding:6px 4px;width:58px;border-left:1px solid #ddd;text-align:center">${pr.writeIn ? '<span style="color:#bbb;font-size:16px">—</span>' : ' '}</td>
+        <td style="padding:6px 4px;width:68px;border-left:1px solid #ddd;text-align:center">${
+          // A ruled blank, so the raw weight has an obvious place to land
+          pr.writeIn ? '<span style="display:inline-block;width:56px;border-bottom:1.5px solid #1A0A04">&nbsp;</span>' : ' '
+        }</td>
         <td style="padding:6px 4px;width:36px;border-left:1px solid #ddd;text-align:center;font-size:20px;color:#999">☐</td>
       </tr>`
     }
