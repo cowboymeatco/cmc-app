@@ -53,19 +53,31 @@ function beefTrimRows(t: any): Array<[string, string]> {
 
 // v2 pork sausage: flavor is a processing decision, format is packaging —
 // the packaging rows keep the flavor so each format is tied to its sausage
+// Rows are named for the flavor rather than "Sausage 1 / 2". Plain ground pork
+// under a "Sausage 1" label read as a stale leftover row (Jill), and naming the
+// flavor still separates two rows that share one — a trim split into pork
+// sausage links AND pork sausage patties reads as two clear lines.
+const trimSplitOf = (t: any) => t?.split === 'yes' && !!t?.flavor2
+
+// The cutter's page carries flavor AND format now, plus each flavor's share, so
+// the trim gets divided at the table instead of guessed at (Jill, 2026-07-21).
 function porkTrimCutterRows(t: any, f: (s: string) => string): Array<[string, string]> {
   if (!t) return []
+  const split = trimSplitOf(t)
+  const share = split ? '50% of trim' : 'all trim'
   const rows: Array<[string, string]> = []
-  if (t.flavor1) rows.push(['Sausage 1', f(t.flavor1)])
-  if (t.split === 'yes' && t.flavor2) rows.push(['Sausage 2', f(t.flavor2)])
+  if (t.flavor1) rows.push([f(t.flavor1), [f(t.format1 ?? ''), share].filter(Boolean).join(' · ')])
+  if (split)     rows.push([f(t.flavor2), [f(t.format2 ?? ''), share].filter(Boolean).join(' · ')])
   return rows
 }
 
 function porkTrimRows(t: any, f: (s: string) => string): Array<[string, string]> {
   if (!t) return []
+  const split = trimSplitOf(t)
+  const share = split ? '50% of trim' : ''
   const rows: Array<[string, string]> = []
-  if (t.flavor1) rows.push(['Sausage 1', [f(t.flavor1), f(t.format1 ?? '')].filter(Boolean).join(' · ')])
-  if (t.split === 'yes' && t.flavor2) rows.push(['Sausage 2', [f(t.flavor2), f(t.format2 ?? '')].filter(Boolean).join(' · ')])
+  if (t.flavor1) rows.push([f(t.flavor1), [f(t.format1 ?? ''), share].filter(Boolean).join(' · ')])
+  if (split)     rows.push([f(t.flavor2), [f(t.format2 ?? ''), share].filter(Boolean).join(' · ')])
   return rows
 }
 
@@ -130,9 +142,12 @@ function rawWeighInRows(d: any, f: (s: string) => string): Array<[string, string
   const ham = d?.ham
   const curedHams = [ham?.style, ham?.style2].filter(s => s === 'cured-smoked').length
   if (curedHams > 0) rows.push(['Ham — Cure & Smoke', [curedHams > 1 ? 'Both hams' : '', f(ham?.cut ?? '')].filter(Boolean).join(' · ')])
+  // Plain ground pork is just grinding, not sausage making — no making charge,
+  // so it gets no weigh-in line.
   const t = d?.trim
-  if (t?.flavor1) rows.push(['Sausage 1', f(t.flavor1)])
-  if (t?.split === 'yes' && t?.flavor2) rows.push(['Sausage 2', f(t.flavor2)])
+  const billable = (flavor?: string | null) => !!flavor && flavor !== 'ground-pork'
+  if (billable(t?.flavor1)) rows.push([f(t.flavor1), f(t.format1 ?? '')])
+  if (t?.split === 'yes' && billable(t?.flavor2)) rows.push([f(t.flavor2), f(t.format2 ?? '')])
   for (const [label, spec] of smokehouseRows(d?.smokehouse, f)) rows.push([label, spec])
   return rows
 }
@@ -244,8 +259,16 @@ function fmtShortDate(v?: string | null): string {
 // Carcass tag for a linked instruction: exact carcass assignment first
 // (Cut Schedule's carcass_assignments), else the appointment's only animal,
 // else '' → the printed card keeps its blank handwriting line
-type CarcassInfo = { tag: string; lot: string; producer: string; hcw: number | string | null }
-const EMPTY_CARCASS: CarcassInfo = { tag: '', lot: '', producer: '', hcw: null }
+type CarcassInfo = { tag: string; lot: string; producer: string; hcw: number | string | null; killType: string }
+const EMPTY_CARCASS: CarcassInfo = { tag: '', lot: '', producer: '', hcw: null, killType: '' }
+
+// USDA vs Custom Exempt decides whether the meat can ever be sold, so it has to
+// be on the card the floor works from (Jill, 2026-07-21). Part B stores
+// 'Custom'; spell it out — "Custom" alone doesn't say "not for sale".
+function killTypeLabel(kt?: string | null): string {
+  if (!kt) return ''
+  return kt === 'Custom' ? 'CUSTOM EXEMPT — NOT FOR SALE' : kt === 'USDA' ? 'USDA INSPECTED' : v2fmt(kt)
+}
 
 // Julian lot code YYDDD (e.g. 2026-06-25 → "26176") — matches the pre-printed
 // carcass tags from the harvest worksheet.
@@ -287,6 +310,7 @@ async function carcassInfoFor(ci: RawInstruction, appointments: HarvestAppointme
       tag: hasLotPrefix ? rawTag.slice(dash + 1) : rawTag,
       producer: log?.producer || appt.source || '',
       hcw: log?.hot_carcass_weight_lbs ?? null,
+      killType: log?.kill_type ?? '',
     }
   } catch {
     return EMPTY_CARCASS
@@ -1208,6 +1232,16 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
          <div style="font-size:12px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Animal</div>
          <div style="font-size:24px;font-weight:bold">${species}${d.portion ? ' · ' + fmt(d.portion) : ''}</div>
          <div style="font-size:16px;color:#555;margin-top:1px">Kill Date: ${d.killDate ?? '—'}</div>
+         ${
+           // Custom Exempt can never be sold, so it prints loud and inverted;
+           // USDA prints as a quieter outline. Unknown gets a line to write on
+           // rather than silence, since the floor must not have to assume.
+           carcass.killType === 'Custom'
+             ? `<div style="margin-top:4px;display:inline-block;background:#1A0A04;color:#F2E8D9;font-size:14px;font-weight:bold;letter-spacing:0.06em;padding:2px 7px">${killTypeLabel(carcass.killType)}</div>`
+             : carcass.killType
+               ? `<div style="margin-top:4px;display:inline-block;border:1.5px solid #1A0A04;font-size:14px;font-weight:bold;letter-spacing:0.06em;padding:1px 6px">${killTypeLabel(carcass.killType)}</div>`
+               : `<div style="font-size:16px;color:#555;margin-top:3px">Inspection: ${wline(120)}</div>`
+         }
        </div>
        <div style="padding:7px 12px">
          <div style="font-size:12px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Producer · Lot / Tag</div>
@@ -1484,7 +1518,7 @@ export default function CuttingInstructionsPage() {
             ✏️ New Cutting Card →
           </a>
           <button
-            onClick={() => printV2CutCard(FAKE_CI, { lot: '26153', tag: '02', producer: 'Test Producer', hcw: 645 })}
+            onClick={() => printV2CutCard(FAKE_CI, { lot: '26153', tag: '02', producer: 'Test Producer', hcw: 645, killType: 'USDA' })}
             style={{ background: 'transparent', color: 'var(--tan)', border: '1px solid rgba(166,120,90,0.4)', borderRadius: '6px', padding: '0.4rem 0.9rem', fontWeight: 600, fontSize: '0.8rem', cursor: 'pointer', whiteSpace: 'nowrap' }}
           >
             🧪 Test Card
