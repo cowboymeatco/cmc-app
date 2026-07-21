@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { HarvestAppointment, HarvestLog, ChillLog, AnimalReceivingLog, CorrectiveAction } from '@/lib/types'
 import { setFeedbackContext, clearFeedbackContext } from '@/lib/feedbackTelemetry'
 import { isoDate, isoDateTime, addDaysISO } from '@/lib/dates'
+import { splitsIntoHalves, WHOLE_WEIGHT_LABEL } from '@/lib/carcass'
 
 type Tab = 'parta' | 'partb' | 'worksheet' | 'harvestlog' | 'chill'
 
@@ -120,9 +121,9 @@ function printCarcassTags(h: HarvestLog) {
       <script>JsBarcode("#${bcId}","${barcodeVal}",{format:"CODE128",width:2.4,height:70,displayValue:true,fontSize:9,margin:10,textMargin:2});<\/script>
     </div>`
   }
-  // Beef carcasses are split into sides → one tag per half. Small animals
-  // (hog / lamb / goat) hang whole → a single carcass tag.
-  const isBeef     = h.species === 'Beef'
+  // Split carcasses (beef, sows, boars) get one tag per side; whole-hanging
+  // ones (lamb, goat, market hog) get a single tag.
+  const isBeef     = splitsIntoHalves(h.species, h.sex)
   const labelsHtml = isBeef
     ? `${makeLabel('L','bc-l')}${makeLabel('R','bc-r')}`
     : makeLabel('WHOLE','bc-w')
@@ -672,6 +673,7 @@ function PartATab({ date, appt }: { date: string; appt: HarvestAppointment | nul
 interface PartBFields {
   half1:       string
   half2:       string
+  whole:       string   // single-weight carcasses (lamb, goat, market hog)
   ztPass:      boolean | null
   ztDirect:    boolean
   hwPass:      boolean | null
@@ -715,6 +717,10 @@ function PartBTab({ date }: { date: string }) {
       fields: {
         half1:      log.half_1_weight_lbs != null ? String(log.half_1_weight_lbs) : '',
         half2:      log.half_2_weight_lbs != null ? String(log.half_2_weight_lbs) : '',
+        // Older single-weight records were typed into a half field before this
+        // form knew the difference — read any of the three.
+        whole:      (log.hot_carcass_weight_lbs ?? log.half_1_weight_lbs ?? log.half_2_weight_lbs) != null
+                      ? String(log.hot_carcass_weight_lbs ?? log.half_1_weight_lbs ?? log.half_2_weight_lbs) : '',
         ztPass:     log.zero_tolerance_pass ?? null,
         ztDirect:   log.zero_tolerance_direct_obs ?? false,
         hwPass:     log.intervention_temp_f != null ? log.ccp_pass : null,
@@ -745,17 +751,19 @@ function PartBTab({ date }: { date: string }) {
 
   async function saveWeights(i: number) {
     const { fields, log } = rows[i]
-    const h1  = fields.half1 ? parseFloat(fields.half1) : null
-    const h2  = fields.half2 ? parseFloat(fields.half2) : null
-    const hcw = h1 != null && h2 != null ? h1 + h2 : h1 ?? h2
-    const lw  = log.live_weight_lbs
-    const yld = lw && hcw ? Math.round((hcw / lw) * 1000) / 10 : null
+    const split = splitsIntoHalves(log.species, log.sex)
+    // Whole-hanging carcasses record one weight and no halves; split carcasses
+    // record a side each and the API sums them. Yield is derived server-side.
+    const h1  = split && fields.half1 ? parseFloat(fields.half1) : null
+    const h2  = split && fields.half2 ? parseFloat(fields.half2) : null
+    const hcw = split
+      ? (h1 != null && h2 != null ? h1 + h2 : h1 ?? h2)
+      : (fields.whole ? parseFloat(fields.whole) : null)
     await patch(i, 'weights', {
       carcass_tag:            fields.carcassTag,
       half_1_weight_lbs:      h1,
       half_2_weight_lbs:      h2,
       hot_carcass_weight_lbs: hcw,
-      yield_pct:              yld,
     })
   }
 
@@ -812,9 +820,15 @@ function PartBTab({ date }: { date: string }) {
       )}
 
       {rows.map((row, i) => {
+        // Beef, sows and boars come off the rail in halves; lambs, goats and
+        // market hogs hang whole and take a single weight.
+        const split = splitsIntoHalves(row.log.species, row.log.sex)
         const h1  = row.fields.half1 ? parseFloat(row.fields.half1) : null
         const h2  = row.fields.half2 ? parseFloat(row.fields.half2) : null
-        const hcw = h1 != null && h2 != null ? (h1 + h2).toFixed(1) : h1 != null ? h1.toFixed(1) : h2 != null ? h2.toFixed(1) : null
+        const whole = row.fields.whole ? parseFloat(row.fields.whole) : null
+        const hcw = split
+          ? (h1 != null && h2 != null ? (h1 + h2).toFixed(1) : h1 != null ? h1.toFixed(1) : h2 != null ? h2.toFixed(1) : null)
+          : (whole != null ? whole.toFixed(1) : null)
         const lw  = row.log.live_weight_lbs
         const yld = lw && hcw ? ((parseFloat(hcw) / lw) * 100).toFixed(1) : null
 
@@ -883,24 +897,33 @@ function PartBTab({ date }: { date: string }) {
                 {/* ── Weights ── */}
                 <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.12)' }}>
                   <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.65rem' }}>⚖ Carcass Weights</div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '0 1rem', marginBottom: '0.75rem' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: split ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr', gap: '0 1rem', marginBottom: '0.75rem' }}>
                     <div>
                       <label style={LABEL}>Carcass Tag #</label>
                       <input style={INPUT} value={row.fields.carcassTag} onChange={e => updField(i, { carcassTag: e.target.value })} placeholder="001" />
                     </div>
+                    {split ? (
+                      <>
+                        <div>
+                          <label style={LABEL}>Left Half (lbs)</label>
+                          <input type="number" step="0.1" style={INPUT} value={row.fields.half1} onChange={e => updField(i, { half1: e.target.value })} placeholder="0.0" />
+                        </div>
+                        <div>
+                          <label style={LABEL}>Right Half (lbs)</label>
+                          <input type="number" step="0.1" style={INPUT} value={row.fields.half2} onChange={e => updField(i, { half2: e.target.value })} placeholder="0.0" />
+                        </div>
+                      </>
+                    ) : (
+                      <div>
+                        <label style={LABEL}>{WHOLE_WEIGHT_LABEL}</label>
+                        <input type="number" step="0.1" style={INPUT} value={row.fields.whole} onChange={e => updField(i, { whole: e.target.value })} placeholder="0.0" />
+                      </div>
+                    )}
                     <div>
-                      <label style={LABEL}>Left Half (lbs)</label>
-                      <input type="number" step="0.1" style={INPUT} value={row.fields.half1} onChange={e => updField(i, { half1: e.target.value })} placeholder="0.0" />
-                    </div>
-                    <div>
-                      <label style={LABEL}>Right Half (lbs)</label>
-                      <input type="number" step="0.1" style={INPUT} value={row.fields.half2} onChange={e => updField(i, { half2: e.target.value })} placeholder="0.0" />
-                    </div>
-                    <div>
-                      <label style={LABEL}>HCW (auto)</label>
+                      <label style={LABEL}>{split ? 'HCW (auto)' : 'Yield'}</label>
                       <div style={{ ...INPUT, color: C.tan, fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                        {hcw ? `${hcw} lbs` : '—'}
-                        {yld && <span style={{ color: C.lightBrown, fontSize: '0.75rem' }}>({yld}%)</span>}
+                        {split ? (hcw ? `${hcw} lbs` : '—') : (yld ? `${yld}%` : '—')}
+                        {split && yld && <span style={{ color: C.lightBrown, fontSize: '0.75rem' }}>({yld}%)</span>}
                       </div>
                     </div>
                   </div>
