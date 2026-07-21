@@ -1083,7 +1083,13 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
   if (trimPrs.length || grindFrom.length) {
     filteredPrs.push({ sectionTitle: isPork ? 'Sausage / Trim' : `Ground ${species}` })
     trimPrs.forEach(([l, v]) => filteredPrs.push({ cut: l, spec: v }))
-    if (grindFrom.length) filteredPrs.push({ cut: `Ground ${species}`, spec: `From: ${grindFrom.join(', ')}`, isGrind: true })
+    // On pork everything sent to grind BECOMES the sausage listed above, so a
+    // separate "Ground Pork · From: Hams" row read as though the ham were a
+    // second, different product — the opposite of what it means (Charlie, on
+    // Kyle Barner's card). Only name the grind sources when there's no sausage
+    // for them to go into, so the destination is never lost.
+    const namesGrindSources = grindFrom.length > 0 && !(isPork && trimPrs.length > 0)
+    if (namesGrindSources) filteredPrs.push({ cut: `Ground ${species}`, spec: `From: ${grindFrom.join(', ')}`, isGrind: true })
   }
 
   // Smokehouse: what to build from this animal's trim, and the total to hold
