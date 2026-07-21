@@ -280,9 +280,23 @@ function julianLot(dateISO: string | null | undefined): string {
   return `${String(dt.getFullYear()).slice(-2)}${String(dayOfYear).padStart(3, '0')}`
 }
 
-async function carcassInfoFor(ci: RawInstruction, appointments: HarvestAppointment[]): Promise<CarcassInfo> {
-  const appt = appointments.find(a => a.customers?.some(c => c.linked_cutting_instruction_id === ci.id))
-  if (!appt) return EMPTY_CARCASS
+// Every carcass this card is linked to. A customer taking more than one
+// animal's worth is linked on several appointments, and each gets its own card.
+async function carcassInfosFor(ci: RawInstruction, appointments: HarvestAppointment[]): Promise<CarcassInfo[]> {
+  const appts = appointments.filter(a => a.customers?.some(c => c.linked_cutting_instruction_id === ci.id))
+  if (!appts.length) return [EMPTY_CARCASS]
+  const infos = await Promise.all(appts.map(a => carcassInfoForAppt(ci, a)))
+  // Drop duplicates so two links onto the same animal don't print twice.
+  const seen = new Set<string>()
+  const out = infos.filter(i => {
+    const key = `${i.lot}|${i.tag}|${i.producer}`
+    if (seen.has(key)) return false
+    seen.add(key); return true
+  })
+  return out.length ? out : [EMPTY_CARCASS]
+}
+
+async function carcassInfoForAppt(ci: RawInstruction, appt: HarvestAppointment): Promise<CarcassInfo> {
   try {
     const [logsRes, asgRes] = await Promise.all([
       fetch(`/api/harvest?appointment_id=${encodeURIComponent(appt.id)}`),
@@ -689,7 +703,13 @@ function renderV2Detail(ci: RawInstruction) {
   )
 }
 
-function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS) {
+// A customer buying more than one animal's worth (Wendy Warren's hog and a half)
+// is linked to several carcasses, and each one gets its own card — same cuts,
+// but its own tag, lot and hanging weight — so the pair on the rail can't be
+// mixed up. Pass one carcass or many.
+function printV2CutCard(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[] = EMPTY_CARCASS) {
+  const carcassList = (Array.isArray(carcassArg) ? carcassArg : [carcassArg])
+  const carcasses   = carcassList.length ? carcassList : [EMPTY_CARCASS]
   const d = ci.data ?? {}
   const species = ci.data?.species ?? ci.species ?? 'Beef'
   const name = d.customerName ?? '—'
@@ -1221,7 +1241,7 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
        <div style="font-size:13px;color:#C9A882">Submitted: ${submittedDate}</div>
      </div>`
 
-  const infoGrid =
+  const infoGrid = (carcass: CarcassInfo) =>
     `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;border:1.5px solid #C9A882;margin-bottom:10px">
        <div style="padding:7px 12px;border-right:1px solid #C9A882">
          <div style="font-size:12px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Customer</div>
@@ -1273,18 +1293,24 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
 </head>
 <body>
 
+${carcasses.map((carcass, ci_) => {
+  // "1 of 2" only when there really are several, so a normal single-animal
+  // card reads exactly as it always has.
+  const ofN  = carcasses.length > 1 ? ` — Animal ${ci_ + 1} of ${carcasses.length}` : ''
+  const last = ci_ === carcasses.length - 1
+  return `
 <!-- PAGE 1: CUT CARD — 3-column section layout -->
 <div class="pagebreak">
-  ${hdr('Cut Card')}
-  ${infoGrid}
+  ${hdr('Cut Card' + ofN)}
+  ${infoGrid(carcass)}
   <div style="column-count:3;column-gap:16px">
     ${cutSections}
   </div>
 </div>
 
 <!-- PAGE 2: PACKAGING SHEET — 3-column table layout -->
-<div>
-  ${hdr('Packaging Sheet')}
+<div${last ? '' : ' class="pagebreak"'}>
+  ${hdr('Packaging Sheet' + ofN)}
   <div style="font-size:16px;color:#555;margin-bottom:8px">
     <strong>${d.customerName ?? '—'}</strong>${d.portion ? ' · ' + fmt(d.portion) : ''} · Kill Date: ${d.killDate ?? '—'}
     <span style="margin-left:14px">Producer: <span style="font-weight:bold">${carcass.producer || wline(110)}</span></span>
@@ -1299,7 +1325,8 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
     <div style="border-top:1px solid #888;padding-top:5px;font-size:13px;color:#75471B;text-transform:uppercase;letter-spacing:0.08em">Packed by / Date</div>
     <div style="border-top:1px solid #888;padding-top:5px;font-size:13px;color:#75471B;text-transform:uppercase;letter-spacing:0.08em">Total Boxes</div>
   </div>
-</div>
+</div>`
+}).join('\n')}
 
 </body></html>`
 
@@ -1598,8 +1625,13 @@ export default function CuttingInstructionsPage() {
                 <span style={{ color: 'var(--tan)', fontSize: '0.82rem', marginLeft: '0.75rem' }}>{selectedSpecies} · submitted {new Date(selected.created_at).toLocaleDateString()}</span>
               </div>
               <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                {selected.status !== 'linked' && selected.status !== 'archived' && (
-                  <button onClick={() => setShowLinkPicker(true)} style={btnStyle('var(--med-brown)')}>🔗 Link to Appointment</button>
+                {/* A linked card can still be linked again: a customer taking
+                    more than one animal's worth is linked once per animal, and
+                    hiding this button once linked left no way to do it. */}
+                {selected.status !== 'archived' && (
+                  <button onClick={() => setShowLinkPicker(true)} style={btnStyle('var(--med-brown)')}>
+                    {selected.status === 'linked' ? '🔗 Link to another animal' : '🔗 Link to Appointment'}
+                  </button>
                 )}
                 {selected.status === 'pending' && (
                   <button onClick={() => markStatus([selected.id], 'imported')} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>✓ Mark Imported</button>
@@ -1611,7 +1643,7 @@ export default function CuttingInstructionsPage() {
                     ✏️ Edit
                   </a>
                 )}
-                <button onClick={async () => isV2 ? printV2CutCard(selected, await carcassInfoFor(selected, appointments)) : printCutCard(selected)} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>🖨 Print Cut Card</button>
+                <button onClick={async () => isV2 ? printV2CutCard(selected, await carcassInfosFor(selected, appointments)) : printCutCard(selected)} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>🖨 Print Cut Card</button>
                 {selected.status === 'archived' ? (
                   <button onClick={() => markStatus([selected.id], 'pending')} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>↩ Restore</button>
                 ) : (
@@ -1624,11 +1656,24 @@ export default function CuttingInstructionsPage() {
 
             {/* Linked badge */}
             {selected.status === 'linked' && (() => {
-              const linkedAppt = appointments.find(a => a.customers?.some(c => c.linked_cutting_instruction_id === selected.id))
-              const linkedCust = linkedAppt?.customers?.find(c => c.linked_cutting_instruction_id === selected.id)
-              return linkedAppt ? (
+              // Every animal this card is linked to — one line each, so a hog
+              // and a half shows both instead of just whichever came first.
+              const linkedAppts = appointments.filter(a => a.customers?.some(c => c.linked_cutting_instruction_id === selected.id))
+              return linkedAppts.length ? (
                 <div style={{ padding: '0.6rem 1.25rem', background: 'rgba(100,180,100,0.1)', borderBottom: '1px solid rgba(100,180,100,0.2)', fontSize: '0.82rem', color: '#6dbf6d' }}>
-                  ✅ Linked to: <strong>{linkedAppt.species}</strong> harvest on <strong>{new Date(linkedAppt.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</strong>{linkedCust ? ` — ${linkedCust.customer_name} (${linkedCust.portion})` : ''}
+                  {linkedAppts.map(appt => {
+                    const cust = appt.customers?.find(c => c.linked_cutting_instruction_id === selected.id)
+                    return (
+                      <div key={appt.id}>
+                        ✅ Linked to: <strong>{appt.species}</strong>{appt.source ? <> from <strong>{appt.source}</strong></> : null} on <strong>{new Date(appt.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</strong>{cust ? ` — ${cust.customer_name} (${cust.portion})` : ''}
+                      </div>
+                    )
+                  })}
+                  {linkedAppts.length > 1 && (
+                    <div style={{ color: 'var(--tan)', marginTop: '0.25rem' }}>
+                      Printing gives one card per animal, each with its own tag and hanging weight.
+                    </div>
+                  )}
                 </div>
               ) : null
             })()}
