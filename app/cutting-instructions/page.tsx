@@ -358,7 +358,8 @@ function slaughterDateFor(ci: RawInstruction, appointments: HarvestAppointment[]
   return null
 }
 
-const LIST_GRID_COLS = 'minmax(0,1fr) 54px 70px 70px 76px'
+// Leading 26px column is the batch-print tickbox.
+const LIST_GRID_COLS = '26px minmax(0,1fr) 54px 70px 70px 76px'
 
 // ── V2 form helpers ───────────────────────────────────────────────────────────
 
@@ -722,11 +723,18 @@ function renderV2Detail(ci: RawInstruction) {
   )
 }
 
+// Builds one card's pages — cut card + packaging sheet per carcass — WITHOUT the
+// document shell, so several cards can be printed into a single document
+// (Jill wanted to select a batch and print them in one go).
+//
 // A customer buying more than one animal's worth (Wendy Warren's hog and a half)
 // is linked to several carcasses, and each one gets its own card — same cuts,
 // but its own tag, lot and hanging weight — so the pair on the rail can't be
 // mixed up. Pass one carcass or many.
-function printV2CutCard(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[] = EMPTY_CARCASS) {
+//
+// isLastCard suppresses the trailing page break so a batch doesn't end on a
+// blank sheet.
+function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[] = EMPTY_CARCASS, isLastCard = true): string {
   const carcassList = (Array.isArray(carcassArg) ? carcassArg : [carcassArg])
   const carcasses   = carcassList.length ? carcassList : [EMPTY_CARCASS]
   const d = ci.data ?? {}
@@ -1296,33 +1304,13 @@ function printV2CutCard(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInf
        </div>
      </div>`
 
-  const html = `<!DOCTYPE html>
-<html><head>
-  <meta charset="UTF-8">
-  <title>Cut Card — ${name}</title>
-  <style>
-    * { box-sizing: border-box; }
-    body { font-family: Arial, sans-serif; color: #1A0A04; margin: 0; padding: 18px; }
-    /* Landscape: matches the wall monitors these cards are headed for, and
-       three columns across beats two tall ones on paper too. */
-    @page { margin: 0.4in; size: letter landscape; }
-    /* Big type can push a loaded card past one sheet — keep rows whole when
-       content flows across the page break. */
-    tr { break-inside: avoid; page-break-inside: avoid; }
-    @media print {
-      body { padding: 0; }
-      .pagebreak { page-break-after: always; }
-      * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-    }
-  </style>
-</head>
-<body>
-
-${carcasses.map((carcass, ci_) => {
+  return carcasses.map((carcass, ci_) => {
   // "1 of 2" only when there really are several, so a normal single-animal
   // card reads exactly as it always has.
   const ofN  = carcasses.length > 1 ? ` — Animal ${ci_ + 1} of ${carcasses.length}` : ''
-  const last = ci_ === carcasses.length - 1
+  // Only the very last page of the whole document skips the break; in a batch,
+  // every earlier card still has to break before the next one starts.
+  const last = isLastCard && ci_ === carcasses.length - 1
   return `
 <!-- PAGE 1: CUT CARD — 3-column section layout -->
 <div class="pagebreak">
@@ -1352,14 +1340,57 @@ ${carcasses.map((carcass, ci_) => {
     <div style="border-top:1px solid #888;padding-top:5px;font-size:13px;color:#75471B;text-transform:uppercase;letter-spacing:0.08em">Total Boxes</div>
   </div>
 </div>`
-}).join('\n')}
+}).join('\n')
+}
+
+// The document shell every printed card sits in. Landscape matches the wall
+// monitors these are headed for, and three columns across beats two tall ones.
+function cardDocument(title: string, body: string): string {
+  return `<!DOCTYPE html>
+<html><head>
+  <meta charset="UTF-8">
+  <title>${title}</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; color: #1A0A04; margin: 0; padding: 18px; }
+    @page { margin: 0.4in; size: letter landscape; }
+    /* Big type can push a loaded card past one sheet — keep rows whole when
+       content flows across the page break. */
+    tr { break-inside: avoid; page-break-inside: avoid; }
+    @media print {
+      body { padding: 0; }
+      .pagebreak { page-break-after: always; }
+      * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    }
+  </style>
+</head>
+<body>
+
+${body}
 
 </body></html>`
+}
 
+function openPrintable(html: string) {
   const blob = new Blob([html], { type: 'text/html' })
   const url  = URL.createObjectURL(blob)
   const win  = window.open(url, '_blank')
   if (win) { win.onload = () => { URL.revokeObjectURL(url) } }
+}
+
+function printV2CutCard(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[] = EMPTY_CARCASS) {
+  const name = ci.data?.customerName ?? '—'
+  openPrintable(cardDocument(`Cut Card — ${name}`, v2CardPages(ci, carcassArg)))
+}
+
+// A whole batch in one document, so the crew gets a single print job instead of
+// opening every card in turn (Jill, 2026-07-21).
+function printV2CutCards(items: { ci: RawInstruction; carcasses: CarcassInfo[] }[]) {
+  if (!items.length) return
+  const body = items
+    .map((it, i) => v2CardPages(it.ci, it.carcasses, i === items.length - 1))
+    .join('\n')
+  openPrintable(cardDocument(`Cut Cards — ${items.length} card${items.length === 1 ? '' : 's'}`, body))
 }
 
 // ── Test / preview data ───────────────────────────────────────────────────────
@@ -1411,6 +1442,10 @@ export default function CuttingInstructionsPage() {
   const [filterSpecies, setFilterSpecies] = useState<string>('all')
   const [showLinkPicker, setShowLinkPicker] = useState(false)
   const [linking, setLinking]           = useState(false)
+  // Cards ticked for a batch print. Separate from `selected`, which drives the
+  // detail panel — clicking a row to read it shouldn't add it to the batch.
+  const [picked, setPicked]             = useState<Set<string>>(new Set())
+  const [printingBatch, setPrintingBatch] = useState(false)
   const [showCreate, setShowCreate]     = useState(false)
   const [createSpecies, setCreateSpecies] = useState('Beef')
   const [createFields, setCreateFields] = useState<Record<string, string>>({})
@@ -1539,6 +1574,35 @@ export default function CuttingInstructionsPage() {
   const sections = sectionsFor(selectedSpecies)
   const isV2 = selected?.data?.formVersion === 'v2'
 
+  const togglePicked = (id: string) =>
+    setPicked(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next })
+
+  // Batch print: one document, in the order shown on screen. Carcass lookups run
+  // in parallel because each one is two fetches and a batch of twenty would
+  // otherwise crawl.
+  async function printPicked() {
+    const chosen = filtered.filter(i => picked.has(i.id))
+    // Only v2 cards go through the v2 renderer; legacy v1 cards have their own
+    // print path and are left out rather than printed wrong.
+    const v2 = chosen.filter(i => i.data?.formVersion === 'v2')
+    const legacy = chosen.length - v2.length
+    if (v2.length === 0) {
+      alert('None of the selected cards are the current form version, so there is nothing to batch print. Open them individually instead.')
+      return
+    }
+    setPrintingBatch(true)
+    try {
+      const appts = await freshAppointments(appointments)
+      const items = await Promise.all(v2.map(async ci => ({ ci, carcasses: await carcassInfosFor(ci, appts) })))
+      printV2CutCards(items)
+      if (legacy) {
+        alert(`Printed ${v2.length} card${v2.length === 1 ? '' : 's'}. ${legacy} older-format card${legacy === 1 ? ' was' : 's were'} skipped — open those individually.`)
+      }
+    } finally {
+      setPrintingBatch(false)
+    }
+  }
+
   return (
     <div style={{ minHeight: '100vh', background: 'var(--dark-brown)', display: 'flex', flexDirection: 'column' }}>
 
@@ -1600,6 +1664,26 @@ export default function CuttingInstructionsPage() {
             <button onClick={() => { setCreateFields({}); setCreateSpecies('Beef'); setShowCreate(true) }} style={{ ...btnStyle('var(--med-brown)', 'var(--cream)'), border: 'none', fontWeight: 700, letterSpacing: '0.04em' }}>+ New</button>
           </div>
 
+          {/* Batch bar — only once something's ticked, so it stays out of the way */}
+          {picked.size > 0 && (
+            <div style={{ padding: '0.6rem 1rem', borderBottom: '1px solid rgba(166,120,90,0.15)', background: 'rgba(117,71,27,0.25)', display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <span style={{ color: 'var(--cream)', fontSize: '0.85rem', fontWeight: 600 }}>
+                {picked.size} card{picked.size === 1 ? '' : 's'} selected
+              </span>
+              <button
+                onClick={printPicked}
+                disabled={printingBatch}
+                style={{ ...btnStyle('var(--tan)', 'var(--dark-brown)'), border: 'none', fontWeight: 700, opacity: printingBatch ? 0.6 : 1, cursor: printingBatch ? 'not-allowed' : 'pointer' }}
+              >
+                {printingBatch ? 'Preparing…' : `🖨 Print ${picked.size} card${picked.size === 1 ? '' : 's'}`}
+              </button>
+              <button onClick={() => setPicked(new Set())} style={{ ...btnStyle('transparent', 'var(--tan)'), border: '1px solid rgba(166,120,90,0.3)' }}>Clear</button>
+              <span style={{ color: 'var(--light-brown)', fontSize: '0.75rem' }}>
+                Prints as one job, in the order shown.
+              </span>
+            </div>
+          )}
+
           {/* List */}
           <div style={{ overflowY: 'auto', flex: 1 }}>
             {loading ? (
@@ -1614,6 +1698,15 @@ export default function CuttingInstructionsPage() {
               <>
                 {/* Column headers */}
                 <div style={{ display: 'grid', gridTemplateColumns: LIST_GRID_COLS, gap: '0.5rem', padding: '0.5rem 1.1rem', borderBottom: '1px solid rgba(166,120,90,0.2)', background: 'var(--dark-brown)', position: 'sticky', top: 0, zIndex: 1 }}>
+                  {/* Tick-all for the batch, scoped to what the filters are showing */}
+                  <input
+                    type="checkbox"
+                    checked={filtered.length > 0 && filtered.every(i => picked.has(i.id))}
+                    ref={el => { if (el) el.indeterminate = picked.size > 0 && !filtered.every(i => picked.has(i.id)) }}
+                    onChange={() => setPicked(prev => prev.size > 0 ? new Set() : new Set(filtered.map(i => i.id)))}
+                    title="Select all shown / none"
+                    style={{ width: 15, height: 15, accentColor: 'var(--tan)', cursor: 'pointer' }}
+                  />
                   {['Customer','Species','Submitted','Slaughter','Status'].map(h => (
                     <div key={h} style={{ fontSize: '0.62rem', color: 'var(--light-brown)', textTransform: 'uppercase', letterSpacing: '0.1em', whiteSpace: 'nowrap' }}>{h}</div>
                   ))}
@@ -1627,6 +1720,16 @@ export default function CuttingInstructionsPage() {
                   return (
                     <div key={ci.id} onClick={() => setSelected(isSel ? null : ci)}
                       style={{ display: 'grid', gridTemplateColumns: LIST_GRID_COLS, gap: '0.5rem', alignItems: 'center', padding: '0.7rem 1.1rem', borderBottom: '1px solid rgba(166,120,90,0.1)', cursor: 'pointer', background: isSel ? 'rgba(117,71,27,0.3)' : 'transparent', transition: 'background 0.15s' }}>
+                      {/* stopPropagation so ticking for the batch doesn't also
+                          open the card in the detail panel */}
+                      <input
+                        type="checkbox"
+                        checked={picked.has(ci.id)}
+                        onClick={e => e.stopPropagation()}
+                        onChange={() => togglePicked(ci.id)}
+                        title="Include in batch print"
+                        style={{ width: 15, height: 15, accentColor: 'var(--tan)', cursor: 'pointer' }}
+                      />
                       <div style={{ fontWeight: 600, color: 'var(--cream)', fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
                       <div style={{ fontSize: '0.78rem', color: 'var(--tan)' }}>{species}</div>
                       <div style={{ fontSize: '0.78rem', color: 'var(--tan)', whiteSpace: 'nowrap' }}>{fmtShortDate(ci.created_at)}</div>
