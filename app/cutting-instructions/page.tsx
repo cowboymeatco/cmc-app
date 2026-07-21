@@ -951,6 +951,10 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
         if (loin.cut === 'boneless-chops' && loin.babyBack) pc('Baby Back Ribs', fmt(loin.babyBack))
       } else if (loin.cut === 'loin-roast') {
         pc('Loin Roast', fmt(loin.roastSize ?? ''))
+      } else {
+        // Anything else the wizard offers (e.g. cubed pork) still has to reach
+        // the packagers — without this the loin silently left the sheet.
+        pc('Loin', fmt(loin.cut))
       }
       if (loin.tenderloin === 'grind') pg('Tenderloin')
       else if (loin.tenderloin) pc('Tenderloin', fmt(loin.tenderloin))
