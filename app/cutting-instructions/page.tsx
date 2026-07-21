@@ -244,6 +244,14 @@ function v2fmt(val: string): string {
   return val.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
 
+// Two sides of a split primal. Identical answers collapse to one value —
+// "1: Filet 2" / 2: Filet 2"" is just noise when both sides match (Charlie).
+function sidePair(a: string, b: string): string {
+  if (!a) return b ?? ''
+  if (!b || a === b) return a
+  return `1: ${a} / 2: ${b}`
+}
+
 // Hocks follow the ham style (the wizard leaves hocks.cut empty). The cutter
 // only needs the word: Fresh or Smoked. Whole-hog split hams (style2) can
 // differ, so print both when they do; grind hams get no hock line.
@@ -252,7 +260,7 @@ function hockStyle(ham?: { style?: string | null; style2?: string | null }): str
   if (!ham?.style) return ''
   if (ham.style2) {
     const parts = [word(ham.style), word(ham.style2)]
-    return parts.every(Boolean) ? `1: ${parts[0]} / 2: ${parts[1]}` : parts.filter(Boolean).join(' / ')
+    return parts.every(Boolean) ? sidePair(parts[0], parts[1]) : parts.filter(Boolean).join(' / ')
   }
   return word(ham.style)
 }
@@ -286,7 +294,7 @@ function v2withT(cut: string, t: string): string { return [v2fmt(cut), v2thick(t
 function v2adds(arr: string[]): string { return arr?.length ? arr.map(v2fmt).join(', ') : '' }
 // A round sent to jerky carries its flavor; split rounds show both sides
 function v2roundOne(r: any): string { return r?.cut === 'jerky' ? `Jerky${r.jerkyFlavor ? ` — ${v2fmt(r.jerkyFlavor)}` : ''}` : v2withT(r?.cut ?? '', r?.thickness ?? '') }
-function v2roundVal(r: any): string { return r?.round2 ? `1: ${v2roundOne(r)} / 2: ${v2roundOne(r.round2)}` : v2roundOne(r) }
+function v2roundVal(r: any): string { return r?.round2 ? sidePair(v2roundOne(r), v2roundOne(r.round2)) : v2roundOne(r) }
 
 // The ribeye's only value-add is Seasoned (roast cuts only), and the wizard
 // stores it as a boolean rather than the addons array every other primal uses.
@@ -326,29 +334,36 @@ function V2Section({ title, children }: { title: string; children: React.ReactNo
   )
 }
 
-// One short-loin side's fields; sfx labels the side when a whole/three-quarter
-// order splits the two short loins (e.g. " (1)" / " (2)")
-function V2ShortLoinFields({ sl, sfx = '' }: { sl: any; sfx?: string }) {
-  if (!sl) return null
-  return (
-    <>
-      {sl.path === 'bone-in' && (
-        <>
-          <V2Field label={`T-Bone / Porterhouse${sfx}`} value={v2thick(sl.tBoneThickness)} />
-          <V2Field label={`Filet${sfx}`} value={BONE_IN_FILET_THICKNESS} />
-        </>
-      )}
-      {sl.path === 'boneless' && (
-        <>
-          {/* One name per row — "Tenderloin: Filet Mignon" read as two cuts (Charlie) */}
-          {sl.tenderloin?.cut === 'filet'
-            ? <V2Field label={`Filet${sfx}`} value={'2"'} />
-            : <V2Field label={`Tenderloin${sfx}`} value={v2fmt(sl.tenderloin?.cut ?? '')} />}
-          <V2Field label={`Strip Loin${sfx}`} value={v2withT(sl.stripLoin?.cut ?? '', sl.stripLoin?.thickness ?? '')} />
-        </>
-      )}
-    </>
-  )
+// One short-loin side as (label, value) pairs. A bone-in loin still yields
+// filets — the tenderloin head runs past the last rib — so both paths can
+// produce a Filet row, which is exactly why the merge below matters.
+// `f` formats a cut value (the print and detail renderers format differently).
+function shortLoinFields(sl: any, f: (v: string) => string, t: (v: string) => string): Array<[string, string]> {
+  if (sl?.path === 'bone-in') return [
+    ['T-Bone / Porterhouse', t(sl.tBoneThickness ?? '')],
+    ['Filet', BONE_IN_FILET_THICKNESS],
+  ]
+  if (sl?.path === 'boneless') return [
+    // One name per row — "Tenderloin: Filet Mignon" read as two cuts (Charlie)
+    sl.tenderloin?.cut === 'filet' ? ['Filet', '2"'] : ['Tenderloin', f(sl.tenderloin?.cut ?? '')],
+    ['Strip Loin', [f(sl.stripLoin?.cut ?? ''), t(sl.stripLoin?.thickness ?? '')].filter(Boolean).join(' — ')],
+  ]
+  return []
+}
+
+// Merge the two sides of a split primal row-by-row: a row that comes out the
+// same on both sides prints once, unsuffixed; only rows that actually differ
+// get labelled (1) / (2). Two loins both yielding a 2" filet is one line.
+function mergeSides(a: Array<[string, string]>, b: Array<[string, string]>): Array<[string, string]> {
+  const out: Array<[string, string]> = []
+  const usedB = new Set<number>()
+  for (const [la, va] of a) {
+    const j = b.findIndex(([lb, vb], i) => !usedB.has(i) && lb === la && vb === va)
+    if (j >= 0) { usedB.add(j); out.push([la, va]) }
+    else out.push([`${la} (1)`, va])
+  }
+  b.forEach(([lb, vb], i) => { if (!usedB.has(i)) out.push([`${lb} (2)`, vb]) })
+  return out
 }
 
 function renderV2Detail(ci: RawInstruction) {
@@ -382,14 +397,14 @@ function renderV2Detail(ci: RawInstruction) {
           <V2Section title="Chuck">
             <V2Field label="Brisket" value={
               d.brisket?.cut2
-                ? `1: ${v2fmt(d.brisket.cut)} / 2: ${v2fmt(d.brisket.cut2)}`
+                ? sidePair(v2fmt(d.brisket.cut), v2fmt(d.brisket.cut2))
                 : v2fmt(d.brisket?.cut)
             } />
             <V2Field label="Shank" value={v2fmt(d.shank?.cut)} />
             <V2Field label="Shank Add-ons" value={v2adds(d.shank?.addons)} addon />
             <V2Field label="Arm Roast" value={
               d.armRoast?.arm2
-                ? `1: ${v2withT(d.armRoast.cut ?? '', stdThick(d.armRoast.cut))} / 2: ${v2withT(d.armRoast.arm2.cut ?? '', stdThick(d.armRoast.arm2.cut))}`
+                ? sidePair(v2withT(d.armRoast.cut ?? '', stdThick(d.armRoast.cut)), v2withT(d.armRoast.arm2.cut ?? '', stdThick(d.armRoast.arm2.cut)))
                 : v2withT(d.armRoast?.cut ?? '', stdThick(d.armRoast?.cut))
             } />
             {d.armRoast?.arm2 ? (
@@ -403,7 +418,7 @@ function renderV2Detail(ci: RawInstruction) {
             <V2Field label="Flat Iron" value={v2withT(d.flatIron?.cut ?? '', stdThick(d.flatIron?.cut, 'flat-iron'))} />
             <V2Field label="Chuck Roll" value={
               d.chuckRoll?.cut2
-                ? `1: ${v2withT(d.chuckRoll.cut ?? '', stdThick(d.chuckRoll.cut))} / 2: ${v2withT(d.chuckRoll.cut2, stdThick(d.chuckRoll.cut2))}`
+                ? sidePair(v2withT(d.chuckRoll.cut ?? '', stdThick(d.chuckRoll.cut)), v2withT(d.chuckRoll.cut2, stdThick(d.chuckRoll.cut2)))
                 : v2withT(d.chuckRoll?.cut ?? '', stdThick(d.chuckRoll?.cut))
             } />
             {d.chuckRoll?.cut2 ? (
@@ -423,15 +438,12 @@ function renderV2Detail(ci: RawInstruction) {
           <V2Section title="Ribeye">
             <V2Field label="Style" value={
               d.ribeye?.ribeye2
-                ? `1: ${v2fmt(d.ribeye.style)} / 2: ${v2fmt(d.ribeye.ribeye2.style)}`
+                ? sidePair(v2fmt(d.ribeye.style), v2fmt(d.ribeye.ribeye2.style))
                 : v2fmt(d.ribeye?.style)
             } />
             <V2Field label="Cut" value={
               d.ribeye?.ribeye2
-                ? [
-                    d.ribeye.cut ? `1: ${v2withT(d.ribeye.cut, d.ribeye.thickness ?? '')}` : '',
-                    d.ribeye.ribeye2.cut ? `2: ${v2withT(d.ribeye.ribeye2.cut, d.ribeye.ribeye2.thickness ?? '')}` : '',
-                  ].filter(Boolean).join(' / ')
+                ? sidePair(v2withT(d.ribeye.cut ?? '', d.ribeye.thickness ?? ''), v2withT(d.ribeye.ribeye2.cut ?? '', d.ribeye.ribeye2.thickness ?? ''))
                 : v2withT(d.ribeye?.cut ?? '', d.ribeye?.thickness ?? '')
             } />
             {d.ribeye?.ribeye2 ? (
@@ -444,14 +456,10 @@ function renderV2Detail(ci: RawInstruction) {
             )}
           </V2Section>
           <V2Section title="Short Loin">
-            {d.shortLoin?.loin2 ? (
-              <>
-                <V2ShortLoinFields sl={d.shortLoin} sfx=" (1)" />
-                <V2ShortLoinFields sl={d.shortLoin.loin2} sfx=" (2)" />
-              </>
-            ) : (
-              <V2ShortLoinFields sl={d.shortLoin} />
-            )}
+            {(d.shortLoin?.loin2
+              ? mergeSides(shortLoinFields(d.shortLoin, v2fmt, v2thick), shortLoinFields(d.shortLoin.loin2, v2fmt, v2thick))
+              : shortLoinFields(d.shortLoin, v2fmt, v2thick)
+            ).map(([label, value]) => <V2Field key={label} label={label} value={value} />)}
           </V2Section>
           <V2Section title="Sirloin">
             <V2Field label="Top Sirloin" value={v2withT(d.topSirloin?.cut ?? '', d.topSirloin?.thickness ?? '')} />
@@ -466,7 +474,7 @@ function renderV2Detail(ci: RawInstruction) {
           <V2Section title="Round">
             <V2Field label="Sirloin Tip" value={
               d.sirloinTip?.tip2
-                ? `1: ${v2withT(d.sirloinTip.cut ?? '', d.sirloinTip.thickness ?? '')} / 2: ${v2withT(d.sirloinTip.tip2.cut ?? '', d.sirloinTip.tip2.thickness ?? '')}`
+                ? sidePair(v2withT(d.sirloinTip.cut ?? '', d.sirloinTip.thickness ?? ''), v2withT(d.sirloinTip.tip2.cut ?? '', d.sirloinTip.tip2.thickness ?? ''))
                 : v2withT(d.sirloinTip?.cut ?? '', d.sirloinTip?.thickness ?? '')
             } />
             {d.sirloinTip?.tip2 ? (
@@ -520,7 +528,7 @@ function renderV2Detail(ci: RawInstruction) {
           <V2Section title="Ham & Hocks">
             <V2Field label="Style" value={
               d.ham?.style2
-                ? `1: ${v2fmt(d.ham.style)} / 2: ${v2fmt(d.ham.style2)}`
+                ? sidePair(v2fmt(d.ham.style), v2fmt(d.ham.style2))
                 : v2fmt(d.ham?.style)
             } />
             {d.ham?.style !== 'grind' && <V2Field label="Cut" value={hamCut(d.ham?.cut)} />}
@@ -583,7 +591,7 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
   const rackDisplay = (v?: string) => v === 'whole-rack' ? `Frenched Rack of ${sp === 'goat' ? 'Goat' : 'Lamb'}` : fmt(v ?? '')
   // A round sent to jerky carries its flavor; split rounds print both sides
   const roundOne = (r: any) => r?.cut === 'jerky' ? `Jerky${r.jerkyFlavor ? ` — ${fmt(r.jerkyFlavor)}` : ''}` : withT(r?.cut ?? '', r?.thickness ?? '')
-  const roundVal = (r: any) => r?.round2 ? `1: ${roundOne(r)} / 2: ${roundOne(r.round2)}` : roundOne(r)
+  const roundVal = (r: any) => r?.round2 ? sidePair(roundOne(r), roundOne(r.round2)) : roundOne(r)
 
   // Primal color coding for the cutting table (Chris): chuck green,
   // rib & plate yellow, rest of the beef red
@@ -633,12 +641,12 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
 
   if (isBeef) {
     cutSections += sec('Chuck', [
-      row('Brisket', d.brisket?.cut2 ? `1: ${fmt(d.brisket.cut)} / 2: ${fmt(d.brisket.cut2)}` : fmt(d.brisket?.cut)),
+      row('Brisket', d.brisket?.cut2 ? sidePair(fmt(d.brisket.cut), fmt(d.brisket.cut2)) : fmt(d.brisket?.cut)),
       d.brisket?.fat ? row('  Brisket Fat', fmt(d.brisket.fat)) : '',
       row('Shank', fmt(d.shank?.cut)),
       d.shank?.addons?.length ? row('  Add-ons', adds(d.shank.addons), true) : '',
       row('Arm Roast', d.armRoast?.arm2
-        ? `1: ${withT(d.armRoast.cut ?? '', stdThick(d.armRoast.cut))} / 2: ${withT(d.armRoast.arm2.cut ?? '', stdThick(d.armRoast.arm2.cut))}`
+        ? sidePair(withT(d.armRoast.cut ?? '', stdThick(d.armRoast.cut)), withT(d.armRoast.arm2.cut ?? '', stdThick(d.armRoast.arm2.cut)))
         : withT(d.armRoast?.cut ?? '', stdThick(d.armRoast?.cut))),
       d.armRoast?.arm2
         ? [
@@ -648,7 +656,7 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
         : (d.armRoast?.addons?.length ? row('  Add-ons', adds(d.armRoast.addons), true) : ''),
       row('Flat Iron', withT(d.flatIron?.cut ?? '', stdThick(d.flatIron?.cut, 'flat-iron'))),
       row('Chuck Roll', d.chuckRoll?.cut2
-        ? `1: ${withT(d.chuckRoll.cut ?? '', stdThick(d.chuckRoll.cut))} / 2: ${withT(d.chuckRoll.cut2, stdThick(d.chuckRoll.cut2))}`
+        ? sidePair(withT(d.chuckRoll.cut ?? '', stdThick(d.chuckRoll.cut)), withT(d.chuckRoll.cut2, stdThick(d.chuckRoll.cut2)))
         : withT(d.chuckRoll?.cut ?? '', stdThick(d.chuckRoll?.cut))),
       d.chuckRoll?.cut2
         ? [
@@ -664,13 +672,10 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
     ].join(''))
     cutSections += sec('Ribeye', [
       row('Style', d.ribeye?.ribeye2
-        ? `1: ${fmt(d.ribeye.style)} / 2: ${fmt(d.ribeye.ribeye2.style)}`
+        ? sidePair(fmt(d.ribeye.style), fmt(d.ribeye.ribeye2.style))
         : fmt(d.ribeye?.style)),
       row('Cut', d.ribeye?.ribeye2
-        ? [
-            d.ribeye.cut ? `1: ${withT(d.ribeye.cut, d.ribeye.thickness ?? '')}` : '',
-            d.ribeye.ribeye2.cut ? `2: ${withT(d.ribeye.ribeye2.cut, d.ribeye.ribeye2.thickness ?? '')}` : '',
-          ].filter(Boolean).join(' / ')
+        ? sidePair(withT(d.ribeye.cut ?? '', d.ribeye.thickness ?? ''), withT(d.ribeye.ribeye2.cut ?? '', d.ribeye.ribeye2.thickness ?? ''))
         : withT(d.ribeye?.cut ?? '', d.ribeye?.thickness ?? '')),
       d.ribeye?.ribeye2
         ? [
@@ -680,17 +685,10 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
         : (ribeyeAdds(d.ribeye).length ? row('  Add-ons', adds(ribeyeAdds(d.ribeye)), true) : ''),
     ].join(''))
     const sl = d.shortLoin ?? {}
-    // One name per row — "Tenderloin: Filet Mignon" read as two cuts (Charlie)
-    const slRows = (s: any, sfx: string): string => s?.path === 'bone-in' ? [
-      row(`T-Bone / Porterhouse${sfx}`, thick(s.tBoneThickness)),
-      row(`Filet${sfx}`, BONE_IN_FILET_THICKNESS),
-    ].join('') : s?.path === 'boneless' ? [
-      s.tenderloin?.cut === 'filet'
-        ? row(`Filet${sfx}`, '2"')
-        : row(`Tenderloin${sfx}`, fmt(s.tenderloin?.cut ?? '')),
-      row(`Strip Loin${sfx}`, withT(s.stripLoin?.cut ?? '', s.stripLoin?.thickness ?? '')),
-    ].join('') : ''
-    cutSections += sec('Short Loin', sl.loin2 ? slRows(sl, ' (1)') + slRows(sl.loin2, ' (2)') : slRows(sl, ''))
+    cutSections += sec('Short Loin', (sl.loin2
+      ? mergeSides(shortLoinFields(sl, fmt, thick), shortLoinFields(sl.loin2, fmt, thick))
+      : shortLoinFields(sl, fmt, thick)
+    ).map(([label, value]) => row(label, value)).join(''))
     cutSections += sec('Sirloin', [
       row('Top Sirloin', withT(d.topSirloin?.cut ?? '', d.topSirloin?.thickness ?? '')),
       d.topSirloin?.addons?.length ? row('  Add-ons', adds(d.topSirloin.addons), true) : '',
@@ -703,7 +701,7 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
     ].join(''))
     cutSections += sec('Round', [
       row('Sirloin Tip', d.sirloinTip?.tip2
-        ? `1: ${withT(d.sirloinTip.cut ?? '', d.sirloinTip.thickness ?? '')} / 2: ${withT(d.sirloinTip.tip2.cut ?? '', d.sirloinTip.tip2.thickness ?? '')}`
+        ? sidePair(withT(d.sirloinTip.cut ?? '', d.sirloinTip.thickness ?? ''), withT(d.sirloinTip.tip2.cut ?? '', d.sirloinTip.tip2.thickness ?? ''))
         : withT(d.sirloinTip?.cut ?? '', d.sirloinTip?.thickness ?? '')),
       d.sirloinTip?.tip2
         ? [
@@ -742,7 +740,7 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
     cutSections += sec('Belly', [row('Cut', fmt(d.belly?.cut))].join(''))
     // Hocks come off the ham, so they share its header; spare ribs stand alone.
     cutSections += sec('Ham & Hocks', [
-      row('Style', d.ham?.style2 ? `1: ${fmt(d.ham.style)} / 2: ${fmt(d.ham.style2)}` : fmt(d.ham?.style)),
+      row('Style', d.ham?.style2 ? sidePair(fmt(d.ham.style), fmt(d.ham.style2)) : fmt(d.ham?.style)),
       d.ham?.style !== 'grind' ? row('Cut', hamCut(d.ham?.cut)) : '',
       row('Hocks', fmt(d.hocks?.cut) || hockStyle(d.ham)),
     ].join(''))
@@ -797,7 +795,7 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
     if (d.brisket?.cut) {
       if (d.brisket.cut === 'grind') { pg('Brisket') }
       else {
-        const bSpec = (d.brisket.cut2 ? `1: ${fmt(d.brisket.cut)} / 2: ${fmt(d.brisket.cut2)}` : fmt(d.brisket.cut))
+        const bSpec = (d.brisket.cut2 ? sidePair(fmt(d.brisket.cut), fmt(d.brisket.cut2)) : fmt(d.brisket.cut))
           + (d.brisket.fat ? ` · ${fmt(d.brisket.fat)}` : '')
         pc('Brisket', bSpec)
       }
@@ -851,21 +849,25 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
     }
     ps('Short Loin')
     const sl = d.shortLoin ?? {}
-    const packShortLoin = (s: any, sfx: string) => {
-      if (s.path === 'bone-in') {
-        if (s.tBoneThickness) pc(`T-Bone / Porterhouse${sfx}`, thick(s.tBoneThickness))
-        pc(`Filet${sfx}`, BONE_IN_FILET_THICKNESS)
+    // Cuts sent to grind leave the packing list and join the grind bucket;
+    // the rest merge row-by-row so an identical row prints once.
+    const slPackFields = (s: any): Array<[string, string]> => {
+      const out: Array<[string, string]> = []
+      if (s?.path === 'bone-in') {
+        if (s.tBoneThickness) out.push(['T-Bone / Porterhouse', thick(s.tBoneThickness)])
+        out.push(['Filet', BONE_IN_FILET_THICKNESS])
       }
-      if (s.path === 'boneless') {
-        if (s.tenderloin?.cut === 'grind') pg(`Tenderloin${sfx}`)
-        else if (s.tenderloin?.cut === 'filet') pc(`Filet${sfx}`, '2"')
-        else if (s.tenderloin?.cut) pc(`Tenderloin${sfx}`, fmt(s.tenderloin.cut))
-        if (s.stripLoin?.cut === 'grind') pg(`Strip Loin${sfx}`)
-        else if (s.stripLoin?.cut) pc(`Strip Loin (NY Strip)${sfx}`, withT(s.stripLoin.cut, s.stripLoin.thickness ?? ''))
+      if (s?.path === 'boneless') {
+        if (s.tenderloin?.cut === 'grind') pg('Tenderloin')
+        else if (s.tenderloin?.cut === 'filet') out.push(['Filet', '2"'])
+        else if (s.tenderloin?.cut) out.push(['Tenderloin', fmt(s.tenderloin.cut)])
+        if (s.stripLoin?.cut === 'grind') pg('Strip Loin')
+        else if (s.stripLoin?.cut) out.push(['Strip Loin (NY Strip)', withT(s.stripLoin.cut, s.stripLoin.thickness ?? '')])
       }
+      return out
     }
-    if (sl.loin2) { packShortLoin(sl, ' (1)'); packShortLoin(sl.loin2, ' (2)') }
-    else packShortLoin(sl, '')
+    const slPacked = sl.loin2 ? mergeSides(slPackFields(sl), slPackFields(sl.loin2)) : slPackFields(sl)
+    slPacked.forEach(([label, value]) => pc(label, value))
     ps('Sirloin')
     if (d.topSirloin?.cut) {
       if (d.topSirloin.cut === 'grind') pg('Top Sirloin')
@@ -885,7 +887,9 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
       pc(`Sirloin Tip${sfx}`, withT(t.cut, t.thickness ?? ''))
       if (t.addons?.length) pc('  Add-on', adds(t.addons), true)
     }
-    if (d.sirloinTip?.tip2) {
+    const sameTip = (a: any, b: any) => a?.cut === b?.cut && (a?.thickness ?? '') === (b?.thickness ?? '')
+      && adds(a?.addons ?? []) === adds(b?.addons ?? [])
+    if (d.sirloinTip?.tip2 && !sameTip(d.sirloinTip, d.sirloinTip.tip2)) {
       packSirloinTip(d.sirloinTip, ' (1)')
       packSirloinTip(d.sirloinTip.tip2, ' (2)')
     } else if (d.sirloinTip?.cut) {
@@ -898,11 +902,12 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
       pc(`${label}${sfx}`, roundOne(r))
       if (r.addons?.length) pc('  Add-on', adds(r.addons), true)
     }
-    if (d.bottomRound?.round2) { packRound('Bottom Round', d.bottomRound, ' (1)'); packRound('Bottom Round', d.bottomRound.round2, ' (2)') }
+    const sameRound = (a: any, b: any) => roundOne(a) === roundOne(b) && a?.cut === b?.cut
+    if (d.bottomRound?.round2 && !sameRound(d.bottomRound, d.bottomRound.round2)) { packRound('Bottom Round', d.bottomRound, ' (1)'); packRound('Bottom Round', d.bottomRound.round2, ' (2)') }
     else packRound('Bottom Round', d.bottomRound)
     if (d.eyeOfRound?.cut)  { d.eyeOfRound.cut  === 'grind' ? pg('Eye of Round')  : pc('Eye of Round',  withT(d.eyeOfRound.cut,  d.eyeOfRound.thickness  ?? '')) }
     if (d.rumpRoast?.cut)   { d.rumpRoast.cut   === 'grind' ? pg('Rump Roast')    : pc('Rump Roast',    withT(d.rumpRoast.cut,   d.rumpRoast.thickness   ?? '')) }
-    if (d.topRound?.round2) { packRound('Top Round', d.topRound, ' (1)'); packRound('Top Round', d.topRound.round2, ' (2)') }
+    if (d.topRound?.round2 && !sameRound(d.topRound, d.topRound.round2)) { packRound('Top Round', d.topRound, ' (1)'); packRound('Top Round', d.topRound.round2, ' (2)') }
     else packRound('Top Round', d.topRound)
     if (d.roundShank?.marrow) pc('Round Shank / Marrow', fmt(d.roundShank.marrow))
   }
@@ -941,7 +946,7 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
     if (d.ham?.style) {
       if (d.ham.style === 'grind' && !d.ham.style2) pg('Ham')
       else pc('Ham', [
-        d.ham.style2 ? `1: ${fmt(d.ham.style)} / 2: ${fmt(d.ham.style2)}` : fmt(d.ham.style),
+        d.ham.style2 ? sidePair(fmt(d.ham.style), fmt(d.ham.style2)) : fmt(d.ham.style),
         d.ham.cut ? hamCut(d.ham.cut) : '',
       ].filter(Boolean).join(' · '))
     }
