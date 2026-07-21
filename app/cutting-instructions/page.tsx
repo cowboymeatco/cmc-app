@@ -69,6 +69,18 @@ function porkTrimRows(t: any, f: (s: string) => string): Array<[string, string]>
   return rows
 }
 
+// Lamb/goat trim destination. All three renderers used to hardcode
+// "grind ? Ground : Stew", so any new wizard option printed as Stew — a wrong
+// instruction to the floor rather than a missing one. One place now, and an
+// unknown value falls back to its own name instead of a confident lie.
+function lgTrimLabel(style?: string | null): string {
+  if (!style) return ''
+  if (style === 'grind')   return 'Ground — 1 lb packs'
+  if (style === 'stew')    return 'Stew — 1 lb packs'
+  if (style === 'sausage') return 'Sausage — 1 lb packs'
+  return v2fmt(style)
+}
+
 // Smokehouse orders — what the customer wants built out of their trim. These
 // never reached any printed sheet, so the floor had no way to know how much
 // trim to hold back before the rest went to grind (Charlie, 2026-07-21).
@@ -628,7 +640,7 @@ function renderV2Detail(ci: RawInstruction) {
           <V2Field label="Leg" value={v2fmt(d.leg?.cut)} />
           <V2Field label="Shoulder" value={v2fmt(d.shoulder?.cut)} />
           <V2Field label="Shank" value={v2fmt(d.shank?.cut)} />
-          <V2Field label="Trim" value={d.trim?.style === 'grind' ? 'Ground — 1 lb packs' : d.trim?.style === 'stew' ? 'Stew — 1 lb packs' : undefined} />
+          <V2Field label="Trim" value={lgTrimLabel(d.trim?.style) || undefined} />
         </V2Section>
       )}
 
@@ -838,7 +850,7 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
       row('Leg',      fmt(d.leg?.cut)),
       row('Shoulder', fmt(d.shoulder?.cut)),
       row('Shank',    fmt(d.shank?.cut)),
-      d.trim?.style ? row('Trim', d.trim.style === 'grind' ? 'Ground — 1 lb packs' : 'Stew — 1 lb packs') : '',
+      d.trim?.style ? row('Trim', lgTrimLabel(d.trim.style)) : '',
     ].join(''))
   }
 
@@ -1066,7 +1078,7 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
     if (d.leg?.cut)      { d.leg.cut      === 'grind' ? pg('Leg')      : pc('Leg',      fmt(d.leg.cut)) }
     if (d.shoulder?.cut) { d.shoulder.cut === 'grind' ? pg('Shoulder') : pc('Shoulder', fmt(d.shoulder.cut)) }
     if (d.shank?.cut)    { d.shank.cut    === 'grind' ? pg('Shank')    : pc('Shank',    fmt(d.shank.cut)) }
-    if (d.trim?.style)   { d.trim.style   === 'grind' ? pg('Trim')     : pc('Trim',     'Stew — 1 lb packs') }
+    if (d.trim?.style)   { d.trim.style   === 'grind' ? pg('Trim')     : pc('Trim',     lgTrimLabel(d.trim.style)) }
   }
 
   // Strip section headers that have no cut rows under them
