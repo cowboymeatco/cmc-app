@@ -1473,6 +1473,18 @@ function WorksheetTab({ date }: { date: string }) {
       return next
     })
   }
+
+  // Producer-row checkbox: any animal still unticked means "tick them all",
+  // otherwise clear the whole block.
+  function toggleGroup(gi: number) {
+    const keys = (groups[gi]?.rows ?? []).map((_, ri) => `${gi}:${ri}`)
+    setSkipped(prev => {
+      const next    = new Set(prev)
+      const allOn   = keys.every(k => !next.has(k))
+      keys.forEach(k => { if (allOn) next.add(k); else next.delete(k) })
+      return next
+    })
+  }
   const fmtDate   = new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
   const NAV: React.CSSProperties = { background: 'rgba(166,120,90,0.12)', border: '1px solid rgba(166,120,90,0.3)', color: C.tan, borderRadius: 3, padding: '0.4rem 0.75rem', fontSize: '1rem', cursor: 'pointer', lineHeight: 1 }
 
@@ -1764,7 +1776,7 @@ function WorksheetTab({ date }: { date: string }) {
             <div style={{ display: 'flex', alignItems: 'flex-end', gap: '0.6rem', flexWrap: 'wrap' }}>
               <div style={{ color: C.lightBrown, fontSize: '0.76rem', minWidth: 0, flex: 1 }}>
                 Producer, species &amp; ear tag print on the tag — only weights get written in. Beef, sows &amp; boars get an L and an R tag; market hogs, lambs &amp; goats get one.
-                {flatAnimals.length > 0 && <> <strong style={{ color: C.tan }}>{chosen.length} of {flatAnimals.length} animal{flatAnimals.length === 1 ? '' : 's'} → {chosenTags} label{chosenTags === 1 ? '' : 's'}.</strong></>}
+                {flatAnimals.length > 0 && <> Tick the animals below. <strong style={{ color: C.tan }}>{chosen.length} of {flatAnimals.length} animal{flatAnimals.length === 1 ? '' : 's'} → {chosenTags} label{chosenTags === 1 ? '' : 's'}.</strong></>}
               </div>
               {flatAnimals.length > 0 && (
                 <button onClick={() => setSkipped(prev => prev.size > 0 ? new Set() : new Set(flatAnimals.map(a => a.key)))} style={{ ...BTN('rgba(166,120,90,0.12)', C.tan), border: '1px solid rgba(166,120,90,0.3)', fontSize: '0.78rem' }}>
@@ -1778,35 +1790,9 @@ function WorksheetTab({ date }: { date: string }) {
               <button onClick={printAnimalTags} disabled={chosen.length === 0} style={{ ...BTN(C.tan, C.dark), opacity: chosen.length === 0 ? 0.5 : 1, cursor: chosen.length === 0 ? 'not-allowed' : 'pointer' }}>🖨 Print Tags</button>
             </div>
 
-            {flatAnimals.length === 0 ? (
+            {flatAnimals.length === 0 && (
               <div style={{ color: C.lightBrown, fontSize: '0.78rem', fontStyle: 'italic' }}>
                 Nobody checked in for this date yet — use <strong style={{ color: C.tan }}>Blank</strong> to pre-print a numbered run.
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
-                {flatAnimals.map(a => {
-                  const on = !skipped.has(a.key)
-                  return (
-                    <button
-                      key={a.key}
-                      onClick={() => toggleAnimal(a.key)}
-                      title={`${a.producer} · ${a.species}${a.row.sex ? ` · ${a.row.sex}` : ''} — ${a.split ? '2 tags (L + R)' : '1 tag (hangs whole)'}`}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: '0.45rem', textAlign: 'left', cursor: 'pointer',
-                        background: on ? 'rgba(166,120,90,0.16)' : 'transparent',
-                        border: `1px solid ${on ? 'rgba(166,120,90,0.5)' : 'rgba(166,120,90,0.2)'}`,
-                        borderRadius: 3, padding: '0.35rem 0.6rem', opacity: on ? 1 : 0.5,
-                      }}
-                    >
-                      <span style={{ color: on ? C.tan : C.lightBrown, fontWeight: 800, fontSize: '0.85rem', fontVariantNumeric: 'tabular-nums' }}>{String(a.seq).padStart(2, '0')}</span>
-                      <span style={{ color: on ? C.cream : C.lightBrown, fontSize: '0.78rem' }}>
-                        {a.producer} · {a.species}{a.row.ear_tag ? ` · ${a.row.ear_tag}` : ''}
-                      </span>
-                      <span style={{ color: C.lightBrown, fontSize: '0.7rem', fontWeight: 700, whiteSpace: 'nowrap' }}>{a.split ? '2 ×' : '1 ×'}</span>
-                      {a.row.over_30_months && <span style={{ color: '#e08a8a', fontSize: '0.65rem', fontWeight: 800 }}>OTM</span>}
-                    </button>
-                  )
-                })}
               </div>
             )}
           </>
@@ -1850,13 +1836,15 @@ function WorksheetTab({ date }: { date: string }) {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.84rem' }}>
             <thead>
               <tr style={{ borderBottom: '2px solid rgba(166,120,90,0.3)' }}>
+                {/* Tag column: ticked animals are the ones "🖨 Print Tags" prints. */}
+                <th style={{ padding: '0.6rem 0.5rem', color: C.lightBrown, fontWeight: 600, textAlign: 'center', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.06em' }} title="Tick the animals to print tags for">Tag</th>
                 {['Carcass ID', 'Kill Order', 'Kill Type', 'Ear Tag / ID', 'Sex', 'Breed', 'L Half', 'R Half', 'Total'].map(h => (
                   <th key={h} style={{ padding: '0.6rem 0.75rem', color: C.lightBrown, fontWeight: 600, textAlign: 'left', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {(() => { let off = parseInt(startNum, 10) || 1; return groups.map((g, gi) => { const startId = off; off += g.rows.length; return <FragmentGroup key={gi} group={g} startId={startId} /> }) })()}
+              {(() => { let off = parseInt(startNum, 10) || 1; return groups.map((g, gi) => { const startId = off; off += g.rows.length; return <FragmentGroup key={gi} gi={gi} group={g} startId={startId} skipped={skipped} onToggle={toggleAnimal} onToggleGroup={toggleGroup} /> }) })()}
             </tbody>
           </table>
         </div>
@@ -1865,18 +1853,50 @@ function WorksheetTab({ date }: { date: string }) {
   )
 }
 
-// One producer block: a header row + its animal rows (blank weight cells to write on)
-function FragmentGroup({ group, startId }: { group: WSGroup; startId: number }) {
+// One producer block: a header row + its animal rows (blank weight cells to write on).
+// The leading checkbox picks which animals "🖨 Print Tags" prints — on the producer
+// row it takes the whole block, and it shows how many tags that head will get.
+function FragmentGroup({ gi, group, startId, skipped, onToggle, onToggleGroup }: {
+  gi: number; group: WSGroup; startId: number
+  skipped: Set<string>; onToggle: (key: string) => void; onToggleGroup: (gi: number) => void
+}) {
   const blank = <span style={{ color: 'rgba(166,120,90,0.35)' }}>—</span>
+  const onCount = group.rows.filter((_, i) => !skipped.has(`${gi}:${i}`)).length
+  const CHECKBOX: React.CSSProperties = { width: 17, height: 17, accentColor: C.tan, cursor: 'pointer' }
   return (
     <>
       <tr style={{ background: 'rgba(166,120,90,0.14)' }}>
+        <td style={{ padding: '0.45rem 0.5rem', textAlign: 'center' }}>
+          <input
+            type="checkbox"
+            checked={onCount === group.rows.length}
+            ref={el => { if (el) el.indeterminate = onCount > 0 && onCount < group.rows.length }}
+            onChange={() => onToggleGroup(gi)}
+            style={CHECKBOX}
+            title={`Print tags for all of ${group.producer}'s animals`}
+          />
+        </td>
         <td colSpan={9} style={{ padding: '0.45rem 0.75rem', color: C.cream, fontWeight: 700, fontSize: '0.82rem', letterSpacing: '0.02em' }}>
           {group.producer} <span style={{ color: C.tan, fontWeight: 400 }}>· {group.species} · {group.rows.length} head</span>
         </td>
       </tr>
-      {group.rows.map((r, i) => (
-        <tr key={i} style={{ borderBottom: '1px solid rgba(166,120,90,0.1)' }}>
+      {group.rows.map((r, i) => {
+        // Beef, sows and boars hang as two sides and take two tags; market hogs,
+        // lambs and goats hang whole and take one.
+        const split = splitsIntoHalves(group.species, r.sex)
+        const on    = !skipped.has(`${gi}:${i}`)
+        return (
+        <tr key={i} style={{ borderBottom: '1px solid rgba(166,120,90,0.1)', opacity: on ? 1 : 0.55 }}>
+          <td style={{ padding: '0.5rem 0.5rem', textAlign: 'center', whiteSpace: 'nowrap' }}>
+            <input
+              type="checkbox"
+              checked={on}
+              onChange={() => onToggle(`${gi}:${i}`)}
+              style={CHECKBOX}
+              title={split ? 'Prints 2 tags (L + R)' : 'Prints 1 tag (hangs whole)'}
+            />
+            <div style={{ color: C.lightBrown, fontSize: '0.62rem', fontWeight: 700, marginTop: 1 }}>{split ? '2 ×' : '1 ×'}</div>
+          </td>
           <td style={{ padding: '0.5rem 0.75rem', color: C.tan, fontWeight: 800, fontFamily: 'monospace' }}>{r.carcassTag || String(startId + i).padStart(2, '0')}</td>
           <td style={{ padding: '0.5rem 0.75rem', color: C.cream, fontWeight: 600 }}>{r.killOrder ?? blank}</td>
           {r.killType
@@ -1892,7 +1912,8 @@ function FragmentGroup({ group, startId }: { group: WSGroup; startId: number }) 
           <td style={{ padding: '0.5rem 0.75rem', color: C.cream }}>{r.half2 ?? blank}</td>
           <td style={{ padding: '0.5rem 0.75rem', color: C.cream, fontWeight: 600 }}>{r.total ?? blank}</td>
         </tr>
-      ))}
+        )
+      })}
     </>
   )
 }
