@@ -89,7 +89,9 @@ function lgTrimLabel(style?: string | null): string {
   if (!style) return ''
   if (style === 'grind')   return 'Ground — 1 lb packs'
   if (style === 'stew')    return 'Stew — 1 lb packs'
-  if (style === 'sausage') return 'Sausage — 1 lb packs'
+  // Lamb/goat sausage is a breakfast recipe, not the smoked summer sausage —
+  // named on the card so the floor reaches for the right one.
+  if (style === 'sausage') return 'Breakfast Sausage — 1 lb packs'
   return v2fmt(style)
 }
 
