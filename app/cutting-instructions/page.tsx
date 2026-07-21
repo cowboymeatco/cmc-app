@@ -351,6 +351,20 @@ function shortLoinFields(sl: any, f: (v: string) => string, t: (v: string) => st
   return []
 }
 
+// One pork shoulder as (label, value) pairs. A whole hog's two shoulders can
+// be cut differently (one roast, one grind), so each renders through here and
+// the pair gets merged below.
+function shoulderFields(sh: any, f: (v: string) => string, t: (v: string) => string): Array<[string, string]> {
+  if (!sh?.cut) return []
+  const out: Array<[string, string]> = [['Cut', f(sh.cut)]]
+  if (sh.cut === 'roast') {
+    out.push(['Roast Size', sh.addons?.includes('pulled-pork') ? 'Whole shoulder — pulled pork' : sh.roastSize ? `${sh.roastSize} lb` : ''])
+  }
+  if (sh.cut === 'steaks' && sh.steakThickness) out.push(['Thickness', t(sh.steakThickness)])
+  if (sh.addons?.length) out.push(['Add-ons', sh.addons.map(f).join(', ')])
+  return out.filter(([, v]) => v)
+}
+
 // Merge the two sides of a split primal row-by-row: a row that comes out the
 // same on both sides prints once, unsuffixed; only rows that actually differ
 // get labelled (1) / (2). Two loins both yielding a 2" filet is one line.
@@ -502,10 +516,10 @@ function renderV2Detail(ci: RawInstruction) {
       {isPork && (
         <>
           <V2Section title="Shoulder">
-            <V2Field label="Cut" value={v2fmt(d.shoulder?.cut)} />
-            {d.shoulder?.cut === 'roast' && <V2Field label="Roast Size" value={d.shoulder.roastSize ? `${d.shoulder.roastSize} lb` : ''} />}
-            {d.shoulder?.cut === 'steaks' && <V2Field label="Thickness" value={v2thick(d.shoulder.steakThickness)} />}
-            <V2Field label="Add-ons" value={v2adds(d.shoulder?.addons)} addon />
+            {(d.shoulder?.shoulder2
+              ? mergeSides(shoulderFields(d.shoulder, v2fmt, v2thick), shoulderFields(d.shoulder.shoulder2, v2fmt, v2thick))
+              : shoulderFields(d.shoulder, v2fmt, v2thick)
+            ).map(([label, value]) => <V2Field key={label} label={label} value={value} addon={label.startsWith('Add-ons')} />)}
           </V2Section>
           <V2Section title="Loin">
             <V2Field label="Cut" value={v2fmt(d.loin?.cut)} />
@@ -722,12 +736,10 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
 
   if (isPork) {
     const loin = d.loin ?? {}
-    cutSections += sec('Shoulder', [
-      row('Cut', fmt(d.shoulder?.cut)),
-      d.shoulder?.cut === 'roast'  && d.shoulder?.roastSize    ? row('Roast Size', `${d.shoulder.roastSize} lb`) : '',
-      d.shoulder?.cut === 'steaks' && d.shoulder?.steakThickness ? row('Thickness', thick(d.shoulder.steakThickness)) : '',
-      d.shoulder?.addons?.length ? row('  Add-ons', adds(d.shoulder.addons), true) : '',
-    ].join(''))
+    cutSections += sec('Shoulder', (d.shoulder?.shoulder2
+      ? mergeSides(shoulderFields(d.shoulder, fmt, thick), shoulderFields(d.shoulder.shoulder2, fmt, thick))
+      : shoulderFields(d.shoulder, fmt, thick)
+    ).map(([label, value]) => row(label.startsWith('Add-ons') ? `  ${label}` : label, value, label.startsWith('Add-ons'))).join(''))
     cutSections += sec('Loin', [
       row('Cut', fmt(loin.cut)),
       (loin.cut === 'bone-in-chops' || loin.cut === 'boneless-chops' || loin.cut === 'smoked-chops') ? row('Chop Thickness', thick(loin.chopThickness ?? '')) : '',
@@ -915,18 +927,22 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
   if (isPork) {
     const loin = d.loin ?? {}
     ps('Shoulder')
-    if (d.shoulder?.cut) {
-      if (d.shoulder.cut === 'grind') pg('Shoulder')
-      else {
-        const sSpec = [
-          fmt(d.shoulder.cut),
-          d.shoulder.cut === 'roast'  && d.shoulder.roastSize    ? `${d.shoulder.roastSize} lb`    : '',
-          d.shoulder.cut === 'steaks' && d.shoulder.steakThickness ? thick(d.shoulder.steakThickness) : '',
-        ].filter(Boolean).join(' · ')
-        pc('Shoulder', sSpec)
-        if (d.shoulder.addons?.length) pc('  Add-on', adds(d.shoulder.addons), true)
-      }
+    // A whole hog's two shoulders can be cut differently — pack each one that
+    // isn't ground, labelling the sides only when they actually differ.
+    const packShoulder = (sh: any, sfx: string) => {
+      if (!sh?.cut) return
+      if (sh.cut === 'grind') { pg(`Shoulder${sfx}`); return }
+      pc(`Shoulder${sfx}`, [
+        fmt(sh.cut),
+        sh.cut === 'roast'  && sh.roastSize      ? `${sh.roastSize} lb`      : '',
+        sh.cut === 'steaks' && sh.steakThickness ? thick(sh.steakThickness)  : '',
+      ].filter(Boolean).join(' · '))
+      if (sh.addons?.length) pc('  Add-on', adds(sh.addons), true)
     }
+    const sh2 = d.shoulder?.shoulder2
+    const sameShoulder = sh2 && JSON.stringify(shoulderFields(d.shoulder, fmt, thick)) === JSON.stringify(shoulderFields(sh2, fmt, thick))
+    if (sh2 && !sameShoulder) { packShoulder(d.shoulder, ' (1)'); packShoulder(sh2, ' (2)') }
+    else packShoulder(d.shoulder, '')
     ps('Loin')
     if (loin.cut === 'grind') { pg('Loin') }
     else if (loin.cut) {

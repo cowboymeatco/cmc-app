@@ -132,6 +132,29 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json(data)
   }
 
+  // Yield needs the live weight (Part A) and the hot carcass weight (Part B).
+  // Those are entered on different screens, in either order, so computing it
+  // only at weigh-in left yield blank whenever the live weight came second.
+  // Derive it here from the merged row so entry order can't matter.
+  const touchesYield = table === 'harvest_log' && (
+    'live_weight_lbs' in updates || 'hot_carcass_weight_lbs' in updates ||
+    'half_1_weight_lbs' in updates || 'half_2_weight_lbs' in updates
+  )
+  if (touchesYield && id) {
+    const { data: cur } = await supabase
+      .from('harvest_log')
+      .select('live_weight_lbs, hot_carcass_weight_lbs, half_1_weight_lbs, half_2_weight_lbs')
+      .eq('id', id)
+      .single()
+    const num = (v: unknown) => (v === null || v === undefined || v === '' ? null : Number(v))
+    const merged = { ...(cur ?? {}), ...updates }
+    const lw  = num(merged.live_weight_lbs)
+    const h1  = num(merged.half_1_weight_lbs)
+    const h2  = num(merged.half_2_weight_lbs)
+    const hcw = num(merged.hot_carcass_weight_lbs) ?? (h1 != null && h2 != null ? h1 + h2 : h1 ?? h2)
+    updates.yield_pct = lw && hcw ? Math.round((hcw / lw) * 1000) / 10 : null
+  }
+
   const { data, error } = await supabase
     .from(table)
     .update(updates)
