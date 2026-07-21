@@ -85,13 +85,13 @@ function porkTrimRows(t: any, f: (s: string) => string): Array<[string, string]>
 // "grind ? Ground : Stew", so any new wizard option printed as Stew — a wrong
 // instruction to the floor rather than a missing one. One place now, and an
 // unknown value falls back to its own name instead of a confident lie.
-function lgTrimLabel(style?: string | null): string {
+// `species` names the sausage — "Lamb Sausage", not "Breakfast Sausage" — so the
+// card matches what goes on the label (Jill, 2026-07-21).
+function lgTrimLabel(style?: string | null, species?: string | null): string {
   if (!style) return ''
   if (style === 'grind')   return 'Ground — 1 lb packs'
   if (style === 'stew')    return 'Stew — 1 lb packs'
-  // Lamb/goat sausage is a breakfast recipe, not the smoked summer sausage —
-  // named on the card so the floor reaches for the right one.
-  if (style === 'sausage') return 'Breakfast Sausage — 1 lb packs'
+  if (style === 'sausage') return `${v2fmt(species ?? '') || 'Lamb'} Sausage — 1 lb packs`
   return v2fmt(style)
 }
 
@@ -695,7 +695,7 @@ function renderV2Detail(ci: RawInstruction) {
           <V2Field label="Leg" value={v2fmt(d.leg?.cut)} />
           <V2Field label="Shoulder" value={v2fmt(d.shoulder?.cut)} />
           <V2Field label="Shank" value={v2fmt(d.shank?.cut)} />
-          <V2Field label="Trim" value={lgTrimLabel(d.trim?.style) || undefined} />
+          <V2Field label="Trim" value={lgTrimLabel(d.trim?.style, sp === 'goat' ? 'Goat' : 'Lamb') || undefined} />
         </V2Section>
       )}
 
@@ -911,7 +911,7 @@ function printV2CutCard(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInf
       row('Leg',      fmt(d.leg?.cut)),
       row('Shoulder', fmt(d.shoulder?.cut)),
       row('Shank',    fmt(d.shank?.cut)),
-      d.trim?.style ? row('Trim', lgTrimLabel(d.trim.style)) : '',
+      d.trim?.style ? row('Trim', lgTrimLabel(d.trim.style, species)) : '',
     ].join(''))
   }
 
@@ -1139,7 +1139,7 @@ function printV2CutCard(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInf
     if (d.leg?.cut)      { d.leg.cut      === 'grind' ? pg('Leg')      : pc('Leg',      fmt(d.leg.cut)) }
     if (d.shoulder?.cut) { d.shoulder.cut === 'grind' ? pg('Shoulder') : pc('Shoulder', fmt(d.shoulder.cut)) }
     if (d.shank?.cut)    { d.shank.cut    === 'grind' ? pg('Shank')    : pc('Shank',    fmt(d.shank.cut)) }
-    if (d.trim?.style)   { d.trim.style   === 'grind' ? pg('Trim')     : pc('Trim',     lgTrimLabel(d.trim.style)) }
+    if (d.trim?.style)   { d.trim.style   === 'grind' ? pg('Trim')     : pc('Trim',     lgTrimLabel(d.trim.style, species)) }
   }
 
   // Strip section headers that have no cut rows under them
