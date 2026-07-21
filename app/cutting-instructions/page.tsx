@@ -284,6 +284,9 @@ const BONE_IN_FILET_THICKNESS = '2"'
 function v2thick(v: string): string { return v ? `${v}"` : '' }
 function v2withT(cut: string, t: string): string { return [v2fmt(cut), v2thick(t)].filter(Boolean).join(' — ') }
 function v2adds(arr: string[]): string { return arr?.length ? arr.map(v2fmt).join(', ') : '' }
+// A round sent to jerky carries its flavor; split rounds show both sides
+function v2roundOne(r: any): string { return r?.cut === 'jerky' ? `Jerky${r.jerkyFlavor ? ` — ${v2fmt(r.jerkyFlavor)}` : ''}` : v2withT(r?.cut ?? '', r?.thickness ?? '') }
+function v2roundVal(r: any): string { return r?.round2 ? `1: ${v2roundOne(r)} / 2: ${v2roundOne(r.round2)}` : v2roundOne(r) }
 
 // The ribeye's only value-add is Seasoned (roast cuts only), and the wizard
 // stores it as a boolean rather than the addons array every other primal uses.
@@ -332,12 +335,15 @@ function V2ShortLoinFields({ sl, sfx = '' }: { sl: any; sfx?: string }) {
       {sl.path === 'bone-in' && (
         <>
           <V2Field label={`T-Bone / Porterhouse${sfx}`} value={v2thick(sl.tBoneThickness)} />
-          <V2Field label={`Filet Mignon${sfx}`} value={BONE_IN_FILET_THICKNESS} />
+          <V2Field label={`Filet${sfx}`} value={BONE_IN_FILET_THICKNESS} />
         </>
       )}
       {sl.path === 'boneless' && (
         <>
-          <V2Field label={`Tenderloin${sfx}`} value={sl.tenderloin?.cut === 'filet' ? 'Filet Mignon — 2"' : v2fmt(sl.tenderloin?.cut ?? '')} />
+          {/* One name per row — "Tenderloin: Filet Mignon" read as two cuts (Charlie) */}
+          {sl.tenderloin?.cut === 'filet'
+            ? <V2Field label={`Filet${sfx}`} value={'2"'} />
+            : <V2Field label={`Tenderloin${sfx}`} value={v2fmt(sl.tenderloin?.cut ?? '')} />}
           <V2Field label={`Strip Loin${sfx}`} value={v2withT(sl.stripLoin?.cut ?? '', sl.stripLoin?.thickness ?? '')} />
         </>
       )}
@@ -471,9 +477,9 @@ function renderV2Detail(ci: RawInstruction) {
             ) : (
               <V2Field label="Sirloin Tip Add-ons" value={v2adds(d.sirloinTip?.addons)} addon />
             )}
-            <V2Field label="Bottom Round" value={v2withT(d.bottomRound?.cut ?? '', d.bottomRound?.thickness ?? '')} />
+            <V2Field label="Bottom Round" value={v2roundVal(d.bottomRound)} />
             <V2Field label="Bottom Round Add-ons" value={v2adds(d.bottomRound?.addons)} addon />
-            <V2Field label="Top Round" value={v2withT(d.topRound?.cut ?? '', d.topRound?.thickness ?? '')} />
+            <V2Field label="Top Round" value={v2roundVal(d.topRound)} />
             <V2Field label="Top Round Add-ons" value={v2adds(d.topRound?.addons)} addon />
             <V2Field label="Round Shank / Marrow" value={v2fmt(d.roundShank?.marrow)} />
           </V2Section>
@@ -575,6 +581,9 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
   const wline = (w: number) => `<span style="display:inline-block;min-width:${w}px;border-bottom:1.5px solid #1A0A04">&nbsp;</span>`
   // Jill's wording: a kept-whole rack reads "Frenched Rack of Lamb/Goat"
   const rackDisplay = (v?: string) => v === 'whole-rack' ? `Frenched Rack of ${sp === 'goat' ? 'Goat' : 'Lamb'}` : fmt(v ?? '')
+  // A round sent to jerky carries its flavor; split rounds print both sides
+  const roundOne = (r: any) => r?.cut === 'jerky' ? `Jerky${r.jerkyFlavor ? ` — ${fmt(r.jerkyFlavor)}` : ''}` : withT(r?.cut ?? '', r?.thickness ?? '')
+  const roundVal = (r: any) => r?.round2 ? `1: ${roundOne(r)} / 2: ${roundOne(r.round2)}` : roundOne(r)
 
   // Primal color coding for the cutting table (Chris): chuck green,
   // rib & plate yellow, rest of the beef red
@@ -671,11 +680,14 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
         : (ribeyeAdds(d.ribeye).length ? row('  Add-ons', adds(ribeyeAdds(d.ribeye)), true) : ''),
     ].join(''))
     const sl = d.shortLoin ?? {}
+    // One name per row — "Tenderloin: Filet Mignon" read as two cuts (Charlie)
     const slRows = (s: any, sfx: string): string => s?.path === 'bone-in' ? [
       row(`T-Bone / Porterhouse${sfx}`, thick(s.tBoneThickness)),
-      row(`Filet Mignon${sfx}`, BONE_IN_FILET_THICKNESS),
+      row(`Filet${sfx}`, BONE_IN_FILET_THICKNESS),
     ].join('') : s?.path === 'boneless' ? [
-      row(`Tenderloin${sfx}`, s.tenderloin?.cut === 'filet' ? 'Filet Mignon — 2"' : fmt(s.tenderloin?.cut ?? '')),
+      s.tenderloin?.cut === 'filet'
+        ? row(`Filet${sfx}`, '2"')
+        : row(`Tenderloin${sfx}`, fmt(s.tenderloin?.cut ?? '')),
       row(`Strip Loin${sfx}`, withT(s.stripLoin?.cut ?? '', s.stripLoin?.thickness ?? '')),
     ].join('') : ''
     cutSections += sec('Short Loin', sl.loin2 ? slRows(sl, ' (1)') + slRows(sl.loin2, ' (2)') : slRows(sl, ''))
@@ -699,11 +711,11 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
             d.sirloinTip.tip2.addons?.length ? row('  Add-ons (2)', adds(d.sirloinTip.tip2.addons), true) : '',
           ].join('')
         : (d.sirloinTip?.addons?.length ? row('  Add-ons', adds(d.sirloinTip.addons), true) : ''),
-      row('Bottom Round', withT(d.bottomRound?.cut ?? '', d.bottomRound?.thickness ?? '')),
+      row('Bottom Round', roundVal(d.bottomRound)),
       d.bottomRound?.addons?.length ? row('  Add-ons', adds(d.bottomRound.addons), true) : '',
       d.eyeOfRound?.cut ? row('Eye of Round', withT(d.eyeOfRound.cut, d.eyeOfRound.thickness ?? '')) : '',
       d.rumpRoast?.cut  ? row('Rump Roast',   withT(d.rumpRoast.cut,  d.rumpRoast.thickness  ?? '')) : '',
-      row('Top Round', withT(d.topRound?.cut ?? '', d.topRound?.thickness ?? '')),
+      row('Top Round', roundVal(d.topRound)),
       d.topRound?.addons?.length ? row('  Add-ons', adds(d.topRound.addons), true) : '',
       row('Round Shank / Marrow', fmt(d.roundShank?.marrow)),
     ].join(''))
@@ -842,11 +854,12 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
     const packShortLoin = (s: any, sfx: string) => {
       if (s.path === 'bone-in') {
         if (s.tBoneThickness) pc(`T-Bone / Porterhouse${sfx}`, thick(s.tBoneThickness))
-        pc(`Filet Mignon${sfx}`, BONE_IN_FILET_THICKNESS)
+        pc(`Filet${sfx}`, BONE_IN_FILET_THICKNESS)
       }
       if (s.path === 'boneless') {
         if (s.tenderloin?.cut === 'grind') pg(`Tenderloin${sfx}`)
-        else if (s.tenderloin?.cut) pc(`Tenderloin${sfx}`, s.tenderloin.cut === 'filet' ? 'Filet Mignon — 2"' : fmt(s.tenderloin.cut))
+        else if (s.tenderloin?.cut === 'filet') pc(`Filet${sfx}`, '2"')
+        else if (s.tenderloin?.cut) pc(`Tenderloin${sfx}`, fmt(s.tenderloin.cut))
         if (s.stripLoin?.cut === 'grind') pg(`Strip Loin${sfx}`)
         else if (s.stripLoin?.cut) pc(`Strip Loin (NY Strip)${sfx}`, withT(s.stripLoin.cut, s.stripLoin.thickness ?? ''))
       }
@@ -878,16 +891,19 @@ function printV2CutCard(ci: RawInstruction, carcass: CarcassInfo = EMPTY_CARCASS
     } else if (d.sirloinTip?.cut) {
       packSirloinTip(d.sirloinTip, '')
     }
-    if (d.bottomRound?.cut) {
-      if (d.bottomRound.cut === 'grind') pg('Bottom Round')
-      else { pc('Bottom Round', withT(d.bottomRound.cut, d.bottomRound.thickness ?? '')); if (d.bottomRound.addons?.length) pc('  Add-on', adds(d.bottomRound.addons), true) }
+    // Split rounds get a line per side so each is packed separately
+    const packRound = (label: string, r: any, sfx = '') => {
+      if (!r?.cut) return
+      if (r.cut === 'grind') { pg(`${label}${sfx}`); return }
+      pc(`${label}${sfx}`, roundOne(r))
+      if (r.addons?.length) pc('  Add-on', adds(r.addons), true)
     }
+    if (d.bottomRound?.round2) { packRound('Bottom Round', d.bottomRound, ' (1)'); packRound('Bottom Round', d.bottomRound.round2, ' (2)') }
+    else packRound('Bottom Round', d.bottomRound)
     if (d.eyeOfRound?.cut)  { d.eyeOfRound.cut  === 'grind' ? pg('Eye of Round')  : pc('Eye of Round',  withT(d.eyeOfRound.cut,  d.eyeOfRound.thickness  ?? '')) }
     if (d.rumpRoast?.cut)   { d.rumpRoast.cut   === 'grind' ? pg('Rump Roast')    : pc('Rump Roast',    withT(d.rumpRoast.cut,   d.rumpRoast.thickness   ?? '')) }
-    if (d.topRound?.cut) {
-      if (d.topRound.cut === 'grind') pg('Top Round')
-      else { pc('Top Round', withT(d.topRound.cut, d.topRound.thickness ?? '')); if (d.topRound.addons?.length) pc('  Add-on', adds(d.topRound.addons), true) }
-    }
+    if (d.topRound?.round2) { packRound('Top Round', d.topRound, ' (1)'); packRound('Top Round', d.topRound.round2, ' (2)') }
+    else packRound('Top Round', d.topRound)
     if (d.roundShank?.marrow) pc('Round Shank / Marrow', fmt(d.roundShank.marrow))
   }
 
@@ -1143,7 +1159,7 @@ const FAKE_CI: RawInstruction = {
     skirt:     { cut: 'cut-half' },
     flank:     { cut: 'keep-whole' },
     sirloinTip:  { mode: 'split', cut: 'roast-half', thickness: '', addons: ['seasoned'], tip2: { cut: 'steaks', thickness: '1', addons: [] } },
-    bottomRound: { cut: 'jerky' },
+    bottomRound: { cut: 'jerky', jerkyFlavor: 'cowboy-ranch' },
     topRound:    { cut: 'cubed-steak' },
     roundShank:  { marrow: 'canoe' },
     trim:        { fatPct: '85/15', pattyPct: 30, patties: { size: '4:1', pkg: '1lb' }, loose: { packSize: '1.5', rollstock: false } },
