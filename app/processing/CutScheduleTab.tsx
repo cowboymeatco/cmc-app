@@ -561,19 +561,24 @@ export default function CutScheduleTab() {
                         </span>
                       )}
                     </div>
+                    {/* Only the producer name may truncate — the assigned badge and
+                        the Assign button sit outside the ellipsis so a long producer
+                        can never clip the one control that fixes the row. */}
                     <div style={{
                       fontSize: '0.68rem',
-                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                      display: 'flex', alignItems: 'center', minWidth: 0,
                     }}>
-                      <span style={{ color: C.medBrown }}>Producer:</span>{' '}
-                      {entry.producer
-                        ? <span style={{ color: C.lightBrown }}>{entry.producer}</span>
-                        : <span style={{ color: C.amber }}>⚠ not set</span>}
-                      {!entry.assigned && entry.customer_count > 1 && (
-                        <span style={{ color: C.amber }} title="This appointment has multiple cut customers not yet assigned to individual carcasses — shown as one row per carcass until you assign them">
-                          {' · '}{entry.customer_count} cut customers
-                        </span>
-                      )}
+                      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
+                        <span style={{ color: C.medBrown }}>Producer:</span>{' '}
+                        {entry.producer
+                          ? <span style={{ color: C.lightBrown }}>{entry.producer}</span>
+                          : <span style={{ color: C.amber }}>⚠ not set</span>}
+                        {!entry.assigned && entry.customer_count > 1 && (
+                          <span style={{ color: C.amber }} title="This appointment has multiple cut customers not yet assigned to individual carcasses — shown as one row per carcass until you assign them">
+                            {' · '}{entry.customer_count} cut customers
+                          </span>
+                        )}
+                      </span>
                       {/* Per-appointment assignment progress badge */}
                       {entry.customer_count > 1 && entry.appt_total_carcasses > 0 && (() => {
                         const done = entry.appt_assigned_carcasses >= entry.appt_total_carcasses
@@ -582,7 +587,7 @@ export default function CutScheduleTab() {
                           <span
                             title={`${entry.appt_assigned_carcasses} of ${entry.appt_total_carcasses} of this appointment's carcasses fully assigned to cut customers`}
                             style={{
-                              marginLeft: 6, padding: '0 5px', borderRadius: 3, verticalAlign: 'middle',
+                              marginLeft: 6, padding: '0 5px', borderRadius: 3, flexShrink: 0,
                               background: `${color}1A`, border: `1px solid ${color}55`, color,
                               fontSize: '0.6rem', fontWeight: 700, whiteSpace: 'nowrap',
                             }}
@@ -598,12 +603,12 @@ export default function CutScheduleTab() {
                           onDragStart={e => e.stopPropagation()}
                           title={entry.assigned ? 'Reassign this carcass to a different cut customer' : 'Assign this appointment’s carcasses to specific cut customers'}
                           style={{
-                            marginLeft: 6, padding: '0 6px', height: 16, lineHeight: '14px',
+                            marginLeft: 6, padding: '0 6px', height: 16, lineHeight: '14px', flexShrink: 0,
                             background: entry.assigned ? 'rgba(166,120,90,0.12)' : 'rgba(245,158,11,0.16)',
                             border: `1px solid ${entry.assigned ? 'rgba(166,120,90,0.35)' : 'rgba(245,158,11,0.5)'}`,
                             borderRadius: 3, cursor: 'pointer',
                             color: entry.assigned ? C.tan : C.amber,
-                            fontSize: '0.62rem', fontWeight: 700, verticalAlign: 'middle',
+                            fontSize: '0.62rem', fontWeight: 700, whiteSpace: 'nowrap',
                           }}
                         >
                           ⇄ {entry.assigned ? 'Reassign' : 'Assign'}
