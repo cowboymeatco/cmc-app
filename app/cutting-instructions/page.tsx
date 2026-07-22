@@ -831,14 +831,9 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
 
   let cutSections = ''
 
-  if (d.organs) {
-    cutSections += sec('Organs', [
-      row('Heart', fmt(d.organs.heart)),
-      row('Liver', fmt(d.organs.liver)),
-      isBeef ? row('Tongue', fmt(d.organs.tongue)) : '',
-      isBeef ? row('Oxtail', fmt(d.organs.oxtail)) : '',
-    ].join(''))
-  }
+  // No organs on the cut card: the cutters never handle them (Charlie,
+  // 2026-07-22). Whatever the customer is keeping still reaches the floor on
+  // the packaging sheet, where it's actually packed.
 
   if (isBeef) {
     cutSections += sec('Chuck', [
@@ -977,9 +972,12 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
     }
   }
 
-  if (d.specialty?.interest) {
+  // A "no thanks" is an answered question, not an instruction — printing it just
+  // costs the cutter a section to read past (Charlie, 2026-07-22). Only a yes
+  // earns space, and any notes ride along with it.
+  if (d.specialty?.interest === 'yes') {
     cutSections += sec('Specialty Items', [
-      row('Interested', d.specialty.interest === 'yes' ? 'Yes — crew will call' : 'No thanks'),
+      row('Interested', 'Yes — crew will call'),
       d.specialty.notes ? row('Notes', d.specialty.notes) : '',
     ].join(''))
   }
@@ -994,13 +992,17 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
   const pc  = (cut: string, spec: string, isAddon = false) => prs.push({ cut, spec, isAddon })
   const pg  = (src: string)                            => grindFrom.push(src)
 
-  // organs
+  // organs — only the ones coming home. The wizard writes 'keep' / 'discard',
+  // but this used to test for 'no', so a declined organ printed as
+  // "Liver · Discard" and read like something to pack (Jill's card, 2026-07-22).
+  // Older orders used yes/no, so both vocabularies have to count as declined.
+  const organKept = (v?: string | null) => !!v && !['discard', 'no', 'none'].includes(v.toLowerCase())
   if (d.organs) {
     const orgPacks: string[] = []
-    if (d.organs.heart && d.organs.heart !== 'no') orgPacks.push(`Heart · ${fmt(d.organs.heart)}`)
-    if (d.organs.liver && d.organs.liver !== 'no') orgPacks.push(`Liver · ${fmt(d.organs.liver)}`)
-    if (isBeef && d.organs.tongue && d.organs.tongue !== 'no') orgPacks.push(`Tongue · ${fmt(d.organs.tongue)}`)
-    if (isBeef && d.organs.oxtail && d.organs.oxtail !== 'no') orgPacks.push(`Oxtail · ${fmt(d.organs.oxtail)}`)
+    if (organKept(d.organs.heart)) orgPacks.push(`Heart · ${fmt(d.organs.heart)}`)
+    if (organKept(d.organs.liver)) orgPacks.push(`Liver · ${fmt(d.organs.liver)}`)
+    if (isBeef && organKept(d.organs.tongue)) orgPacks.push(`Tongue · ${fmt(d.organs.tongue)}`)
+    if (isBeef && organKept(d.organs.oxtail)) orgPacks.push(`Oxtail · ${fmt(d.organs.oxtail)}`)
     if (orgPacks.length) { ps('Organs'); orgPacks.forEach(o => pc(o, '')) }
   }
 
