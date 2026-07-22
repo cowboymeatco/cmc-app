@@ -491,15 +491,6 @@ function hamCut(cut?: string | null): string {
   return cut === 'half' ? 'Cut in Half' : cut === 'quarters' ? 'Cut in Quarters' : v2fmt(cut)
 }
 
-// Split hams each carry their own cut (Jill, 2026-07-22) — the fresh one can go
-// to steaks while the cured one stays whole. Same shape as hockStyle: pair them
-// only when both sides have a cut, since a grind ham has none.
-function hamCutPair(ham?: { cut?: string | null; cut2?: string | null }): string {
-  if (!ham?.cut2) return hamCut(ham?.cut)
-  const parts = [hamCut(ham.cut), hamCut(ham.cut2)]
-  return parts.every(Boolean) ? sidePair(parts[0], parts[1]) : parts.filter(Boolean).join(' / ')
-}
-
 // Everything cured here also gets smoked, so "Cured & Smoked" is two words of
 // noise on a card read at arm's length — it prints as "Cured" (Charlie).
 function hamStyleWord(style?: string | null): string {
@@ -805,21 +796,15 @@ function renderV2Detail(ci: RawInstruction) {
             <V2Field label="Tenderloin" value={v2fmt(d.loin?.tenderloin)} />
             <V2Field label="Add-ons" value={v2adds(d.loin?.addons)} addon />
           </V2Section>
+          {/* This detail reads the same as the printed cut card (Charlie): the
+              belly says "Cured" not "Bacon", the ham is one line per side with
+              smoking assumed, and hocks aren't listed since they follow the ham.
+              bellyRows / hamRows are the same helpers the card is built from. */}
           <V2Section title="Belly">
-            <V2Field label="Cut" value={v2fmt(d.belly?.cut)} />
+            {bellyRows(d.belly).map(([l, v]) => <V2Field key={l} label={l} value={v} />)}
           </V2Section>
-          {/* Hocks come off the ham, so they share its header (Charlie);
-              spare ribs stand alone. */}
-          <V2Section title="Ham & Hocks">
-            <V2Field label="Style" value={
-              d.ham?.style2
-                ? sidePair(v2fmt(d.ham.style), v2fmt(d.ham.style2))
-                : v2fmt(d.ham?.style)
-            } />
-            {/* A split hog can pair a grind ham with a cut one, so key the row
-                off whether any cut exists rather than off ham 1's style. */}
-            {hamCutPair(d.ham) && <V2Field label="Cut" value={hamCutPair(d.ham)} />}
-            <V2Field label="Hocks" value={v2fmt(d.hocks?.cut) || hockStyle(d.ham)} />
+          <V2Section title="Ham">
+            {hamRows(d.ham).map(([l, v]) => <V2Field key={l} label={l} value={v} />)}
           </V2Section>
           <V2Section title="Country Style Ribs">
             <V2Field label="Country Style Ribs" value={v2fmt(d.spareRibs?.cut)} />
