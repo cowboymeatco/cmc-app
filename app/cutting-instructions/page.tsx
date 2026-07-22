@@ -143,7 +143,18 @@ function rawWeighInRows(d: any, f: (s: string) => string): Array<[string, string
   }
   const ham = d?.ham
   const curedHams = [ham?.style, ham?.style2].filter(s => s === 'cured-smoked').length
-  if (curedHams > 0) rows.push(['Ham — Cure & Smoke', [curedHams > 1 ? 'Both hams' : '', f(ham?.cut ?? '')].filter(Boolean).join(' · ')])
+  if (curedHams > 0) {
+    // Name the cut of the ham actually being cured — with split hams the cured
+    // one may be the second, whose cut lives in cut2.
+    const curedCuts = [
+      ham?.style === 'cured-smoked' ? ham?.cut : null,
+      ham?.style2 === 'cured-smoked' ? ham?.cut2 : null,
+    ].filter(Boolean).map(c => f(c as string))
+    const cutLabel = curedCuts.length === 2 && curedCuts[0] !== curedCuts[1]
+      ? curedCuts.join(' / ')
+      : curedCuts[0] ?? ''
+    rows.push(['Ham — Cure & Smoke', [curedHams > 1 ? 'Both hams' : '', cutLabel].filter(Boolean).join(' · ')])
+  }
   // Plain ground pork is just grinding, not sausage making — no making charge,
   // so it gets no weigh-in line.
   const t = d?.trim
@@ -400,6 +411,15 @@ function hockStyle(ham?: { style?: string | null; style2?: string | null }): str
 function hamCut(cut?: string | null): string {
   if (!cut) return ''
   return cut === 'half' ? 'Cut in Half' : cut === 'quarters' ? 'Cut in Quarters' : v2fmt(cut)
+}
+
+// Split hams each carry their own cut (Jill, 2026-07-22) — the fresh one can go
+// to steaks while the cured one stays whole. Same shape as hockStyle: pair them
+// only when both sides have a cut, since a grind ham has none.
+function hamCutPair(ham?: { cut?: string | null; cut2?: string | null }): string {
+  if (!ham?.cut2) return hamCut(ham?.cut)
+  const parts = [hamCut(ham.cut), hamCut(ham.cut2)]
+  return parts.every(Boolean) ? sidePair(parts[0], parts[1]) : parts.filter(Boolean).join(' / ')
 }
 
 // Shop-standard steak thicknesses the wizard states in its labels but doesn't
@@ -677,7 +697,9 @@ function renderV2Detail(ci: RawInstruction) {
                 ? sidePair(v2fmt(d.ham.style), v2fmt(d.ham.style2))
                 : v2fmt(d.ham?.style)
             } />
-            {d.ham?.style !== 'grind' && <V2Field label="Cut" value={hamCut(d.ham?.cut)} />}
+            {/* A split hog can pair a grind ham with a cut one, so key the row
+                off whether any cut exists rather than off ham 1's style. */}
+            {hamCutPair(d.ham) && <V2Field label="Cut" value={hamCutPair(d.ham)} />}
             <V2Field label="Hocks" value={v2fmt(d.hocks?.cut) || hockStyle(d.ham)} />
           </V2Section>
           <V2Section title="Country Style Ribs">
@@ -918,7 +940,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
     // Hocks come off the ham, so they share its header; spare ribs stand alone.
     cutSections += sec('Ham & Hocks', [
       row('Style', d.ham?.style2 ? sidePair(fmt(d.ham.style), fmt(d.ham.style2)) : fmt(d.ham?.style)),
-      d.ham?.style !== 'grind' ? row('Cut', hamCut(d.ham?.cut)) : '',
+      hamCutPair(d.ham) ? row('Cut', hamCutPair(d.ham)) : '',
       row('Hocks', fmt(d.hocks?.cut) || hockStyle(d.ham)),
     ].join(''))
     cutSections += sec('Country Style Ribs', [
@@ -1147,7 +1169,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
       if (d.ham.style === 'grind' && !d.ham.style2) pg('Ham')
       else pc('Ham', [
         d.ham.style2 ? sidePair(fmt(d.ham.style), fmt(d.ham.style2)) : fmt(d.ham.style),
-        d.ham.cut ? hamCut(d.ham.cut) : '',
+        hamCutPair(d.ham),
       ].filter(Boolean).join(' · '))
     }
     if (d.hocks?.cut)     pc('Hocks', fmt(d.hocks.cut))
