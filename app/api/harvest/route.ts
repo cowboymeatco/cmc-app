@@ -17,9 +17,13 @@ export async function GET(req: NextRequest) {
   }
 
   // harvest log
-  const status = searchParams.get('status')
-  const date   = searchParams.get('date')
-  const apptId = searchParams.get('appointment_id')
+  const status  = searchParams.get('status')
+  const date    = searchParams.get('date')
+  const apptId  = searchParams.get('appointment_id')
+  // Several appointments at once, so a page showing many linked cards can work
+  // out which ones still need a carcass assigned in one call instead of one per
+  // card. An explicitly empty list means "nothing to ask about" — not "all".
+  const apptIds = searchParams.get('appointment_ids')
   let query = supabase
     .from('harvest_log')
     .select('*')
@@ -28,6 +32,11 @@ export async function GET(req: NextRequest) {
   if (status) query = query.eq('status', status)
   if (date)   query = query.eq('harvest_date', date)
   if (apptId) query = query.eq('appointment_id', apptId)
+  if (apptIds !== null) {
+    const ids = apptIds.split(',').map(s => s.trim()).filter(Boolean)
+    if (ids.length === 0) return NextResponse.json([])
+    query = query.in('appointment_id', ids)
+  }
 
   const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

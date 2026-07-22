@@ -270,10 +270,31 @@ function fmtShortDate(v?: string | null): string {
 }
 
 // Carcass tag for a linked instruction: exact carcass assignment first
-// (Cut Schedule's carcass_assignments), else the appointment's only animal,
-// else '' → the printed card keeps its blank handwriting line
-type CarcassInfo = { tag: string; lot: string; producer: string; hcw: number | string | null; killType: string }
-const EMPTY_CARCASS: CarcassInfo = { tag: '', lot: '', producer: '', hcw: null, killType: '' }
+// (carcass_assignments), else the appointment's only animal, else '' → the
+// printed card keeps its blank handwriting line.
+//
+// Linking a card attaches it to a CUSTOMER SLOT on a check-in ("one of Cook's
+// hogs is Gabby's"), not to an animal. When the check-in brought one animal the
+// two are the same thing; when it brought several, the slot alone can't say
+// which carcass is hers, and the card would print a blank tag, a blank hanging
+// weight and — worse, because nothing marks its absence — no kill-type badge.
+// `state` is what tells those cases apart so the UI and the card can say so.
+//   assigned    — an explicit carcass_assignments row. Trustworthy.
+//   sole        — one animal on the check-in, so there is nothing to choose.
+//   ambiguous   — several animals, none assigned to this card. Needs a human.
+//   unharvested — not killed yet; blank lines are expected, nothing is wrong.
+type CarcassState = 'assigned' | 'sole' | 'ambiguous' | 'unharvested'
+type Candidate = { id: string; tag: string; hcw: number | string | null; heldBy: string[] }
+type CarcassInfo = {
+  tag: string; lot: string; producer: string; hcw: number | string | null; killType: string
+  state: CarcassState
+  apptId: string
+  candidates: Candidate[]   // the animals on this check-in, for the picker
+}
+const EMPTY_CARCASS: CarcassInfo = {
+  tag: '', lot: '', producer: '', hcw: null, killType: '',
+  state: 'unharvested', apptId: '', candidates: [],
+}
 
 // USDA vs Custom Exempt decides whether the meat can ever be sold, so it has to
 // be on the card the floor works from (Jill, 2026-07-21). Part B stores
@@ -324,36 +345,68 @@ async function carcassInfosFor(ci: RawInstruction, appointments: HarvestAppointm
   return out.length ? out : [EMPTY_CARCASS]
 }
 
+// Pure resolution, given the check-in's animals and assignment rows already in
+// hand. Split out from fetching so the page can work out every card's state
+// from two bulk calls, and the print path can do the same from its own reads.
+function resolveCarcass(
+  ciId: string,
+  appt: HarvestAppointment,
+  logs: any[],
+  asgs: any[],
+): CarcassInfo {
+  const animals = Array.isArray(logs) ? logs : []
+  const rows    = Array.isArray(asgs) ? asgs : []
+  const asg     = rows.find((a: any) => a.linked_cutting_instruction_id === ciId) ?? null
+
+  const log = animals.length === 0 ? null
+    : asg ? animals.find((l: any) => l.id === asg.harvest_log_id) ?? null
+    : animals.length === 1 ? animals[0] : null
+
+  const state: CarcassState =
+    animals.length === 0 ? 'unharvested'
+    : log && asg          ? 'assigned'
+    : log                 ? 'sole'
+    : 'ambiguous'
+
+  // Even without a specific carcass, the appointment pins down producer and
+  // lot (Julian of the harvest date) — only tag & weight stay handwriting.
+  const rawTag: string = log?.carcass_tag ?? ''
+  // Tags print as <julian>-<seq>; Part B usually stores just the seq. Split
+  // out a lot prefix ONLY when it actually looks like a 5-digit Julian —
+  // a side-suffixed tag like "2-R" is a tag alone, not lot-tag.
+  const hasLotPrefix = /^\d{5}-/.test(rawTag)
+  const dash = rawTag.indexOf('-')
+
+  // A kill type shared by every animal on the check-in is known even when the
+  // individual animal isn't — so CUSTOM EXEMPT — NOT FOR SALE still prints on
+  // an unassigned card. That marking is the one thing that must never go quiet.
+  const killTypes = [...new Set(animals.map((l: any) => l.kill_type).filter(Boolean))]
+  const killType  = log?.kill_type ?? (killTypes.length === 1 ? killTypes[0] : '')
+
+  return {
+    lot: hasLotPrefix ? rawTag.slice(0, dash) : julianLot(appt.harvest_date),
+    tag: hasLotPrefix ? rawTag.slice(dash + 1) : rawTag,
+    producer: log?.producer || appt.source || '',
+    hcw: log?.hot_carcass_weight_lbs ?? null,
+    killType,
+    state,
+    apptId: appt.id,
+    candidates: animals.map((l: any) => ({
+      id:  l.id,
+      tag: l.carcass_tag ?? '',
+      hcw: l.hot_carcass_weight_lbs ?? null,
+      heldBy: rows.filter((a: any) => a.harvest_log_id === l.id).map((a: any) => a.customer_name || 'someone'),
+    })),
+  }
+}
+
 async function carcassInfoForAppt(ci: RawInstruction, appt: HarvestAppointment): Promise<CarcassInfo> {
   try {
     const [logsRes, asgRes] = await Promise.all([
       fetch(`/api/harvest?appointment_id=${encodeURIComponent(appt.id)}`),
       fetch(`/api/carcass-assignments?appointment_id=${encodeURIComponent(appt.id)}`),
     ])
-    const logs = await logsRes.json()
-    const asgs = await asgRes.json()
-    const asg = Array.isArray(asgs) ? asgs.find((a: any) => a.linked_cutting_instruction_id === ci.id) : null
-    // Exact carcass assignment first (Cut Schedule), else the appointment's
-    // only animal; multiple animals with no assignment is ambiguous.
-    const log = !Array.isArray(logs) || logs.length === 0 ? null
-      : asg ? logs.find((l: any) => l.id === asg.harvest_log_id) ?? null
-      : logs.length === 1 ? logs[0] : null
-
-    // Even without a specific carcass, the appointment pins down producer and
-    // lot (Julian of the harvest date) — only tag & weight stay handwriting.
-    const rawTag: string = log?.carcass_tag ?? ''
-    // Tags print as <julian>-<seq>; Part B usually stores just the seq. Split
-    // out a lot prefix ONLY when it actually looks like a 5-digit Julian —
-    // a side-suffixed tag like "2-R" is a tag alone, not lot-tag.
-    const hasLotPrefix = /^\d{5}-/.test(rawTag)
-    const dash = rawTag.indexOf('-')
-    return {
-      lot: hasLotPrefix ? rawTag.slice(0, dash) : julianLot(appt.harvest_date),
-      tag: hasLotPrefix ? rawTag.slice(dash + 1) : rawTag,
-      producer: log?.producer || appt.source || '',
-      hcw: log?.hot_carcass_weight_lbs ?? null,
-      killType: log?.kill_type ?? '',
-    }
+    return resolveCarcass(ci.id, appt, await logsRes.json(), await asgRes.json())
   } catch {
     return EMPTY_CARCASS
   }
@@ -1363,6 +1416,24 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
        <div style="font-size:13px;color:#C9A882">Submitted: ${submittedDate}</div>
      </div>`
 
+  // Several animals came in on this check-in and none of them is assigned to
+  // this customer, so the card cannot say which one is hers. Blank tag and
+  // weight lines look identical to "not filled in yet", so say it outright —
+  // this is the one failure the floor cannot be left to infer.
+  const unassignedBand = (carcass: CarcassInfo) =>
+    carcass.state !== 'ambiguous' ? '' :
+    `<div style="border:3px solid #1A0A04;margin-bottom:8px">
+       <div style="background:#1A0A04;color:#F2E8D9;padding:5px 12px;font-size:19px;font-weight:bold;letter-spacing:0.08em">
+         ⚠ CARCASS NOT ASSIGNED — DO NOT CUT
+       </div>
+       <div style="padding:5px 12px;font-size:15px">
+         ${carcass.candidates.length} animals came in on this check-in and none is assigned to
+         <strong>${d.customerName ?? 'this customer'}</strong>, so this card cannot say which one is hers.
+         Tags on this check-in: <strong>${carcass.candidates.map(c => esc(c.tag || '?')).join(', ')}</strong>.
+         Assign the carcass on the cutting card, then reprint.
+       </div>
+     </div>`
+
   const infoGrid = (carcass: CarcassInfo) =>
     `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;border:1.5px solid #C9A882;margin-bottom:8px">
        <div style="padding:6px 11px;border-right:1px solid #C9A882">
@@ -1407,6 +1478,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
 <!-- PAGE 1: CUT CARD — 3-column section layout -->
 <div class="page pagebreak">
   ${hdr('Cut Card' + ofN)}
+  ${unassignedBand(carcass)}
   ${infoGrid(carcass)}
   <div style="column-count:3;column-gap:14px">
     ${cutSections}
@@ -1416,6 +1488,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
 <!-- PAGE 2: PACKAGING SHEET — 3-column table layout -->
 <div class="page${last ? '' : ' pagebreak'}">
   ${hdr('Packaging Sheet' + ofN)}
+  ${unassignedBand(carcass)}
   <div style="font-size:16px;color:#555;margin-bottom:8px">
     <strong>${d.customerName ?? '—'}</strong>${d.portion ? ' · ' + fmt(d.portion) : ''} · Kill Date: ${d.killDate ?? '—'}
     <span style="margin-left:14px">Producer: <span style="font-weight:bold">${carcass.producer || wline(110)}</span></span>
@@ -1573,6 +1646,11 @@ export default function CuttingInstructionsPage() {
   const [filterSpecies, setFilterSpecies] = useState<string>('all')
   const [showLinkPicker, setShowLinkPicker] = useState(false)
   const [linking, setLinking]           = useState(false)
+  // Which carcass each linked card sits on, keyed by instruction id. Loaded in
+  // bulk after the list so an unassigned card can be flagged before it prints.
+  const [carcassStates, setCarcassStates] = useState<Record<string, CarcassInfo[]>>({})
+  const [assigning, setAssigning]       = useState('')
+  const [assignError, setAssignError]   = useState('')
   // Cards ticked for a batch print. Separate from `selected`, which drives the
   // detail panel — clicking a row to read it shouldn't add it to the batch.
   const [picked, setPicked]             = useState<Set<string>>(new Set())
@@ -1590,9 +1668,91 @@ export default function CuttingInstructionsPage() {
     ])
     const ci   = await ciRes.json()
     const appt = await apptRes.json()
-    setInstructions(Array.isArray(ci)   ? ci   : [])
-    setAppointments(Array.isArray(appt) ? appt : [])
+    const cis    = Array.isArray(ci)   ? ci   : []
+    const appts  = Array.isArray(appt) ? appt : []
+    setInstructions(cis)
+    setAppointments(appts)
     setLoading(false)
+    loadCarcassStates(cis, appts)
+  }
+
+  // Which animal each linked card actually belongs to, for every card at once.
+  // Two calls for the whole page rather than two per card, so the list can warn
+  // about cards whose carcass was never assigned without a burst of requests.
+  async function loadCarcassStates(cis: RawInstruction[], appts: HarvestAppointment[]) {
+    const linkedApptIds = [...new Set(
+      appts.filter(a => a.customers?.some(c => c.linked_cutting_instruction_id))
+           .map(a => a.id)
+    )]
+    if (!linkedApptIds.length) { setCarcassStates({}); return }
+    try {
+      const logsRes = await fetch(`/api/harvest?appointment_ids=${encodeURIComponent(linkedApptIds.join(','))}`)
+      const logs    = await logsRes.json()
+      const logList = Array.isArray(logs) ? logs : []
+      const asgRes  = await fetch(`/api/carcass-assignments?harvest_log_ids=${encodeURIComponent(logList.map((l: any) => l.id).join(','))}`)
+      const asgs    = await asgRes.json()
+      const asgList = Array.isArray(asgs) ? asgs : []
+
+      const next: Record<string, CarcassInfo[]> = {}
+      for (const ciRow of cis) {
+        const mine = appts.filter(a => a.customers?.some(c => c.linked_cutting_instruction_id === ciRow.id))
+        if (!mine.length) continue
+        next[ciRow.id] = mine.map(a => resolveCarcass(
+          ciRow.id, a,
+          logList.filter((l: any) => l.appointment_id === a.id),
+          asgList.filter((x: any) => x.appointment_id === a.id),
+        ))
+      }
+      setCarcassStates(next)
+    } catch {
+      setCarcassStates({})   // never block the page on this
+    }
+  }
+
+  // Put this card on a specific animal. The assignments API rewrites a whole
+  // check-in at once, so keep everyone else's exactly as-is and swap only the
+  // rows belonging to this card's customer slot.
+  async function assignCarcass(apptId: string, harvestLogId: string) {
+    if (!selected) return
+    setAssigning(harvestLogId)
+    try {
+      const appt = appointments.find(a => a.id === apptId)
+      const slot = appt?.customers?.find(c => c.linked_cutting_instruction_id === selected.id)
+      if (!appt || !slot) return
+      const existing = await (await fetch(`/api/carcass-assignments?appointment_id=${encodeURIComponent(apptId)}`)).json()
+      const others = (Array.isArray(existing) ? existing : [])
+        .filter((a: any) => a.appointment_customer_id !== slot.id)
+        .map((a: any) => ({
+          harvest_log_id: a.harvest_log_id,
+          appointment_customer_id: a.appointment_customer_id,
+          customer_name: a.customer_name,
+          portion: a.portion,
+          linked_cutting_instruction_id: a.linked_cutting_instruction_id,
+        }))
+      const res = await fetch('/api/carcass-assignments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          appointment_id: apptId,
+          assignments: [...others, {
+            harvest_log_id: harvestLogId,
+            appointment_customer_id: slot.id,
+            customer_name: slot.customer_name,
+            portion: slot.portion || 'Whole',
+            linked_cutting_instruction_id: selected.id,
+          }],
+        }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        setAssignError(body.error || 'Could not assign that carcass.')
+        return
+      }
+      setAssignError('')
+      await loadCarcassStates(instructions, appointments)
+    } finally {
+      setAssigning('')
+    }
   }
 
   useEffect(() => {
@@ -1602,10 +1762,17 @@ export default function CuttingInstructionsPage() {
     try { localStorage.setItem('cutInstrSeenAt', new Date().toISOString()) } catch { /* private browsing */ }
   }, [])
 
+  // Linked to a check-in but not to an animal — these are the cards that print
+  // blank tag, blank hanging weight and no inspection marking.
+  const needsCarcass = (id: string) => (carcassStates[id] ?? []).some(s => s.state === 'ambiguous')
+  const needCarcassCount = instructions.filter(i => i.status !== 'archived' && needsCarcass(i.id)).length
+
   const filtered = instructions.filter(i => {
     const species = speciesOf(i)
     // Archived cards are hidden everywhere except the "archived" tab
-    if (filterStatus === 'archived') {
+    if (filterStatus === 'needs-carcass') {
+      if (i.status === 'archived' || !needsCarcass(i.id)) return false
+    } else if (filterStatus === 'archived') {
       if (i.status !== 'archived') return false
     } else if (filterStatus === 'all') {
       if (i.status === 'archived') return false
@@ -1744,6 +1911,13 @@ export default function CuttingInstructionsPage() {
         <h1 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: 'var(--cream)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>📋 Cutting Instructions</h1>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '1.5rem', fontSize: '0.8rem' }}>
           {pendingCount > 0 && <span style={{ color: '#f0c040' }}>⚠ {pendingCount} pending review</span>}
+          {needCarcassCount > 0 && (
+            <button onClick={() => setFilterStatus('needs-carcass')}
+              title="Linked to a check-in but not to an animal — these print with no tag, no hanging weight and no inspection marking"
+              style={{ background: 'rgba(245,158,11,0.16)', border: '1px solid rgba(245,158,11,0.5)', borderRadius: 3, padding: '0.2rem 0.55rem', color: '#f0b429', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}>
+              ⚠ {needCarcassCount} need a carcass
+            </button>
+          )}
           {linkedCount  > 0 && <span style={{ color: '#6dbf6d' }}>✅ {linkedCount} linked</span>}
           <span style={{ color: 'var(--tan)' }}>{activeCount} total</span>
           <a
@@ -1766,7 +1940,7 @@ export default function CuttingInstructionsPage() {
             ✏️ New Cutting Card →
           </a>
           <button
-            onClick={() => printV2CutCard(FAKE_CI, { lot: '26153', tag: '02', producer: 'Test Producer', hcw: 645, killType: 'USDA' })}
+            onClick={() => printV2CutCard(FAKE_CI, { ...EMPTY_CARCASS, lot: '26153', tag: '02', producer: 'Test Producer', hcw: 645, killType: 'USDA', state: 'assigned' })}
             style={{ background: 'transparent', color: 'var(--tan)', border: '1px solid rgba(166,120,90,0.4)', borderRadius: '6px', padding: '0.4rem 0.9rem', fontWeight: 600, fontSize: '0.8rem', cursor: 'pointer', whiteSpace: 'nowrap' }}
           >
             🧪 Test Card
@@ -1865,7 +2039,7 @@ export default function CuttingInstructionsPage() {
                       <div style={{ fontSize: '0.78rem', color: 'var(--tan)' }}>{species}</div>
                       <div style={{ fontSize: '0.78rem', color: 'var(--tan)', whiteSpace: 'nowrap' }}>{fmtShortDate(ci.created_at)}</div>
                       <div style={{ fontSize: '0.78rem', color: slaughter ? 'var(--cream)' : 'rgba(166,120,90,0.5)', whiteSpace: 'nowrap' }}>{fmtShortDate(slaughter)}</div>
-                      <div><StatusBadge status={ci.status} /></div>
+                      <div><StatusBadge status={ci.status} needsCarcass={(carcassStates[ci.id] ?? []).some(s => s.state === 'ambiguous')} /></div>
                     </div>
                   )
                 })}
@@ -1919,16 +2093,75 @@ export default function CuttingInstructionsPage() {
               // Every animal this card is linked to — one line each, so a hog
               // and a half shows both instead of just whichever came first.
               const linkedAppts = appointments.filter(a => a.customers?.some(c => c.linked_cutting_instruction_id === selected.id))
+              const states = carcassStates[selected.id] ?? []
+              // Linking attaches the card to a slot on a check-in, not to an
+              // animal. Green here used to mean "linked" and read as "done",
+              // which is exactly how cards reached the floor with no tag, no
+              // hanging weight and no inspection marking. Only a card that
+              // knows its animal gets to look finished.
+              const needsCarcass = states.some(s => s.state === 'ambiguous')
+              const tone = needsCarcass
+                ? { bg: 'rgba(245,158,11,0.12)', border: 'rgba(245,158,11,0.35)', fg: '#f0b429' }
+                : { bg: 'rgba(100,180,100,0.1)', border: 'rgba(100,180,100,0.2)', fg: '#6dbf6d' }
               return linkedAppts.length ? (
-                <div style={{ padding: '0.6rem 1.25rem', background: 'rgba(100,180,100,0.1)', borderBottom: '1px solid rgba(100,180,100,0.2)', fontSize: '0.82rem', color: '#6dbf6d' }}>
+                <div style={{ padding: '0.6rem 1.25rem', background: tone.bg, borderBottom: `1px solid ${tone.border}`, fontSize: '0.82rem', color: tone.fg }}>
                   {linkedAppts.map(appt => {
-                    const cust = appt.customers?.find(c => c.linked_cutting_instruction_id === selected.id)
+                    const cust  = appt.customers?.find(c => c.linked_cutting_instruction_id === selected.id)
+                    const state = states.find(s => s.apptId === appt.id)
+                    const when  = new Date(appt.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
                     return (
-                      <div key={appt.id}>
-                        ✅ Linked to: <strong>{appt.species}</strong>{appt.source ? <> from <strong>{appt.source}</strong></> : null} on <strong>{new Date(appt.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</strong>{cust ? ` — ${cust.customer_name} (${cust.portion})` : ''}
+                      <div key={appt.id} style={{ marginBottom: '0.2rem' }}>
+                        <div>
+                          {state?.state === 'ambiguous' ? '⚠' : '✅'} Linked to: <strong>{appt.species}</strong>
+                          {state && state.state !== 'ambiguous' && state.tag ? <> <strong>#{state.tag}</strong></> : null}
+                          {appt.source ? <> from <strong>{appt.source}</strong></> : null} on <strong>{when}</strong>
+                          {cust ? ` — ${cust.customer_name} (${cust.portion})` : ''}
+                          {state && state.state !== 'ambiguous' && state.hcw != null
+                            ? <> · <strong>{state.hcw} lbs</strong> hanging</>
+                            : null}
+                        </div>
+
+                        {state?.state === 'unharvested' && (
+                          <div style={{ color: 'var(--tan)', fontSize: '0.76rem', marginTop: '0.15rem' }}>
+                            Not harvested yet — the carcass gets picked here once the animals are killed and tagged.
+                          </div>
+                        )}
+
+                        {/* The whole point: choose the animal from this page,
+                            where the cut sheet you are reading is in front of
+                            you, instead of hunting for the row on Cut Schedule. */}
+                        {state?.state === 'ambiguous' && (
+                          <div style={{ marginTop: '0.4rem' }}>
+                            <div style={{ color: 'var(--cream)', fontSize: '0.78rem', marginBottom: '0.35rem' }}>
+                              {state.candidates.length} animals came in on this check-in — which one is {cust?.customer_name || 'this customer'}&apos;s?
+                              <span style={{ color: 'var(--tan)' }}> Until you pick, the card prints with no tag, no hanging weight and no inspection marking.</span>
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                              {state.candidates.map(c => {
+                                const taken = c.heldBy.length > 0
+                                return (
+                                  <button key={c.id} onClick={() => assignCarcass(appt.id, c.id)} disabled={!!assigning}
+                                    title={taken ? `Already assigned to ${c.heldBy.join(', ')}` : 'Assign this carcass to this card'}
+                                    style={{
+                                      background: taken ? 'rgba(0,0,0,0.25)' : 'rgba(245,158,11,0.16)',
+                                      border: `1px solid ${taken ? 'rgba(166,120,90,0.3)' : 'rgba(245,158,11,0.5)'}`,
+                                      borderRadius: 3, padding: '0.3rem 0.6rem', cursor: assigning ? 'wait' : 'pointer',
+                                      color: taken ? 'var(--tan)' : '#f0b429', fontSize: '0.78rem', textAlign: 'left',
+                                    }}>
+                                    {assigning === c.id ? 'Assigning…' : <>
+                                      <strong>#{c.tag || '—'}</strong>{c.hcw != null ? ` · ${c.hcw} lb` : ''}
+                                      <span style={{ color: 'var(--tan)' }}>{taken ? ` · ${c.heldBy.join(', ')}` : ' · open'}</span>
+                                    </>}
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )
                   })}
+                  {assignError && <div style={{ color: '#e08585', marginTop: '0.3rem' }}>{assignError}</div>}
                   {linkedAppts.length > 1 && (
                     <div style={{ color: 'var(--tan)', marginTop: '0.25rem' }}>
                       Printing gives one card per animal, each with its own tag and hanging weight.
@@ -2164,17 +2397,24 @@ function printCutCard(ci: RawInstruction) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function StatusBadge({ status }: { status: string }) {
+// `needsCarcass` demotes a linked card to amber: it is on a check-in but not on
+// an animal, so it would print with no tag, no hanging weight and no inspection
+// marking. Without this the list shows a green "Linked" and looks finished.
+function StatusBadge({ status, needsCarcass }: { status: string; needsCarcass?: boolean }) {
   const colors: Record<string, [string, string]> = {
     pending:  ['rgba(240,192,64,0.2)',  '#f0c040'],
     linked:   ['rgba(109,191,109,0.2)', '#6dbf6d'],
     imported: ['rgba(100,100,100,0.2)', '#aaa'],
     archived: ['rgba(120,120,120,0.15)', '#888'],
   }
-  const [bg, fg] = colors[status] ?? ['rgba(166,120,90,0.2)', 'var(--tan)']
+  const [bg, fg] = needsCarcass && status === 'linked'
+    ? ['rgba(245,158,11,0.18)', '#f0b429']
+    : colors[status] ?? ['rgba(166,120,90,0.2)', 'var(--tan)']
   return (
-    <span style={{ background: bg, color: fg, borderRadius: '3px', padding: '0.2rem 0.55rem', fontSize: '0.72rem', fontWeight: 600, textTransform: 'capitalize', whiteSpace: 'nowrap' }}>
-      {status}
+    <span
+      title={needsCarcass && status === 'linked' ? 'Linked to the check-in but not to an animal — no tag or hanging weight will print' : undefined}
+      style={{ background: bg, color: fg, borderRadius: '3px', padding: '0.2rem 0.55rem', fontSize: '0.72rem', fontWeight: 600, textTransform: 'capitalize', whiteSpace: 'nowrap' }}>
+      {status}{needsCarcass && status === 'linked' ? ' ⚠' : ''}
     </span>
   )
 }
