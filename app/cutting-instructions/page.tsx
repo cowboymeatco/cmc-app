@@ -815,16 +815,16 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
     const fi = addon ? 'italic'  : 'normal'
     // 24px values (18px labels) — readable across the cutting room (Charlie)
     return `<tr style="${addon ? 'background:#fffbe8' : ''}">
-      <td style="padding:4px 8px;color:${lc};font-size:18px;width:150px;vertical-align:top">${label}</td>
-      <td style="padding:4px 8px;font-size:24px;font-weight:600;font-style:${fi};vertical-align:top;border-left:1px solid #eee">${v}</td>
+      <td style="padding:3px 8px;color:${lc};font-size:18px;width:150px;vertical-align:top">${label}</td>
+      <td style="padding:3px 8px;font-size:24px;font-weight:600;font-style:${fi};vertical-align:top;border-left:1px solid #eee">${v}</td>
     </tr>`
   }
   // Each section is a single div with break-inside:avoid so CSS columns won't split it mid-section
   const sec = (title: string, rows: string): string => {
     if (!rows.trim()) return ''
     const c = PRIMAL_COLORS[title]
-    return `<div style="break-inside:avoid;margin-top:8px">
-           <div style="background:${c?.bar ?? '#351E0E'};color:${c?.text ?? '#F2E8D9'};padding:5px 10px;font-size:18px;letter-spacing:0.12em;text-transform:uppercase;font-weight:bold">${title}</div>
+    return `<div style="break-inside:avoid;margin-top:6px">
+           <div style="background:${c?.bar ?? '#351E0E'};color:${c?.text ?? '#F2E8D9'};padding:4px 10px;font-size:18px;letter-spacing:0.12em;text-transform:uppercase;font-weight:bold">${title}</div>
            <table style="width:100%;border-collapse:collapse;border:1px solid #e0d5c8;${c ? `background:${c.tint}` : ''}">${rows}</table>
          </div>`
   }
@@ -1314,20 +1314,20 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
   const submittedDate = new Date(ci.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 
   const hdr = (subtitle: string) =>
-    `<div style="background:#1A0A04;color:#F2E8D9;padding:12px 18px;display:flex;align-items:baseline;justify-content:space-between;margin-bottom:12px">
+    `<div style="background:#1A0A04;color:#F2E8D9;padding:9px 16px;display:flex;align-items:baseline;justify-content:space-between;margin-bottom:9px">
        <div><span style="font-size:24px;font-weight:bold;letter-spacing:0.1em;text-transform:uppercase">Cowboy Meat Company</span>
             <span style="font-size:16px;color:#C9A882;margin-left:12px;letter-spacing:0.05em">— ${subtitle}</span></div>
        <div style="font-size:13px;color:#C9A882">Submitted: ${submittedDate}</div>
      </div>`
 
   const infoGrid = (carcass: CarcassInfo) =>
-    `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;border:1.5px solid #C9A882;margin-bottom:10px">
-       <div style="padding:7px 12px;border-right:1px solid #C9A882">
+    `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;border:1.5px solid #C9A882;margin-bottom:8px">
+       <div style="padding:6px 11px;border-right:1px solid #C9A882">
          <div style="font-size:12px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Customer</div>
          <div style="font-size:24px;font-weight:bold">${d.customerName ?? '—'}</div>
          ${d.customerPhone ? `<div style="font-size:16px;color:#555;margin-top:1px">${d.customerPhone}</div>` : ''}
        </div>
-       <div style="padding:7px 12px;border-right:1px solid #C9A882">
+       <div style="padding:6px 11px;border-right:1px solid #C9A882">
          <div style="font-size:12px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Animal</div>
          <div style="font-size:24px;font-weight:bold">${species}${d.portion ? ' · ' + fmt(d.portion) : ''}</div>
          <div style="font-size:16px;color:#555;margin-top:1px">Kill Date: ${d.killDate ?? '—'}</div>
@@ -1345,7 +1345,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
                : `<div style="font-size:16px;color:#555;margin-top:3px">Inspection: ${wline(120)}</div>`
          }
        </div>
-       <div style="padding:7px 12px">
+       <div style="padding:6px 11px">
          <div style="font-size:12px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Producer · Lot / Tag</div>
          <div style="font-size:20px;font-weight:bold;line-height:1.2">${carcass.producer || wline(150)}</div>
          <div style="font-size:18px;font-weight:bold;margin-top:3px">Lot&nbsp;# ${carcass.lot || wline(56)} &nbsp;·&nbsp; Tag&nbsp;# ${carcass.tag || wline(46)}</div>
@@ -1362,16 +1362,16 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
   const last = isLastCard && ci_ === carcasses.length - 1
   return `
 <!-- PAGE 1: CUT CARD — 3-column section layout -->
-<div class="pagebreak">
+<div class="page pagebreak">
   ${hdr('Cut Card' + ofN)}
   ${infoGrid(carcass)}
-  <div style="column-count:3;column-gap:16px">
+  <div style="column-count:3;column-gap:14px">
     ${cutSections}
   </div>
 </div>
 
 <!-- PAGE 2: PACKAGING SHEET — 3-column table layout -->
-<div${last ? '' : ' class="pagebreak"'}>
+<div class="page${last ? '' : ' pagebreak'}">
   ${hdr('Packaging Sheet' + ofN)}
   <div style="font-size:16px;color:#555;margin-bottom:8px">
     <strong>${d.customerName ?? '—'}</strong>${d.portion ? ' · ' + fmt(d.portion) : ''} · Kill Date: ${d.killDate ?? '—'}
@@ -1403,11 +1403,20 @@ function cardDocument(title: string, body: string): string {
     * { box-sizing: border-box; }
     body { font-family: Arial, sans-serif; color: #1A0A04; margin: 0; padding: 18px; }
     @page { margin: 0.4in; size: letter landscape; }
+    /* Letter landscape less 0.4in margins all round. Every page is laid out at
+       exactly the printable size so what's measured on screen is what prints —
+       otherwise the browser window's width decides the column flow and the fit
+       pass below measures a page that never existed. */
+    .page { width: 10.2in; }
+    @media screen {
+      body { background: #efece7; }
+      .page { margin: 0 auto 18px; background: #fff; outline: 1px solid #d8d0c6; }
+    }
     /* Big type can push a loaded card past one sheet — keep rows whole when
        content flows across the page break. */
     tr { break-inside: avoid; page-break-inside: avoid; }
     @media print {
-      body { padding: 0; }
+      body { padding: 0; background: none; }
       .pagebreak { page-break-after: always; }
       * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
     }
@@ -1416,6 +1425,36 @@ function cardDocument(title: string, body: string): string {
 <body>
 
 ${body}
+
+<script>
+(function () {
+  // A card that measures taller than the printable area spills onto a second
+  // sheet, which splits one animal's instructions across two pieces of paper on
+  // the cutting floor. Shrink it just enough to land on one.
+  //
+  // Only as far as FLOOR, though, and never by clipping: the type is sized to be
+  // read across the cutting room, and a card nobody can read from the rail is
+  // worse than a card that ran to two pages. Anything still over at the floor is
+  // left alone to paginate as before.
+  var LIMIT = 7.7 * 96
+  var FLOOR = 0.62
+  var pages = document.querySelectorAll('.page')
+  for (var i = 0; i < pages.length; i++) {
+    var page = pages[i]
+    var scale = 1
+    // Zoom reflows the columns rather than just scaling pixels, so the height
+    // after shrinking isn't a straight multiple of the height before it —
+    // converge instead of computing one factor.
+    for (var pass = 0; pass < 6; pass++) {
+      var h = page.getBoundingClientRect().height
+      if (h <= LIMIT || scale <= FLOOR) break
+      scale = Math.max(FLOOR, scale * (LIMIT / h) * 0.995)
+      page.style.zoom = scale
+    }
+    if (scale < 1) page.setAttribute('data-fit', scale.toFixed(3))
+  }
+})()
+</script>
 
 </body></html>`
 }
