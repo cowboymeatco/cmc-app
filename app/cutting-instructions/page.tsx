@@ -368,6 +368,12 @@ function v2fmt(val: string): string {
   return val.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
 
+// Leg steaks carry a thickness and pack count, and a split pair only needs one
+// side asking for them.
+function lgLegSteaks(leg?: { cut?: string; cut2?: string | null } | null): boolean {
+  return leg?.cut === 'leg-steaks' || leg?.cut2 === 'leg-steaks'
+}
+
 // Two sides of a split primal. Identical answers collapse to one value —
 // "1: Filet 2" / 2: Filet 2"" is just noise when both sides match (Charlie).
 function sidePair(a: string, b: string): string {
@@ -695,8 +701,14 @@ function renderV2Detail(ci: RawInstruction) {
               <V2Field label="Per Pack" value={d.loin?.chopPack} />
             </>
           )}
-          <V2Field label="Leg" value={v2fmt(d.leg?.cut)} />
-          <V2Field label="Shoulder" value={v2fmt(d.shoulder?.cut)} />
+          <V2Field label="Leg" value={sidePair(v2fmt(d.leg?.cut), v2fmt(d.leg?.cut2))} />
+          {lgLegSteaks(d.leg) && (
+            <>
+              <V2Field label="Steak Thickness" value={v2thick(d.leg?.steakThickness)} />
+              <V2Field label="Per Pack" value={d.leg?.steakPack} />
+            </>
+          )}
+          <V2Field label="Shoulder" value={sidePair(v2fmt(d.shoulder?.cut), v2fmt(d.shoulder?.cut2))} />
           <V2Field label="Shank" value={v2fmt(d.shank?.cut)} />
           <V2Field label="Trim" value={lgTrimLabel(d.trim?.style, sp === 'goat' ? 'Goat' : 'Lamb') || undefined} />
         </V2Section>
@@ -921,8 +933,10 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
       row('Loin',     fmt(d.loin?.cut)),
       d.loin?.cut === 'loin-chops' && d.loin?.chopThickness ? row('Chop Thickness', thick(d.loin.chopThickness)) : '',
       d.loin?.cut === 'loin-chops' && d.loin?.chopPack ? row('Per Pack', d.loin.chopPack) : '',
-      row('Leg',      fmt(d.leg?.cut)),
-      row('Shoulder', fmt(d.shoulder?.cut)),
+      row('Leg',      sidePair(fmt(d.leg?.cut), fmt(d.leg?.cut2))),
+      lgLegSteaks(d.leg) && d.leg?.steakThickness ? row('Steak Thickness', thick(d.leg.steakThickness)) : '',
+      lgLegSteaks(d.leg) && d.leg?.steakPack ? row('Per Pack', d.leg.steakPack) : '',
+      row('Shoulder', sidePair(fmt(d.shoulder?.cut), fmt(d.shoulder?.cut2))),
       row('Shank',    fmt(d.shank?.cut)),
       d.trim?.style ? row('Trim', lgTrimLabel(d.trim.style, species)) : '',
     ].join(''))
@@ -1149,8 +1163,21 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
       d.loin.cut === 'grind' ? pg('Loin')
         : pc('Loin', [fmt(d.loin.cut), thick(d.loin.chopThickness ?? ''), d.loin.chopPack ? `${d.loin.chopPack}/pkg` : ''].filter(Boolean).join(' · '))
     }
-    if (d.leg?.cut)      { d.leg.cut      === 'grind' ? pg('Leg')      : pc('Leg',      fmt(d.leg.cut)) }
-    if (d.shoulder?.cut) { d.shoulder.cut === 'grind' ? pg('Shoulder') : pc('Shoulder', fmt(d.shoulder.cut)) }
+    // Split legs and shoulders get a line per side so each is packed separately
+    const packLeg = (cut: string, sfx: string) => {
+      if (!cut) return
+      if (cut === 'grind') { pg(`Leg${sfx}`); return }
+      pc(`Leg${sfx}`, [fmt(cut), cut === 'leg-steaks' ? thick(d.leg.steakThickness ?? '') : '',
+        cut === 'leg-steaks' && d.leg.steakPack ? `${d.leg.steakPack}/pkg` : ''].filter(Boolean).join(' · '))
+    }
+    if (d.leg?.cut2 && d.leg.cut2 !== d.leg.cut) { packLeg(d.leg.cut, ' (1)'); packLeg(d.leg.cut2, ' (2)') }
+    else packLeg(d.leg?.cut ?? '', '')
+    const packShoulder = (cut: string, sfx: string) => {
+      if (!cut) return
+      cut === 'grind' ? pg(`Shoulder${sfx}`) : pc(`Shoulder${sfx}`, fmt(cut))
+    }
+    if (d.shoulder?.cut2 && d.shoulder.cut2 !== d.shoulder.cut) { packShoulder(d.shoulder.cut, ' (1)'); packShoulder(d.shoulder.cut2, ' (2)') }
+    else packShoulder(d.shoulder?.cut ?? '', '')
     if (d.shank?.cut)    { d.shank.cut    === 'grind' ? pg('Shank')    : pc('Shank',    fmt(d.shank.cut)) }
     if (d.trim?.style)   { d.trim.style   === 'grind' ? pg('Trim')     : pc('Trim',     lgTrimLabel(d.trim.style, species)) }
   }
