@@ -1212,8 +1212,11 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
     ps('Ham & Hocks')
     if (d.ham?.style === 'grind' && !d.ham?.style2) pg('Ham')
     else hamRows(d.ham).forEach(([l, v]) => (v === 'Grind' ? pg(l) : pc(l, v)))
-    if (d.hocks?.cut)     pc('Hocks', fmt(d.hocks.cut))
-    else if (hockStyle(d.ham)) pc('Hocks', hockStyle(d.ham))
+    // Hocks always come the way the hams do, so the spec column only repeated
+    // the line above it. The packer needs the row and its checkbox, not the
+    // wording (Charlie, 2026-07-22). hockStyle is still what decides whether
+    // there are hocks at all — a ham sent to grind leaves none.
+    if (d.hocks?.cut || hockStyle(d.ham)) pc('Hocks', '')
     ps('Country Style Ribs')
     if (d.spareRibs?.cut) pc('Country Style Ribs', fmt(d.spareRibs.cut))
   }
