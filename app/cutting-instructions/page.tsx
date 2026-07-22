@@ -18,6 +18,25 @@ function speciesOf(ci: RawInstruction): string {
   return ci.data?.species ?? ci.species ?? '—'
 }
 
+// The two halves of the app disagree on the word: appointments get booked as
+// "Hog" (a couple as "Pork"), while every cutting instruction says "Pork".
+// Anything comparing the two has to match on the animal, not the spelling.
+const SPECIES_KEY: Record<string, string> = { hog: 'pork', pork: 'pork', beef: 'beef', lamb: 'lamb', goat: 'goat' }
+function speciesKey(s?: string | null): string {
+  const k = (s ?? '').trim().toLowerCase()
+  return SPECIES_KEY[k] ?? k
+}
+function sameSpecies(a?: string | null, b?: string | null): boolean {
+  return !!a && !!b && speciesKey(a) === speciesKey(b)
+}
+
+// Falls back to a generic cut rather than a cow — an unknown species showing a
+// beef emblem is exactly the bug this replaced (Charlie, 2026-07-22).
+const SPECIES_EMBLEM: Record<string, string> = { beef: '🐄', pork: '🐖', lamb: '🐑', goat: '🐐' }
+function speciesEmblem(s?: string | null): string {
+  return SPECIES_EMBLEM[speciesKey(s)] ?? '🥩'
+}
+
 // v2 beef `trim` prefs split by audience: the blend is the cutters' call
 // (cut card), packaging style & size is the packaging side's (packaging sheet)
 function beefTrimCutterRows(t: any): Array<[string, string]> {
@@ -356,7 +375,13 @@ function resolveCarcass(
 ): CarcassInfo {
   const animals = Array.isArray(logs) ? logs : []
   const rows    = Array.isArray(asgs) ? asgs : []
-  const asg     = rows.find((a: any) => a.linked_cutting_instruction_id === ciId) ?? null
+  // Match on the customer slot first. Carcasses are normally assigned at
+  // harvest, before the cut sheet has even arrived, so the assignment row's
+  // own linked_cutting_instruction_id is empty on exactly the rows that matter
+  // most — matching only on it reported assigned animals as unassigned.
+  const slot = appt.customers?.find(c => c.linked_cutting_instruction_id === ciId)
+  const asg  = rows.find((a: any) =>
+    (slot && a.appointment_customer_id === slot.id) || a.linked_cutting_instruction_id === ciId) ?? null
 
   const log = animals.length === 0 ? null
     : asg ? animals.find((l: any) => l.id === asg.harvest_log_id) ?? null
@@ -1655,10 +1680,6 @@ export default function CuttingInstructionsPage() {
   // detail panel — clicking a row to read it shouldn't add it to the batch.
   const [picked, setPicked]             = useState<Set<string>>(new Set())
   const [printingBatch, setPrintingBatch] = useState(false)
-  const [showCreate, setShowCreate]     = useState(false)
-  const [createSpecies, setCreateSpecies] = useState('Beef')
-  const [createFields, setCreateFields] = useState<Record<string, string>>({})
-  const [creating, setCreating]         = useState(false)
 
   async function load() {
     setLoading(true)
@@ -1822,9 +1843,16 @@ export default function CuttingInstructionsPage() {
 
   async function linkToCustomer(apptId: string, customerIdx: number) {
     if (!selected) return
-    setLinking(true)
     const appt = appointments.find(a => a.id === apptId)
     if (!appt) return
+    // The picker only offers matching animals, but this is the gate that has to
+    // hold: a mismatched link puts the wrong cut card on a carcass, and setLinking
+    // used to fire before the appointment was even found.
+    if (!sameSpecies(appt.species, speciesOf(selected))) {
+      alert(`This is a ${speciesOf(selected)} cutting card — it can't be linked to a ${appt.species} appointment.`)
+      return
+    }
+    setLinking(true)
     const customers = appt.customers.map((c, i) =>
       i === customerIdx ? { ...c, linked_cutting_instruction_id: selected.id } : c
     )
@@ -1849,26 +1877,16 @@ export default function CuttingInstructionsPage() {
     load()
   }
 
-  async function handleCreate() {
-    setCreating(true)
-    await fetch('/api/cutting-instructions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...createFields, species: createSpecies }),
-    })
-    setCreating(false)
-    setShowCreate(false)
-    setCreateFields({})
-    load()
-  }
+  const selectedSpecies = selected ? speciesOf(selected) : 'Beef'
 
-  // Upcoming appointments that have at least one customer without a linked instruction
+  // Upcoming appointments that have at least one customer without a linked
+  // instruction — and that are the same animal. A hog's instructions on a beef
+  // appointment sends the wrong cut card to the rail (Charlie, 2026-07-22).
   const linkableAppts = appointments.filter(a =>
     a.status !== 'Complete' &&
-    a.customers?.some(c => !c.linked_cutting_instruction_id)
+    a.customers?.some(c => !c.linked_cutting_instruction_id) &&
+    sameSpecies(a.species, selectedSpecies)
   ).sort((a, b) => a.harvest_date.localeCompare(b.harvest_date))
-
-  const selectedSpecies = selected ? speciesOf(selected) : 'Beef'
   const sections = sectionsFor(selectedSpecies)
   const isV2 = selected?.data?.formVersion === 'v2'
 
@@ -1966,7 +1984,6 @@ export default function CuttingInstructionsPage() {
               ))}
             </div>
             <button onClick={load} style={{ ...btnStyle('transparent', 'var(--tan)'), border: '1px solid rgba(166,120,90,0.3)', marginLeft: 'auto' }}>↺</button>
-            <button onClick={() => { setCreateFields({}); setCreateSpecies('Beef'); setShowCreate(true) }} style={{ ...btnStyle('var(--med-brown)', 'var(--cream)'), border: 'none', fontWeight: 700, letterSpacing: '0.04em' }}>+ New</button>
           </div>
 
           {/* Batch bar — only once something's ticked, so it stays out of the way */}
@@ -2229,12 +2246,12 @@ export default function CuttingInstructionsPage() {
             </p>
 
             {linkableAppts.length === 0 ? (
-              <p style={{ color: 'var(--tan)', textAlign: 'center', padding: '2rem' }}>No upcoming appointments need instructions yet.</p>
+              <p style={{ color: 'var(--tan)', textAlign: 'center', padding: '2rem' }}>No upcoming {selectedSpecies.toLowerCase()} appointments need instructions yet.</p>
             ) : (
               linkableAppts.map(a => (
                 <div key={a.id} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: '4px', padding: '0.85rem 1rem', marginBottom: '0.75rem' }}>
                   <div style={{ fontWeight: 700, color: 'var(--cream)', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
-                    🐄 {a.species} · {new Date(a.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
+                    {speciesEmblem(a.species)} {a.species} · {new Date(a.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
                     {a.source && <span style={{ color: 'var(--tan)', fontWeight: 400, marginLeft: '0.5rem' }}>· {a.source}</span>}
                   </div>
                   {a.customers?.filter(c => !c.linked_cutting_instruction_id).map((c, idx) => (
@@ -2254,58 +2271,6 @@ export default function CuttingInstructionsPage() {
         </div>
       )}
 
-      {/* ── Create New Instruction Modal ──────────────────────────────────── */}
-      {showCreate && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', zIndex: 200, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '2rem 1rem', overflowY: 'auto' }}>
-          <div style={{ background: 'var(--dark)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 5, padding: '1.75rem 2rem', width: '100%', maxWidth: '680px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-              <h2 style={{ margin: 0, color: 'var(--cream)', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.1em' }}>New Cutting Instruction</h2>
-              <button onClick={() => setShowCreate(false)} style={{ background: 'transparent', border: 'none', color: 'var(--tan)', fontSize: '1.2rem', cursor: 'pointer', lineHeight: 1 }}>✕</button>
-            </div>
-
-            {/* Species picker */}
-            <div style={{ marginBottom: '1.25rem' }}>
-              <div style={{ fontSize: '0.7rem', color: 'var(--light-brown)', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: '0.4rem' }}>Species</div>
-              <div style={{ display: 'flex', gap: 0, border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, overflow: 'hidden', width: 'fit-content' }}>
-                {['Beef','Hog','Lamb','Goat'].map(s => (
-                  <button key={s} onClick={() => { setCreateSpecies(s); setCreateFields({}) }}
-                    style={{ ...tabBtn(createSpecies === s), padding: '0.45rem 1rem' }}>{s}</button>
-                ))}
-              </div>
-            </div>
-
-            {/* Fields by section */}
-            {sectionsFor(createSpecies).map(sec => (
-              <div key={sec.label} style={{ marginBottom: '1.25rem' }}>
-                <div style={{ fontSize: '0.68rem', color: 'var(--light-brown)', textTransform: 'uppercase', letterSpacing: '0.14em', marginBottom: '0.6rem', paddingBottom: '0.3rem', borderBottom: '1px solid rgba(166,120,90,0.15)' }}>
-                  {sec.label}
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem 1rem' }}>
-                  {sec.fields.map(([key, label]) => (
-                    <div key={key}>
-                      <label style={{ display: 'block', fontSize: '0.7rem', color: 'var(--tan)', marginBottom: '0.2rem' }}>{label}</label>
-                      <input
-                        style={{ width: '100%', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, padding: '0.4rem 0.65rem', color: 'var(--cream)', fontSize: '0.85rem', boxSizing: 'border-box' as const, outline: 'none' }}
-                        value={createFields[key] ?? ''}
-                        onChange={e => setCreateFields(p => ({ ...p, [key]: e.target.value }))}
-                        placeholder=""
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-
-            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '1rem', borderTop: '1px solid rgba(166,120,90,0.2)', paddingTop: '1rem' }}>
-              <button onClick={() => setShowCreate(false)} style={{ ...btnStyle('transparent', 'var(--tan)'), border: '1px solid rgba(166,120,90,0.3)' }}>Cancel</button>
-              <button onClick={handleCreate} disabled={creating || !createFields.customerName}
-                style={{ ...btnStyle(creating || !createFields.customerName ? 'rgba(166,120,90,0.2)' : 'var(--med-brown)'), opacity: creating ? 0.7 : 1 }}>
-                {creating ? 'Saving…' : '✓ Create Instruction'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
