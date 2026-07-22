@@ -1908,11 +1908,15 @@ function FragmentGroup({ gi, group, startId, skipped, onToggle }: {
 // ══════════════════════════════════════════════════════════════════════════════
 // CHILL LOG TAB
 // ══════════════════════════════════════════════════════════════════════════════
-function ChillTab() {
+// onReopen hands the carcass back to Part B: the parent jumps to that tab and
+// moves the date picker to the carcass's own harvest date, since a carcass can
+// still be chilling days after its kill and Part B is scoped to one day.
+function ChillTab({ onReopen }: { onReopen: (log: HarvestLog) => void }) {
   const [carcasses, setCarcasses] = useState<HarvestLog[]>([])
   const [chillLogs, setChillLogs] = useState<ChillLog[]>([])
   const [selected, setSelected]   = useState<HarvestLog | null>(null)
   const [saving, setSaving]       = useState(false)
+  const [reopening, setReopening] = useState(false)
   const [form, setForm] = useState({ checked_at: isoDateTime(), carcass_temp_f: '', cooler_temp_f: '', checked_by: '', notes: '' })
 
   const load = useCallback(async () => {
@@ -1957,6 +1961,24 @@ function ChillTab() {
     load()
   }
 
+  // Part B drops a carcass off its worklist once the cooler temp is in and the
+  // row is marked complete, which used to make a late correction (wrong weight,
+  // wrong tag) a database job. Clearing part_b_complete puts it back on the
+  // worklist without touching a single recorded value. Chill monitoring is
+  // unaffected — that list keys off status, not this flag — so the carcass sits
+  // in both places until Part B is finished again.
+  async function handleReopen() {
+    if (!selected) return
+    setReopening(true)
+    const res = await fetch('/api/harvest', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: selected.id, part_b_complete: false }),
+    })
+    setReopening(false)
+    if (!res.ok) { alert('Could not reopen this carcass — try again.'); return }
+    onReopen(selected)
+  }
+
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '360px 1fr', gap: '1.5rem', height: '100%' }}>
       {/* Left — chilling list */}
@@ -1998,11 +2020,30 @@ function ChillTab() {
           </div>
         ) : (
           <>
-            <div style={{ background: 'rgba(166,120,90,0.08)', border: '1px solid rgba(166,120,90,0.2)', borderRadius: 4, padding: '1rem 1.25rem', marginBottom: '1.25rem' }}>
-              <div style={{ color: C.cream, fontWeight: 700 }}>{selected.species} — Tag {selected.carcass_tag || '—'}</div>
-              <div style={{ fontSize: '0.8rem', color: C.tan, marginTop: '0.2rem' }}>
-                {hoursAgo(selected.created_at)} hrs in cooler{selected.hot_carcass_weight_lbs ? ` · ${selected.hot_carcass_weight_lbs} lbs HCW` : ''}{selected.sex ? ` · ${selected.sex}` : ''}
+            <div style={{ background: 'rgba(166,120,90,0.08)', border: '1px solid rgba(166,120,90,0.2)', borderRadius: 4, padding: '1rem 1.25rem', marginBottom: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
+              <div>
+                <div style={{ color: C.cream, fontWeight: 700 }}>{selected.species} — Tag {selected.carcass_tag || '—'}</div>
+                <div style={{ fontSize: '0.8rem', color: C.tan, marginTop: '0.2rem' }}>
+                  {selected.producer ? `${selected.producer} · ` : ''}{hoursAgo(selected.created_at)} hrs in cooler{selected.hot_carcass_weight_lbs ? ` · ${selected.hot_carcass_weight_lbs} lbs HCW` : ''}{selected.sex ? ` · ${selected.sex}` : ''}
+                </div>
               </div>
+              {selected.part_b_complete ? (
+                <button
+                  onClick={handleReopen}
+                  disabled={reopening}
+                  title="Put this carcass back on the Part B worklist to correct weights, CCPs, or its tag. Nothing already recorded is cleared."
+                  style={{
+                    flexShrink: 0, background: 'transparent', color: C.tan,
+                    border: '1px solid rgba(166,120,90,0.45)', borderRadius: 3,
+                    padding: '0.45rem 0.9rem', fontSize: '0.8rem', fontWeight: 600,
+                    cursor: reopening ? 'default' : 'pointer', letterSpacing: '0.04em',
+                    opacity: reopening ? 0.6 : 1,
+                  }}>
+                  {reopening ? 'Reopening…' : '↩ Reopen in Part B'}
+                </button>
+              ) : (
+                <span style={{ flexShrink: 0, fontSize: '0.75rem', color: C.lightBrown }}>Open in Part B</span>
+              )}
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1rem', marginBottom: '1rem' }}>
               <div style={{ marginBottom: '0.85rem' }}>
@@ -2205,7 +2246,7 @@ export default function HarvestPage() {
         {tab === 'partb'      && <PartBTab      date={harvestDate} />}
         {tab === 'worksheet'  && <WorksheetTab  date={harvestDate} />}
         {tab === 'harvestlog' && <HarvestLogTab />}
-        {tab === 'chill'      && <ChillTab />}
+        {tab === 'chill'      && <ChillTab onReopen={log => { setDate(log.harvest_date); setTab('partb') }} />}
       </main>
 
       <footer style={{ background: 'var(--dark)', borderTop: '1px solid rgba(166,120,90,0.2)', padding: '0.5rem 2rem', textAlign: 'center', fontSize: '0.72rem', color: C.lightBrown, flexShrink: 0 }}>
