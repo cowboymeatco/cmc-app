@@ -563,12 +563,15 @@ export default function CutScheduleTab() {
                     </div>
                     {/* Only the producer name may truncate — the assigned badge and
                         the Assign button sit outside the ellipsis so a long producer
-                        can never clip the one control that fixes the row. */}
+                        can never clip the one control that fixes the row. On a narrow
+                        window they wrap to their own line rather than spilling under
+                        the species column, where the chip paints over them. */}
                     <div style={{
                       fontSize: '0.68rem',
                       display: 'flex', alignItems: 'center', minWidth: 0,
+                      flexWrap: 'wrap', rowGap: 3,
                     }}>
-                      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
+                      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: '1 1 auto', minWidth: 70 }}>
                         <span style={{ color: C.medBrown }}>Producer:</span>{' '}
                         {entry.producer
                           ? <span style={{ color: C.lightBrown }}>{entry.producer}</span>
