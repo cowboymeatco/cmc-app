@@ -422,6 +422,47 @@ function hamCutPair(ham?: { cut?: string | null; cut2?: string | null }): string
   return parts.every(Boolean) ? sidePair(parts[0], parts[1]) : parts.filter(Boolean).join(' / ')
 }
 
+// Everything cured here also gets smoked, so "Cured & Smoked" is two words of
+// noise on a card read at arm's length — it prints as "Cured" (Charlie).
+function hamStyleWord(style?: string | null): string {
+  return style === 'cured-smoked' ? 'Cured' : v2fmt(style ?? '')
+}
+
+// One ham, one line, whole story: "Cured: Cut in Quarters". A ham going to
+// grind has no cut, so it's just the style.
+function hamLine(style?: string | null, cut?: string | null): string {
+  const s = hamStyleWord(style)
+  if (!s) return ''
+  const c = hamCut(cut)
+  return c ? `${s}: ${c}` : s
+}
+
+// Split hams read as one row each; matched hams collapse to a single
+// instruction, since repeating an identical line twice is just more to read.
+function hamRows(ham?: { style?: string | null; cut?: string | null; style2?: string | null; cut2?: string | null }): Array<[string, string]> {
+  if (!ham?.style) return []
+  const one = hamLine(ham.style, ham.cut)
+  if (!ham.style2) return one ? [['Ham', one]] : []
+  const two = hamLine(ham.style2, ham.cut2)
+  if (!two || one === two) return one ? [['Ham', one]] : []
+  return [['Ham (1)', one], ['Ham (2)', two]]
+}
+
+// A cured belly IS bacon and the packagers know it, so the belly reads the same
+// way the ham does rather than naming the product it becomes (Charlie).
+function bellyWord(cut?: string | null): string {
+  return cut === 'bacon' ? 'Cured' : v2fmt(cut ?? '')
+}
+
+function bellyRows(belly?: { cut?: string | null; cut2?: string | null }): Array<[string, string]> {
+  if (!belly?.cut) return []
+  const one = bellyWord(belly.cut)
+  if (!belly.cut2) return [['Belly', one]]
+  const two = bellyWord(belly.cut2)
+  if (!two || one === two) return [['Belly', one]]
+  return [['Belly (1)', one], ['Belly (2)', two]]
+}
+
 // Shop-standard steak thicknesses the wizard states in its labels but doesn't
 // store — printed on the cards so new cutters don't have to ask
 const STEAK_STANDARDS: Record<string, string> = {
@@ -931,13 +972,12 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
       row('Tenderloin', fmt(loin.tenderloin)),
       loin.addons?.length ? row('  Add-ons', adds(loin.addons), true) : '',
     ].join(''))
-    cutSections += sec('Belly', [row('Cut', fmt(d.belly?.cut))].join(''))
-    // Hocks come off the ham, so they share its header; spare ribs stand alone.
-    cutSections += sec('Ham & Hocks', [
-      row('Style', d.ham?.style2 ? sidePair(fmt(d.ham.style), fmt(d.ham.style2)) : fmt(d.ham?.style)),
-      hamCutPair(d.ham) ? row('Cut', hamCutPair(d.ham)) : '',
-      row('Hocks', fmt(d.hocks?.cut) || hockStyle(d.ham)),
-    ].join(''))
+    // A split belly used to print only side 1 here, so half the instruction
+    // never reached the cutter.
+    cutSections += sec('Belly', bellyRows(d.belly).map(([l, v]) => row(l, v)).join(''))
+    // Hocks come off the ham and always follow its style, so the cut card no
+    // longer restates them — the cutter has that from the ham line (Charlie).
+    cutSections += sec('Ham', hamRows(d.ham).map(([l, v]) => row(l, v)).join(''))
     cutSections += sec('Country Style Ribs', [
       row('Country Style Ribs', fmt(d.spareRibs?.cut)),
     ].join(''))
@@ -1167,15 +1207,11 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
       if (loin.addons?.length) pc('  Add-on', adds(loin.addons), true)
     }
     ps('Belly')
-    if (d.belly?.cut) { d.belly.cut === 'grind' ? pg('Belly') : pc('Belly / Bacon', fmt(d.belly.cut)) }
+    if (d.belly?.cut === 'grind' && !d.belly?.cut2) pg('Belly')
+    else bellyRows(d.belly).forEach(([l, v]) => (v === 'Grind' ? pg(l) : pc(l, v)))
     ps('Ham & Hocks')
-    if (d.ham?.style) {
-      if (d.ham.style === 'grind' && !d.ham.style2) pg('Ham')
-      else pc('Ham', [
-        d.ham.style2 ? sidePair(fmt(d.ham.style), fmt(d.ham.style2)) : fmt(d.ham.style),
-        hamCutPair(d.ham),
-      ].filter(Boolean).join(' · '))
-    }
+    if (d.ham?.style === 'grind' && !d.ham?.style2) pg('Ham')
+    else hamRows(d.ham).forEach(([l, v]) => (v === 'Grind' ? pg(l) : pc(l, v)))
     if (d.hocks?.cut)     pc('Hocks', fmt(d.hocks.cut))
     else if (hockStyle(d.ham)) pc('Hocks', hockStyle(d.ham))
     ps('Country Style Ribs')
