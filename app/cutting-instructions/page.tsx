@@ -992,17 +992,19 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
   const pc  = (cut: string, spec: string, isAddon = false) => prs.push({ cut, spec, isAddon })
   const pg  = (src: string)                            => grindFrom.push(src)
 
-  // organs — only the ones coming home. The wizard writes 'keep' / 'discard',
-  // but this used to test for 'no', so a declined organ printed as
-  // "Liver · Discard" and read like something to pack (Jill's card, 2026-07-22).
-  // Older orders used yes/no, so both vocabularies have to count as declined.
-  const organKept = (v?: string | null) => !!v && !['discard', 'no', 'none'].includes(v.toLowerCase())
+  // Nothing the customer turned down belongs on this sheet: every row here is a
+  // packing row with a checkbox, so "Liver · Discard" reads like something to
+  // put in the box (Charlie + Jill's card, 2026-07-22). The cut card still
+  // carries these — the cutter has to know to discard rather than save.
+  // The wizard writes 'keep' / 'discard'; older orders used yes/no, so both
+  // vocabularies count as declined.
+  const wanted = (v?: string | null) => !!v && !['discard', 'no', 'none'].includes(v.toLowerCase())
   if (d.organs) {
     const orgPacks: string[] = []
-    if (organKept(d.organs.heart)) orgPacks.push(`Heart · ${fmt(d.organs.heart)}`)
-    if (organKept(d.organs.liver)) orgPacks.push(`Liver · ${fmt(d.organs.liver)}`)
-    if (isBeef && organKept(d.organs.tongue)) orgPacks.push(`Tongue · ${fmt(d.organs.tongue)}`)
-    if (isBeef && organKept(d.organs.oxtail)) orgPacks.push(`Oxtail · ${fmt(d.organs.oxtail)}`)
+    if (wanted(d.organs.heart)) orgPacks.push(`Heart · ${fmt(d.organs.heart)}`)
+    if (wanted(d.organs.liver)) orgPacks.push(`Liver · ${fmt(d.organs.liver)}`)
+    if (isBeef && wanted(d.organs.tongue)) orgPacks.push(`Tongue · ${fmt(d.organs.tongue)}`)
+    if (isBeef && wanted(d.organs.oxtail)) orgPacks.push(`Oxtail · ${fmt(d.organs.oxtail)}`)
     if (orgPacks.length) { ps('Organs'); orgPacks.forEach(o => pc(o, '')) }
   }
 
@@ -1125,7 +1127,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
     if (d.rumpRoast?.cut)   { d.rumpRoast.cut   === 'grind' ? pg('Rump Roast')    : pc('Rump Roast',    withT(d.rumpRoast.cut,   d.rumpRoast.thickness   ?? '')) }
     if (d.topRound?.round2 && !sameRound(d.topRound, d.topRound.round2)) { packRound('Top Round', d.topRound, ' (1)'); packRound('Top Round', d.topRound.round2, ' (2)') }
     else packRound('Top Round', d.topRound)
-    if (d.roundShank?.marrow) pc('Round Shank / Marrow', fmt(d.roundShank.marrow))
+    if (wanted(d.roundShank?.marrow)) pc('Round Shank / Marrow', fmt(d.roundShank.marrow))
   }
 
   if (isPork) {
