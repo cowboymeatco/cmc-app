@@ -1371,25 +1371,43 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
 
   // ── Split packaging rows into balanced columns (at section boundaries) ────
   // Landscape fits three tables across; splits only ever land where a new
-  // section starts so a primal's rows never straddle columns.
+  // section starts so a primal's rows never straddle columns. Sections are
+  // atomic and packed greedily left-to-right, always leaving at least one
+  // section for each still-empty column — so no column is stranded empty while
+  // another overflows onto a second page (the old target-based split could dump
+  // the whole tail into one column when a big final section had no boundary
+  // after the target row).
   const PACK_COLS = 3
-  const packCols: (typeof filteredPrs)[] = []
-  let remaining = filteredPrs
-  for (let c = PACK_COLS; c > 1; c--) {
-    const target = Math.ceil(remaining.filter(pr => !pr.sectionTitle).length / c)
-    let seen = 0
-    let idx = remaining.length
-    for (let i = 0; i < remaining.length; i++) {
-      if (!remaining[i].sectionTitle) seen++
-      if (seen >= target && i + 1 < remaining.length && remaining[i + 1].sectionTitle) {
-        idx = i + 1
-        break
-      }
-    }
-    packCols.push(remaining.slice(0, idx))
-    remaining = remaining.slice(idx)
+  // Group the flat row list into sections: each carries its title row plus its
+  // body rows, and a count of just the body rows (what column height balances on).
+  const sections: { rows: typeof filteredPrs; count: number }[] = []
+  for (const pr of filteredPrs) {
+    if (pr.sectionTitle) sections.push({ rows: [pr], count: 0 })
+    else if (sections.length) { const s = sections[sections.length - 1]; s.rows.push(pr); s.count++ }
   }
-  packCols.push(remaining)
+  const packCols: (typeof filteredPrs)[] = []
+  let rowsLeft = filteredPrs.filter(pr => !pr.sectionTitle).length
+  let si = 0
+  for (let c = 0; c < PACK_COLS; c++) {
+    const colsLeft = PACK_COLS - c
+    const target = Math.ceil(rowsLeft / colsLeft)
+    const col: typeof filteredPrs = []
+    let colRows = 0
+    while (si < sections.length) {
+      const sec = sections[si]
+      const sectionsLeft = sections.length - si
+      // Keep one section in reserve for each column still to be filled.
+      if (col.length && sectionsLeft <= colsLeft - 1) break
+      // Column is carrying its share — stop, as long as enough sections remain
+      // to fill the rest.
+      if (col.length && colRows + sec.count > target && sectionsLeft > colsLeft - 1) break
+      col.push(...sec.rows)
+      colRows += sec.count
+      rowsLeft -= sec.count
+      si++
+    }
+    packCols.push(col)
+  }
 
   // Renders an array of PR rows into a complete packaging table (thead + tbody)
   const buildPackTable = (prs: typeof filteredPrs) => {
