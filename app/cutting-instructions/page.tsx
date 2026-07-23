@@ -517,10 +517,16 @@ function hamStyleWord(style?: string | null): string {
 }
 
 // One ham, one line, whole story: "Cured: Cut in Quarters". A ham going to
-// grind has no cut, so it's just the style.
+// grind has no cut, so it's just the style — and any cut is ignored outright,
+// since legacy split-ham orders (before the per-ham cut split, 2026-07-22) can
+// carry a stale cut under a grind style and would otherwise read as the
+// contradiction "Grind: Steaks" (Charlie, 2026-07-23). The packaging sheet keys
+// on the bare word "Grind" to route the ham to the grind pile, so dropping the
+// cut also stops a ground ham being packed as a whole ham.
 function hamLine(style?: string | null, cut?: string | null): string {
   const s = hamStyleWord(style)
   if (!s) return ''
+  if (style === 'grind') return s
   const c = hamCut(cut)
   return c ? `${s}: ${c}` : s
 }
