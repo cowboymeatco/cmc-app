@@ -466,7 +466,10 @@ const LIST_GRID_COLS = '26px minmax(0,1fr) 54px 70px 70px 76px'
 // the on-screen order detail and the printed card name that format "1 lb Packs".
 // Keyed on the exact slug so nothing else the generic title-caser handles is
 // affected. (Lamb sausage already reads "1 lb packs" a few lines down.)
-const FMT_OVERRIDES: Record<string, string> = { 'loose-pack': '1 lb Packs' }
+// The only loin-roast the wizard offers is boneless, but the slug title-cased to
+// plain "Loin Roast" — cutters missed the debone and lost roast size (2026-07-23).
+// Spell it out so the card says "Boneless" right in the cut name.
+const FMT_OVERRIDES: Record<string, string> = { 'loose-pack': '1 lb Packs', 'loin-roast': 'Boneless Loin Roast' }
 
 function v2fmt(val: string): string {
   if (!val) return ''
@@ -1275,7 +1278,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
         pc('Chops', [fmt(loin.cut), thick(loin.chopThickness ?? ''), loin.chopPack ? `${loin.chopPack}/pkg` : ''].filter(Boolean).join(' · '))
         if (loin.cut === 'boneless-chops' && loin.babyBack) pc('Baby Back Ribs', fmt(loin.babyBack))
       } else if (loin.cut === 'loin-roast') {
-        pc('Loin Roast', fmt(loin.roastSize ?? ''))
+        pc('Boneless Loin Roast', fmt(loin.roastSize ?? ''))
       } else {
         // Anything else the wizard offers (e.g. cubed pork) still has to reach
         // the packagers — without this the loin silently left the sheet.
