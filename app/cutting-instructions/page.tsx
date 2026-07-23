@@ -584,6 +584,16 @@ function stdThick(cut?: string, primal?: string): string {
   return STEAK_STANDARDS[`${primal}:${cut}`] ?? STEAK_STANDARDS[cut] ?? ''
 }
 
+// Arm / chuck / sirloin-tip roasts are portioned by a count now ("3 Roasts"),
+// replacing the old whole/half/thirds/quarters fractions (Jill, 2026-07-23).
+function roastText(count?: string | null): string {
+  return count ? `${count} Roast${count === '1' ? '' : 's'}` : 'Roasts'
+}
+// Render a roast-count cut, or fall back to the caller's normal cut formatter.
+function roastOr(cut: string | undefined | null, count: string | undefined | null, renderCut: (cut: string) => string): string {
+  return cut === 'roasts' ? roastText(count) : renderCut(cut ?? '')
+}
+
 // Bone-in short loin still yields filets: the tenderloin head runs past the
 // last rib, so 3–4 filet mignons come off before the T-bones start. That's why
 // the row prints at all on a bone-in loin — the cutter only needs the thickness.
@@ -737,8 +747,8 @@ function renderV2Detail(ci: RawInstruction) {
             <V2Field label="Shank Add-ons" value={v2adds(d.shank?.addons)} addon />
             <V2Field label="Arm Roast" value={
               d.armRoast?.arm2
-                ? sidePair(v2withT(d.armRoast.cut ?? '', stdThick(d.armRoast.cut)), v2withT(d.armRoast.arm2.cut ?? '', stdThick(d.armRoast.arm2.cut)))
-                : v2withT(d.armRoast?.cut ?? '', stdThick(d.armRoast?.cut))
+                ? sidePair(roastOr(d.armRoast.cut, d.armRoast.roastCount, c => v2withT(c, stdThick(c))), roastOr(d.armRoast.arm2.cut, d.armRoast.arm2.roastCount, c => v2withT(c, stdThick(c))))
+                : roastOr(d.armRoast?.cut, d.armRoast?.roastCount, c => v2withT(c, stdThick(c)))
             } />
             {d.armRoast?.arm2 ? (
               <>
@@ -751,8 +761,8 @@ function renderV2Detail(ci: RawInstruction) {
             <V2Field label="Flat Iron" value={v2withT(d.flatIron?.cut ?? '', stdThick(d.flatIron?.cut, 'flat-iron'))} />
             <V2Field label="Chuck Roll" value={
               d.chuckRoll?.cut2
-                ? sidePair(v2withT(d.chuckRoll.cut ?? '', stdThick(d.chuckRoll.cut)), v2withT(d.chuckRoll.cut2, stdThick(d.chuckRoll.cut2)))
-                : v2withT(d.chuckRoll?.cut ?? '', stdThick(d.chuckRoll?.cut))
+                ? sidePair(roastOr(d.chuckRoll.cut, d.chuckRoll.roastCount, c => v2withT(c, stdThick(c))), roastOr(d.chuckRoll.cut2, d.chuckRoll.roastCount2, c => v2withT(c, stdThick(c))))
+                : roastOr(d.chuckRoll?.cut, d.chuckRoll?.roastCount, c => v2withT(c, stdThick(c)))
             } />
             {d.chuckRoll?.cut2 ? (
               <>
@@ -807,8 +817,8 @@ function renderV2Detail(ci: RawInstruction) {
           <V2Section title="Round">
             <V2Field label="Sirloin Tip" value={
               d.sirloinTip?.tip2
-                ? sidePair(v2withT(d.sirloinTip.cut ?? '', d.sirloinTip.thickness ?? ''), v2withT(d.sirloinTip.tip2.cut ?? '', d.sirloinTip.tip2.thickness ?? ''))
-                : v2withT(d.sirloinTip?.cut ?? '', d.sirloinTip?.thickness ?? '')
+                ? sidePair(roastOr(d.sirloinTip.cut, d.sirloinTip.roastCount, c => v2withT(c, d.sirloinTip.thickness ?? '')), roastOr(d.sirloinTip.tip2.cut, d.sirloinTip.tip2.roastCount, c => v2withT(c, d.sirloinTip.tip2.thickness ?? '')))
+                : roastOr(d.sirloinTip?.cut, d.sirloinTip?.roastCount, c => v2withT(c, d.sirloinTip?.thickness ?? ''))
             } />
             {d.sirloinTip?.tip2 ? (
               <>
@@ -996,8 +1006,8 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
       row('Shank', fmt(d.shank?.cut)),
       d.shank?.addons?.length ? row('  Add-ons', adds(d.shank.addons), true) : '',
       row('Arm Roast', d.armRoast?.arm2
-        ? sidePair(withT(d.armRoast.cut ?? '', stdThick(d.armRoast.cut)), withT(d.armRoast.arm2.cut ?? '', stdThick(d.armRoast.arm2.cut)))
-        : withT(d.armRoast?.cut ?? '', stdThick(d.armRoast?.cut))),
+        ? sidePair(roastOr(d.armRoast.cut, d.armRoast.roastCount, c => withT(c, stdThick(c))), roastOr(d.armRoast.arm2.cut, d.armRoast.arm2.roastCount, c => withT(c, stdThick(c))))
+        : roastOr(d.armRoast?.cut, d.armRoast?.roastCount, c => withT(c, stdThick(c)))),
       d.armRoast?.arm2
         ? [
             d.armRoast.addons?.length ? row('  Add-ons (1)', adds(d.armRoast.addons), true) : '',
@@ -1006,8 +1016,8 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
         : (d.armRoast?.addons?.length ? row('  Add-ons', adds(d.armRoast.addons), true) : ''),
       row('Flat Iron', withT(d.flatIron?.cut ?? '', stdThick(d.flatIron?.cut, 'flat-iron'))),
       row('Chuck Roll', d.chuckRoll?.cut2
-        ? sidePair(withT(d.chuckRoll.cut ?? '', stdThick(d.chuckRoll.cut)), withT(d.chuckRoll.cut2, stdThick(d.chuckRoll.cut2)))
-        : withT(d.chuckRoll?.cut ?? '', stdThick(d.chuckRoll?.cut))),
+        ? sidePair(roastOr(d.chuckRoll.cut, d.chuckRoll.roastCount, c => withT(c, stdThick(c))), roastOr(d.chuckRoll.cut2, d.chuckRoll.roastCount2, c => withT(c, stdThick(c))))
+        : roastOr(d.chuckRoll?.cut, d.chuckRoll?.roastCount, c => withT(c, stdThick(c)))),
       d.chuckRoll?.cut2
         ? [
             d.chuckRoll.addons?.length ? row('  Add-ons (1)', adds(d.chuckRoll.addons), true) : '',
@@ -1051,8 +1061,8 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
     ].join(''))
     cutSections += sec('Round', [
       row('Sirloin Tip', d.sirloinTip?.tip2
-        ? sidePair(withT(d.sirloinTip.cut ?? '', d.sirloinTip.thickness ?? ''), withT(d.sirloinTip.tip2.cut ?? '', d.sirloinTip.tip2.thickness ?? ''))
-        : withT(d.sirloinTip?.cut ?? '', d.sirloinTip?.thickness ?? '')),
+        ? sidePair(roastOr(d.sirloinTip.cut, d.sirloinTip.roastCount, c => withT(c, d.sirloinTip.thickness ?? '')), roastOr(d.sirloinTip.tip2.cut, d.sirloinTip.tip2.roastCount, c => withT(c, d.sirloinTip.tip2.thickness ?? '')))
+        : roastOr(d.sirloinTip?.cut, d.sirloinTip?.roastCount, c => withT(c, d.sirloinTip?.thickness ?? ''))),
       d.sirloinTip?.tip2
         ? [
             d.sirloinTip.addons?.length ? row('  Add-ons (1)', adds(d.sirloinTip.addons), true) : '',
@@ -1175,22 +1185,22 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
     }
     if (d.armRoast?.arm2) {
       if (d.armRoast.cut === 'grind') pg('Arm Roast (1)')
-      else if (d.armRoast.cut) { pc('Arm Roast (1)', withT(d.armRoast.cut, stdThick(d.armRoast.cut))); if (d.armRoast.addons?.length) pc('  Add-on', adds(d.armRoast.addons), true) }
+      else if (d.armRoast.cut) { pc('Arm Roast (1)', roastOr(d.armRoast.cut, d.armRoast.roastCount, c => withT(c, stdThick(c)))); if (d.armRoast.addons?.length) pc('  Add-on', adds(d.armRoast.addons), true) }
       if (d.armRoast.arm2.cut === 'grind') pg('Arm Roast (2)')
-      else if (d.armRoast.arm2.cut) { pc('Arm Roast (2)', withT(d.armRoast.arm2.cut, stdThick(d.armRoast.arm2.cut))); if (d.armRoast.arm2.addons?.length) pc('  Add-on', adds(d.armRoast.arm2.addons), true) }
+      else if (d.armRoast.arm2.cut) { pc('Arm Roast (2)', roastOr(d.armRoast.arm2.cut, d.armRoast.arm2.roastCount, c => withT(c, stdThick(c)))); if (d.armRoast.arm2.addons?.length) pc('  Add-on', adds(d.armRoast.arm2.addons), true) }
     } else if (d.armRoast?.cut) {
       if (d.armRoast.cut === 'grind') pg('Arm Roast')
-      else { pc('Arm Roast', withT(d.armRoast.cut, stdThick(d.armRoast.cut))); if (d.armRoast.addons?.length) pc('  Add-on', adds(d.armRoast.addons), true) }
+      else { pc('Arm Roast', roastOr(d.armRoast.cut, d.armRoast.roastCount, c => withT(c, stdThick(c)))); if (d.armRoast.addons?.length) pc('  Add-on', adds(d.armRoast.addons), true) }
     }
     if (d.flatIron?.cut) { d.flatIron.cut === 'grind' ? pg('Flat Iron') : pc('Flat Iron', withT(d.flatIron.cut, stdThick(d.flatIron.cut, 'flat-iron'))) }
     if (d.chuckRoll?.cut2) {
       if (d.chuckRoll.cut === 'grind') pg('Chuck Roll (1)')
-      else if (d.chuckRoll.cut) { pc('Chuck Roll (1)', withT(d.chuckRoll.cut, stdThick(d.chuckRoll.cut))); if (d.chuckRoll.addons?.length) pc('  Add-on', adds(d.chuckRoll.addons), true) }
+      else if (d.chuckRoll.cut) { pc('Chuck Roll (1)', roastOr(d.chuckRoll.cut, d.chuckRoll.roastCount, c => withT(c, stdThick(c)))); if (d.chuckRoll.addons?.length) pc('  Add-on', adds(d.chuckRoll.addons), true) }
       if (d.chuckRoll.cut2 === 'grind') pg('Chuck Roll (2)')
-      else { pc('Chuck Roll (2)', withT(d.chuckRoll.cut2, stdThick(d.chuckRoll.cut2))); if (d.chuckRoll.addons2?.length) pc('  Add-on', adds(d.chuckRoll.addons2), true) }
+      else { pc('Chuck Roll (2)', roastOr(d.chuckRoll.cut2, d.chuckRoll.roastCount2, c => withT(c, stdThick(c)))); if (d.chuckRoll.addons2?.length) pc('  Add-on', adds(d.chuckRoll.addons2), true) }
     } else if (d.chuckRoll?.cut) {
       if (d.chuckRoll.cut === 'grind') pg('Chuck Roll')
-      else { pc('Chuck Roll', withT(d.chuckRoll.cut, stdThick(d.chuckRoll.cut))); if (d.chuckRoll.addons?.length) pc('  Add-on', adds(d.chuckRoll.addons), true) }
+      else { pc('Chuck Roll', roastOr(d.chuckRoll.cut, d.chuckRoll.roastCount, c => withT(c, stdThick(c)))); if (d.chuckRoll.addons?.length) pc('  Add-on', adds(d.chuckRoll.addons), true) }
     }
     ps('Plate & Short Ribs')
     if (d.shortRibs?.cut) {
@@ -1247,13 +1257,13 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
     if (d.skirt?.cut)  { d.skirt.cut  === 'grind' ? pg('Skirt')       : pc('Skirt Steak',  fmt(d.skirt.cut)) }
     if (d.flank?.cut)  { d.flank.cut  === 'grind' ? pg('Flank Steak') : pc('Flank Steak',  fmt(d.flank.cut)) }
     ps('Round')
-    const packSirloinTip = (t: { cut?: string; thickness?: string; addons?: string[] }, sfx: string) => {
+    const packSirloinTip = (t: { cut?: string; roastCount?: string; thickness?: string; addons?: string[] }, sfx: string) => {
       if (t.cut === 'grind') { pg(`Sirloin Tip${sfx}`); return }
       if (!t.cut) return
-      pc(`Sirloin Tip${sfx}`, withT(t.cut, t.thickness ?? ''))
+      pc(`Sirloin Tip${sfx}`, roastOr(t.cut, t.roastCount, c => withT(c, t.thickness ?? '')))
       if (t.addons?.length) pc('  Add-on', adds(t.addons), true)
     }
-    const sameTip = (a: any, b: any) => a?.cut === b?.cut && (a?.thickness ?? '') === (b?.thickness ?? '')
+    const sameTip = (a: any, b: any) => a?.cut === b?.cut && (a?.roastCount ?? '') === (b?.roastCount ?? '') && (a?.thickness ?? '') === (b?.thickness ?? '')
       && adds(a?.addons ?? []) === adds(b?.addons ?? [])
     if (d.sirloinTip?.tip2 && !sameTip(d.sirloinTip, d.sirloinTip.tip2)) {
       packSirloinTip(d.sirloinTip, ' (1)')
