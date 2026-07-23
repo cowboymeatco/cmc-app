@@ -160,6 +160,16 @@ function rawWeighInRows(d: any, f: (s: string) => string): Array<[string, string
     const both = belly.cut === 'bacon' && belly.cut2 === 'bacon'
     rows.push(['Bacon', both ? 'Both bellies · cure & smoke' : 'Cure & smoke'])
   }
+  // Shoulder bacon is a cured add-on chosen on the shoulder step (data.shoulder
+  // .addons, or shoulder2.addons for a split whole hog). Like belly bacon it's
+  // billed on the raw weight into the cure, so it earns its own weigh-in line.
+  const sh = d?.shoulder
+  const shoulderBacon  = Array.isArray(sh?.addons) && sh.addons.includes('shoulder-bacon')
+  const shoulderBacon2 = Array.isArray(sh?.shoulder2?.addons) && sh.shoulder2.addons.includes('shoulder-bacon')
+  if (shoulderBacon || shoulderBacon2) {
+    const both = shoulderBacon && shoulderBacon2
+    rows.push(['Shoulder Bacon', both ? 'Both shoulders · cure & smoke' : 'Cure & smoke'])
+  }
   const ham = d?.ham
   const curedHams = [ham?.style, ham?.style2].filter(s => s === 'cured-smoked').length
   if (curedHams > 0) {
