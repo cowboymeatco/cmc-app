@@ -462,9 +462,15 @@ const LIST_GRID_COLS = '26px minmax(0,1fr) 54px 70px 70px 76px'
 
 // ── V2 form helpers ───────────────────────────────────────────────────────────
 
+// The team doesn't use "loose pack" — hog sausage goes into 1 lb chubs, so both
+// the on-screen order detail and the printed card name that format "1 lb Packs".
+// Keyed on the exact slug so nothing else the generic title-caser handles is
+// affected. (Lamb sausage already reads "1 lb packs" a few lines down.)
+const FMT_OVERRIDES: Record<string, string> = { 'loose-pack': '1 lb Packs' }
+
 function v2fmt(val: string): string {
   if (!val) return ''
-  return val.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+  return FMT_OVERRIDES[val] ?? val.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
 
 // Leg steaks carry a thickness and pack count, and a split pair only needs one
@@ -893,7 +899,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
   const isPork = sp === 'pork' || sp === 'hog'
   const isLG   = sp === 'lamb' || sp === 'goat'
 
-  const fmt   = (v: string) => v ? v.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : ''
+  const fmt   = (v: string) => v ? (FMT_OVERRIDES[v] ?? v.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())) : ''
   // The card is built as an HTML string from a public form's JSONB, so anything
   // interpolated raw gets escaped first.
   const esc   = (v: unknown) => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string))
