@@ -479,6 +479,10 @@ const FMT_OVERRIDES: Record<string, string> = {
   'half-ab': 'Half A|B',
   'three-quarter': '¾ Beef',
   'three-quarter-abc': '¾ A|B|C',
+  // Brisket is kept whole; Jill dropped the half options, so the packer/flat
+  // slugs read as plain "Packer" / "Flat" instead of "Packer Whole".
+  'packer-whole': 'Packer',
+  'flat-whole': 'Flat',
 }
 
 function v2fmt(val: string): string {
