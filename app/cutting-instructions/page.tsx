@@ -594,6 +594,12 @@ function roastOr(cut: string | undefined | null, count: string | undefined | nul
   return cut === 'roasts' ? roastText(count) : renderCut(cut ?? '')
 }
 
+// A whole packer/flat brisket can be halved via a toggle (whole/half beef).
+function brisketLabel(cut: string | undefined | null, half: boolean | undefined, f: (c: string) => string): string {
+  const base = f(cut ?? '')
+  return half && (cut === 'packer-whole' || cut === 'flat-whole') ? `${base} — Cut in Half` : base
+}
+
 // Bone-in short loin still yields filets: the tenderloin head runs past the
 // last rib, so 3–4 filet mignons come off before the T-bones start. That's why
 // the row prints at all on a bone-in loin — the cutter only needs the thickness.
@@ -740,8 +746,8 @@ function renderV2Detail(ci: RawInstruction) {
           <V2Section title="Chuck">
             <V2Field label="Brisket" value={
               d.brisket?.cut2
-                ? sidePair(v2fmt(d.brisket.cut), v2fmt(d.brisket.cut2))
-                : v2fmt(d.brisket?.cut)
+                ? sidePair(brisketLabel(d.brisket.cut, d.brisket.half, v2fmt), brisketLabel(d.brisket.cut2, d.brisket.half2, v2fmt))
+                : brisketLabel(d.brisket?.cut, d.brisket?.half, v2fmt)
             } />
             <V2Field label="Shank" value={v2fmt(d.shank?.cut)} />
             <V2Field label="Shank Add-ons" value={v2adds(d.shank?.addons)} addon />
@@ -1001,7 +1007,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
 
   if (isBeef) {
     cutSections += sec('Chuck', [
-      row('Brisket', d.brisket?.cut2 ? sidePair(fmt(d.brisket.cut), fmt(d.brisket.cut2)) : fmt(d.brisket?.cut)),
+      row('Brisket', d.brisket?.cut2 ? sidePair(brisketLabel(d.brisket.cut, d.brisket.half, fmt), brisketLabel(d.brisket.cut2, d.brisket.half2, fmt)) : brisketLabel(d.brisket?.cut, d.brisket?.half, fmt)),
       d.brisket?.fat ? row('  Brisket Fat', fmt(d.brisket.fat)) : '',
       row('Shank', fmt(d.shank?.cut)),
       d.shank?.addons?.length ? row('  Add-ons', adds(d.shank.addons), true) : '',
@@ -1171,7 +1177,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
     if (d.brisket?.cut) {
       if (d.brisket.cut === 'grind') { pg('Brisket') }
       else {
-        const bSpec = (d.brisket.cut2 ? sidePair(fmt(d.brisket.cut), fmt(d.brisket.cut2)) : fmt(d.brisket.cut))
+        const bSpec = (d.brisket.cut2 ? sidePair(brisketLabel(d.brisket.cut, d.brisket.half, fmt), brisketLabel(d.brisket.cut2, d.brisket.half2, fmt)) : brisketLabel(d.brisket.cut, d.brisket.half, fmt))
           + (d.brisket.fat ? ` · ${fmt(d.brisket.fat)}` : '')
         pc('Brisket', bSpec)
       }
