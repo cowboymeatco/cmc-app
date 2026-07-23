@@ -1530,7 +1530,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
 </div>
 
 <!-- PAGE 2: PACKAGING SHEET — 3-column table layout -->
-<div class="page${last ? '' : ' pagebreak'}">
+<div class="page packsheet${last ? '' : ' pagebreak'}">
   ${hdr('Packaging Sheet' + ofN)}
   ${unassignedBand(carcass)}
   <div style="font-size:16px;color:#555;margin-bottom:8px">
@@ -1544,7 +1544,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
     ${packCols.map(col => `<div>${col.length ? buildPackTable(col) : ''}</div>`).join('')}
   </div>
   ${d.notes ? `<div style="margin-top:10px;border:1px solid #C9A882;padding:8px"><div style="font-size:12px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px">Special Notes</div><div style="font-size:18px">${d.notes}</div></div>` : ''}
-  <div style="margin-top:18px;display:grid;grid-template-columns:1fr 1fr;gap:20px">
+  <div style="margin-top:auto;padding-top:18px;display:grid;grid-template-columns:1fr 1fr;gap:20px">
     <div style="border-top:1px solid #888;padding-top:5px;font-size:13px;color:#75471B;text-transform:uppercase;letter-spacing:0.08em">Packed by / Date</div>
     <div style="border-top:1px solid #888;padding-top:5px;font-size:13px;color:#75471B;text-transform:uppercase;letter-spacing:0.08em">Total Boxes</div>
   </div>
@@ -1568,6 +1568,11 @@ function cardDocument(title: string, body: string): string {
        otherwise the browser window's width decides the column flow and the fit
        pass below measures a page that never existed. */
     .page { width: 10.2in; }
+    /* The packaging sheet fills the sheet so its sign-off line drops to the very
+       bottom like a real footer instead of floating right under the tables. Held
+       just under the auto-fit LIMIT (7.7in) below so a normal sheet that already
+       fits never trips the shrink pass. */
+    .packsheet { min-height: 7.6in; display: flex; flex-direction: column; }
     @media screen {
       body { background: #efece7; }
       .page { margin: 0 auto 18px; background: #fff; outline: 1px solid #d8d0c6; }
