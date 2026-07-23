@@ -650,6 +650,24 @@ function shoulderFields(sh: any, f: (v: string) => string, t: (v: string) => str
   return out.filter(([, v]) => v)
 }
 
+// One pork loin as (label, value) pairs. A whole hog's two loins can be cut
+// differently (one chops, one roast), each with its own tenderloin, so each
+// renders through here and the pair gets merged below.
+function loinFields(loin: any, f: (v: string) => string, t: (v: string) => string): Array<[string, string]> {
+  if (!loin?.cut) return []
+  const out: Array<[string, string]> = [['Cut', f(loin.cut)]]
+  if (loin.cut === 'bone-in-chops' || loin.cut === 'boneless-chops' || loin.cut === 'smoked-chops') {
+    if (loin.chopThickness) out.push(['Chop Thickness', t(loin.chopThickness)])
+    if (loin.chopPack) out.push(['Per Pack', String(loin.chopPack)])
+  }
+  if (loin.cut === 'boneless-chops') out.push(['Baby Back Ribs', f(loin.babyBack ?? '')])
+  if (loin.cut === 'loin-roast') out.push(['Roast Size', f(loin.roastSize ?? '')])
+  // Bone-in chops keep the tenderloin, so it carries no separate line.
+  if (loin.cut !== 'bone-in-chops') out.push(['Tenderloin', f(loin.tenderloin ?? '')])
+  if (loin.addons?.length) out.push(['Add-ons', loin.addons.map(f).join(', ')])
+  return out.filter(([, v]) => v)
+}
+
 // Merge the two sides of a split primal row-by-row: a row that comes out the
 // same on both sides prints once, unsuffixed; only rows that actually differ
 // get labelled (1) / (2). Two loins both yielding a 2" filet is one line.
@@ -809,17 +827,10 @@ function renderV2Detail(ci: RawInstruction) {
             ).map(([label, value]) => <V2Field key={label} label={label} value={value} addon={label.startsWith('Add-ons')} />)}
           </V2Section>
           <V2Section title="Loin">
-            <V2Field label="Cut" value={v2fmt(d.loin?.cut)} />
-            {(d.loin?.cut === 'bone-in-chops' || d.loin?.cut === 'boneless-chops' || d.loin?.cut === 'smoked-chops') && (
-              <>
-                <V2Field label="Chop Thickness" value={v2thick(d.loin?.chopThickness)} />
-                <V2Field label="Per Pack" value={d.loin?.chopPack} />
-              </>
-            )}
-            {d.loin?.cut === 'boneless-chops' && <V2Field label="Baby Back Ribs" value={v2fmt(d.loin?.babyBack ?? '')} />}
-            {d.loin?.cut === 'loin-roast' && <V2Field label="Roast Size" value={v2fmt(d.loin?.roastSize ?? '')} />}
-            <V2Field label="Tenderloin" value={v2fmt(d.loin?.tenderloin)} />
-            <V2Field label="Add-ons" value={v2adds(d.loin?.addons)} addon />
+            {(d.loin?.loin2
+              ? mergeSides(loinFields(d.loin, v2fmt, v2thick), loinFields(d.loin.loin2, v2fmt, v2thick))
+              : loinFields(d.loin, v2fmt, v2thick)
+            ).map(([label, value]) => <V2Field key={label} label={label} value={value} addon={label.startsWith('Add-ons')} />)}
           </V2Section>
           {/* This detail reads the same as the printed cut card (Charlie): the
               belly says "Cured" not "Bacon", the ham is one line per side with
@@ -1051,15 +1062,10 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
       ? mergeSides(shoulderFields(d.shoulder, fmt, thick), shoulderFields(d.shoulder.shoulder2, fmt, thick))
       : shoulderFields(d.shoulder, fmt, thick)
     ).map(([label, value]) => row(label.startsWith('Add-ons') ? `  ${label}` : label, value, label.startsWith('Add-ons'))).join(''))
-    cutSections += sec('Loin', [
-      row('Cut', fmt(loin.cut)),
-      (loin.cut === 'bone-in-chops' || loin.cut === 'boneless-chops' || loin.cut === 'smoked-chops') ? row('Chop Thickness', thick(loin.chopThickness ?? '')) : '',
-      (loin.cut === 'bone-in-chops' || loin.cut === 'boneless-chops' || loin.cut === 'smoked-chops') ? row('Per Pack', loin.chopPack) : '',
-      loin.cut === 'boneless-chops' ? row('Baby Back Ribs', fmt(loin.babyBack ?? '')) : '',
-      loin.cut === 'loin-roast' ? row('Roast Size', fmt(loin.roastSize ?? '')) : '',
-      row('Tenderloin', fmt(loin.tenderloin)),
-      loin.addons?.length ? row('  Add-ons', adds(loin.addons), true) : '',
-    ].join(''))
+    cutSections += sec('Loin', (loin.loin2
+      ? mergeSides(loinFields(loin, fmt, thick), loinFields(loin.loin2, fmt, thick))
+      : loinFields(loin, fmt, thick)
+    ).map(([label, value]) => row(label.startsWith('Add-ons') ? `  ${label}` : label, value, label.startsWith('Add-ons'))).join(''))
     // A split belly used to print only side 1 here, so half the instruction
     // never reached the cutter.
     cutSections += sec('Belly', bellyRows(d.belly).map(([l, v]) => row(l, v)).join(''))
@@ -1278,22 +1284,29 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
     if (sh2 && !sameShoulder) { packShoulder(d.shoulder, ' (1)'); packShoulder(sh2, ' (2)') }
     else packShoulder(d.shoulder, '')
     ps('Loin')
-    if (loin.cut === 'grind') { pg('Loin') }
-    else if (loin.cut) {
-      if (loin.cut === 'bone-in-chops' || loin.cut === 'boneless-chops' || loin.cut === 'smoked-chops') {
-        pc('Chops', [fmt(loin.cut), thick(loin.chopThickness ?? ''), loin.chopPack ? `${loin.chopPack}/pkg` : ''].filter(Boolean).join(' · '))
-        if (loin.cut === 'boneless-chops' && loin.babyBack) pc('Baby Back Ribs', fmt(loin.babyBack))
-      } else if (loin.cut === 'loin-roast') {
-        pc('Boneless Loin Roast', fmt(loin.roastSize ?? ''))
+    // A whole hog's two loins can be cut differently, so each side packs on its
+    // own line — labelled (1)/(2) only when they actually differ.
+    const packLoin = (ln: any, sfx: string) => {
+      if (!ln?.cut) return
+      if (ln.cut === 'grind') { pg(`Loin${sfx}`); return }
+      if (ln.cut === 'bone-in-chops' || ln.cut === 'boneless-chops' || ln.cut === 'smoked-chops') {
+        pc(`Chops${sfx}`, [fmt(ln.cut), thick(ln.chopThickness ?? ''), ln.chopPack ? `${ln.chopPack}/pkg` : ''].filter(Boolean).join(' · '))
+        if (ln.cut === 'boneless-chops' && ln.babyBack) pc(`Baby Back Ribs${sfx}`, fmt(ln.babyBack))
+      } else if (ln.cut === 'loin-roast') {
+        pc(`Boneless Loin Roast${sfx}`, fmt(ln.roastSize ?? ''))
       } else {
         // Anything else the wizard offers (e.g. cubed pork) still has to reach
         // the packagers — without this the loin silently left the sheet.
-        pc('Loin', fmt(loin.cut))
+        pc(`Loin${sfx}`, fmt(ln.cut))
       }
-      if (loin.tenderloin === 'grind') pg('Tenderloin')
-      else if (loin.tenderloin) pc('Tenderloin', fmt(loin.tenderloin))
-      if (loin.addons?.length) pc('  Add-on', adds(loin.addons), true)
+      if (ln.tenderloin === 'grind') pg(`Tenderloin${sfx}`)
+      else if (ln.tenderloin) pc(`Tenderloin${sfx}`, fmt(ln.tenderloin))
+      if (ln.addons?.length) pc('  Add-on', adds(ln.addons), true)
     }
+    const loin2 = loin.loin2
+    const sameLoin = loin2 && JSON.stringify(loinFields(loin, fmt, thick)) === JSON.stringify(loinFields(loin2, fmt, thick))
+    if (loin2 && !sameLoin) { packLoin(loin, ' (1)'); packLoin(loin2, ' (2)') }
+    else packLoin(loin, '')
     ps('Belly')
     if (d.belly?.cut === 'grind' && !d.belly?.cut2) pg('Belly')
     else bellyRows(d.belly).forEach(([l, v]) => (v === 'Grind' ? pg(l) : pc(l, v)))
