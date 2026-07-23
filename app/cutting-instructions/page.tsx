@@ -469,7 +469,17 @@ const LIST_GRID_COLS = '26px minmax(0,1fr) 54px 70px 70px 76px'
 // The only loin-roast the wizard offers is boneless, but the slug title-cased to
 // plain "Loin Roast" — cutters missed the debone and lost roast size (2026-07-23).
 // Spell it out so the card says "Boneless" right in the cut name.
-const FMT_OVERRIDES: Record<string, string> = { 'loose-pack': '1 lb Packs', 'loin-roast': 'Boneless Loin Roast' }
+// Split-share portions carry an A|B suffix the title-caser mangles ("Whole Ab"),
+// so name them the way the wizard shows them.
+const FMT_OVERRIDES: Record<string, string> = {
+  'loose-pack': '1 lb Packs',
+  'loin-roast': 'Boneless Loin Roast',
+  'whole-ab': 'Whole A|B',
+  'whole-abcd': 'Whole A|B|C|D',
+  'half-ab': 'Half A|B',
+  'three-quarter': '¾ Beef',
+  'three-quarter-abc': '¾ A|B|C',
+}
 
 function v2fmt(val: string): string {
   if (!val) return ''
