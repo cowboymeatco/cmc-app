@@ -63,7 +63,36 @@ export function makeCode39Barcode(text: string): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${x} ${H}" width="${x}" height="${H}" style="display:block;max-width:100%;height:auto;margin:0 auto"><g fill="#000">${rects}</g></svg>`
 }
 
-export function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlags = DEFAULT_FLAGS): string {
+// The animal behind the box, resolved from the carcass scan (harvest record).
+// Drives the databased producer/weight and the compliance mark.
+export interface LabelAnimal { producer?: string | null; hangingWeightLbs?: number | null; killType?: string | null }
+
+const escLabel = (v: unknown) => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string))
+
+// Crews type the hanging weight into the name ("Scott Ruff 196#"). Once the
+// weight prints on its own databased line, strip it from the name — but only
+// when we actually have that databased weight to show instead, so an unresolved
+// box keeps whatever the crew typed.
+export function displayCustomerName(name: string, weightLbs?: number | null): string {
+  let n = (name || '').trim()
+  if (weightLbs) {
+    n = n.replace(/\s*[·\-]?\s*\d{2,4}\s*(#|lbs?)\s*$/i, '').trim()   // "196#", "196 lb"
+    const m = n.match(/\s(\d{2,4})$/)                                 // bare trailing number
+    if (m && Math.abs(Number(m[1]) - weightLbs) <= 2) n = n.slice(0, m.index).trim()
+  }
+  return n
+}
+
+// Batch code: YYDDD off the pack/processing date (Julian day-of-year). This is
+// the number the floor recognizes, not the calendar date.
+export function julianYYDDD(dateStr: string): string {
+  const d = new Date(dateStr + 'T12:00:00')
+  const start = new Date(d.getFullYear(), 0, 0)
+  const day = Math.floor((d.getTime() - start.getTime()) / 86_400_000)
+  return String(d.getFullYear()).slice(2) + String(day).padStart(3, '0')
+}
+
+export function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlags = DEFAULT_FLAGS, animal?: LabelAnimal): string {
   const grouped: Record<string, { count: number; weight: number }> = {}
   scans.forEach(s => {
     const key = s.item_name || s.plu_number || 'Unknown'
@@ -76,62 +105,74 @@ export function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlag
   const totalCuts   = items.reduce((s, [, v]) => s + v.count, 0)
   const boxLabel    = `Box ${box.box_number}${box.is_final ? ' ★' : ''}`
   const dateStr     = new Date(box.pack_date + 'T12:00:00').toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })
+  const julian      = julianYYDDD(box.pack_date)
 
   const itemRows = items.map(([name, v]) =>
-    `<div class="item-row"><span><b>(${v.count})</b> ${name}</span><span>${v.weight.toFixed(2)} lb</span></div>`
+    `<div class="item-row"><span><b>(${v.count})</b> ${escLabel(name)}</span><span>${v.weight.toFixed(2)} lb</span></div>`
   ).join('')
 
-  const usdaHTML = flags.usda_bug ? `<div class="usda-bug">${usdaMarkSVG(USDA_EST_NUMBER)}</div>` : ''
-  const exemptHTML     = flags.retail_exempt ? `<div class="badge">RETAIL EXEMPT</div>` : ''
-  const notForSaleHTML = flags.not_for_sale   ? `<div class="nfs">★ NOT FOR SALE ★</div>` : ''
+  // The compliance mark rides on top of the box row, in the open right-hand
+  // space, so it never pushes the lines apart. Custom exempt = NOT FOR SALE and
+  // no legend; otherwise the approved USDA mark of inspection (default on).
+  const markHTML = flags.not_for_sale
+    ? `<div class="mark"><div class="nfs">NOT FOR SALE</div></div>`
+    : flags.usda_bug
+      ? `<div class="mark up"><img class="usdaimg" src="/usda-legend.png" alt="USDA Inspected EST. 47648"></div>`
+      : ''
+  const exemptHTML   = flags.retail_exempt ? `<div class="badge">RETAIL EXEMPT</div>` : ''
+  const producerHTML = animal?.producer ? `<div class="producer">Producer: <b>${escLabel(animal.producer)}</b></div>` : ''
+  const weightHTML   = animal?.hangingWeightLbs ? `<div class="hangwt">Hanging Wt: ${animal.hangingWeightLbs} lb</div>` : ''
 
   const barcodeHTML = box.serial_number ? `
   <hr>
-  <div class="serial">SERIAL: ${box.serial_number}</div>
+  <div class="serial">SERIAL: ${escLabel(box.serial_number)}</div>
   <div class="barcode">${makeCode39Barcode(box.serial_number)}</div>` : ''
 
   return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
-<title>Box Label — ${box.customer_name} ${boxLabel}</title>
+<title>Box Label — ${escLabel(box.customer_name)} ${boxLabel}</title>
 <style>
   @page { size: 4in auto; margin: 0.15in; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { width: 3.7in; font-family: Arial, sans-serif; color: #000; background: #fff; }
-  .top-bar  { display: flex; justify-content: space-between; align-items: flex-start; }
-  .company  { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 9pt; font-weight: bold; text-align: center; letter-spacing: 0.05em; margin-bottom: 2px; flex: 1; }
-  .usda-bug { width: 0.62in; flex-shrink: 0; }
-  .customer { font-size: 20pt; font-weight: bold; text-align: center; line-height: 1.1; margin: 4px 0; }
-  .box-num  { font-size: 14pt; font-weight: bold; text-align: center; margin-bottom: 2px; }
-  .box-for  { font-size: 13pt; font-weight: bold; text-align: center; margin-bottom: 2px; border: 1.5px solid #000; border-radius: 3px; padding: 2px 4px; }
-  .date     { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 9pt; text-align: center; margin-bottom: 4px; }
-  hr        { border: none; border-top: 1px solid #000; margin: 5px 0; }
+  .logo     { display: block; width: 100%; max-width: 3.05in; height: auto; margin: 0 auto 3px; }
+  .customer { font-size: 21pt; font-weight: bold; text-align: center; line-height: 1.0; margin: 0; }
+  .producer { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 11pt; text-align: center; line-height: 1.2; }
+  .hangwt   { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 11pt; text-align: center; font-weight: bold; line-height: 1.2; margin-bottom: 1px; }
+  .box-for  { font-size: 12pt; font-weight: bold; text-align: center; margin: 2px auto; border: 1.5px solid #000; border-radius: 3px; padding: 1px 4px; }
+  /* Box # and date stack tight; the mark floats over the open right space. */
+  .boxrow   { position: relative; text-align: center; }
+  .box-num  { font-size: 15pt; font-weight: bold; text-align: center; line-height: 1.15; }
+  .date     { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 10pt; text-align: center; line-height: 1.2; }
+  .mark     { position: absolute; right: 0; top: 50%; transform: translateY(-50%); width: 0.6in; z-index: 2; display: flex; align-items: center; }
+  .mark.up  { top: 12%; }
+  .usdaimg  { width: 100%; height: auto; display: block; }
+  .mark .nfs { border: 2px solid #000; font-size: 8pt; font-weight: bold; text-align: center; letter-spacing: 0.02em; padding: 2px 1px; line-height: 1.1; width: 100%; }
+  hr        { border: none; border-top: 1px solid #000; margin: 4px 0; }
   .item-row { display: flex; justify-content: space-between; align-items: baseline;
               font-family: 'Arial Narrow', Arial, sans-serif; font-size: 11pt; padding: 1px 0; }
   .footer   { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 10pt; font-weight: bold; text-align: center; margin-top: 2px; }
   .badge    { text-align: center; font-size: 7.5pt; font-weight: bold; border: 1px solid #000; border-radius: 2px; padding: 1px 4px; display: inline-block; margin: 2px auto; letter-spacing: 0.06em; }
-  .nfs      { text-align: center; font-size: 9pt; font-weight: bold; letter-spacing: 0.1em; margin: 3px 0; }
-  .barcode  { text-align: center; margin: 6px 0 2px; }
+  .barcode  { text-align: center; margin: 4px 0 2px; }
   .barcode svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
   .serial   { text-align: center; font-size: 10pt; font-family: monospace; letter-spacing: 0.1em; font-weight: bold; margin: 4px 0 2px; }
   @media print { html, body { width: 4in; } }
 </style>
 </head>
 <body>
-  <div class="top-bar">
-    <div style="flex:1;text-align:center">
-      <img src="/cmc-horns.jpg" alt="" style="height:32px;display:block;margin:0 auto 2px">
-      <div class="company">COWBOY MEAT COMPANY</div>
-    </div>
-    ${usdaHTML}
-  </div>
-  ${notForSaleHTML}
+  <img class="logo" src="/cmc-logo.png" alt="Cowboy Meat Co">
   ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
-  <div class="customer">${box.customer_name.toUpperCase()}</div>
-  <div class="box-num">${boxLabel}</div>
-  ${box.box_label ? `<div class="box-for">FOR: ${box.box_label.toUpperCase()}</div>` : ''}
-  <div class="date">${dateStr}</div>
+  <div class="customer">${escLabel(displayCustomerName(box.customer_name, animal?.hangingWeightLbs)).toUpperCase()}</div>
+  ${producerHTML}
+  ${weightHTML}
+  ${box.box_label ? `<div class="box-for">FOR: ${escLabel(box.box_label).toUpperCase()}</div>` : ''}
+  <div class="boxrow">
+    <div class="box-num">${boxLabel}</div>
+    <div class="date">${dateStr} &nbsp;&middot;&nbsp; <b style="font-family:monospace;letter-spacing:0.1em">${julian}</b></div>
+    ${markHTML}
+  </div>
   <hr>
   ${itemRows}
   <hr>

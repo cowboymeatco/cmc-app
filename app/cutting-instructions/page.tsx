@@ -1505,10 +1505,13 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
   // ── Assemble HTML ─────────────────────────────────────────────────────────
   const submittedDate = new Date(ci.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 
+  // The logo (white variant for the dark bar) replaces the "Cowboy Meat Company"
+  // wordmark. Absolute origin so it still resolves inside the printed blob doc.
+  const assetBase = typeof window !== 'undefined' ? window.location.origin : ''
   const hdr = (subtitle: string) =>
-    `<div style="background:#1A0A04;color:#F2E8D9;padding:9px 16px;display:flex;align-items:baseline;justify-content:space-between;margin-bottom:9px">
-       <div><span style="font-size:24px;font-weight:bold;letter-spacing:0.1em;text-transform:uppercase">Cowboy Meat Company</span>
-            <span style="font-size:16px;color:#C9A882;margin-left:12px;letter-spacing:0.05em">— ${subtitle}</span></div>
+    `<div style="background:#1A0A04;color:#F2E8D9;padding:9px 16px;display:flex;align-items:center;justify-content:space-between;margin-bottom:9px">
+       <div style="display:flex;align-items:center;gap:14px"><img src="${assetBase}/cmc-logo-white.png" alt="Cowboy Meat Co" style="height:34px;display:block">
+            <span style="font-size:16px;color:#C9A882;letter-spacing:0.05em">— ${subtitle}</span></div>
        <div style="font-size:13px;color:#C9A882">Submitted: ${submittedDate}</div>
      </div>`
 
