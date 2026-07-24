@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { generateLabel, LabelFlags, LabelAnimal, BoxRecord, BoxScan } from '@/lib/label'
 import { generateCMBLabel } from '@/lib/labelCMB'
 import { generateWIPLabel, wipDataFromBox, isWIPBoxLabel } from '@/lib/labelWIP'
+import { parseSmokehouseOrders, roundJerkyLabel, classifyBoxProduct, allocateIntent } from '@/lib/wipIntent'
 
 // Central Montana Beef cases get their US Foods label (4x6, GTIN barcode)
 // instead of the standard CMC box label. Sessions are named "CMB", "CMB 26181",
@@ -59,6 +60,80 @@ async function resolveAnimal(box: BoxRecord): Promise<LabelAnimal | undefined> {
   }
 }
 
+// The customer's own cutting instruction for the animal in this box, reached on
+// keys rather than names — the box says "Bill Schiffer 207#" while the cut card
+// says "Billy Schiffer", so only the appointment id joins them reliably.
+async function resolveCuttingInstruction(box: BoxRecord): Promise<Record<string, unknown> | null> {
+  const inputs = await supabase
+    .from('processing_inputs')
+    .select('linked_harvest_id')
+    .eq('customer_name', box.customer_name)
+    .eq('pack_date', box.pack_date)
+    .not('linked_harvest_id', 'is', null)
+  const ids = [...new Set((inputs.data ?? []).map(r => r.linked_harvest_id).filter(Boolean))]
+  if (!ids.length) return null
+
+  const hl = await supabase.from('harvest_log').select('appointment_id').in('id', ids)
+  const appts = [...new Set((hl.data ?? []).map(r => r.appointment_id).filter(Boolean))]
+  if (!appts.length) return null
+
+  const ci = await supabase
+    .from('cutting_instructions')
+    .select('data')
+    .in('appointment_id', appts)
+    .order('last_modified', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  return (ci.data?.data ?? null) as Record<string, unknown> | null
+}
+
+// Decide what this box is for and remember it. Assignment is sticky: once a box
+// has started filling an order, reprinting its tag must not move it.
+async function resolveWIPIntent(box: BoxRecord, items: { name: string }[]): Promise<string | null> {
+  if (box.wip_intent_label) return box.wip_intent_label
+
+  const data = await resolveCuttingInstruction(box)
+  if (!data) return null
+
+  const product = classifyBoxProduct(items)
+  let assignment: { key: string; label: string } | null = null
+
+  if (product === 'round') {
+    const jerky = roundJerkyLabel(data)
+    if (jerky) assignment = { key: 'round#jerky', label: jerky }
+  }
+
+  if (!assignment) {
+    const orders = parseSmokehouseOrders(data)
+    if (orders.length) {
+      // What the customer's other boxes have already committed to each order.
+      const siblings = await supabase
+        .from('boxes')
+        .select('id, wip_intent_key, total_weight_lbs')
+        .eq('customer_name', box.customer_name)
+        .eq('pack_date', box.pack_date)
+        .not('wip_intent_key', 'is', null)
+
+      const assigned: Record<string, number> = {}
+      for (const s of siblings.data ?? []) {
+        if (s.id === box.id) continue
+        const k = String(s.wip_intent_key)
+        assigned[k] = (assigned[k] ?? 0) + (Number(s.total_weight_lbs) || 0)
+      }
+      assignment = allocateIntent(orders, assigned, Number(box.total_weight_lbs) || 0)
+    }
+  }
+
+  if (!assignment) return null
+
+  await supabase
+    .from('boxes')
+    .update({ wip_intent_key: assignment.key, wip_intent_label: assignment.label })
+    .eq('id', box.id)
+
+  return assignment.label
+}
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const box_id = searchParams.get('box_id')
@@ -98,11 +173,16 @@ export async function GET(req: NextRequest) {
 
   // The WIP tag carries the same inspection flags as the finished box label, so
   // value add can see what level the product left the processing room under.
-  const html = useWIP
-    ? generateWIPLabel(wipDataFromBox(box, scans, animal), flags)
-    : useCMB
-      ? generateCMBLabel(box, scans, { productGtin: searchParams.get('product'), lot: searchParams.get('lot') })
-      : generateLabel(box, scans, flags, animal)
+  let html: string
+  if (useWIP) {
+    const base   = wipDataFromBox(box, scans, animal)
+    const intent = await resolveWIPIntent(box, base.items)
+    html = generateWIPLabel(intent ? { ...base, intent } : base, flags)
+  } else if (useCMB) {
+    html = generateCMBLabel(box, scans, { productGtin: searchParams.get('product'), lot: searchParams.get('lot') })
+  } else {
+    html = generateLabel(box, scans, flags, animal)
+  }
 
   return new NextResponse(html, {
     headers: {

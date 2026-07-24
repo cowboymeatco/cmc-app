@@ -82,7 +82,7 @@ export function wipDataFromJob(job: WIPJob): WIPTagData {
 
 // A box headed to value add: the box recipient field carries the intent, the
 // box serial is already a scannable code, and the scans say what's inside.
-export function wipDataFromBox(box: BoxRecord, scans: BoxScan[], animal?: LabelAnimal): WIPTagData {
+export function wipDataFromBox(box: BoxRecord, scans: BoxScan[], animal?: LabelAnimal, intentOverride?: string | null): WIPTagData {
   const grouped: Record<string, { count: number; weight: number }> = {}
   for (const s of scans) {
     const key = s.item_name || s.plu_number || 'Unknown'
@@ -106,7 +106,8 @@ export function wipDataFromBox(box: BoxRecord, scans: BoxScan[], animal?: LabelA
     customer:          customer || 'CMC',
     keepSeparate:      !isStock,
     sourceDescription: items.length === 1 ? items[0].name : (items.length > 1 ? `${items.length} items` : null),
-    intent:            intent || 'Value Add',
+    // A resolved order off the cut card beats whatever was scribbled on the box.
+    intent:            (intentOverride || '').trim() || intent || 'Value Add',
     labelAs:           null,
     weightLbs:         box.total_weight_lbs != null ? Number(box.total_weight_lbs) : null,
     assignedTo:        null,
