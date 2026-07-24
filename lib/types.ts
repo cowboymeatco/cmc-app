@@ -280,4 +280,9 @@ export interface DeliveryScan {
   barcodes:     { barcode: string; scannedAt: string }[]
   notes:        string
   status:       string   // 'pending' | 'reviewed'
+  // Where the run dropped the product. 'baker_storage' = the locker in Baker,
+  // which is out of our freezer but still ours until the customer collects.
+  destination:  string   // 'customer' | 'baker_storage'
+  // Processing sessions that rode along, so a run can cover several customers.
+  session_refs: { customer_name: string; session_date: string }[]
 }

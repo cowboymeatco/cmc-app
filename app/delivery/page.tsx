@@ -5,8 +5,29 @@ import Link from 'next/link'
 import { DeliveryScan } from '@/lib/types'
 import { isoDateTime } from '@/lib/dates'
 
-type Tab = 'new' | 'log'
+type Tab = 'new' | 'log' | 'baker'
 type LogFilter = 'all' | 'pending' | 'reviewed'
+type Destination = 'customer' | 'baker_storage'
+
+// A processing session as the scanner reports it — enough to put it on a run.
+interface SessionLite {
+  customer_name: string
+  session_date:  string
+  status:        string
+  box_count:     number
+  total_weight:  number
+}
+
+const DEST_CFG: Record<Destination, { label: string; short: string; icon: string; color: string }> = {
+  customer:      { label: 'To Customer',   short: 'Customer', icon: '🏠', color: '#4CAF50' },
+  baker_storage: { label: 'Baker Storage', short: 'Baker',    icon: '🚚', color: '#C9A882' },
+}
+
+function daysSince(sessionDate: string): number {
+  return Math.max(0, Math.floor((Date.now() - new Date(sessionDate + 'T12:00:00').getTime()) / 86400000))
+}
+
+const sessionKey = (s: { customer_name: string; session_date: string }) => `${s.customer_name}|${s.session_date}`
 
 // ── Barcode type detection ────────────────────────────────────────────────────
 type BarcodeType = 'ean13' | 'carcass' | 'cmc_box' | 'unknown'
@@ -104,7 +125,11 @@ function StatusBadge({ status }: { status: string }) {
 function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Record<string, string> }) {
   const barcodeInputRef = useRef<HTMLInputElement>(null)
   const [saving, setSaving] = useState(false)
-  const [success, setSuccess] = useState(false)
+  const [success, setSuccess] = useState('')
+
+  const [destination, setDestination] = useState<Destination>('customer')
+  const [sessions, setSessions] = useState<SessionLite[]>([])
+  const [picked, setPicked] = useState<string[]>([])
 
   const [form, setForm] = useState({
     delivered_at: isoDateTime(),
@@ -118,6 +143,36 @@ function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Reco
 
   const f = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm(p => ({ ...p, [k]: e.target.value }))
+
+  // Everything sitting in the freezer is loadable; a Baker run can also be
+  // hauling something back out of the locker to its owner.
+  useEffect(() => {
+    fetch('/api/processing/sessions')
+      .then(r => r.json())
+      .then((data: unknown) => {
+        if (!Array.isArray(data)) return
+        setSessions((data as SessionLite[]).filter(s => s.status === 'complete' || s.status === 'baker_storage'))
+      })
+      .catch(() => {})
+  }, [])
+
+  const loadable = sessions
+    .filter(s => destination === 'baker_storage' ? s.status === 'complete' : true)
+    .sort((a, b) => a.session_date.localeCompare(b.session_date))
+
+  const pickedSessions = sessions.filter(s => picked.includes(sessionKey(s)))
+
+  function togglePick(s: SessionLite) {
+    const key = sessionKey(s)
+    setPicked(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key])
+  }
+
+  // One picked session names the run; several make it a multi-stop haul.
+  const derivedCustomer = form.customer.trim()
+    || (pickedSessions.length === 1 ? pickedSessions[0].customer_name : '')
+    || (pickedSessions.length > 1 ? `${pickedSessions.length} customers` : '')
+
+  const canSave = !!form.driver.trim() && !!derivedCustomer
 
   function addBarcode(raw: string) {
     const val = raw.trim()
@@ -142,21 +197,45 @@ function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Reco
   }
 
   async function handleSubmit() {
-    if (!form.customer || !form.driver) return
+    if (!canSave) return
     setSaving(true)
-    await fetch('/api/delivery', {
+    const res = await fetch('/api/delivery', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // delivered_at is a datetime-local wall-time string — store a real
       // instant so it sorts consistently with API-defaulted UTC rows.
-      body: JSON.stringify({ ...form, delivered_at: new Date(form.delivered_at).toISOString(), barcodes }),
+      body: JSON.stringify({
+        ...form,
+        customer:     derivedCustomer,
+        delivered_at: new Date(form.delivered_at).toISOString(),
+        barcodes,
+        destination,
+        session_refs: pickedSessions.map(s => ({ customer_name: s.customer_name, session_date: s.session_date })),
+      }),
     })
+    const saved = await res.json().catch(() => null)
     setSaving(false)
-    setSuccess(true)
+    if (!res.ok) {
+      setSuccess(`⚠ Save failed — ${saved?.error ?? 'try again'}`)
+      setTimeout(() => setSuccess(''), 6000)
+      return
+    }
+    const moved = saved?.sessions_updated ?? 0
+    setSuccess(moved > 0
+      ? `✓ Delivery saved — ${moved} session${moved !== 1 ? 's' : ''} moved to ${DEST_CFG[destination].label}`
+      : '✓ Delivery saved')
     setForm({ delivered_at: isoDateTime(), driver: '', customer: '', notes: '' })
     setBarcodes([])
+    setPicked([])
+    // Picked sessions have changed status — refresh so they leave the list
+    fetch('/api/processing/sessions')
+      .then(r => r.json())
+      .then((data: unknown) => {
+        if (Array.isArray(data)) setSessions((data as SessionLite[]).filter(s => s.status === 'complete' || s.status === 'baker_storage'))
+      })
+      .catch(() => {})
     onSaved()
-    setTimeout(() => setSuccess(false), 4000)
+    setTimeout(() => setSuccess(''), 5000)
   }
 
   return (
@@ -168,10 +247,46 @@ function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Reco
         </h3>
 
         {success && (
-          <div style={{ background: 'rgba(76,175,80,0.15)', border: '1px solid rgba(76,175,80,0.4)', borderRadius: 4, padding: '0.75rem 1rem', marginBottom: '1rem', color: C.green, fontSize: '0.85rem' }}>
-            ✓ Delivery saved
+          <div style={{
+            background: success.startsWith('⚠') ? 'rgba(217,119,6,0.15)' : 'rgba(76,175,80,0.15)',
+            border: `1px solid ${success.startsWith('⚠') ? 'rgba(217,119,6,0.4)' : 'rgba(76,175,80,0.4)'}`,
+            borderRadius: 4, padding: '0.75rem 1rem', marginBottom: '1rem',
+            color: success.startsWith('⚠') ? C.yellow : C.green, fontSize: '0.85rem',
+          }}>
+            {success}
           </div>
         )}
+
+        {/* Destination — where this run drops the product */}
+        <div style={{ marginBottom: '0.9rem' }}>
+          <label style={LABEL}>Destination *</label>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            {(Object.keys(DEST_CFG) as Destination[]).map(d => {
+              const cfg = DEST_CFG[d]
+              const on  = destination === d
+              return (
+                <button
+                  key={d}
+                  onClick={() => { setDestination(d); setPicked([]) }}
+                  style={{
+                    flex: 1, borderRadius: 3, padding: '0.55rem 0.5rem', fontSize: '0.83rem', fontWeight: 700,
+                    cursor: 'pointer', letterSpacing: '0.03em',
+                    background: on ? cfg.color : 'transparent',
+                    color: on ? C.dark : cfg.color,
+                    border: `1px solid ${cfg.color}`,
+                  }}
+                >
+                  {cfg.icon} {cfg.label}
+                </button>
+              )
+            })}
+          </div>
+          <div style={{ fontSize: '0.75rem', color: C.lightBrown, marginTop: '0.35rem' }}>
+            {destination === 'baker_storage'
+              ? 'Hauled to the locker in Baker — still ours, still on storage fee.'
+              : 'Into the customer’s hands — closes the session out.'}
+          </div>
+        </div>
 
         <div style={{ marginBottom: '0.9rem' }}>
           <label style={LABEL}>Date / Time *</label>
@@ -183,8 +298,60 @@ function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Reco
             <input style={INPUT} value={form.driver} onChange={f('driver')} placeholder="Name" />
           </div>
           <div style={{ marginBottom: '0.9rem' }}>
-            <label style={LABEL}>Customer *</label>
-            <input style={INPUT} value={form.customer} onChange={f('customer')} placeholder="Name" />
+            <label style={LABEL}>Customer {pickedSessions.length > 0 ? '' : '*'}</label>
+            <input style={INPUT} value={form.customer} onChange={f('customer')}
+              placeholder={pickedSessions.length > 0 ? derivedCustomer : 'Name'} />
+          </div>
+        </div>
+
+        {/* Sessions on this run — the tie-in to the processing scanner */}
+        <div style={{ marginBottom: '0.9rem' }}>
+          <label style={LABEL}>
+            Sessions on this run {picked.length > 0 && <span style={{ color: C.tan }}>· {picked.length} selected</span>}
+          </label>
+          <div style={{ border: '1px solid rgba(166,120,90,0.35)', borderRadius: 3, maxHeight: 190, overflowY: 'auto', background: 'rgba(255,255,255,0.03)' }}>
+            {loadable.length === 0 ? (
+              <p style={{ color: C.lightBrown, fontSize: '0.8rem', padding: '0.9rem', margin: 0, textAlign: 'center' }}>
+                Nothing in the freezer to load.
+              </p>
+            ) : loadable.map(s => {
+              const key = sessionKey(s)
+              const on  = picked.includes(key)
+              const d   = daysSince(s.session_date)
+              return (
+                <div
+                  key={key}
+                  onClick={() => togglePick(s)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer',
+                    padding: '0.5rem 0.75rem', borderBottom: '1px solid rgba(166,120,90,0.1)',
+                    background: on ? 'rgba(201,168,130,0.14)' : 'transparent',
+                  }}
+                >
+                  <span style={{ color: on ? C.tan : C.lightBrown, fontSize: '0.9rem', lineHeight: 1 }}>{on ? '☑' : '☐'}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ color: C.cream, fontSize: '0.83rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {s.customer_name}
+                    </div>
+                    <div style={{ color: C.lightBrown, fontSize: '0.72rem' }}>
+                      {s.box_count} box{s.box_count !== 1 ? 'es' : ''}
+                      {s.total_weight > 0 && ` · ${s.total_weight.toFixed(1)} lbs`}
+                      {` · ${d}d`}
+                    </div>
+                  </div>
+                  {s.status === 'baker_storage' && (
+                    <span style={{ fontSize: '0.66rem', fontWeight: 700, color: C.tan, background: 'rgba(201,168,130,0.15)', borderRadius: 99, padding: '2px 7px', flexShrink: 0 }}>
+                      IN BAKER
+                    </span>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+          <div style={{ fontSize: '0.75rem', color: C.lightBrown, marginTop: '0.3rem' }}>
+            {destination === 'baker_storage'
+              ? 'Selected sessions move to Baker Storage on save.'
+              : 'Selected sessions get marked picked up on save.'}
           </div>
         </div>
 
@@ -221,11 +388,11 @@ function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Reco
         </div>
 
         <button
-          style={{ ...BTN(form.customer && form.driver ? C.tan : C.medBrown), width: '100%', opacity: form.customer && form.driver ? 1 : 0.55 }}
+          style={{ ...BTN(canSave ? C.tan : C.medBrown), width: '100%', opacity: canSave ? 1 : 0.55 }}
           onClick={handleSubmit}
-          disabled={saving || !form.customer || !form.driver}
+          disabled={saving || !canSave}
         >
-          {saving ? 'Saving…' : `Save Delivery${barcodes.length > 0 ? ` (${barcodes.length} items)` : ''}`}
+          {saving ? 'Saving…' : `Save ${DEST_CFG[destination].icon} ${DEST_CFG[destination].short} Delivery${barcodes.length > 0 ? ` (${barcodes.length} items)` : ''}`}
         </button>
       </div>
 
@@ -375,6 +542,9 @@ function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
                   <StatusBadge status={d.status} />
                 </div>
                 <div style={{ fontSize: '0.78rem', color: C.tan }}>
+                  {d.destination === 'baker_storage' && (
+                    <span style={{ color: DEST_CFG.baker_storage.color, fontWeight: 700 }}>🚚 Baker · </span>
+                  )}
                   {new Date(d.delivered_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                   {d.driver ? ` · ${d.driver}` : ''}
                 </div>
@@ -420,6 +590,16 @@ function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
                 {selected.driver && (
                   <div style={{ fontSize: '0.8rem', color: C.lightBrown, marginTop: '0.2rem' }}>Driver: {selected.driver}</div>
                 )}
+                <div style={{ marginTop: '0.45rem' }}>
+                  <span style={{
+                    fontSize: '0.72rem', fontWeight: 700, borderRadius: 99, padding: '3px 10px',
+                    color: DEST_CFG[(selected.destination as Destination)] ? DEST_CFG[selected.destination as Destination].color : C.tan,
+                    background: 'rgba(255,255,255,0.05)',
+                  }}>
+                    {(DEST_CFG[selected.destination as Destination] ?? DEST_CFG.customer).icon}{' '}
+                    {(DEST_CFG[selected.destination as Destination] ?? DEST_CFG.customer).label}
+                  </span>
+                </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.5rem' }}>
                 <StatusBadge status={selected.status} />
@@ -444,6 +624,24 @@ function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
                 <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: '0.2rem' }}>Items</div>
               </div>
             </div>
+
+            {/* Sessions this run covered */}
+            {(selected.session_refs?.length ?? 0) > 0 && (
+              <div style={{ marginBottom: '1.25rem' }}>
+                <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.5rem' }}>
+                  Sessions on this run
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                  {selected.session_refs.map(r => (
+                    <span key={`${r.customer_name}|${r.session_date}`}
+                      style={{ background: 'rgba(201,168,130,0.12)', border: '1px solid rgba(201,168,130,0.3)', borderRadius: 3, padding: '0.3rem 0.6rem', fontSize: '0.78rem', color: C.tan }}>
+                      {r.customer_name}
+                      <span style={{ color: C.lightBrown }}> · {new Date(r.session_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Barcode list */}
             {(selected.barcodes?.length ?? 0) > 0 ? (
@@ -487,6 +685,109 @@ function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// BAKER STORAGE TAB — what's on the shelf in Baker right now
+// ══════════════════════════════════════════════════════════════════════════════
+function BakerStorageTab() {
+  const [sessions, setSessions] = useState<SessionLite[]>([])
+  const [loading, setLoading]   = useState(true)
+  const [busy, setBusy]         = useState('')
+
+  const load = useCallback(() => {
+    fetch('/api/processing/sessions')
+      .then(r => r.json())
+      .then((data: unknown) => {
+        if (Array.isArray(data)) setSessions((data as SessionLite[]).filter(s => s.status === 'baker_storage'))
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  // Oldest first — the top of this list is what's been billing storage longest.
+  const inBaker = [...sessions].sort((a, b) => a.session_date.localeCompare(b.session_date))
+  const totalWeight = inBaker.reduce((sum, s) => sum + (s.total_weight || 0), 0)
+  const totalBoxes  = inBaker.reduce((sum, s) => sum + (s.box_count || 0), 0)
+
+  async function markPickedUp(s: SessionLite) {
+    setBusy(sessionKey(s))
+    await fetch('/api/processing/sessions', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customer_name: s.customer_name, session_date: s.session_date, status: 'picked_up' }),
+    })
+    setSessions(prev => prev.filter(x => sessionKey(x) !== sessionKey(s)))
+    setBusy('')
+  }
+
+  if (loading) {
+    return <div style={{ color: C.lightBrown, fontSize: '0.9rem', textAlign: 'center', padding: '3rem' }}>Loading…</div>
+  }
+
+  return (
+    <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1.5rem', overflowY: 'auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <h3 style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0 }}>
+          🚚 On the shelf in Baker
+        </h3>
+        <div style={{ fontSize: '0.82rem', color: C.tan }}>
+          {inBaker.length} customer{inBaker.length !== 1 ? 's' : ''} · {totalBoxes} box{totalBoxes !== 1 ? 'es' : ''}
+          {totalWeight > 0 && ` · ${totalWeight.toFixed(1)} lbs`}
+        </div>
+      </div>
+
+      {inBaker.length === 0 ? (
+        <p style={{ color: C.lightBrown, fontSize: '0.88rem', textAlign: 'center', padding: '2.5rem 1rem', margin: 0 }}>
+          Nothing in Baker Storage right now.<br />
+          <span style={{ fontSize: '0.8rem' }}>Log a run on the New Delivery tab with destination “Baker Storage”.</span>
+        </p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          {inBaker.map(s => {
+            const d = daysSince(s.session_date)
+            // A month on the shelf is a storage-fee line worth noticing.
+            const aged = d >= 30
+            return (
+              <div key={sessionKey(s)} style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem',
+                background: 'rgba(255,255,255,0.04)', border: `1px solid ${aged ? 'rgba(217,119,6,0.4)' : 'rgba(166,120,90,0.18)'}`,
+                borderRadius: 4, padding: '0.75rem 1rem',
+              }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ color: C.cream, fontWeight: 600, fontSize: '0.9rem' }}>{s.customer_name}</div>
+                  <div style={{ color: C.lightBrown, fontSize: '0.76rem', marginTop: '0.15rem' }}>
+                    packed {new Date(s.session_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    {s.box_count > 0 && ` · ${s.box_count} box${s.box_count !== 1 ? 'es' : ''}`}
+                    {s.total_weight > 0 && ` · ${s.total_weight.toFixed(1)} lbs`}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexShrink: 0 }}>
+                  <span style={{ color: aged ? C.yellow : C.tan, fontWeight: 700, fontSize: '0.82rem' }}>
+                    {d}d{aged && ' ⚠'}
+                  </span>
+                  <button
+                    onClick={() => markPickedUp(s)}
+                    disabled={busy === sessionKey(s)}
+                    style={{ ...BTN(C.green, C.dark), padding: '0.4rem 0.9rem', fontSize: '0.78rem', opacity: busy === sessionKey(s) ? 0.5 : 1 }}
+                  >
+                    {busy === sessionKey(s) ? 'Saving…' : '📦 Picked Up'}
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {inBaker.length > 0 && (
+        <p style={{ color: C.lightBrown, fontSize: '0.75rem', marginTop: '1.25rem', marginBottom: 0 }}>
+          ⚠ = 30+ days on the shelf. These are the ones carrying a monthly storage fee.
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // PAGE
 // ══════════════════════════════════════════════════════════════════════════════
 export default function DeliveryPage() {
@@ -521,7 +822,7 @@ export default function DeliveryPage() {
         </div>
 
         <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden' }}>
-          {(['new', 'log'] as Tab[]).map(t => (
+          {(['new', 'log', 'baker'] as Tab[]).map(t => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -533,17 +834,16 @@ export default function DeliveryPage() {
                 transition: 'background 0.15s',
               }}
             >
-              {t === 'new' ? '🚚 New Delivery' : '📋 Delivery Log'}
+              {t === 'new' ? '🚚 New Delivery' : t === 'log' ? '📋 Delivery Log' : '🏔 Baker Storage'}
             </button>
           ))}
         </div>
       </header>
 
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1300px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
-        {tab === 'new'
-          ? <NewDeliveryTab onSaved={() => setLogKey(k => k + 1)} pluMap={pluMap} />
-          : <DeliveryLogTab key={logKey} pluMap={pluMap} />
-        }
+        {tab === 'new'  && <NewDeliveryTab onSaved={() => setLogKey(k => k + 1)} pluMap={pluMap} />}
+        {tab === 'log'  && <DeliveryLogTab key={logKey} pluMap={pluMap} />}
+        {tab === 'baker' && <BakerStorageTab key={logKey} />}
       </main>
 
       <footer style={{ background: 'var(--dark)', borderTop: '1px solid rgba(166,120,90,0.2)', padding: '0.5rem 2rem', textAlign: 'center', fontSize: '0.72rem', color: C.lightBrown, flexShrink: 0 }}>
