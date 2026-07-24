@@ -56,11 +56,15 @@ function decodePluFromBarcode(barcode: string): string | null {
   return plu > 0 ? String(plu) : null
 }
 
+// baker_storage = hauled to the Baker storage locker — out of our freezer but not
+// yet in the customer's hands, and accruing a monthly storage fee.
+type SessionStatus = 'scanning' | 'value_add' | 'complete' | 'baker_storage' | 'picked_up'
+
 interface SessionWithStats {
   id:             string | null
   customer_name:  string
   session_date:   string
-  status:         'scanning' | 'value_add' | 'complete' | 'picked_up'
+  status:         SessionStatus
   notes:          string
   box_count:      number
   closed_count:   number
@@ -399,9 +403,10 @@ export default function ScannerPage() {
   const [sessions,         setSessions]         = useState<SessionWithStats[]>([])
   const [sessionsLoading,  setSessionsLoading]  = useState(true)
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
-  const [currentStatus,    setCurrentStatus]    = useState<'scanning' | 'value_add' | 'complete' | 'picked_up'>('scanning')
+  const [currentStatus,    setCurrentStatus]    = useState<SessionStatus>('scanning')
   const [showNewForm,      setShowNewForm]      = useState(false)
   const [showAllFreezer,   setShowAllFreezer]   = useState(false)
+  const [showAllBaker,     setShowAllBaker]     = useState(false)
   const [showAllPickedUp,  setShowAllPickedUp]  = useState(false)
   const [sharedYield,      setSharedYield]      = useState<SharedYield | null>(null)
   const [mergeSource,      setMergeSource]      = useState<SessionWithStats | null>(null)
@@ -614,7 +619,7 @@ export default function ScannerPage() {
     } catch { return null }
   }
 
-  async function updateSessionStatus(status: 'scanning' | 'value_add' | 'complete' | 'picked_up') {
+  async function updateSessionStatus(status: SessionStatus) {
     setCurrentStatus(status)
     await fetch('/api/processing/sessions', {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
@@ -622,7 +627,7 @@ export default function ScannerPage() {
     })
   }
 
-  async function quickStatus(s: SessionWithStats, status: 'scanning' | 'value_add' | 'complete' | 'picked_up') {
+  async function quickStatus(s: SessionWithStats, status: SessionStatus) {
     await fetch('/api/processing/sessions', {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ customer_name: s.customer_name, session_date: s.session_date, status }),
@@ -1219,6 +1224,10 @@ export default function ScannerPage() {
     // they've been waiting the longest.
     const freezer   = sessions.filter(s => s.status === 'complete')
       .sort((a, b) => a.session_date.localeCompare(b.session_date))
+    // Baker Storage = delivered to the locker in Baker, still ours to track.
+    // Oldest first — these are the ones racking up storage fees.
+    const bakerStorage = sessions.filter(s => s.status === 'baker_storage')
+      .sort((a, b) => a.session_date.localeCompare(b.session_date))
     const pickedUp  = sessions.filter(s => s.status === 'picked_up')
     // Retail orders Jill marked "In Progress" — ready to pack/scan straight in.
     const inProgressOrders = orders.filter(o => o.status === 'in_progress')
@@ -1227,13 +1236,15 @@ export default function ScannerPage() {
       scanning:  { label: 'Scanning',   color: C.yellow,        dot: '●' },
       value_add: { label: 'Value Add',  color: '#E8883A',       dot: '◆' },
       complete:  { label: 'In Freezer', color: '#7CAFDD',       dot: '🧊' },
+      baker_storage: { label: 'Baker Storage', color: C.tan,    dot: '🚚' },
       picked_up: { label: 'Picked Up',  color: C.green,         dot: '✓' },
     }
 
     function SessionCard({ s }: { s: SessionWithStats }) {
       const dateStr = new Date(s.session_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
       const cfg = STATUS_CFG[s.status]
-      const freezerDays = s.status === 'complete'
+      // Days waiting — in our freezer, or on the shelf in Baker (where it bills monthly)
+      const waitingDays = s.status === 'complete' || s.status === 'baker_storage'
         ? Math.max(0, Math.floor((Date.now() - new Date(s.session_date + 'T12:00:00').getTime()) / 86400000))
         : null
       const btnBase: React.CSSProperties = { borderRadius: 3, padding: '0.3rem 0.75rem', fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer' }
@@ -1249,9 +1260,11 @@ export default function ScannerPage() {
             {s.box_count} box{s.box_count !== 1 ? 'es' : ''}
             {s.closed_count > 0 && ` · ${s.closed_count} closed`}
             {s.total_weight > 0 && ` · ${s.total_weight.toFixed(1)} lbs`}
-            {freezerDays !== null && (
-              <span style={{ color: freezerDays >= 14 ? C.yellow : '#7CAFDD', fontWeight: 600 }}>
-                {` · 🧊 ${freezerDays === 0 ? 'today' : `${freezerDays}d in freezer`}`}
+            {waitingDays !== null && (
+              <span style={{ color: waitingDays >= 14 ? C.yellow : (s.status === 'baker_storage' ? C.tan : '#7CAFDD'), fontWeight: 600 }}>
+                {s.status === 'baker_storage'
+                  ? ` · 🚚 ${waitingDays === 0 ? 'today' : `${waitingDays}d in Baker`}`
+                  : ` · 🧊 ${waitingDays === 0 ? 'today' : `${waitingDays}d in freezer`}`}
               </span>
             )}
           </div>
@@ -1309,12 +1322,24 @@ export default function ScannerPage() {
               </button>
             )}
             {s.status === 'complete' && (
+              <button onClick={() => quickStatus(s, 'baker_storage')}
+                style={{ ...btnBase, background: 'transparent', border: `1px solid ${C.tan}`, color: C.tan }}>
+                🚚 Baker Storage
+              </button>
+            )}
+            {s.status === 'complete' && (
               <button onClick={() => quickStatus(s, 'scanning')}
                 style={{ ...btnBase, background: 'transparent', border: '1px solid rgba(166,120,90,0.3)', color: C.lightBrown }}>
                 ↩ Reopen
               </button>
             )}
-            {s.status === 'picked_up' && (
+            {s.status === 'baker_storage' && (
+              <button onClick={() => quickStatus(s, 'picked_up')}
+                style={{ ...btnBase, background: C.green, color: C.dark, border: 'none' }}>
+                📦 Picked Up
+              </button>
+            )}
+            {(s.status === 'picked_up' || s.status === 'baker_storage') && (
               <button onClick={() => quickStatus(s, 'complete')}
                 style={{ ...btnBase, background: 'transparent', border: '1px solid rgba(124,175,221,0.4)', color: '#7CAFDD' }}>
                 🧊 Back to Freezer
@@ -1433,6 +1458,7 @@ export default function ScannerPage() {
               <Section title="● Scanning"       color={C.yellow}  items={scanning} />
               <Section title="◆ Value Add Queue" color="#E8883A"   items={valueAdd} />
               <Section title="🧊 Freezer — Ready for Pickup" color="#7CAFDD" items={freezer} showAll={showAllFreezer} onToggle={() => setShowAllFreezer(p => !p)} />
+              <Section title="🚚 Baker Storage"  color={C.tan}     items={bakerStorage} showAll={showAllBaker} onToggle={() => setShowAllBaker(p => !p)} />
               <Section title="✓ Picked Up"       color={C.green}   items={pickedUp} showAll={showAllPickedUp} onToggle={() => setShowAllPickedUp(p => !p)} />
             </>
           )}
@@ -1529,6 +1555,19 @@ export default function ScannerPage() {
           {currentStatus === 'complete' && (
             <>
               <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#7CAFDD', background: 'rgba(124,175,221,0.12)', borderRadius: 99, padding: '2px 8px' }}>🧊 In Freezer</span>
+              <button onClick={() => updateSessionStatus('picked_up')}
+                style={{ background: 'transparent', border: `1px solid rgba(76,175,80,0.4)`, color: C.green, borderRadius: 3, padding: '0.2rem 0.6rem', fontSize: '0.72rem', cursor: 'pointer', fontWeight: 600 }}>
+                📦 Picked Up
+              </button>
+              <button onClick={() => updateSessionStatus('baker_storage')}
+                style={{ background: 'transparent', border: `1px solid ${C.tan}`, color: C.tan, borderRadius: 3, padding: '0.2rem 0.6rem', fontSize: '0.72rem', cursor: 'pointer', fontWeight: 600 }}>
+                🚚 Baker Storage
+              </button>
+            </>
+          )}
+          {currentStatus === 'baker_storage' && (
+            <>
+              <span style={{ fontSize: '0.72rem', fontWeight: 700, color: C.tan, background: 'rgba(201,168,130,0.12)', borderRadius: 99, padding: '2px 8px' }}>🚚 Baker Storage</span>
               <button onClick={() => updateSessionStatus('picked_up')}
                 style={{ background: 'transparent', border: `1px solid rgba(76,175,80,0.4)`, color: C.green, borderRadius: 3, padding: '0.2rem 0.6rem', fontSize: '0.72rem', cursor: 'pointer', fontWeight: 600 }}>
                 📦 Picked Up
