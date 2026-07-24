@@ -316,12 +316,13 @@ type CarcassState = 'assigned' | 'sole' | 'ambiguous' | 'unharvested'
 type Candidate = { id: string; tag: string; hcw: number | string | null; heldBy: string[] }
 type CarcassInfo = {
   tag: string; lot: string; producer: string; hcw: number | string | null; killType: string
+  over30: boolean | null    // null = unknown, so the card stays quiet rather than guessing
   state: CarcassState
   apptId: string
   candidates: Candidate[]   // the animals on this check-in, for the picker
 }
 const EMPTY_CARCASS: CarcassInfo = {
-  tag: '', lot: '', producer: '', hcw: null, killType: '',
+  tag: '', lot: '', producer: '', hcw: null, killType: '', over30: null,
   state: 'unharvested', apptId: '', candidates: [],
 }
 
@@ -418,7 +419,18 @@ function resolveCarcass(
   const killTypes = [...new Set(animals.map((l: any) => l.kill_type).filter(Boolean))]
   const killType  = log?.kill_type ?? (killTypes.length === 1 ? killTypes[0] : '')
 
+  // Over/under 30 months decides whether the vertebral column is SRM and has to
+  // come out, so the floor needs it on the card (Jill, 2026-07-24). Like kill
+  // type, an unassigned card can still say it when every animal on the check-in
+  // agrees. null = genuinely unknown, which prints nothing rather than "under".
+  const ages = [...new Set(animals.map((l: any) => l.over_30_months).filter((v: any) => v === true || v === false))]
+  const over30: boolean | null =
+    typeof log?.over_30_months === 'boolean' ? log.over_30_months
+    : ages.length === 1 ? ages[0] as boolean
+    : null
+
   return {
+    over30,
     lot: hasLotPrefix ? rawTag.slice(0, dash) : julianLot(appt.harvest_date),
     tag: hasLotPrefix ? rawTag.slice(dash + 1) : rawTag,
     producer: log?.producer || appt.source || '',
@@ -586,12 +598,25 @@ function stdThick(cut?: string, primal?: string): string {
 
 // Arm / chuck / sirloin-tip roasts are portioned by a count now ("3 Roasts"),
 // replacing the old whole/half/thirds/quarters fractions (Jill, 2026-07-23).
-function roastText(count?: string | null): string {
-  return count ? `${count} Roast${count === '1' ? '' : 's'}` : 'Roasts'
+//
+// The count the customer picked is per side — these primals come one per half —
+// so on a whole beef the floor has to cut twice that many. Spell out both
+// numbers rather than making the cutter double it (Jill, 2026-07-24).
+function roastText(count?: string | null, perHalf = false): string {
+  if (!count) return 'Roasts'
+  const n = Number(count)
+  const plural = (x: number) => `${x} Roast${x === 1 ? '' : 's'}`
+  if (!perHalf || !Number.isFinite(n) || n <= 0) return plural(n || 0)
+  return `${count} per half — ${plural(n * 2)} total`
 }
 // Render a roast-count cut, or fall back to the caller's normal cut formatter.
-function roastOr(cut: string | undefined | null, count: string | undefined | null, renderCut: (cut: string) => string): string {
-  return cut === 'roasts' ? roastText(count) : renderCut(cut ?? '')
+function roastOr(cut: string | undefined | null, count: string | undefined | null, renderCut: (cut: string) => string, perHalf = false): string {
+  return cut === 'roasts' ? roastText(count, perHalf) : renderCut(cut ?? '')
+}
+// Both halves are in play, so a per-side count doubles. A split primal already
+// carries its own count per side, so those never double.
+function isWholeAnimal(portion?: string | null): boolean {
+  return portion === 'whole' || portion === 'whole-ab'
 }
 
 // A whole packer/flat brisket can be halved via a toggle (whole/half beef).
@@ -604,7 +629,24 @@ function brisketLabel(cut: string | undefined | null, half: boolean | undefined,
 // last rib, so 3–4 filet mignons come off before the T-bones start. That's why
 // the row prints at all on a bone-in loin — the cutter only needs the thickness.
 const BONE_IN_FILET_THICKNESS = '2"'
-function v2thick(v: string): string { return v ? `${v}"` : '' }
+// The wizard offers thicknesses as fractions (¾", 1¼") but stores the decimal.
+// Print the fraction the customer actually picked — a cutter reading 0.75" has
+// to translate it back to a tape measure anyway (Jill, 2026-07-24).
+const EIGHTHS = ['', '⅛', '¼', '⅜', '½', '⅝', '¾', '⅞']
+export function fracThick(v: string | number | null | undefined): string {
+  if (v === null || v === undefined || v === '') return ''
+  const n = Number(v)
+  if (!Number.isFinite(n) || n <= 0) return String(v)
+  const whole = Math.floor(n)
+  const eighth = Math.round((n - whole) * 8)
+  // Rounded up to the next whole inch (e.g. 1.99)
+  if (eighth === 8) return `${whole + 1}"`
+  const frac = EIGHTHS[eighth]
+  if (!frac) return `${whole}"`
+  return whole > 0 ? `${whole}${frac}"` : `${frac}"`
+}
+
+function v2thick(v: string): string { return fracThick(v) }
 function v2withT(cut: string, t: string): string { return [v2fmt(cut), v2thick(t)].filter(Boolean).join(' — ') }
 function v2adds(arr: string[]): string { return arr?.length ? arr.map(v2fmt).join(', ') : '' }
 // A round sent to jerky carries its flavor; split rounds show both sides
@@ -754,7 +796,7 @@ function renderV2Detail(ci: RawInstruction) {
             <V2Field label="Arm Roast" value={
               d.armRoast?.arm2
                 ? sidePair(roastOr(d.armRoast.cut, d.armRoast.roastCount, c => v2withT(c, stdThick(c))), roastOr(d.armRoast.arm2.cut, d.armRoast.arm2.roastCount, c => v2withT(c, stdThick(c))))
-                : roastOr(d.armRoast?.cut, d.armRoast?.roastCount, c => v2withT(c, stdThick(c)))
+                : roastOr(d.armRoast?.cut, d.armRoast?.roastCount, c => v2withT(c, stdThick(c)), isWholeAnimal(d.portion))
             } />
             {d.armRoast?.arm2 ? (
               <>
@@ -768,7 +810,7 @@ function renderV2Detail(ci: RawInstruction) {
             <V2Field label="Chuck Roll" value={
               d.chuckRoll?.cut2
                 ? sidePair(roastOr(d.chuckRoll.cut, d.chuckRoll.roastCount, c => v2withT(c, stdThick(c))), roastOr(d.chuckRoll.cut2, d.chuckRoll.roastCount2, c => v2withT(c, stdThick(c))))
-                : roastOr(d.chuckRoll?.cut, d.chuckRoll?.roastCount, c => v2withT(c, stdThick(c)))
+                : roastOr(d.chuckRoll?.cut, d.chuckRoll?.roastCount, c => v2withT(c, stdThick(c)), isWholeAnimal(d.portion))
             } />
             {d.chuckRoll?.cut2 ? (
               <>
@@ -824,7 +866,7 @@ function renderV2Detail(ci: RawInstruction) {
             <V2Field label="Sirloin Tip" value={
               d.sirloinTip?.tip2
                 ? sidePair(roastOr(d.sirloinTip.cut, d.sirloinTip.roastCount, c => v2withT(c, d.sirloinTip.thickness ?? '')), roastOr(d.sirloinTip.tip2.cut, d.sirloinTip.tip2.roastCount, c => v2withT(c, d.sirloinTip.tip2.thickness ?? '')))
-                : roastOr(d.sirloinTip?.cut, d.sirloinTip?.roastCount, c => v2withT(c, d.sirloinTip?.thickness ?? ''))
+                : roastOr(d.sirloinTip?.cut, d.sirloinTip?.roastCount, c => v2withT(c, d.sirloinTip?.thickness ?? ''), isWholeAnimal(d.portion))
             } />
             {d.sirloinTip?.tip2 ? (
               <>
@@ -953,9 +995,11 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
   // The card is built as an HTML string from a public form's JSONB, so anything
   // interpolated raw gets escaped first.
   const esc   = (v: unknown) => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string))
-  const thick = (v: string) => v ? `${v}"` : ''
+  const thick = (v: string) => fracThick(v)
   const withT = (cut: string, t: string) => [fmt(cut), thick(t)].filter(Boolean).join(' — ')
   const adds  = (arr: string[]) => arr?.length ? arr.map(fmt).join(', ') : ''
+  // A per-side roast count doubles when the customer has the whole animal.
+  const wholeAnimal = isWholeAnimal(d.portion)
   // Handwriting blank — anything the system doesn't know gets a line to write on
   const wline = (w: number) => `<span style="display:inline-block;min-width:${w}px;border-bottom:1.5px solid #1A0A04">&nbsp;</span>`
   // Jill's wording: a kept-whole rack reads "Frenched Rack of Lamb/Goat"
@@ -1013,7 +1057,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
       d.shank?.addons?.length ? row('  Add-ons', adds(d.shank.addons), true) : '',
       row('Arm Roast', d.armRoast?.arm2
         ? sidePair(roastOr(d.armRoast.cut, d.armRoast.roastCount, c => withT(c, stdThick(c))), roastOr(d.armRoast.arm2.cut, d.armRoast.arm2.roastCount, c => withT(c, stdThick(c))))
-        : roastOr(d.armRoast?.cut, d.armRoast?.roastCount, c => withT(c, stdThick(c)))),
+        : roastOr(d.armRoast?.cut, d.armRoast?.roastCount, c => withT(c, stdThick(c)), wholeAnimal)),
       d.armRoast?.arm2
         ? [
             d.armRoast.addons?.length ? row('  Add-ons (1)', adds(d.armRoast.addons), true) : '',
@@ -1023,7 +1067,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
       row('Flat Iron', withT(d.flatIron?.cut ?? '', stdThick(d.flatIron?.cut, 'flat-iron'))),
       row('Chuck Roll', d.chuckRoll?.cut2
         ? sidePair(roastOr(d.chuckRoll.cut, d.chuckRoll.roastCount, c => withT(c, stdThick(c))), roastOr(d.chuckRoll.cut2, d.chuckRoll.roastCount2, c => withT(c, stdThick(c))))
-        : roastOr(d.chuckRoll?.cut, d.chuckRoll?.roastCount, c => withT(c, stdThick(c)))),
+        : roastOr(d.chuckRoll?.cut, d.chuckRoll?.roastCount, c => withT(c, stdThick(c)), wholeAnimal)),
       d.chuckRoll?.cut2
         ? [
             d.chuckRoll.addons?.length ? row('  Add-ons (1)', adds(d.chuckRoll.addons), true) : '',
@@ -1068,7 +1112,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
     cutSections += sec('Round', [
       row('Sirloin Tip', d.sirloinTip?.tip2
         ? sidePair(roastOr(d.sirloinTip.cut, d.sirloinTip.roastCount, c => withT(c, d.sirloinTip.thickness ?? '')), roastOr(d.sirloinTip.tip2.cut, d.sirloinTip.tip2.roastCount, c => withT(c, d.sirloinTip.tip2.thickness ?? '')))
-        : roastOr(d.sirloinTip?.cut, d.sirloinTip?.roastCount, c => withT(c, d.sirloinTip?.thickness ?? ''))),
+        : roastOr(d.sirloinTip?.cut, d.sirloinTip?.roastCount, c => withT(c, d.sirloinTip?.thickness ?? ''), wholeAnimal)),
       d.sirloinTip?.tip2
         ? [
             d.sirloinTip.addons?.length ? row('  Add-ons (1)', adds(d.sirloinTip.addons), true) : '',
@@ -1196,7 +1240,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
       else if (d.armRoast.arm2.cut) { pc('Arm Roast (2)', roastOr(d.armRoast.arm2.cut, d.armRoast.arm2.roastCount, c => withT(c, stdThick(c)))); if (d.armRoast.arm2.addons?.length) pc('  Add-on', adds(d.armRoast.arm2.addons), true) }
     } else if (d.armRoast?.cut) {
       if (d.armRoast.cut === 'grind') pg('Arm Roast')
-      else { pc('Arm Roast', roastOr(d.armRoast.cut, d.armRoast.roastCount, c => withT(c, stdThick(c)))); if (d.armRoast.addons?.length) pc('  Add-on', adds(d.armRoast.addons), true) }
+      else { pc('Arm Roast', roastOr(d.armRoast.cut, d.armRoast.roastCount, c => withT(c, stdThick(c)), wholeAnimal)); if (d.armRoast.addons?.length) pc('  Add-on', adds(d.armRoast.addons), true) }
     }
     if (d.flatIron?.cut) { d.flatIron.cut === 'grind' ? pg('Flat Iron') : pc('Flat Iron', withT(d.flatIron.cut, stdThick(d.flatIron.cut, 'flat-iron'))) }
     if (d.chuckRoll?.cut2) {
@@ -1206,7 +1250,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
       else { pc('Chuck Roll (2)', roastOr(d.chuckRoll.cut2, d.chuckRoll.roastCount2, c => withT(c, stdThick(c)))); if (d.chuckRoll.addons2?.length) pc('  Add-on', adds(d.chuckRoll.addons2), true) }
     } else if (d.chuckRoll?.cut) {
       if (d.chuckRoll.cut === 'grind') pg('Chuck Roll')
-      else { pc('Chuck Roll', roastOr(d.chuckRoll.cut, d.chuckRoll.roastCount, c => withT(c, stdThick(c)))); if (d.chuckRoll.addons?.length) pc('  Add-on', adds(d.chuckRoll.addons), true) }
+      else { pc('Chuck Roll', roastOr(d.chuckRoll.cut, d.chuckRoll.roastCount, c => withT(c, stdThick(c)), wholeAnimal)); if (d.chuckRoll.addons?.length) pc('  Add-on', adds(d.chuckRoll.addons), true) }
     }
     ps('Plate & Short Ribs')
     if (d.shortRibs?.cut) {
@@ -1556,6 +1600,17 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
              : carcass.killType
                ? `<div style="margin-top:4px;display:inline-block;border:1.5px solid #1A0A04;font-size:14px;font-weight:bold;letter-spacing:0.06em;padding:1px 6px">${killTypeLabel(carcass.killType)}</div>`
                : `<div style="font-size:16px;color:#555;margin-top:3px">Inspection: ${wline(120)}</div>`
+         }
+         ${
+           // Over 30 months makes the vertebral column SRM — it has to come out
+           // and can't go in the box. Beef only; pork/lamb/goat have no such
+           // rule, and an unknown age gets a line rather than a wrong answer.
+           !isBeef ? ''
+             : carcass.over30 === true
+               ? `<div style="margin-top:4px;display:inline-block;background:#1A0A04;color:#F2E8D9;font-size:14px;font-weight:bold;letter-spacing:0.06em;padding:2px 7px">OVER 30 MONTHS — REMOVE VERTEBRAL COLUMN</div>`
+               : carcass.over30 === false
+                 ? `<div style="margin-top:4px;display:inline-block;border:1.5px solid #1A0A04;font-size:14px;font-weight:bold;letter-spacing:0.06em;padding:1px 6px">UNDER 30 MONTHS</div>`
+                 : `<div style="font-size:16px;color:#555;margin-top:3px">Over / Under 30 mo: ${wline(110)}</div>`
          }
        </div>
        <div style="padding:6px 11px">
