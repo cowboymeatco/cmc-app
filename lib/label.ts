@@ -1,5 +1,5 @@
 export interface BoxScan   { id: string; item_name: string; plu_number: string; weight_lbs: number; quantity: number }
-export interface BoxRecord { id: string; customer_name: string; pack_date: string; box_number: number; is_closed: boolean; is_final: boolean; total_weight_lbs: number; total_cuts: number; serial_number?: string; box_label?: string | null }
+export interface BoxRecord { id: string; customer_name: string; pack_date: string; box_number: number; is_closed: boolean; is_final: boolean; total_weight_lbs: number; total_cuts: number; serial_number?: string; box_label?: string | null; notes?: string | null }
 export interface LabelFlags { usda_bug: boolean; retail_exempt: boolean; not_for_sale: boolean }
 
 export const DEFAULT_FLAGS: LabelFlags = { usda_bug: true, retail_exempt: false, not_for_sale: false }

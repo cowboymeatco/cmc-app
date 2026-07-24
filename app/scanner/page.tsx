@@ -932,13 +932,22 @@ export default function ScannerPage() {
   }
 
   // ── Print label ───────────────────────────────────────────────────────────────
-  function openPrintWindow(box: BoxRecord, _labelScans: ScanLine[], flags: LabelFlags = labelFlags) {
+  // `format` forces a layout; left off, the label route decides — a box headed
+  // to value add prints the WIP tag instead of the finished box label.
+  function openPrintWindow(box: BoxRecord, _labelScans: ScanLine[], flags: LabelFlags = labelFlags, format?: 'std' | 'wip') {
     const p = new URLSearchParams({ box_id: box.id })
     if (!flags.usda_bug)     p.set('usda',   '0')
     if (flags.retail_exempt) p.set('exempt', '1')
     if (flags.not_for_sale)  p.set('nfs',    '1')
+    if (format)              p.set('format', format)
     window.open(`/api/boxes/label?${p}`, '_blank')
   }
+
+  // Mirrors the label route's auto-recognition so the scanner can say up front
+  // which tag is about to come out of the printer.
+  const WIP_RE = /\b(wip|work in progress|value ?add)\b/i
+  const boxPrintsWIP = (box: BoxRecord | null) =>
+    !!box && (WIP_RE.test(box.box_label || '') || currentStatus === 'value_add')
 
   // ── Remove a scan ─────────────────────────────────────────────────────────────
   async function removeScan(id: string) {
@@ -1744,9 +1753,23 @@ export default function ScannerPage() {
                 </button>
                 <button
                   onClick={() => openPrintWindow(activeBox, scans)}
+                  title={boxPrintsWIP(activeBox)
+                    ? 'This box is headed to value add — prints the WIP tag'
+                    : 'Prints the finished box label'}
                   style={{ background: 'transparent', border: `1px solid ${C.tan}`, borderRadius: 3, padding: '0.4rem 0.9rem', color: C.tan, fontSize: '0.82rem', cursor: 'pointer', fontWeight: 600 }}
                 >
-                  🖨 Print Label
+                  {boxPrintsWIP(activeBox) ? '🏷 Print WIP Tag' : '🖨 Print Label'}
+                </button>
+                {/* Auto-recognition is a guess about intent — always leave a way
+                    to print the other one without renaming the box. */}
+                <button
+                  onClick={() => openPrintWindow(activeBox, scans, labelFlags, boxPrintsWIP(activeBox) ? 'std' : 'wip')}
+                  title={boxPrintsWIP(activeBox)
+                    ? 'Print the finished box label instead'
+                    : 'Print this box as a WIP tag for value add'}
+                  style={{ background: 'transparent', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, padding: '0.4rem 0.75rem', color: C.lightBrown, fontSize: '0.78rem', cursor: 'pointer' }}
+                >
+                  {boxPrintsWIP(activeBox) ? '🖨 Box label' : '🏷 WIP'}
                 </button>
                 {isOpen && (
                   <button

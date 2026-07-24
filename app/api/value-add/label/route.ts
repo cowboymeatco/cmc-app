@@ -1,7 +1,7 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
-import { generateWIPLabel, WIPJob } from '@/lib/labelWIP'
+import { generateWIPLabel, wipDataFromJob, WIPJob } from '@/lib/labelWIP'
 
 export const dynamic = 'force-dynamic'
 
@@ -19,7 +19,16 @@ export async function GET(req: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   if (!data)  return NextResponse.json({ error: 'job not found' }, { status: 404 })
 
-  return new NextResponse(generateWIPLabel(data as WIPJob), {
+  // A job-created tag has no carcass behind it to resolve a kill type from, so
+  // the inspection band stays unmarked unless the caller says otherwise.
+  const sp = new URL(req.url).searchParams
+  const flags = {
+    usda_bug:      sp.get('usda') === '1',
+    not_for_sale:  sp.get('nfs')  === '1',
+    retail_exempt: sp.get('exempt') === '1',
+  }
+
+  return new NextResponse(generateWIPLabel(wipDataFromJob(data as WIPJob), flags), {
     headers: { 'Content-Type': 'text/html;charset=utf-8', 'Cache-Control': 'no-store' },
   })
 }

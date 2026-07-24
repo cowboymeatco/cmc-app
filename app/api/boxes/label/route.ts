@@ -3,11 +3,28 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { generateLabel, LabelFlags, LabelAnimal, BoxRecord, BoxScan } from '@/lib/label'
 import { generateCMBLabel } from '@/lib/labelCMB'
+import { generateWIPLabel, wipDataFromBox, isWIPBoxLabel } from '@/lib/labelWIP'
 
 // Central Montana Beef cases get their US Foods label (4x6, GTIN barcode)
 // instead of the standard CMC box label. Sessions are named "CMB", "CMB 26181",
 // "CMB Grind All", etc. Override per-print with ?format=std or ?format=cmb.
 const isCMBCustomer = (name: string) => /^\s*(cmb\b|central\s+montana)/i.test(name || '')
+
+// A box is work-in-progress when it isn't finished product leaving the plant —
+// it's headed to value add. Recognised two ways, either of which the crew is
+// already doing: the box recipient says so ("WIP", "Value Add"), or the whole
+// packing session has been moved to the Value Add queue on the scanner.
+// Override per-print with ?format=wip or ?format=std.
+async function isWIPBox(box: BoxRecord): Promise<boolean> {
+  if (isWIPBoxLabel(box.box_label)) return true
+  const { data } = await supabase
+    .from('processing_sessions')
+    .select('status')
+    .eq('customer_name', box.customer_name)
+    .eq('session_date', box.pack_date)
+    .maybeSingle()
+  return data?.status === 'value_add'
+}
 
 // A box's animal is whatever carcass(es) the crew scanned into its packing
 // session. Keyed on customer + pack date (how every session keys). If more than
@@ -76,10 +93,16 @@ export async function GET(req: NextRequest) {
   }
 
   const format = searchParams.get('format')
-  const useCMB = format === 'cmb' || (isCMBCustomer(box.customer_name) && format !== 'std')
-  const html   = useCMB
-    ? generateCMBLabel(box, scans, { productGtin: searchParams.get('product'), lot: searchParams.get('lot') })
-    : generateLabel(box, scans, flags, animal)
+  const useWIP = format === 'wip' || (format == null && await isWIPBox(box))
+  const useCMB = format === 'cmb' || (!useWIP && isCMBCustomer(box.customer_name) && format !== 'std')
+
+  // The WIP tag carries the same inspection flags as the finished box label, so
+  // value add can see what level the product left the processing room under.
+  const html = useWIP
+    ? generateWIPLabel(wipDataFromBox(box, scans, animal), flags)
+    : useCMB
+      ? generateCMBLabel(box, scans, { productGtin: searchParams.get('product'), lot: searchParams.get('lot') })
+      : generateLabel(box, scans, flags, animal)
 
   return new NextResponse(html, {
     headers: {
