@@ -27,6 +27,15 @@ interface ValueAddJob {
   completed_date:                string | null
   status:                        JobStatus
   notes:                         string
+  customer_name:                 string | null
+  source_description:            string | null
+  tag_code:                      string | null
+}
+
+// The WIP tag rides with the tub to value add — opens in its own window and
+// prints itself, same as the box label.
+function printWIPTag(jobId: string) {
+  window.open(`/api/value-add/label?id=${encodeURIComponent(jobId)}`, '_blank')
 }
 
 interface RetailOrderSummary { id: string; customer_name: string; due_date: string }
@@ -171,6 +180,11 @@ function JobCard({ job, onUpdated }: { job: ValueAddJob; onUpdated: (j: ValueAdd
           <span style={{ color: C.cream, fontWeight: 600, fontSize: '0.92rem' }}>
             {job.output_item_name || job.description || '—'}
           </span>
+          {job.source_description && (
+            <span style={{ fontSize: '0.78rem', color: C.lightBrown, marginLeft: '0.5rem' }}>
+              ← {job.source_description}
+            </span>
+          )}
           {job.output_plu && (
             <span style={{ fontFamily: 'monospace', fontSize: '0.72rem', color: C.lightBrown, marginLeft: '0.5rem' }}>
               PLU {job.output_plu}
@@ -182,6 +196,13 @@ function JobCard({ job, onUpdated }: { job: ValueAddJob; onUpdated: (j: ValueAdd
         </div>
       </div>
 
+      {/* Customer — blank means CMC shelf stock, named means keep it separate */}
+      {job.customer_name && (
+        <div style={{ fontSize: '0.82rem', color: C.tan, fontWeight: 700, marginBottom: '0.3rem' }}>
+          👤 {job.customer_name}
+        </div>
+      )}
+
       {/* Source / link */}
       <div style={{ fontSize: '0.75rem', color: C.lightBrown, marginBottom: '0.6rem' }}>
         {job.source_type === 'general'          && '🗂 General / Shelf Stock'}
@@ -189,6 +210,9 @@ function JobCard({ job, onUpdated }: { job: ValueAddJob; onUpdated: (j: ValueAdd
         {job.source_type === 'cutting_instruction' && '📝 Cutting Instruction'}
         {job.assigned_to ? ` · ${job.assigned_to}` : ''}
         {' · '}{new Date(job.requested_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+        {job.tag_code && (
+          <span style={{ fontFamily: 'monospace', color: C.tan, marginLeft: '0.5rem' }}>· {job.tag_code}</span>
+        )}
       </div>
 
       {/* Weight in / out */}
@@ -236,15 +260,23 @@ function JobCard({ job, onUpdated }: { job: ValueAddJob; onUpdated: (j: ValueAdd
       )}
 
       {/* Action */}
-      {nextStatus && (
+      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+        {nextStatus && (
+          <button
+            style={{ ...BTN(STATUS_COLORS[nextStatus]), fontSize: '0.78rem', padding: '0.35rem 0.9rem' }}
+            onClick={advance}
+            disabled={advancing}
+          >
+            {advancing ? '…' : `→ Mark ${STATUS_LABELS[nextStatus]}`}
+          </button>
+        )}
         <button
-          style={{ ...BTN(STATUS_COLORS[nextStatus]), fontSize: '0.78rem', padding: '0.35rem 0.9rem' }}
-          onClick={advance}
-          disabled={advancing}
+          style={{ ...BTN('transparent', C.tan), border: `1px solid ${C.tan}`, fontSize: '0.78rem', padding: '0.35rem 0.9rem' }}
+          onClick={() => printWIPTag(job.id)}
         >
-          {advancing ? '…' : `→ Mark ${STATUS_LABELS[nextStatus]}`}
+          🏷 Print WIP Tag
         </button>
-      )}
+      </div>
     </div>
   )
 }
@@ -270,6 +302,8 @@ function NewJobTab({ onSaved, orders, cuttingInstructions, pluList }: { onSaved:
     assigned_to:      '',
     requested_date:   isoDate(),
     notes:            '',
+    customer_name:      '',
+    source_description: '',
   })
 
   const [form, setForm] = useState(blankForm())
@@ -289,10 +323,13 @@ function NewJobTab({ onSaved, orders, cuttingInstructions, pluList }: { onSaved:
     setPluDropdown([])
   }
 
-  async function handleSubmit() {
+  // The tag needs something to say it's becoming — a label or a typed intent.
+  const canCreate = !!(form.output_item_name || form.output_plu || form.description.trim())
+
+  async function handleSubmit(andPrint = false) {
     if (!form.output_item_name && !form.description) return
     setSaving(true)
-    await fetch('/api/value-add', {
+    const res = await fetch('/api/value-add', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -301,9 +338,15 @@ function NewJobTab({ onSaved, orders, cuttingInstructions, pluList }: { onSaved:
         linked_cutting_instruction_id: form.source_type === 'cutting_instruction' ? (form.linked_cutting_instruction_id || null) : null,
         output_plu:      form.output_plu      || null,
         weight_in_lbs:   form.weight_in_lbs   ? parseFloat(form.weight_in_lbs) : null,
+        customer_name:      form.customer_name.trim()      || null,
+        source_description: form.source_description.trim() || null,
       }),
     })
+    const saved = await res.json().catch(() => null)
     setSaving(false)
+    // Print straight off the create — the tag needs to be on the tub before it
+    // leaves the processing room, not after somebody remembers.
+    if (andPrint && saved?.id) printWIPTag(saved.id)
     setSuccess(true)
     setForm(blankForm())
     setPluSearch('')
@@ -323,6 +366,26 @@ function NewJobTab({ onSaved, orders, cuttingInstructions, pluList }: { onSaved:
             ✓ Job created
           </div>
         )}
+
+        {/* Whose product + what's in the tub — the two the handwritten WIP
+            sheet asked for that had nowhere to go */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+          <div>
+            <label style={LABEL}>Customer</label>
+            <input style={INPUT} value={form.customer_name} onChange={f('customer_name')} placeholder="Blank = CMC shelf stock" />
+          </div>
+          <div>
+            <label style={LABEL}>What is it now</label>
+            <input style={INPUT} value={form.source_description} onChange={f('source_description')} placeholder="Trim, Round Roast…" />
+          </div>
+        </div>
+
+        {/* The intent is the biggest thing on the printed tag — what the floor
+            reads to know why this tub is on their bench. */}
+        <div>
+          <label style={LABEL}>Intent — what it becomes</label>
+          <input style={INPUT} value={form.description} onChange={f('description')} placeholder="Make snack sticks, Make jerky…" />
+        </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
           <div>
@@ -437,13 +500,22 @@ function NewJobTab({ onSaved, orders, cuttingInstructions, pluList }: { onSaved:
           <textarea style={{ ...INPUT, height: 64, resize: 'vertical' }} value={form.notes} onChange={f('notes')} placeholder="Special instructions, blend notes, etc." />
         </div>
 
-        <button
-          style={{ ...BTN(form.output_item_name || form.output_plu ? C.tan : C.medBrown), width: '100%', opacity: form.output_item_name || form.output_plu ? 1 : 0.5 }}
-          onClick={handleSubmit}
-          disabled={saving || (!form.output_item_name && !form.output_plu)}
-        >
-          {saving ? 'Saving…' : 'Create Job'}
-        </button>
+        <div style={{ display: 'flex', gap: '0.6rem' }}>
+          <button
+            style={{ ...BTN(canCreate ? C.tan : C.medBrown), flex: 2, opacity: canCreate ? 1 : 0.5 }}
+            onClick={() => handleSubmit(true)}
+            disabled={saving || !canCreate}
+          >
+            {saving ? 'Saving…' : '🏷 Create + Print WIP Tag'}
+          </button>
+          <button
+            style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.35)', flex: 1, opacity: canCreate ? 1 : 0.5 }}
+            onClick={() => handleSubmit(false)}
+            disabled={saving || !canCreate}
+          >
+            Create only
+          </button>
+        </div>
       </div>
     </div>
   )
