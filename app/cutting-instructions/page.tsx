@@ -1660,12 +1660,12 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
       // A hog fills its boxes in stages — a couple of cuts, then sausage, then
       // hams and bacon back from the smokehouse — so the packager circles the
       // running count as it climbs instead of writing one total they don't know
-      // yet (Charlie, 2026-07-24).
+      // yet. Runs to 8 because the big ones go past six (Charlie, 2026-07-24).
       isPork
         ? `<div style="border-top:1px solid #888;padding-top:5px">
              <div style="font-size:13px;color:#75471B;text-transform:uppercase;letter-spacing:0.08em">Box Count — circle as filled</div>
              <div style="display:flex;gap:10px;margin-top:3px">
-               ${[1, 2, 3, 4, 5, 6].map(n => `<span style="width:34px;height:34px;line-height:34px;text-align:center;font-size:22px;font-weight:bold">${n}</span>`).join('')}
+               ${[1, 2, 3, 4, 5, 6, 7, 8].map(n => `<span style="width:34px;height:34px;line-height:34px;text-align:center;font-size:22px;font-weight:bold">${n}</span>`).join('')}
              </div>
            </div>`
         : `<div style="border-top:1px solid #888;padding-top:5px;font-size:13px;color:#75471B;text-transform:uppercase;letter-spacing:0.08em">Total Boxes</div>`
