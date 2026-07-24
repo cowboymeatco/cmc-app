@@ -60,40 +60,86 @@ async function resolveAnimal(box: BoxRecord): Promise<LabelAnimal | undefined> {
   }
 }
 
-// The customer's own cutting instruction for the animal in this box, reached on
-// keys rather than names — the box says "Bill Schiffer 207#" while the cut card
-// says "Billy Schiffer", so only the appointment id joins them reliably.
-async function resolveCuttingInstruction(box: BoxRecord): Promise<Record<string, unknown> | null> {
+// Names as the floor writes them vs. as the cut card holds them: the box says
+// "Travis Buck 204#", the card says "Travis Buck". Strip the hanging weight and
+// punctuation so the two can be compared.
+const normName = (n: string) =>
+  (n || '')
+    .replace(/\s*[·\-]?\s*\d{2,4}\s*(#|lbs?)?\s*$/i, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+interface CIMatch { data: Record<string, unknown>; via: string; name: string }
+
+// Find the customer's cut card. Tries the databased links first, but in
+// practice most sessions have neither — carcass_assignments has a handful of
+// rows and no cutting instruction carries an appointment_id — so the name match
+// is what actually connects a box to its orders today. How it matched gets
+// printed on the tag, because a name match deserves to be visible.
+async function resolveCuttingInstruction(box: BoxRecord): Promise<CIMatch | null> {
+  const pick = (row: { data?: unknown; customer_name?: string } | null, via: string): CIMatch | null =>
+    row?.data ? { data: row.data as Record<string, unknown>, via, name: row.customer_name ?? '' } : null
+
+  // 1. Carcass scanned into this session → the assignment made at check-in.
   const inputs = await supabase
     .from('processing_inputs')
     .select('linked_harvest_id')
     .eq('customer_name', box.customer_name)
     .eq('pack_date', box.pack_date)
     .not('linked_harvest_id', 'is', null)
-  const ids = [...new Set((inputs.data ?? []).map(r => r.linked_harvest_id).filter(Boolean))]
-  if (!ids.length) return null
+  const harvestIds = [...new Set((inputs.data ?? []).map(r => r.linked_harvest_id).filter(Boolean))]
 
-  const hl = await supabase.from('harvest_log').select('appointment_id').in('id', ids)
-  const appts = [...new Set((hl.data ?? []).map(r => r.appointment_id).filter(Boolean))]
-  if (!appts.length) return null
+  if (harvestIds.length) {
+    const ca = await supabase
+      .from('carcass_assignments')
+      .select('linked_cutting_instruction_id')
+      .in('harvest_log_id', harvestIds)
+      .not('linked_cutting_instruction_id', 'is', null)
+    const ciIds = [...new Set((ca.data ?? []).map(r => r.linked_cutting_instruction_id).filter(Boolean))]
+    if (ciIds.length === 1) {
+      const ci = await supabase.from('cutting_instructions').select('data, customer_name').eq('id', ciIds[0]).maybeSingle()
+      const hit = pick(ci.data, 'carcass')
+      if (hit) return hit
+    }
 
-  const ci = await supabase
-    .from('cutting_instructions')
-    .select('data')
-    .in('appointment_id', appts)
-    .order('last_modified', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-  return (ci.data?.data ?? null) as Record<string, unknown> | null
+    // 2. Appointment key, for once cut cards start carrying one.
+    const hl = await supabase.from('harvest_log').select('appointment_id').in('id', harvestIds)
+    const appts = [...new Set((hl.data ?? []).map(r => r.appointment_id).filter(Boolean))]
+    if (appts.length) {
+      const ci = await supabase
+        .from('cutting_instructions')
+        .select('data, customer_name')
+        .in('appointment_id', appts)
+        .order('last_modified', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      const hit = pick(ci.data, 'appointment')
+      if (hit) return hit
+    }
+  }
+
+  // 3. Name. Only when exactly one card matches — two customers sharing a name
+  // means we cook somebody else's order, so leave it to the crew.
+  const target = normName(box.customer_name)
+  if (!target) return null
+  const all = await supabase.from('cutting_instructions').select('data, customer_name, species')
+  const matches = (all.data ?? []).filter(r => normName(r.customer_name ?? '') === target)
+  if (matches.length !== 1) return null
+  return pick(matches[0], 'name')
 }
 
 // Decide what this box is for and remember it. Assignment is sticky: once a box
 // has started filling an order, reprinting its tag must not move it.
-async function resolveWIPIntent(box: BoxRecord, items: { name: string }[]): Promise<string | null> {
-  if (box.wip_intent_label) return box.wip_intent_label
+async function resolveWIPIntent(box: BoxRecord, items: { name: string }[], boxLbs: number): Promise<{ label: string; source: string } | null> {
+  // Already assigned on an earlier print — reuse it verbatim. No source note:
+  // the decision is settled, and how it was first reached is no longer news.
+  if (box.wip_intent_label) return { label: box.wip_intent_label, source: '' }
 
-  const data = await resolveCuttingInstruction(box)
-  if (!data) return null
+  const match = await resolveCuttingInstruction(box)
+  if (!match) return null
+  const data = match.data
 
   const product = classifyBoxProduct(items)
   let assignment: { key: string; label: string } | null = null
@@ -103,7 +149,10 @@ async function resolveWIPIntent(box: BoxRecord, items: { name: string }[]): Prom
     if (jerky) assignment = { key: 'round#jerky', label: jerky }
   }
 
-  if (!assignment) {
+  // Only trim feeds the smokehouse orders. A box of chops or roasts tagged WIP
+  // — which happens whenever a whole session is moved to the Value Add queue —
+  // must not consume the customer's brat order.
+  if (!assignment && product === 'trim') {
     const orders = parseSmokehouseOrders(data)
     if (orders.length) {
       // What the customer's other boxes have already committed to each order.
@@ -120,18 +169,23 @@ async function resolveWIPIntent(box: BoxRecord, items: { name: string }[]): Prom
         const k = String(s.wip_intent_key)
         assigned[k] = (assigned[k] ?? 0) + (Number(s.total_weight_lbs) || 0)
       }
-      assignment = allocateIntent(orders, assigned, Number(box.total_weight_lbs) || 0)
+      assignment = allocateIntent(orders, assigned, boxLbs)
     }
   }
 
   if (!assignment) return null
 
-  await supabase
-    .from('boxes')
-    .update({ wip_intent_key: assignment.key, wip_intent_label: assignment.label })
-    .eq('id', box.id)
+  // Only remember the assignment once the box is closed. An open box is still
+  // being filled, so its weight — and therefore what it can cover — is not
+  // final; freezing it now would hand the next order a number that changes.
+  if (box.is_closed) {
+    await supabase
+      .from('boxes')
+      .update({ wip_intent_key: assignment.key, wip_intent_label: assignment.label })
+      .eq('id', box.id)
+  }
 
-  return assignment.label
+  return { label: assignment.label, source: match.via }
 }
 
 export async function GET(req: NextRequest) {
@@ -175,9 +229,11 @@ export async function GET(req: NextRequest) {
   // value add can see what level the product left the processing room under.
   let html: string
   if (useWIP) {
-    const base   = wipDataFromBox(box, scans, animal)
-    const intent = await resolveWIPIntent(box, base.items)
-    html = generateWIPLabel(intent ? { ...base, intent } : base, flags)
+    const base = wipDataFromBox(box, scans, animal)
+    const hit  = await resolveWIPIntent(box, base.items, base.weightLbs ?? 0)
+    html = generateWIPLabel(
+      hit ? { ...base, intent: hit.label, intentSource: hit.source } : base,
+      flags)
   } else if (useCMB) {
     html = generateCMBLabel(box, scans, { productGtin: searchParams.get('product'), lot: searchParams.get('lot') })
   } else {

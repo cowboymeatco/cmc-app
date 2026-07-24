@@ -18,6 +18,9 @@ export interface WIPTagData {
   notes:             string | null
   items:             { name: string; count: number; weight: number }[]
   producer:          string | null
+  // How the intent was reached, when it came off a cut card. A name match is
+  // worth showing — it's the one that can pick the wrong customer.
+  intentSource?:     string | null
 }
 
 export interface WIPJob {
@@ -102,6 +105,15 @@ export function wipDataFromBox(box: BoxRecord, scans: BoxScan[], animal?: LabelA
   const customer = displayCustomerName(box.customer_name, animal?.hangingWeightLbs)
   const isStock  = /^cmc\b/i.test(customer)
 
+  // total_weight_lbs is only written when the box is closed, but a WIP tub gets
+  // tagged while it's still open — fall back to what's actually been scanned in
+  // so the batch weight is never blank. It's the number the seasoning and the
+  // yield both come off of.
+  const scanned = items.reduce((sum, i) => sum + i.weight, 0)
+  const weight  = box.total_weight_lbs != null && Number(box.total_weight_lbs) > 0
+    ? Number(box.total_weight_lbs)
+    : (scanned > 0 ? scanned : null)
+
   return {
     customer:          customer || 'CMC',
     keepSeparate:      !isStock,
@@ -109,7 +121,7 @@ export function wipDataFromBox(box: BoxRecord, scans: BoxScan[], animal?: LabelA
     // A resolved order off the cut card beats whatever was scribbled on the box.
     intent:            (intentOverride || '').trim() || intent || 'Value Add',
     labelAs:           null,
-    weightLbs:         box.total_weight_lbs != null ? Number(box.total_weight_lbs) : null,
+    weightLbs:         weight,
     assignedTo:        null,
     date:              box.pack_date,
     code:              box.serial_number ?? null,
@@ -184,6 +196,8 @@ export function generateWIPLabel(data: WIPTagData, flags: LabelFlags = DEFAULT_F
   .v       { font-weight: bold; flex: 1; border-bottom: 1px solid #000; min-height: 15px; }
   .item    { display: flex; justify-content: space-between; align-items: baseline;
              font-family: 'Arial Narrow', Arial, sans-serif; font-size: 10.5pt; padding: 0.5px 0; }
+  .srcnote { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 7.5pt; text-align: center;
+             font-style: italic; margin: -1px 0 3px; }
   .batch   { text-align: center; font-size: 10pt; margin-top: 3px; }
   .batch b { font-family: monospace; letter-spacing: 0.1em; font-size: 12pt; }
   .barcode { text-align: center; margin: 3px 0 1px; }
@@ -204,6 +218,11 @@ export function generateWIPLabel(data: WIPTagData, flags: LabelFlags = DEFAULT_F
 
   <div class="intent-k">INTENT</div>
   <div class="intent">${esc(data.intent).toUpperCase()}</div>
+  ${data.intentSource === 'name'
+    ? `<div class="srcnote">from cut card matched by name — check it's the right customer</div>`
+    : data.intentSource
+      ? `<div class="srcnote">from ${esc(data.intentSource)}-linked cut card</div>`
+      : ''}
 
   ${inspection}
 
