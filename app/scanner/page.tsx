@@ -351,6 +351,10 @@ export default function ScannerPage() {
   const [customer, setCustomer] = useState('')
   const [date,     setDate]     = useState(isoDate())
   const [started,  setStarted]  = useState(false)
+  // Inline rename of the open session's customer (header)
+  const [editingName, setEditingName] = useState(false)
+  const [nameDraft,   setNameDraft]   = useState('')
+  const [renameBusy,  setRenameBusy]  = useState(false)
 
   // ── Boxes / scans ────────────────────────────────────────────────────────────
   const [boxes,     setBoxes]     = useState<BoxRecord[]>([])
@@ -731,6 +735,47 @@ export default function ScannerPage() {
       .then((d: unknown) => { if (Array.isArray(d)) setInputs(d as ProcessingInput[]) })
       .catch(() => {})
     loadSharedYield(cust, dt)
+  }
+
+  // ── Rename the open session's customer ───────────────────────────────────────
+  // Re-keys this session's boxes/inputs/record to the new name (same date), then
+  // re-points the open view at the new key. Boxes carry the name, so we reload.
+  async function renameCustomer() {
+    const next = nameDraft.trim()
+    setEditingName(false)
+    if (!next || next === customer) { setNameDraft(customer); return }
+    const prev = customer
+    setRenameBusy(true)
+    try {
+      const res = await fetch('/api/processing/sessions/rename', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_date: date, old_name: prev, new_name: next }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({} as { error?: string }))
+        window.alert(`Rename failed: ${d.error ?? res.statusText}`)
+        setNameDraft(prev)
+        return
+      }
+      // Re-point the open view at the new key
+      setCustomer(next)
+      const bRes = await fetch(`/api/boxes?customer_name=${encodeURIComponent(next)}&date=${date}`)
+      const loaded: BoxRecord[] = await bRes.json().catch(() => [])
+      const sorted = [...loaded].sort((a, b) => a.box_number - b.box_number)
+      setBoxes(sorted)
+      const openBox = sorted.find(b => b.id === activeBox?.id) ?? sorted.find(b => !b.is_closed) ?? sorted[sorted.length - 1] ?? null
+      setActiveBox(openBox)
+      fetch(`/api/processing/inputs?customer_name=${encodeURIComponent(next)}&session_date=${date}`)
+        .then(r => r.json())
+        .then((d: unknown) => { if (Array.isArray(d)) setInputs(d as ProcessingInput[]) })
+        .catch(() => {})
+      loadSharedYield(next, date)
+    } catch {
+      window.alert('Rename failed — network error')
+      setNameDraft(prev)
+    } finally {
+      setRenameBusy(false)
+    }
   }
 
   // ── Start a scanning session straight from an in-progress retail order ───────
@@ -1441,7 +1486,29 @@ export default function ScannerPage() {
             ← Sessions
           </button>
           <span style={{ color: 'rgba(166,120,90,0.35)' }}>|</span>
-          <span style={{ color: C.cream, fontWeight: 700, fontSize: '1rem' }}>{customer}</span>
+          {editingName ? (
+            <input
+              autoFocus
+              value={nameDraft}
+              onChange={e => setNameDraft(e.target.value)}
+              onBlur={renameCustomer}
+              onKeyDown={e => {
+                if (e.key === 'Enter') renameCustomer()
+                else if (e.key === 'Escape') { setEditingName(false); setNameDraft(customer) }
+              }}
+              style={{ background: C.dark, color: C.cream, fontWeight: 700, fontSize: '1rem', border: `1px solid ${C.tan}`, borderRadius: 4, padding: '0.15rem 0.4rem', width: `${Math.max(8, nameDraft.length + 1)}ch`, outline: 'none' }}
+            />
+          ) : (
+            <button
+              onClick={() => { setNameDraft(customer); setEditingName(true) }}
+              title="Click to rename this session's customer"
+              disabled={renameBusy}
+              style={{ background: 'none', border: 'none', color: C.cream, fontWeight: 700, fontSize: '1rem', cursor: 'pointer', padding: 0, display: 'inline-flex', alignItems: 'center', gap: '0.3rem', opacity: renameBusy ? 0.5 : 1 }}
+            >
+              {customer}
+              <span style={{ color: C.lightBrown, fontSize: '0.7rem', fontWeight: 400 }}>{renameBusy ? '⟳' : '✎'}</span>
+            </button>
+          )}
           <span style={{ color: C.lightBrown, fontSize: '0.82rem' }}>{date}</span>
           {/* Status badge + quick-change */}
           {currentStatus === 'scanning' && (
