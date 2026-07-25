@@ -90,9 +90,21 @@ interface SweepLogRow {
   error: string
   triggered_by: string
 }
+interface SyncDecision {
+  docNumber: string
+  customerName: string
+  title: string
+  amountCents: number
+  action: 'create' | 'update' | 'skip'
+  reason: string
+  orderId?: string
+}
 interface SweepData {
   wouldRemove: SweepDecision[]
   wouldKeep: SweepDecision[]
+  wouldCreate: SyncDecision[]
+  wouldUpdate: SyncDecision[]
+  needsPerson: SyncDecision[]
   history: SweepLogRow[]
 }
 interface QboCust { qbo_id: string; display_name: string; company_name?: string | null; phone?: string | null; balance: number | null }
@@ -155,17 +167,20 @@ export default function BillingPage() {
     }
   }, [])
 
-  async function cleanUpNow() {
+  async function syncNow() {
     setSweeping(true)
     setSweepMsg(null)
     try {
       const res = await fetch('/api/clover/reconcile', { method: 'POST' })
       const json = await res.json()
-      if (!res.ok || json.error) throw new Error(json.error ?? 'Cleanup failed')
-      const n = json.removed?.length ?? 0
-      setSweepMsg(n === 0
-        ? 'Nothing needed removing.'
-        : `Removed ${n} settled order(s) from the register: ${json.removed.map((d: SweepDecision) => d.title).join(', ')}`)
+      if (!res.ok || json.error) throw new Error(json.error ?? 'Sync failed')
+      const parts: string[] = []
+      if (json.created?.length) parts.push(`${json.created.length} added`)
+      if (json.updated?.length) parts.push(`${json.updated.length} amount(s) corrected`)
+      if (json.removed?.length) parts.push(`${json.removed.length} removed`)
+      if (json.deferred) parts.push(`${json.deferred} left for the next run`)
+      if (json.errors?.length) parts.push(`${json.errors.length} failed`)
+      setSweepMsg(parts.length ? `Register synced — ${parts.join(', ')}.` : 'Register already up to date.')
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -382,21 +397,26 @@ export default function BillingPage() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
             <div>
               <div style={{ color: C.tan, fontWeight: 700, fontSize: '0.95rem' }}>
-                Register Cleanup{sweep && sweep.wouldRemove.length > 0 && (
+                Register Sync
+                {sweep && (sweep.wouldCreate.length + sweep.wouldUpdate.length + sweep.wouldRemove.length) > 0 && (
                   <span style={{ color: C.yellow, fontWeight: 400, marginLeft: '0.5rem' }}>
-                    {sweep.wouldRemove.length} ready to remove
+                    {[
+                      sweep.wouldCreate.length && `${sweep.wouldCreate.length} to add`,
+                      sweep.wouldUpdate.length && `${sweep.wouldUpdate.length} to correct`,
+                      sweep.wouldRemove.length && `${sweep.wouldRemove.length} to remove`,
+                    ].filter(Boolean).join(' · ')}
                   </span>
                 )}
               </div>
               <div style={{ color: C.lightBrown, fontSize: '0.78rem' }}>
-                Runs itself at 5am. Once an invoice is marked paid in QuickBooks, its leftover unpaid order is
-                pulled off the register so nobody can ring it twice. Paid orders and anything a cashier added
-                are never touched.
+                Runs itself at 5am. Every open invoice gets an order waiting on the register, amounts are
+                corrected when a balance moves, and orders are pulled once the invoice is marked paid in
+                QuickBooks. Paid orders and anything a cashier added are never touched.
               </div>
               {sweepMsg && <div style={{ color: C.green, fontSize: '0.78rem', marginTop: '0.3rem' }}>{sweepMsg}</div>}
             </div>
-            <button onClick={cleanUpNow} disabled={sweeping} style={BTN(C.tan)}>
-              {sweeping ? 'Cleaning…' : '🧹 Clean up now'}
+            <button onClick={syncNow} disabled={sweeping} style={BTN(C.tan)}>
+              {sweeping ? 'Syncing…' : '⟳ Sync register now'}
             </button>
           </div>
 
@@ -404,8 +424,42 @@ export default function BillingPage() {
             <div style={{ color: C.lightBrown, fontSize: '0.83rem' }}>Checking the register…</div>
           ) : (
             <>
-              {sweep.wouldRemove.length === 0 && sweep.wouldKeep.length === 0 && (
-                <div style={{ color: C.lightBrown, fontSize: '0.83rem' }}>No ring-up orders on the register.</div>
+              {sweep.wouldCreate.length === 0 && sweep.wouldUpdate.length === 0 &&
+               sweep.wouldRemove.length === 0 && sweep.needsPerson.length === 0 && (
+                <div style={{ color: C.green, fontSize: '0.83rem' }}>
+                  Register is in sync with QuickBooks — nothing to add, correct or remove.
+                </div>
+              )}
+
+              {(sweep.wouldCreate.length > 0 || sweep.wouldUpdate.length > 0) && (
+                <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '0.6rem' }}>
+                  <thead><tr>
+                    <th style={TH}>Pending</th><th style={TH}>Invoice</th><th style={TH}>Amount</th><th style={TH}>Why</th>
+                  </tr></thead>
+                  <tbody>
+                    {[...sweep.wouldCreate, ...sweep.wouldUpdate].map(d => (
+                      <tr key={`${d.action}-${d.docNumber}`}>
+                        <td style={{ ...TD, color: d.action === 'create' ? C.green : C.yellow }}>
+                          {d.action === 'create' ? 'add' : 'correct'}
+                        </td>
+                        <td style={TD}>{d.title}</td>
+                        <td style={{ ...TD, fontFamily: 'monospace' }}>${(d.amountCents / 100).toFixed(2)}</td>
+                        <td style={{ ...TD, fontSize: '0.78rem', color: C.lightBrown }}>{d.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              {sweep.needsPerson.length > 0 && (
+                <div style={{ fontSize: '0.78rem', color: C.yellow, marginBottom: '0.5rem' }}>
+                  <div style={{ marginBottom: '0.25rem' }}>⚠ Needs a person ({sweep.needsPerson.length}) — left untouched:</div>
+                  {sweep.needsPerson.map(d => (
+                    <div key={d.docNumber} style={{ paddingLeft: '0.6rem', color: C.lightBrown }}>
+                      <span style={{ color: C.cream }}>{d.title}</span> — {d.reason}
+                    </div>
+                  ))}
+                </div>
               )}
 
               {sweep.wouldRemove.length > 0 && (
@@ -441,7 +495,7 @@ export default function BillingPage() {
               {sweep.history.length > 0 && (
                 <details style={{ marginTop: '0.7rem' }}>
                   <summary style={{ color: C.lightBrown, fontSize: '0.78rem', cursor: 'pointer' }}>
-                    Cleanup history ({sweep.history.length})
+                    Sync history ({sweep.history.length})
                   </summary>
                   <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '0.4rem' }}>
                     <thead><tr>

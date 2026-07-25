@@ -96,7 +96,15 @@ async function decide(o: Awaited<ReturnType<typeof getRingUpOrders>>[number]): P
         return keep(`expected 1 line item, found ${lineItems.length} — needs a person`)
       }
 
-      return { ...base, action: 'remove', reason: `invoice ${docNumber} paid in QuickBooks` }
+      return {
+        ...base,
+        // Clover leaves order.total null until a device opens the order, so a
+        // never-touched order reports no total. Take the amount off the line
+        // item instead — this is the row where seeing the number matters most.
+        amountCents: lineItems[0].price ?? base.amountCents,
+        action: 'remove',
+        reason: `invoice ${docNumber} paid in QuickBooks`,
+      }
     } catch (e) {
       // A failed check is never permission to delete.
       return keep(`could not verify (${e instanceof Error ? e.message : String(e)})`)
