@@ -71,6 +71,30 @@ interface RingUpData {
   openOrders: { id: string; title?: string }[]
   ordersError?: string
 }
+interface SweepDecision {
+  orderId: string
+  docNumber: string
+  title: string
+  amountCents: number | null
+  action: 'remove' | 'keep'
+  reason: string
+}
+interface SweepLogRow {
+  created_at: string
+  doc_number: string
+  title: string
+  amount_cents: number | null
+  action: string
+  reason: string
+  status: string
+  error: string
+  triggered_by: string
+}
+interface SweepData {
+  wouldRemove: SweepDecision[]
+  wouldKeep: SweepDecision[]
+  history: SweepLogRow[]
+}
 interface QboCust { qbo_id: string; display_name: string; company_name?: string | null; phone?: string | null; balance: number | null }
 interface LinksData {
   linked: { producer: Producer; qbo: QboCust }[]
@@ -103,13 +127,19 @@ export default function BillingPage() {
   const [ringBusy, setRingBusy] = useState<string | null>(null)
   const [ringMsg, setRingMsg] = useState<string | null>(null)
 
+  // register cleanup
+  const [sweep, setSweep] = useState<SweepData | null>(null)
+  const [sweeping, setSweeping] = useState(false)
+  const [sweepMsg, setSweepMsg] = useState<string | null>(null)
+
   const load = useCallback(async () => {
     setError(null)
     try {
-      const [custRes, evRes, ringRes] = await Promise.all([
+      const [custRes, evRes, ringRes, sweepRes] = await Promise.all([
         fetch('/api/qbo/customers'),
         fetch('/api/billing/events'),
         fetch('/api/clover/ring-up'),
+        fetch('/api/clover/reconcile'),
       ])
       const json = await custRes.json()
       if (!custRes.ok || json.error) throw new Error(json.error ?? 'Load failed')
@@ -118,10 +148,30 @@ export default function BillingPage() {
       if (evRes.ok && !ev.error) setCharges(ev)
       const ru = await ringRes.json()
       if (ringRes.ok && !ru.error) setRingUp(ru)
+      const sw = await sweepRes.json()
+      if (sweepRes.ok && !sw.error) setSweep(sw)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
   }, [])
+
+  async function cleanUpNow() {
+    setSweeping(true)
+    setSweepMsg(null)
+    try {
+      const res = await fetch('/api/clover/reconcile', { method: 'POST' })
+      const json = await res.json()
+      if (!res.ok || json.error) throw new Error(json.error ?? 'Cleanup failed')
+      const n = json.removed?.length ?? 0
+      setSweepMsg(n === 0
+        ? 'Nothing needed removing.'
+        : `Removed ${n} settled order(s) from the register: ${json.removed.map((d: SweepDecision) => d.title).join(', ')}`)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+    setSweeping(false)
+  }
 
   // Push one invoice to the register as a pre-labelled open order. The amount
   // is re-read from QuickBooks server-side, so what rings is the balance now.
@@ -325,6 +375,97 @@ export default function BillingPage() {
               </div>
             )
           })()}
+        </div>
+
+        {/* ── Register cleanup ───────────────────────────────────────── */}
+        <div style={CARD}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <div>
+              <div style={{ color: C.tan, fontWeight: 700, fontSize: '0.95rem' }}>
+                Register Cleanup{sweep && sweep.wouldRemove.length > 0 && (
+                  <span style={{ color: C.yellow, fontWeight: 400, marginLeft: '0.5rem' }}>
+                    {sweep.wouldRemove.length} ready to remove
+                  </span>
+                )}
+              </div>
+              <div style={{ color: C.lightBrown, fontSize: '0.78rem' }}>
+                Runs itself at 5am. Once an invoice is marked paid in QuickBooks, its leftover unpaid order is
+                pulled off the register so nobody can ring it twice. Paid orders and anything a cashier added
+                are never touched.
+              </div>
+              {sweepMsg && <div style={{ color: C.green, fontSize: '0.78rem', marginTop: '0.3rem' }}>{sweepMsg}</div>}
+            </div>
+            <button onClick={cleanUpNow} disabled={sweeping} style={BTN(C.tan)}>
+              {sweeping ? 'Cleaning…' : '🧹 Clean up now'}
+            </button>
+          </div>
+
+          {!sweep ? (
+            <div style={{ color: C.lightBrown, fontSize: '0.83rem' }}>Checking the register…</div>
+          ) : (
+            <>
+              {sweep.wouldRemove.length === 0 && sweep.wouldKeep.length === 0 && (
+                <div style={{ color: C.lightBrown, fontSize: '0.83rem' }}>No ring-up orders on the register.</div>
+              )}
+
+              {sweep.wouldRemove.length > 0 && (
+                <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '0.6rem' }}>
+                  <thead><tr>
+                    <th style={TH}>Ready to remove</th><th style={TH}>Amount</th><th style={TH}>Why</th>
+                  </tr></thead>
+                  <tbody>
+                    {sweep.wouldRemove.map(d => (
+                      <tr key={d.orderId}>
+                        <td style={TD}>{d.title}</td>
+                        <td style={{ ...TD, fontFamily: 'monospace', color: C.yellow }}>
+                          {d.amountCents != null ? `$${(d.amountCents / 100).toFixed(2)}` : '—'}
+                        </td>
+                        <td style={{ ...TD, fontSize: '0.78rem', color: C.lightBrown }}>{d.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              {sweep.wouldKeep.length > 0 && (
+                <div style={{ fontSize: '0.78rem', color: C.lightBrown }}>
+                  <div style={{ marginBottom: '0.25rem' }}>Left alone ({sweep.wouldKeep.length}):</div>
+                  {sweep.wouldKeep.map(d => (
+                    <div key={d.orderId} style={{ paddingLeft: '0.6rem' }}>
+                      <span style={{ color: C.cream }}>{d.title || d.docNumber}</span> — {d.reason}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {sweep.history.length > 0 && (
+                <details style={{ marginTop: '0.7rem' }}>
+                  <summary style={{ color: C.lightBrown, fontSize: '0.78rem', cursor: 'pointer' }}>
+                    Cleanup history ({sweep.history.length})
+                  </summary>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '0.4rem' }}>
+                    <thead><tr>
+                      <th style={TH}>When</th><th style={TH}>Order</th><th style={TH}>Action</th><th style={TH}>Why</th>
+                    </tr></thead>
+                    <tbody>
+                      {sweep.history.map((h, i) => (
+                        <tr key={i}>
+                          <td style={{ ...TD, fontFamily: 'monospace', color: C.lightBrown, fontSize: '0.75rem' }}>
+                            {new Date(h.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                          </td>
+                          <td style={{ ...TD, fontSize: '0.78rem' }}>{h.title || h.doc_number}</td>
+                          <td style={{ ...TD, fontSize: '0.78rem', color: h.status === 'error' ? C.red : h.action === 'removed' ? C.green : C.lightBrown }}>
+                            {h.status === 'error' ? 'error' : h.action}{h.triggered_by === 'manual' ? ' (manual)' : ''}
+                          </td>
+                          <td style={{ ...TD, fontSize: '0.75rem', color: C.lightBrown }}>{h.error || h.reason}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </details>
+              )}
+            </>
+          )}
         </div>
 
         {/* ── Status ─────────────────────────────────────────────────── */}

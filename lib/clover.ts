@@ -31,18 +31,38 @@ export function creds(): { mid: string; token: string } {
   return { mid, token }
 }
 
+// Clover rate-limits bursts with a 429. The register sweep makes several calls
+// per order (payments, line items), so a handful of orders is enough to trip it
+// — and a 429 there reads as "could not verify", which stalls the sweep. Back
+// off and retry rather than surfacing a transient throttle as a hard failure.
+// Only 429 and 5xx are retried; a 401/404 is a real answer, not a hiccup.
+const RETRY_STATUSES = new Set([429, 500, 502, 503, 504])
+const MAX_ATTEMPTS = 4
+
 export async function cloverFetch(path: string, init: RequestInit = {}) {
   const { token } = creds()
-  const res = await fetch(`${BASE}${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      ...init.headers,
-    },
-  })
-  if (!res.ok) throw new Error(`Clover API ${res.status}: ${await res.text()}`)
-  return res.json()
+  let lastStatus = 0
+  let lastBody = ''
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const res = await fetch(`${BASE}${path}`, {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        ...init.headers,
+      },
+    })
+    if (res.ok) return res.json()
+
+    lastStatus = res.status
+    lastBody = await res.text()
+    if (!RETRY_STATUSES.has(res.status) || attempt === MAX_ATTEMPTS) break
+
+    // 250ms, 500ms, 1s — Clover's throttle window is short.
+    await new Promise(r => setTimeout(r, 250 * 2 ** (attempt - 1)))
+  }
+  throw new Error(`Clover API ${lastStatus}: ${lastBody}`)
 }
 
 // Update one Clover item. Clover v3 updates via POST on the item endpoint.

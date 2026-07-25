@@ -103,21 +103,54 @@ export function parseRingUpDocNumber(title?: string | null): string | null {
 // That's a per-order call, so we first narrow to orders titled like ours
 // (2 of the last 200 — a cashier's own tickets carry no title at all) and
 // only check payments for those.
-export async function getUnpaidRingUpOrders(limit = 200): Promise<CloverOrder[]> {
+// Every ring-up order in the recent window, paid or not. The sweep needs the
+// paid ones too so it can record WHY it left them alone.
+export async function getRingUpOrders(limit = 200): Promise<CloverOrder[]> {
   const { mid } = creds()
   const data = await cloverFetch(
     `/merchants/${mid}/orders?limit=${limit}&orderBy=createdTime%20DESC`
   )
-  const ours = ((data.elements ?? []) as CloverOrder[])
+  return ((data.elements ?? []) as CloverOrder[])
     .filter(o => o.state !== 'deleted' && parseRingUpDocNumber(o.title))
+}
+
+export interface CloverLineItem {
+  id: string
+  name?: string
+  price?: number
+}
+
+// Payments settled against an order. Non-empty means real money changed hands
+// and the order is a sales record, not clutter.
+export async function getOrderPayments(orderId: string): Promise<{ id: string; amount: number }[]> {
+  const { mid } = creds()
+  const data = await cloverFetch(`/merchants/${mid}/orders/${orderId}/payments`)
+  return (data.elements ?? []) as { id: string; amount: number }[]
+}
+
+export async function getOrderLineItems(orderId: string): Promise<CloverLineItem[]> {
+  const { mid } = creds()
+  const data = await cloverFetch(`/merchants/${mid}/orders/${orderId}/line_items`)
+  return (data.elements ?? []) as CloverLineItem[]
+}
+
+// Void an order off the register. Only ever called on an order the sweep has
+// already proven is ours, unpaid, settled in QuickBooks and carrying nothing
+// but its own invoice line.
+export async function deleteOrder(orderId: string): Promise<void> {
+  const { mid } = creds()
+  await cloverFetch(`/merchants/${mid}/orders/${orderId}`, { method: 'DELETE' })
+}
+
+export async function getUnpaidRingUpOrders(limit = 200): Promise<CloverOrder[]> {
+  const ours = await getRingUpOrders(limit)
 
   const checked = await Promise.all(ours.map(async o => {
     // A payments read failure must not masquerade as "unpaid" — that would
     // re-flag a settled invoice as still waiting. Treat it as paid (hide it)
     // and let the explicit duplicate confirm catch a genuine re-send.
     try {
-      const p = await cloverFetch(`/merchants/${mid}/orders/${o.id}/payments`)
-      return (p.elements ?? []).length === 0 ? o : null
+      return (await getOrderPayments(o.id)).length === 0 ? o : null
     } catch {
       return null
     }
