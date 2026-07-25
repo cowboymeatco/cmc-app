@@ -24,7 +24,8 @@ export interface CloverOrder {
   id: string
   title?: string
   note?: string
-  state?: string
+  state?: string        // open | locked (cashier has it open) | deleted
+  paymentState?: string // OPEN until tendered — this is the "still owes" signal
   total?: number
 }
 
@@ -80,12 +81,46 @@ export async function createRingUpOrder(opts: {
   return { ...order, title, total: amountCents }
 }
 
-// Open orders currently sitting on the register, newest first. Used to show
-// what is already waiting so we don't ring the same invoice up twice.
-export async function getOpenOrders(limit = 50): Promise<CloverOrder[]> {
+// Pull the invoice number back out of a ring-up title. Accepts an em-dash or a
+// plain hyphen so a title retyped on the device still parses.
+const RING_UP_TITLE = /\s[—-]\s*INV\s+(\S+)\s*$/i
+
+export function parseRingUpDocNumber(title?: string | null): string | null {
+  const m = title?.match(RING_UP_TITLE)
+  return m ? m[1] : null
+}
+
+// Ring-up orders still waiting to be paid, newest first — what the UI needs to
+// avoid ringing the same invoice up twice.
+//
+// Neither `state` nor `paymentState` can answer "is this paid" on our merchant:
+// every one of the last 200 orders reports state=locked / paymentState=OPEN,
+// including ones carrying a settled cash payment. `state` is worse than
+// useless — an order flips open -> locked the moment a cashier opens it on the
+// device, so filtering on it dropped exactly the orders being worked on.
+//
+// The only trustworthy signal is whether the order has payments against it.
+// That's a per-order call, so we first narrow to orders titled like ours
+// (2 of the last 200 — a cashier's own tickets carry no title at all) and
+// only check payments for those.
+export async function getUnpaidRingUpOrders(limit = 200): Promise<CloverOrder[]> {
   const { mid } = creds()
   const data = await cloverFetch(
-    `/merchants/${mid}/orders?filter=${encodeURIComponent('state=open')}&limit=${limit}&orderBy=createdTime%20DESC`
+    `/merchants/${mid}/orders?limit=${limit}&orderBy=createdTime%20DESC`
   )
-  return (data.elements ?? []) as CloverOrder[]
+  const ours = ((data.elements ?? []) as CloverOrder[])
+    .filter(o => o.state !== 'deleted' && parseRingUpDocNumber(o.title))
+
+  const checked = await Promise.all(ours.map(async o => {
+    // A payments read failure must not masquerade as "unpaid" — that would
+    // re-flag a settled invoice as still waiting. Treat it as paid (hide it)
+    // and let the explicit duplicate confirm catch a genuine re-send.
+    try {
+      const p = await cloverFetch(`/merchants/${mid}/orders/${o.id}/payments`)
+      return (p.elements ?? []).length === 0 ? o : null
+    } catch {
+      return null
+    }
+  }))
+  return checked.filter((o): o is CloverOrder => o !== null)
 }

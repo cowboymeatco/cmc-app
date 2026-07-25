@@ -1,7 +1,7 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { getOpenInvoices, getInvoice } from '@/lib/qboInvoices'
-import { createRingUpOrder, getOpenOrders, ringUpTitle } from '@/lib/cloverOrders'
+import { createRingUpOrder, getUnpaidRingUpOrders, parseRingUpDocNumber } from '@/lib/cloverOrders'
 
 // Send a QuickBooks invoice to the Clover register as a pre-labelled open order,
 // so paying a processing bill at the counter is one click and always reads the
@@ -16,20 +16,23 @@ export async function GET() {
     // plainly instead of failing the whole page.
     const [invoices, orders] = await Promise.all([
       getOpenInvoices(),
-      getOpenOrders().catch(e => (e instanceof Error ? e.message : String(e))),
+      getUnpaidRingUpOrders().catch(e => (e instanceof Error ? e.message : String(e))),
     ])
 
     const ordersFailed = typeof orders === 'string'
-    const alreadyOnRegister = ordersFailed
-      ? []
-      : orders.map(o => o.title ?? '').filter(Boolean)
+    // Match on the invoice number parsed out of the title, not on the whole
+    // title: a cashier can rename an order on the device, and the customer
+    // name is the part they'd change. The invoice number is what identifies it.
+    const docsOnRegister = new Set(
+      ordersFailed ? [] : orders.map(o => parseRingUpDocNumber(o.title)).filter(Boolean)
+    )
 
     return NextResponse.json({
       invoices: invoices.map(inv => ({
         ...inv,
         // Flag rather than filter: the cashier may legitimately need to
         // re-ring one, but the UI should warn before making a duplicate.
-        onRegister: alreadyOnRegister.includes(ringUpTitle(inv.customerName, inv.docNumber)),
+        onRegister: docsOnRegister.has(inv.docNumber),
       })),
       openOrders: ordersFailed ? [] : orders,
       ordersError: ordersFailed ? orders : undefined,
