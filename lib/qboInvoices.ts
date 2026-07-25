@@ -28,26 +28,30 @@ export interface OpenInvoice {
   dueDate: string | null
 }
 
-// Balance is filtered in JS rather than in the QBO query: QBO's SQL-ish
-// dialect compares Balance as a string, so `where Balance > '0'` sorts
-// lexically and silently drops amounts. Pulling recent invoices and filtering
-// here is slower but correct.
-export async function getOpenInvoices(maxResults = 500): Promise<OpenInvoice[]> {
-  const q = `select * from Invoice orderby TxnDate desc maxresults ${maxResults}`
-  const res = await qboFetch<InvoiceQueryResponse>(`query?query=${encodeURIComponent(q)}`)
-  const invoices = res.QueryResponse.Invoice ?? []
+// Every unpaid invoice, filtered server-side on Balance.
+//
+// This used to pull the 500 most recent invoices and filter in JS, on the
+// belief that QBO compared Balance lexically. That was wrong on both counts:
+// `where Balance > '0'` returns exactly the right set (verified against a full
+// 10,604-invoice scan — same 75 invoices, no zero-balance leakage), and the
+// 500-row window was silently hiding 31 open invoices older than the cutoff,
+// some over a year old. Anything the window missed was invisible to the whole
+// billing view, not just to the register sync.
+//
+// Paginated so the answer stays complete if receivables ever exceed one page.
+// The JS balance check is kept as a cheap backstop, not as the mechanism.
+export async function getOpenInvoices(): Promise<OpenInvoice[]> {
+  const page = 1000
+  const out: OpenInvoice[] = []
 
-  return invoices
-    .filter(inv => (inv.Balance ?? 0) > 0)
-    .map(inv => ({
-      id: inv.Id,
-      docNumber: inv.DocNumber ?? inv.Id,
-      customerName: inv.CustomerRef?.name ?? '(no customer)',
-      balance: inv.Balance,
-      balanceCents: Math.round(inv.Balance * 100),
-      txnDate: inv.TxnDate,
-      dueDate: inv.DueDate ?? null,
-    }))
+  for (let start = 1; ; start += page) {
+    const q = `select * from Invoice where Balance > '0' orderby TxnDate desc startposition ${start} maxresults ${page}`
+    const res = await qboFetch<InvoiceQueryResponse>(`query?query=${encodeURIComponent(q)}`)
+    const batch = res.QueryResponse.Invoice ?? []
+    out.push(...batch.filter(inv => (inv.Balance ?? 0) > 0).map(toOpenInvoice))
+    if (batch.length < page) break
+  }
+  return out
 }
 
 function toOpenInvoice(inv: QboInvoice): OpenInvoice {
