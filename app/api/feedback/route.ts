@@ -13,8 +13,8 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const body = await req.json()
-  if (!body.type || !body.description) {
-    return NextResponse.json({ error: 'type and description required' }, { status: 400 })
+  if (!body.type || !body.description?.trim() || !body.submitter?.trim()) {
+    return NextResponse.json({ error: 'type, description and your name are required' }, { status: 400 })
   }
   // Stamp diagnostic context server-side so the client can't forge it and so we
   // always know which code version + browser the report came from.
@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
     .insert([{
       type:           body.type,
       description:    body.description,
-      submitter:      body.submitter ?? null,
+      submitter:      body.submitter.trim(),
       page_url:       body.page_url ?? null,
       // diagnostics (see migration add_feedback_diagnostics)
       full_url:       body.full_url ?? null,

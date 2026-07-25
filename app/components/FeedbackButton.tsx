@@ -23,6 +23,7 @@ export default function FeedbackButton() {
   const [submitter, setSubmitter]   = useState('')
   const [sending, setSending]       = useState(false)
   const [sent, setSent]             = useState(false)
+  const [error, setError]           = useState<string | null>(null)
 
   // Install client telemetry once (console errors, click/fetch/nav breadcrumbs).
   useEffect(() => { installTelemetry() }, [])
@@ -36,9 +37,10 @@ export default function FeedbackButton() {
   async function submit() {
     if (!ready) return
     setSending(true)
+    setError(null)
     try {
       const telemetry = getTelemetry()
-      await fetch('/api/feedback', {
+      const res = await fetch('/api/feedback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -49,6 +51,13 @@ export default function FeedbackButton() {
           ...telemetry,   // full_url, viewport, app_context, console_errors, breadcrumbs
         }),
       })
+      // Only claim it sent if it actually did — never clear the box on a failure,
+      // or the report is gone and nobody knows it went missing.
+      if (!res.ok) {
+        const body = await res.json().catch(() => null)
+        setError(body?.error ?? `Didn't send (error ${res.status}) — try again.`)
+        return
+      }
       setSent(true)
       setTimeout(() => {
         setOpen(false)
@@ -57,6 +66,8 @@ export default function FeedbackButton() {
         setSubmitter('')
         setType('bug')
       }, 1500)
+    } catch {
+      setError("Didn't send — check your connection and try again.")
     } finally {
       setSending(false)
     }
@@ -206,6 +217,12 @@ export default function FeedbackButton() {
             {description.trim() && !submitter.trim() && (
               <div style={{ fontSize: 11, color: C.amber, textAlign: 'center', marginTop: -8 }}>
                 Add your name so we can follow up.
+              </div>
+            )}
+
+            {error && (
+              <div style={{ fontSize: 12, color: C.red, textAlign: 'center', marginTop: -8 }}>
+                {error}
               </div>
             )}
 
