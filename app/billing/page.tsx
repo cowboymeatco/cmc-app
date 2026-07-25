@@ -56,6 +56,21 @@ interface EventsData {
     byCustomer: { name: string; amount: number }[]
   }
 }
+interface OpenInvoiceRow {
+  id: string
+  docNumber: string
+  customerName: string
+  balance: number
+  balanceCents: number
+  txnDate: string
+  dueDate: string | null
+  onRegister: boolean
+}
+interface RingUpData {
+  invoices: OpenInvoiceRow[]
+  openOrders: { id: string; title?: string }[]
+  ordersError?: string
+}
 interface QboCust { qbo_id: string; display_name: string; company_name?: string | null; phone?: string | null; balance: number | null }
 interface LinksData {
   linked: { producer: Producer; qbo: QboCust }[]
@@ -82,19 +97,56 @@ export default function BillingPage() {
   const [detectMsg, setDetectMsg] = useState<string | null>(null)
   const [eventBusy, setEventBusy] = useState<string | null>(null)
 
+  // ring up at register
+  const [ringUp, setRingUp] = useState<RingUpData | null>(null)
+  const [ringSearch, setRingSearch] = useState('')
+  const [ringBusy, setRingBusy] = useState<string | null>(null)
+  const [ringMsg, setRingMsg] = useState<string | null>(null)
+
   const load = useCallback(async () => {
     setError(null)
     try {
-      const [custRes, evRes] = await Promise.all([fetch('/api/qbo/customers'), fetch('/api/billing/events')])
+      const [custRes, evRes, ringRes] = await Promise.all([
+        fetch('/api/qbo/customers'),
+        fetch('/api/billing/events'),
+        fetch('/api/clover/ring-up'),
+      ])
       const json = await custRes.json()
       if (!custRes.ok || json.error) throw new Error(json.error ?? 'Load failed')
       setData(json)
       const ev = await evRes.json()
       if (evRes.ok && !ev.error) setCharges(ev)
+      const ru = await ringRes.json()
+      if (ringRes.ok && !ru.error) setRingUp(ru)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
   }, [])
+
+  // Push one invoice to the register as a pre-labelled open order. The amount
+  // is re-read from QuickBooks server-side, so what rings is the balance now.
+  async function sendToRegister(inv: OpenInvoiceRow) {
+    if (inv.onRegister && !confirm(
+      `${inv.customerName} — INV ${inv.docNumber} is already waiting on the register.\n\n` +
+      `Send it again? That creates a SECOND open order for the same invoice.`
+    )) return
+    setRingBusy(inv.id)
+    setRingMsg(null)
+    try {
+      const res = await fetch('/api/clover/ring-up', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoiceId: inv.id }),
+      })
+      const json = await res.json()
+      if (!res.ok || json.error) throw new Error(json.error ?? 'Send failed')
+      setRingMsg(`✓ ${json.title} — $${Number(json.amount).toFixed(2)} is on the register. Pull it up under Open Orders.`)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+    setRingBusy(null)
+  }
 
   async function detect() {
     setDetecting(true)
@@ -188,6 +240,92 @@ export default function BillingPage() {
             {error} <button onClick={() => { setError(null); load() }} style={{ ...BTN('transparent', C.red), border: `1px solid ${C.red}`, marginLeft: '1rem', padding: '0.2rem 0.6rem' }}>Retry</button>
           </div>
         )}
+
+        {/* ── Ring up at register ────────────────────────────────────── */}
+        <div style={CARD}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <div>
+              <div style={{ color: C.tan, fontWeight: 700, fontSize: '0.95rem' }}>
+                Ring Up at Register{ringUp && ringUp.invoices.length > 0 && (
+                  <span style={{ color: C.yellow, fontWeight: 400, marginLeft: '0.5rem' }}>
+                    {ringUp.invoices.length} unpaid · ${ringUp.invoices.reduce((s, i) => s + i.balance, 0).toFixed(2)}
+                  </span>
+                )}
+              </div>
+              <div style={{ color: C.lightBrown, fontSize: '0.78rem' }}>
+                Sends an open QuickBooks invoice to Clover as a labelled order — name, invoice # and amount already
+                rung up, so the counter is one tap.
+              </div>
+              {ringMsg && <div style={{ color: C.green, fontSize: '0.78rem', marginTop: '0.3rem' }}>{ringMsg}</div>}
+            </div>
+            <input
+              value={ringSearch}
+              onChange={e => setRingSearch(e.target.value)}
+              placeholder="Search name or invoice #…"
+              style={{
+                background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.35)',
+                borderRadius: 3, padding: '0.45rem 0.7rem', color: C.cream, fontSize: '0.85rem',
+                outline: 'none', minWidth: 220,
+              }}
+            />
+          </div>
+
+          {ringUp?.ordersError && (
+            <div style={{ color: C.red, fontSize: '0.78rem', marginBottom: '0.5rem' }}>
+              Clover orders unreachable — {ringUp.ordersError}
+            </div>
+          )}
+
+          {!ringUp ? (
+            <div style={{ color: C.lightBrown, fontSize: '0.83rem' }}>Loading open invoices…</div>
+          ) : ringUp.invoices.length === 0 ? (
+            <div style={{ color: C.lightBrown, fontSize: '0.83rem' }}>No unpaid invoices in QuickBooks.</div>
+          ) : (() => {
+            const q = ringSearch.trim().toLowerCase()
+            const rows = q
+              ? ringUp.invoices.filter(i =>
+                  i.customerName.toLowerCase().includes(q) || i.docNumber.toLowerCase().includes(q))
+              : ringUp.invoices
+            if (rows.length === 0) {
+              return <div style={{ color: C.lightBrown, fontSize: '0.83rem' }}>No open invoice matches “{ringSearch}”.</div>
+            }
+            return (
+              <div style={{ maxHeight: 340, overflowY: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead><tr>
+                    <th style={TH}>Customer</th><th style={TH}>Invoice</th><th style={TH}>Dated</th>
+                    <th style={TH}>Balance</th><th style={TH}></th>
+                  </tr></thead>
+                  <tbody>
+                    {rows.map(inv => (
+                      <tr key={inv.id}>
+                        <td style={TD}>
+                          {inv.customerName}
+                          {inv.onRegister && (
+                            <span title="Already waiting on the register" style={{ color: C.green, marginLeft: '0.4rem', fontSize: '0.72rem' }}>
+                              ● on register
+                            </span>
+                          )}
+                        </td>
+                        <td style={{ ...TD, fontFamily: 'monospace', color: C.lightBrown }}>{inv.docNumber}</td>
+                        <td style={{ ...TD, fontFamily: 'monospace', color: C.lightBrown }}>{inv.txnDate}</td>
+                        <td style={{ ...TD, color: C.yellow, fontFamily: 'monospace' }}>${inv.balance.toFixed(2)}</td>
+                        <td style={{ ...TD, textAlign: 'right' }}>
+                          <button onClick={() => sendToRegister(inv)} disabled={ringBusy === inv.id}
+                            style={{ ...BTN(inv.onRegister ? 'transparent' : C.green, inv.onRegister ? C.lightBrown : C.dark),
+                              border: inv.onRegister ? '1px solid rgba(166,120,90,0.35)' : 'none',
+                              padding: '0.3rem 0.8rem', fontSize: '0.76rem', whiteSpace: 'nowrap' }}>
+                            {ringBusy === inv.id ? 'Sending…' : inv.onRegister ? 'Send again' : '→ Send to Register'}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          })()}
+        </div>
 
         {/* ── Status ─────────────────────────────────────────────────── */}
         <div style={{ ...CARD, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>

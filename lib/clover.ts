@@ -22,7 +22,7 @@ export interface CloverItem {
   code?: string
 }
 
-function creds(): { mid: string; token: string } {
+export function creds(): { mid: string; token: string } {
   const mid = process.env.CLOVER_MERCHANT_ID
   const token = process.env.CLOVER_API_TOKEN
   if (!mid || !token) {
@@ -31,7 +31,7 @@ function creds(): { mid: string; token: string } {
   return { mid, token }
 }
 
-async function cloverFetch(path: string, init: RequestInit = {}) {
+export async function cloverFetch(path: string, init: RequestInit = {}) {
   const { token } = creds()
   const res = await fetch(`${BASE}${path}`, {
     ...init,
