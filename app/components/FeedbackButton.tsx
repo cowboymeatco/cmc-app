@@ -29,8 +29,12 @@ export default function FeedbackButton() {
   // Record route changes as breadcrumbs.
   useEffect(() => { addBreadcrumb('nav', `page → ${pathname}`) }, [pathname])
 
+  // Name is required — a report you can't trace back to a person can't be
+  // followed up on when it needs a question answered.
+  const ready = Boolean(description.trim() && submitter.trim())
+
   async function submit() {
-    if (!description.trim()) return
+    if (!ready) return
     setSending(true)
     try {
       const telemetry = getTelemetry()
@@ -40,7 +44,7 @@ export default function FeedbackButton() {
         body: JSON.stringify({
           type,
           description: description.trim(),
-          submitter:   submitter.trim() || null,
+          submitter:   submitter.trim(),
           page_url:    pathname,
           ...telemetry,   // full_url, viewport, app_context, console_errors, breadcrumbs
         }),
@@ -168,7 +172,7 @@ export default function FeedbackButton() {
             <input
               value={submitter}
               onChange={e => setSubmitter(e.target.value)}
-              placeholder="Your name (optional)"
+              placeholder="Your name (required)"
               style={{
                 background:  C.dark,
                 border:      `1px solid ${C.medBrown}`,
@@ -183,7 +187,7 @@ export default function FeedbackButton() {
 
             <button
               onClick={submit}
-              disabled={!description.trim() || sending || sent}
+              disabled={!ready || sending || sent}
               style={{
                 background:   sent ? C.green : C.medBrown,
                 border:       'none',
@@ -192,12 +196,18 @@ export default function FeedbackButton() {
                 padding:      '10px 0',
                 fontSize:     14,
                 fontWeight:   700,
-                cursor:       description.trim() && !sending && !sent ? 'pointer' : 'default',
-                opacity:      !description.trim() ? 0.5 : 1,
+                cursor:       ready && !sending && !sent ? 'pointer' : 'default',
+                opacity:      ready ? 1 : 0.5,
               } as React.CSSProperties}
             >
               {sent ? '✓ Sent!' : sending ? 'Sending…' : 'Send'}
             </button>
+
+            {description.trim() && !submitter.trim() && (
+              <div style={{ fontSize: 11, color: C.amber, textAlign: 'center', marginTop: -8 }}>
+                Add your name so we can follow up.
+              </div>
+            )}
 
             <div style={{ fontSize: 11, color: C.lightBrown, textAlign: 'center' }}>
               page: {pathname}
