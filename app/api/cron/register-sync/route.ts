@@ -30,17 +30,24 @@ export async function GET(req: NextRequest) {
     return new NextResponse('Unauthorized', { status: 401 })
   }
 
+  // ?phase=sweep runs removal only. vercel.json schedules the two phases as
+  // separate cron entries so neither request has to carry both workloads —
+  // doing both in one call timed out against a populated register.
+  const phase = new URL(req.url).searchParams.get('phase')
+
   try {
+    if (phase === 'sweep') {
+      const sweep = await runSweep('cron')
+      return NextResponse.json({ ok: true, phase, removed: sweep.removed.length, errors: sweep.errors.length })
+    }
     const sync = await runSync('cron')
-    const sweep = await runSweep('cron')
     return NextResponse.json({
       ok: true,
+      phase: 'sync',
       created: sync.created.length,
       updated: sync.updated.length,
       deferred: sync.deferred,
-      removed: sweep.removed.length,
-      syncErrors: sync.errors.length,
-      sweepErrors: sweep.errors.length,
+      errors: sync.errors.length,
     })
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 })

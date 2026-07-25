@@ -30,11 +30,12 @@
 import {
   getRingUpOrders,
   getOrderPayments,
-  getOrderLineItems,
+  lineItemsOf,
   deleteOrder,
   parseRingUpDocNumber,
+  type CloverOrder,
 } from '@/lib/cloverOrders'
-import { getInvoiceByDocNumber } from '@/lib/qboInvoices'
+import { getInvoiceByDocNumber, getOpenInvoices } from '@/lib/qboInvoices'
 import { supabase } from '@/lib/supabase'
 
 export interface SweepDecision {
@@ -48,29 +49,47 @@ export interface SweepDecision {
 
 // Decide the fate of every ring-up order in the recent window. Read-only —
 // runSweep() is what actually deletes.
-// Deliberately sequential. Each order costs 2-3 Clover calls, and fanning them
-// out in parallel trips Clover's rate limit — which surfaces as "could not
-// verify" and stalls the sweep instead of failing loudly. Ring-up orders number
-// in the handful, so the wall-clock cost is irrelevant.
-export async function planSweep(): Promise<SweepDecision[]> {
-  const orders = await getRingUpOrders()
-  const decisions: SweepDecision[] = []
+// Sequential and lazy. Fanning per-order calls out in parallel trips Clover's
+// rate limit, which surfaces as "could not verify" and stalls the sweep instead
+// of failing loudly.
+//
+// The cheap path matters more: an order whose invoice is STILL in the open list
+// is obviously not settled, so it's kept without a single extra API call. Only
+// orders that have dropped off that list are real removal candidates, and only
+// those pay for the per-order checks. On a populated register that is the
+// difference between ~100 calls and ~2.
+//
+// Accepts a pre-fetched context so a combined run doesn't fetch it all twice.
+export async function planSweep(ctx?: {
+  orders: CloverOrder[]
+  openDocNumbers: Set<string>
+}): Promise<SweepDecision[]> {
+  const orders = ctx?.orders ?? (await getRingUpOrders())
+  const openDocs = ctx?.openDocNumbers
+    ?? new Set((await getOpenInvoices()).map(i => i.docNumber))
 
+  const decisions: SweepDecision[] = []
   for (const o of orders) {
-    decisions.push(await decide(o))
+    decisions.push(await decide(o, openDocs))
   }
   return decisions
 }
 
-async function decide(o: Awaited<ReturnType<typeof getRingUpOrders>>[number]): Promise<SweepDecision> {
+async function decide(o: CloverOrder, openDocs: Set<string>): Promise<SweepDecision> {
     const docNumber = parseRingUpDocNumber(o.title) ?? ''
+    const lineItems = lineItemsOf(o)
     const base = {
       orderId: o.id,
       docNumber,
       title: o.title ?? '',
-      amountCents: o.total ?? null,
+      // order.total is null until a device opens the order, so fall back to the
+      // line items we already have in hand.
+      amountCents: o.total ?? (lineItems.length ? lineItems.reduce((s, li) => s + (li.price ?? 0), 0) : null),
     }
     const keep = (reason: string): SweepDecision => ({ ...base, action: 'keep', reason })
+
+    // Free gate — still an open invoice, so nothing to reconcile. No API calls.
+    if (openDocs.has(docNumber)) return keep('invoice still open in QuickBooks')
 
     try {
       // Gate 2 — paid on the register, so it's a sales record.
@@ -86,7 +105,6 @@ async function decide(o: Awaited<ReturnType<typeof getRingUpOrders>>[number]): P
       if (invoice.balance > 0) return keep(`still owing $${invoice.balance.toFixed(2)} in QuickBooks`)
 
       // Gate 4 — anything the counter added stays.
-      const lineItems = await getOrderLineItems(o.id)
       const extras = lineItems.filter(li => li.name !== o.title)
       if (extras.length > 0) {
         const names = extras.map(li => li.name ?? 'unnamed').join(', ')

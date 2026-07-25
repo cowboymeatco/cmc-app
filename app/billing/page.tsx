@@ -171,14 +171,27 @@ export default function BillingPage() {
     setSweeping(true)
     setSweepMsg(null)
     try {
-      const res = await fetch('/api/clover/reconcile', { method: 'POST' })
-      const json = await res.json()
-      if (!res.ok || json.error) throw new Error(json.error ?? 'Sync failed')
+      // Two requests, not one: doing both phases server-side blew the function
+      // timeout on a populated register, so each phase gets its own budget.
+      const post = async (phase: string) => {
+        const res = await fetch('/api/clover/reconcile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phase }),
+        })
+        const json = await res.json()
+        if (!res.ok || json.error) throw new Error(json.error ?? `${phase} failed`)
+        return json
+      }
+      const sync = await post('sync')
+      const sweep = await post('sweep')
+      const json = { ...sync, removed: sweep.removed, errors: [...(sync.errors ?? []), ...(sweep.errors ?? [])] }
+
       const parts: string[] = []
       if (json.created?.length) parts.push(`${json.created.length} added`)
       if (json.updated?.length) parts.push(`${json.updated.length} amount(s) corrected`)
       if (json.removed?.length) parts.push(`${json.removed.length} removed`)
-      if (json.deferred) parts.push(`${json.deferred} left for the next run`)
+      if (json.deferred) parts.push(`${json.deferred} left — press again to continue`)
       if (json.errors?.length) parts.push(`${json.errors.length} failed`)
       setSweepMsg(parts.length ? `Register synced — ${parts.join(', ')}.` : 'Register already up to date.')
       await load()

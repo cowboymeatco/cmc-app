@@ -1,21 +1,28 @@
 export const runtime = 'edge'
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { planSweep, runSweep } from '@/lib/ringUpSweep'
-import { planSync, runSync } from '@/lib/ringUpSync'
+import { planSync, runSync, loadContext } from '@/lib/ringUpSync'
 import { supabase } from '@/lib/supabase'
 
 // Register reconcile, for the /billing UI.
-//   GET  -> what a run would do right now + recent history (read-only)
-//   POST -> run it now ("Sync register" button): sync, then sweep
+//   GET               -> what a run would do right now + recent history
+//   POST {phase:sync}  -> create/correct orders for open invoices
+//   POST {phase:sweep} -> remove orders whose invoice is settled
+//
+// The two phases are SEPARATE requests on purpose. Running both in one call
+// timed out (504) against a populated register: the writes had completed but
+// the response never came back, which reads like total failure when it wasn't.
+// The UI fires them in sequence so each gets its own function budget.
 //
 // The scheduled run lives at /api/cron/register-sync so Vercel's plain GET
 // can't trigger writes through this read path.
 
 export async function GET() {
   try {
+    const ctx = await loadContext()
     const [sweepDecisions, syncDecisions, history] = await Promise.all([
-      planSweep(),
-      planSync(),
+      planSweep({ orders: ctx.orders, openDocNumbers: ctx.openDocNumbers }),
+      planSync(ctx),
       supabase
         .from('clover_ringup_sweep_log')
         .select('created_at, doc_number, title, amount_cents, action, reason, status, error, triggered_by')
@@ -38,17 +45,22 @@ export async function GET() {
   }
 }
 
-export async function POST() {
+export async function POST(req: NextRequest) {
   try {
+    const { phase } = await req.json().catch(() => ({ phase: 'sync' }))
+
+    if (phase === 'sweep') {
+      const sweep = await runSweep('manual')
+      return NextResponse.json({ phase, removed: sweep.removed, errors: sweep.errors })
+    }
+
     const sync = await runSync('manual')
-    const sweep = await runSweep('manual')
     return NextResponse.json({
-      ok: true,
+      phase: 'sync',
       created: sync.created,
       updated: sync.updated,
       deferred: sync.deferred,
-      removed: sweep.removed,
-      errors: [...sync.errors, ...sweep.errors],
+      errors: sync.errors,
     })
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 })

@@ -29,7 +29,7 @@
 import {
   getRingUpOrders,
   getOrderPayments,
-  getOrderLineItems,
+  lineItemsOf,
   deleteOrder,
   createRingUpOrder,
   parseRingUpDocNumber,
@@ -70,13 +70,9 @@ async function classify(inv: OpenInvoice, order: CloverOrder | undefined): Promi
     ({ ...base, action: 'skip', reason, orderId: order.id })
 
   try {
-    const payments = await getOrderPayments(order.id)
-    if (payments.length > 0) {
-      const total = payments.reduce((s, p) => s + (p.amount ?? 0), 0)
-      return skip(`paid on the register ($${(total / 100).toFixed(2)})`)
-    }
-
-    const lineItems = await getOrderLineItems(order.id)
+    // Line items came back with the order list, so the common case — order
+    // exists and the amount already matches — costs no API calls at all.
+    const lineItems = lineItemsOf(order)
     const extras = lineItems.filter(li => li.name !== order.title)
     if (extras.length > 0) {
       return skip(`cashier added ${extras.map(li => li.name ?? 'unnamed').join(', ')} — needs a person`)
@@ -86,22 +82,42 @@ async function classify(inv: OpenInvoice, order: CloverOrder | undefined): Promi
     }
 
     const onRegister = lineItems[0].price ?? 0
-    if (onRegister !== inv.balanceCents) {
-      return {
-        ...base,
-        action: 'update',
-        orderId: order.id,
-        reason: `register has $${(onRegister / 100).toFixed(2)}, QuickBooks says $${inv.balance.toFixed(2)}`,
-      }
+    if (onRegister === inv.balanceCents) return skip('already on the register, amount current')
+
+    // Only now, with a real amount discrepancy to act on, is the payment check
+    // worth a call. A paid order is a sales record and must not be replaced.
+    const payments = await getOrderPayments(order.id)
+    if (payments.length > 0) {
+      const total = payments.reduce((s, p) => s + (p.amount ?? 0), 0)
+      return skip(`paid on the register ($${(total / 100).toFixed(2)})`)
     }
-    return skip('already on the register, amount current')
+
+    return {
+      ...base,
+      action: 'update',
+      orderId: order.id,
+      reason: `register has $${(onRegister / 100).toFixed(2)}, QuickBooks says $${inv.balance.toFixed(2)}`,
+    }
   } catch (e) {
     return skip(`could not verify (${e instanceof Error ? e.message : String(e)})`)
   }
 }
 
-export async function planSync(): Promise<SyncDecision[]> {
+// Everything both halves of the reconcile need, fetched once: two API calls
+// total, regardless of how many orders are on the register.
+export interface ReconcileContext {
+  invoices: OpenInvoice[]
+  orders: CloverOrder[]
+  openDocNumbers: Set<string>
+}
+
+export async function loadContext(): Promise<ReconcileContext> {
   const [invoices, orders] = await Promise.all([getOpenInvoices(), getRingUpOrders()])
+  return { invoices, orders, openDocNumbers: new Set(invoices.map(i => i.docNumber)) }
+}
+
+export async function planSync(ctx?: ReconcileContext): Promise<SyncDecision[]> {
+  const { invoices, orders } = ctx ?? (await loadContext())
 
   // Last write wins if a document number somehow has two orders; the duplicate
   // surfaces through the sweep rather than being silently reconciled here.
@@ -126,8 +142,8 @@ export interface SyncResult {
   deferred: number // work left for the next run because of the per-run cap
 }
 
-export async function runSync(triggeredBy: 'cron' | 'manual'): Promise<SyncResult> {
-  const decisions = await planSync()
+export async function runSync(triggeredBy: 'cron' | 'manual', ctx?: ReconcileContext): Promise<SyncResult> {
+  const decisions = await planSync(ctx)
   const result: SyncResult = { created: [], updated: [], skipped: [], errors: [], deferred: 0 }
   const rows: Record<string, unknown>[] = []
   let writes = 0

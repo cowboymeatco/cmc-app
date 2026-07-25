@@ -25,8 +25,9 @@ export interface CloverOrder {
   title?: string
   note?: string
   state?: string        // open | locked (cashier has it open) | deleted
-  paymentState?: string // OPEN until tendered — this is the "still owes" signal
-  total?: number
+  paymentState?: string // unreliable here — see getUnpaidRingUpOrders
+  total?: number        // null until a device first opens the order
+  lineItems?: { elements?: { id: string; name?: string; price?: number }[] }
 }
 
 // Label every ring-up order identically so the Clover order list, the printed
@@ -103,12 +104,21 @@ export function parseRingUpDocNumber(title?: string | null): string | null {
 // That's a per-order call, so we first narrow to orders titled like ours
 // (2 of the last 200 — a cashier's own tickets carry no title at all) and
 // only check payments for those.
-// Every ring-up order in the recent window, paid or not. The sweep needs the
-// paid ones too so it can record WHY it left them alone.
+// Every ring-up order in the recent window, paid or not, WITH its line items.
+//
+// The expand is what makes this scale. Fetching line items per order cost 1
+// call each, so planning a sync against a populated register ran to ~100 Clover
+// calls and blew the function timeout. `expand=lineItems` on the list endpoint
+// returns them all in a single request, so planning is now O(1) calls no matter
+// how many orders are waiting.
+//
+// Payments deliberately are NOT expanded — the token lacks that permission and
+// the request 400s. Callers check payments per order, but only for the handful
+// they actually intend to touch.
 export async function getRingUpOrders(limit = 200): Promise<CloverOrder[]> {
   const { mid } = creds()
   const data = await cloverFetch(
-    `/merchants/${mid}/orders?limit=${limit}&orderBy=createdTime%20DESC`
+    `/merchants/${mid}/orders?limit=${limit}&orderBy=createdTime%20DESC&expand=lineItems`
   )
   return ((data.elements ?? []) as CloverOrder[])
     .filter(o => o.state !== 'deleted' && parseRingUpDocNumber(o.title))
@@ -118,6 +128,11 @@ export interface CloverLineItem {
   id: string
   name?: string
   price?: number
+}
+
+// Line items off an already-expanded order, so callers don't re-fetch.
+export function lineItemsOf(order: CloverOrder): CloverLineItem[] {
+  return order.lineItems?.elements ?? []
 }
 
 // Payments settled against an order. Non-empty means real money changed hands
