@@ -143,7 +143,13 @@ export async function runSweep(triggeredBy: 'cron' | 'manual'): Promise<SweepRes
   for (const d of decisions) {
     if (d.action === 'keep') {
       result.kept.push(d)
-      rows.push({ ...logRow(d, triggeredBy), action: 'kept', status: 'ok' })
+      // Log only keeps that mean something. With every open invoice held on
+      // the register, logging routine keeps wrote ~77 rows per run and buried
+      // the actual events — the audit trail exists to make a delete
+      // reviewable, not to restate the steady state every morning.
+      if (d.reason.includes('needs a person') || d.reason.includes('could not verify')) {
+        rows.push({ ...logRow(d, triggeredBy), action: 'kept', status: 'ok' })
+      }
       continue
     }
     try {
