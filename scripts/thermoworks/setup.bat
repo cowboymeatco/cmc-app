@@ -18,12 +18,19 @@ if errorlevel 1 (
 
 echo.
 
-:: Create .env if it doesn't exist
+:: Create .env if it doesn't exist. Written inline rather than copied from a
+:: template file - .env* is gitignored, so no template survives a fresh clone.
 if not exist "%SCRIPT_DIR%.env" (
-    copy "%SCRIPT_DIR%.env.example" "%SCRIPT_DIR%.env" >nul
-    echo .env created from template.
+    >  "%SCRIPT_DIR%.env" echo # ThermoWorks Cloud login
+    >> "%SCRIPT_DIR%.env" echo THERMOWORKS_EMAIL=
+    >> "%SCRIPT_DIR%.env" echo THERMOWORKS_PASSWORD=
+    >> "%SCRIPT_DIR%.env" echo.
+    >> "%SCRIPT_DIR%.env" echo # Supabase project - service role key, not the anon key
+    >> "%SCRIPT_DIR%.env" echo SUPABASE_URL=
+    >> "%SCRIPT_DIR%.env" echo SUPABASE_KEY=
+    echo .env template created - all four values are blank.
     echo.
-    echo *** IMPORTANT: Edit .env with your credentials before continuing ***
+    echo *** IMPORTANT: Fill in .env before continuing ***
     echo File: %SCRIPT_DIR%.env
     echo.
     pause
