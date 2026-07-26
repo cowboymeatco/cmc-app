@@ -408,6 +408,8 @@ export default function ScannerPage() {
   const [showAllFreezer,   setShowAllFreezer]   = useState(false)
   const [showAllBaker,     setShowAllBaker]     = useState(false)
   const [showAllPickedUp,  setShowAllPickedUp]  = useState(false)
+  const [sessionQuery,     setSessionQuery]     = useState('')
+  const [statusFilter,     setStatusFilter]     = useState<SessionStatus | 'all'>('all')
   const [sharedYield,      setSharedYield]      = useState<SharedYield | null>(null)
   const [mergeSource,      setMergeSource]      = useState<SessionWithStats | null>(null)
   const [mergeBusy,        setMergeBusy]        = useState(false)
@@ -1227,19 +1229,42 @@ export default function ScannerPage() {
   // SETUP SCREEN
   // ══════════════════════════════════════════════════════════════════════════════
   if (!started) {
-    const scanning  = sessions.filter(s => s.status === 'scanning')
-    const valueAdd  = sessions.filter(s => s.status === 'value_add')
+    // Look-up: match the customer, the pack date, or any carcass hanging on the
+    // session ("Beef — Tag 06 (Holdbrook)"), so a producer or tag finds it too.
+    const sq        = sessionQuery.trim().toLowerCase()
+    const searching = sq.length > 0
+    const inScope   = sessions.filter(s =>
+      !sq || [s.customer_name, s.session_date, ...(s.animals ?? [])].some(v => v?.toLowerCase().includes(sq)))
+    const pick = (st: SessionStatus) =>
+      inScope.filter(s => s.status === st && (statusFilter === 'all' || statusFilter === st))
+
+    const scanning  = pick('scanning')
+    const valueAdd  = pick('value_add')
     // Complete = boxed up and in the freezer awaiting pickup. Oldest first —
     // they've been waiting the longest.
-    const freezer   = sessions.filter(s => s.status === 'complete')
+    const freezer   = pick('complete')
       .sort((a, b) => a.session_date.localeCompare(b.session_date))
     // Baker Storage = delivered to the locker in Baker, still ours to track.
     // Oldest first — these are the ones racking up storage fees.
-    const bakerStorage = sessions.filter(s => s.status === 'baker_storage')
+    const bakerStorage = pick('baker_storage')
       .sort((a, b) => a.session_date.localeCompare(b.session_date))
-    const pickedUp  = sessions.filter(s => s.status === 'picked_up')
+    const pickedUp  = pick('picked_up')
+    const shownCount = scanning.length + valueAdd.length + freezer.length + bakerStorage.length + pickedUp.length
     // Retail orders Jill marked "In Progress" — ready to pack/scan straight in.
-    const inProgressOrders = orders.filter(o => o.status === 'in_progress')
+    // A search narrows these too, so a lookup isn't buried under unrelated orders.
+    const inProgressOrders = orders.filter(o =>
+      o.status === 'in_progress' && (!sq || o.customer_name.toLowerCase().includes(sq)))
+
+    const STATUS_RAIL = [
+      { value: 'all' as const,           label: 'All',           dot: '',   color: C.cream },
+      { value: 'scanning' as const,      label: 'Scanning',      dot: '●',  color: C.yellow },
+      { value: 'value_add' as const,     label: 'Value Add',     dot: '◆',  color: '#E8883A' },
+      { value: 'complete' as const,      label: 'Freezer',       dot: '🧊', color: '#7CAFDD' },
+      { value: 'baker_storage' as const, label: 'Baker Storage', dot: '🚚', color: C.tan },
+      { value: 'picked_up' as const,     label: 'Picked Up',     dot: '✓',  color: C.green },
+    ]
+    const railCount = (v: SessionStatus | 'all') =>
+      v === 'all' ? inScope.length : inScope.filter(s => s.status === v).length
 
     const STATUS_CFG = {
       scanning:  { label: 'Scanning',   color: C.yellow,        dot: '●' },
@@ -1408,7 +1433,7 @@ export default function ScannerPage() {
         </div>
 
         {/* Sessions */}
-        <div style={{ flex: 1, padding: '1.5rem', maxWidth: 920, width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
+        <div style={{ flex: 1, padding: '1.5rem', maxWidth: 1160, width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
           {/* Merge mode banner */}
           {mergeSource && (
             <div style={{ marginBottom: '1.25rem', background: 'rgba(217,119,6,0.1)', border: `1px solid ${C.yellow}`, borderRadius: 8, padding: '0.85rem 1.1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
@@ -1421,6 +1446,57 @@ export default function ScannerPage() {
               </button>
             </div>
           )}
+
+          {/* Look up a session — customer, pack date, producer or tag */}
+          <div style={{ position: 'relative', marginBottom: '1.25rem' }}>
+            <span style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', fontSize: '1rem', opacity: 0.6 }}>🔍</span>
+            <input
+              value={sessionQuery}
+              onChange={e => setSessionQuery(e.target.value)}
+              placeholder="Find a session — customer, date, producer or tag…"
+              style={{ ...INPUT, fontSize: '0.95rem', padding: '0.7rem 2.5rem' }}
+            />
+            {searching && (
+              <button onClick={() => setSessionQuery('')} title="Clear"
+                style={{ position: 'absolute', right: '0.5rem', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: C.lightBrown, fontSize: '1.1rem', cursor: 'pointer', padding: '0 0.35rem' }}>
+                ✕
+              </button>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem', alignItems: 'flex-start' }}>
+
+            {/* Status rail */}
+            <aside style={{ flex: '0 1 175px', minWidth: 155 }}>
+              <div style={{ ...LBL, marginBottom: '0.45rem' }}>Status</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {STATUS_RAIL.map(r => {
+                  const active = statusFilter === r.value
+                  const n = railCount(r.value)
+                  return (
+                    <button key={r.value} onClick={() => setStatusFilter(r.value)}
+                      style={{
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem',
+                        width: '100%', textAlign: 'left', padding: '0.45rem 0.6rem', borderRadius: 4,
+                        border: `1px solid ${active ? 'rgba(166,120,90,0.5)' : 'transparent'}`,
+                        background: active ? 'rgba(255,255,255,0.06)' : 'transparent',
+                        color: active ? r.color : C.lightBrown,
+                        fontWeight: active ? 700 : 400, fontSize: '0.82rem', cursor: 'pointer',
+                        opacity: n === 0 && !active ? 0.4 : 1,
+                      } as React.CSSProperties}>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {r.dot && <span style={{ color: r.color, marginRight: '0.4rem' }}>{r.dot}</span>}{r.label}
+                      </span>
+                      <span style={{ fontSize: '0.72rem', color: C.lightBrown, flexShrink: 0 }}>{n}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </aside>
+
+            {/* Sessions — basis kept low so the rail stays beside the cards on a
+                tablet in portrait rather than stacking on top of them */}
+            <div style={{ flex: '1 1 380px', minWidth: 0 }}>
           {/* Ready to Pack — retail orders Jill marked In Progress, one click to scan */}
           {inProgressOrders.length > 0 && (
             <div style={{ marginBottom: '1.75rem', background: 'rgba(76,175,80,0.06)', border: '1px solid rgba(76,175,80,0.3)', borderRadius: 8, padding: '1rem 1.1rem' }}>
@@ -1462,15 +1538,31 @@ export default function ScannerPage() {
               </button>
             </div>
             )
+          ) : shownCount === 0 ? (
+            <div style={{ textAlign: 'center', color: C.lightBrown, padding: '3rem 2rem' }}>
+              <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>🔍</div>
+              <div style={{ fontSize: '0.9rem' }}>
+                No session matches{searching && <> “<span style={{ color: C.cream }}>{sessionQuery.trim()}</span>”</>}
+                {statusFilter !== 'all' && ' in this status'}.
+              </div>
+              <button onClick={() => { setSessionQuery(''); setStatusFilter('all') }}
+                style={{ marginTop: '1rem', background: 'transparent', border: `1px solid ${C.tan}`, color: C.tan, borderRadius: 4, padding: '0.45rem 1.1rem', fontSize: '0.82rem', cursor: 'pointer' }}>
+                Clear search &amp; filters
+              </button>
+            </div>
           ) : (
             <>
+              {/* A search should surface every hit, not hide one behind "Show all 46" */}
               <Section title="● Scanning"       color={C.yellow}  items={scanning} />
               <Section title="◆ Value Add Queue" color="#E8883A"   items={valueAdd} />
-              <Section title="🧊 Freezer — Ready for Pickup" color="#7CAFDD" items={freezer} showAll={showAllFreezer} onToggle={() => setShowAllFreezer(p => !p)} />
-              <Section title="🚚 Baker Storage"  color={C.tan}     items={bakerStorage} showAll={showAllBaker} onToggle={() => setShowAllBaker(p => !p)} />
-              <Section title="✓ Picked Up"       color={C.green}   items={pickedUp} showAll={showAllPickedUp} onToggle={() => setShowAllPickedUp(p => !p)} />
+              <Section title="🧊 Freezer — Ready for Pickup" color="#7CAFDD" items={freezer} showAll={showAllFreezer || searching} onToggle={() => setShowAllFreezer(p => !p)} />
+              <Section title="🚚 Baker Storage"  color={C.tan}     items={bakerStorage} showAll={showAllBaker || searching} onToggle={() => setShowAllBaker(p => !p)} />
+              <Section title="✓ Picked Up"       color={C.green}   items={pickedUp} showAll={showAllPickedUp || searching} onToggle={() => setShowAllPickedUp(p => !p)} />
             </>
           )}
+
+            </div>
+          </div>
         </div>
 
         {/* New Session modal */}
