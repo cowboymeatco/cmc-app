@@ -970,11 +970,12 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
 
     const closed  = (data.sessions_closed  ?? []) as { customer_name: string }[]
     const partial = (data.sessions_partial ?? []) as { customer_name: string; remaining: number }[]
+    // Leaving boxes behind is a normal pickup, not a problem — report it plainly.
     setDone({
-      kind: partial.length ? 'warn' : 'ok',
+      kind: 'ok',
       title: `✓ ${data.boxes_picked_up} box${data.boxes_picked_up !== 1 ? 'es' : ''} released to ${releasedBy.trim()}`,
       detail: [
-        closed.length  ? `Picked up in full: ${closed.map(c => c.customer_name).join(', ')}` : '',
+        closed.length  ? `Marked picked up: ${closed.map(c => c.customer_name).join(', ')}` : '',
         partial.length ? `Still in the freezer: ${partial.map(p => `${p.customer_name} (${p.remaining} box${p.remaining !== 1 ? 'es' : ''})`).join(', ')}` : '',
       ].filter(Boolean).join(' · '),
     })
@@ -1124,9 +1125,12 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
                     background: complete ? 'rgba(76,175,80,0.18)' : 'rgba(217,119,6,0.18)',
                     color: complete ? C.green : C.yellow,
                   }}>
+                    {/* Says what's happening, not whether it's wrong — a partial
+                        is usually deliberate (smokehouse still cooking), so the
+                        badge counts boxes rather than crying about a short load. */}
                     {complete
-                      ? 'COMPLETE ORDER'
-                      : `${remaining.length} BOX${remaining.length !== 1 ? 'ES' : ''} LEFT BEHIND`}
+                      ? `TAKING ALL ${(sess?.boxes ?? []).length} BOX${(sess?.boxes ?? []).length !== 1 ? 'ES' : ''}`
+                      : `TAKING ${scannedIds.size} OF ${(sess?.boxes ?? []).length}`}
                   </span>
                 </div>
 
