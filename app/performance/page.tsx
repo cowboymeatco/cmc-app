@@ -15,9 +15,25 @@ const C = {
 // Series colors — validated for contrast + CVD separation on the dark surface.
 const LBS_COLOR  = '#CE6A20'
 const HEAD_COLOR = '#3E9D63'
+const WARN_COLOR = '#FAB219'
 const GRID       = 'rgba(166,120,90,0.15)'
 
-interface DayPoint { d: string; head: number; lbs: number }
+// Head count is stacked by species: a beef is ten lambs by weight, so the head
+// panel and the pounds panel move independently and the mix is the explanation.
+// Fixed name→color mapping (never reordered, never assigned by volume) so
+// changing the date range can't repaint a species. Orange is reserved for the
+// pounds measure and deliberately absent here.
+const SPECIES = ['Beef', 'Hog', 'Lamb', 'Goat', 'Other'] as const
+type Species = (typeof SPECIES)[number]
+const SPECIES_COLOR: Record<Species, string> = {
+  Beef:  '#3987E5',
+  Hog:   '#199E70',
+  Lamb:  '#C98500',
+  Goat:  '#D55181',
+  Other: '#898781',
+}
+
+interface DayPoint { d: string; head: number; lbs: number; sp: Partial<Record<Species, number>> }
 interface CoolerData {
   series:         DayPoint[]
   asOf:           string
@@ -26,6 +42,7 @@ interface CoolerData {
   estimatedExits: number
   hanging:        { avgDays: number; maxDays: number }
   ytd:            { head: number; lbs: number; yearStart: string }
+  stale:          { head: number; lbs: number; oldestDue: string | null }
 }
 
 const RANGES = [
@@ -95,7 +112,8 @@ function CoolerChart({ data }: { data: CoolerData }) {
   const n = s.length
 
   const M = { top: 14, right: 18, bottom: 24, left: 52 }
-  const LBS_H = 240, GAP = 30, HEAD_H = 90
+  const LBS_H = 240, GAP = 30, HEAD_H = 130
+  const SEG_GAP = 2 // surface gap between stacked species segments
   const plotW  = Math.max(width - M.left - M.right, 50)
   const height = M.top + LBS_H + GAP + HEAD_H + M.bottom
   const headTop = M.top + LBS_H + GAP
@@ -128,7 +146,11 @@ function CoolerChart({ data }: { data: CoolerData }) {
     const xEvery  = Math.max(1, Math.ceil(n / 6))
     const xTicks  = s.map((p, i) => ({ i, d: p.d })).filter(t => t.i % xEvery === 0)
 
-    return { step, xMid, yLbs, yHead, barW, estPath, exactPath, areaPath, xTicks, lbsTicks, headTicks, splitIdx }
+    // Species actually present in this range, in the fixed order — drives both
+    // the stack order and the legend, so neither can drift from the other.
+    const present = SPECIES.filter(sp => s.some(p => (p.sp?.[sp] ?? 0) > 0))
+
+    return { step, xMid, yLbs, yHead, barW, estPath, exactPath, areaPath, xTicks, lbsTicks, headTicks, splitIdx, present }
   }, [s, n, plotW, headTop, data.trackingStart, M.left, M.top])
 
   if (!n || !geom) {
@@ -150,7 +172,8 @@ function CoolerChart({ data }: { data: CoolerData }) {
   const hi = hover !== null ? Math.min(hover, n - 1) : null
   const hp = hi !== null ? s[hi] : null
   const tipX = hi !== null ? geom.xMid(hi) : 0
-  const tipLeft = tipX > width * 0.6 ? tipX - 178 : tipX + 14
+  const TIP_W = 188
+  const tipLeft = tipX > width * 0.6 ? tipX - (TIP_W + 14) : tipX + 14
 
   return (
     <div ref={wrapRef} style={{ position: 'relative', width: '100%' }}
@@ -159,7 +182,12 @@ function CoolerChart({ data }: { data: CoolerData }) {
       onKeyDown={onKey}
       tabIndex={0}
       role="img"
-      aria-label={`Cooler inventory chart, ${fmt(s[n - 1].lbs)} pounds and ${s[n - 1].head} head as of ${dateLabel(data.asOf)}`}
+      aria-label={
+        `Cooler inventory chart, ${fmt(s[n - 1].lbs)} pounds and ${s[n - 1].head} head as of ${dateLabel(data.asOf)}` +
+        (s[n - 1].head
+          ? ` — ${geom.present.map(sp => `${s[n - 1].sp?.[sp] ?? 0} ${sp}`).filter(t => !t.startsWith('0 ')).join(', ')}`
+          : '')
+      }
     >
       <svg width={width} height={height} style={{ display: 'block', outline: 'none' }}>
         {/* gridlines + y ticks — pounds panel */}
@@ -191,18 +219,36 @@ function CoolerChart({ data }: { data: CoolerData }) {
           {fmt(s[n - 1].lbs)} lbs
         </text>
 
-        {/* head-count bars */}
+        {/* head-count bars, stacked by species (fixed order, bottom → top) */}
         {s.map((p, i) => {
           if (p.head === 0) return null
-          const h = headTop + HEAD_H - geom.yHead(p.head)
-          const r = Math.min(4, geom.barW / 2, h)
           const x = geom.xMid(i) - geom.barW / 2
-          const y = geom.yHead(p.head)
+          const segs: { sp: Species; top: number; bottom: number }[] = []
+          let acc = 0
+          for (const sp of geom.present) {
+            const v = p.sp?.[sp] ?? 0
+            if (!v) continue
+            segs.push({ sp, top: geom.yHead(acc + v), bottom: geom.yHead(acc) })
+            acc += v
+          }
           return (
-            <path key={p.d}
-              d={`M${x},${y + h} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + geom.barW - r},${y} Q${x + geom.barW},${y} ${x + geom.barW},${y + r} L${x + geom.barW},${y + h}Z`}
-              fill={HEAD_COLOR} opacity={hi === i ? 1 : 0.85}
-            />
+            <g key={p.d} opacity={hi === i ? 1 : 0.85}>
+              {segs.map((seg, k) => {
+                // 2px surface gap between segments (none under the lowest one,
+                // which sits on the baseline); rounded cap only on the top of
+                // the whole stack, square everywhere else.
+                const bottom = seg.bottom - (k === 0 ? 0 : SEG_GAP)
+                const h = Math.max(bottom - seg.top, 1)
+                const y = bottom - h
+                const r = k === segs.length - 1 ? Math.min(4, geom.barW / 2, h) : 0
+                return (
+                  <path key={seg.sp}
+                    d={`M${x},${y + h} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + geom.barW - r},${y} Q${x + geom.barW},${y} ${x + geom.barW},${y + r} L${x + geom.barW},${y + h}Z`}
+                    fill={SPECIES_COLOR[seg.sp]}
+                  />
+                )
+              })}
+            </g>
           )
         })}
 
@@ -222,10 +268,10 @@ function CoolerChart({ data }: { data: CoolerData }) {
         )}
       </svg>
 
-      {/* tooltip — both series at the hovered date */}
+      {/* tooltip — totals, then the species mix that explains them */}
       {hp && (
         <div style={{
-          position: 'absolute', left: tipLeft, top: 30, width: 164, pointerEvents: 'none',
+          position: 'absolute', left: tipLeft, top: 30, width: TIP_W, pointerEvents: 'none',
           background: 'rgba(26,10,4,0.96)', border: '1px solid rgba(166,120,90,0.4)',
           borderRadius: 4, padding: '0.5rem 0.7rem', zIndex: 5,
         }}>
@@ -238,13 +284,43 @@ function CoolerChart({ data }: { data: CoolerData }) {
             <span style={{ fontSize: '0.92rem', fontWeight: 700, color: C.cream }}>{fmt(hp.lbs)}</span>
             <span style={{ fontSize: '0.7rem', color: C.tan }}>lbs</span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ width: 12, height: 2, background: HEAD_COLOR, flexShrink: 0 }} />
+          {/* No swatch: the head panel is multi-coloured now, so a single
+              colour key here would misname the species dots below. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 18 }}>
             <span style={{ fontSize: '0.92rem', fontWeight: 700, color: C.cream }}>{fmt(hp.head)}</span>
             <span style={{ fontSize: '0.7rem', color: C.tan }}>head</span>
           </div>
+
+          {hp.head > 0 && (
+            <div style={{ marginTop: '0.45rem', paddingTop: '0.4rem', borderTop: `1px solid ${GRID}` }}>
+              {geom.present.map(sp => {
+                const v = hp.sp?.[sp] ?? 0
+                if (!v) return null
+                return (
+                  <div key={sp} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 1 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 2, background: SPECIES_COLOR[sp], flexShrink: 0 }} />
+                    <span style={{ fontSize: '0.72rem', color: C.tan, flex: 1 }}>{sp}</span>
+                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: C.cream, fontVariantNumeric: 'tabular-nums' }}>{fmt(v)}</span>
+                  </div>
+                )
+              })}
+              <div style={{ fontSize: '0.68rem', color: C.lightBrown, marginTop: '0.35rem' }}>
+                {fmt(Math.round(hp.lbs / hp.head))} lbs per head
+              </div>
+            </div>
+          )}
         </div>
       )}
+
+      {/* legend — identity never rests on color alone */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem 1rem', marginTop: '0.5rem', paddingLeft: M.left }}>
+        {geom.present.map(sp => (
+          <span key={sp} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 10, height: 10, borderRadius: 2, background: SPECIES_COLOR[sp], flexShrink: 0 }} />
+            <span style={{ fontSize: '0.72rem', color: C.tan }}>{sp}</span>
+          </span>
+        ))}
+      </div>
     </div>
   )
 }
@@ -273,6 +349,12 @@ export default function PerformancePage() {
   }, [data, range])
 
   const now = data?.series[data.series.length - 1]
+
+  // Same fixed order the chart stacks in, narrowed to what's in the range.
+  const tableSpecies = useMemo(
+    () => SPECIES.filter(sp => (view?.series ?? []).some(p => (p.sp?.[sp] ?? 0) > 0)),
+    [view],
+  )
 
   return (
     <div style={{ minHeight: '100vh', background: C.darkBrown }}>
@@ -330,6 +412,28 @@ export default function PerformancePage() {
             sub="carcasses cut since Jan 1" />
         </div>
 
+        {/* Carcasses the cut schedule says are done but nobody marked cut. They
+            never leave the chart, so both panels read high until someone does. */}
+        {data && data.stale.head > 0 && (
+          <div style={{
+            background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderLeft: `4px solid ${WARN_COLOR}`,
+            borderRadius: 4, padding: '0.85rem 1rem', marginBottom: '1.5rem',
+            display: 'flex', alignItems: 'flex-start', gap: '0.6rem',
+          }}>
+            <span aria-hidden style={{ color: WARN_COLOR, fontSize: '1rem', lineHeight: 1.3 }}>⚠</span>
+            <div style={{ fontSize: '0.8rem', color: C.cream, lineHeight: 1.5 }}>
+              <strong style={{ color: WARN_COLOR }}>Still marked chilling:</strong>{' '}
+              {fmt(data.stale.head)} head ({fmt(data.stale.lbs)} lbs) were scheduled to be cut
+              {data.stale.oldestDue ? ` starting ${dateLabel(data.stale.oldestDue, { month: 'short', day: 'numeric' })}` : ''},
+              but are still hanging on the harvest log — so this chart still counts them in the cooler.{' '}
+              <Link href="/processing" style={{ color: C.tan, textDecoration: 'underline' }}>
+                Mark them cut on the cut schedule
+              </Link>{' '}
+              to bring it back in line.
+            </div>
+          </div>
+        )}
+
         {/* Range presets */}
         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
           {RANGES.map(r => (
@@ -368,19 +472,24 @@ export default function PerformancePage() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
                 <thead>
                   <tr>
-                    {['Date', 'Head in cooler', 'Pounds hanging'].map(h => (
-                      <th key={h} style={{ position: 'sticky', top: 0, background: C.dark, color: C.tan, textAlign: h === 'Date' ? 'left' : 'right', padding: '0.5rem 0.9rem', borderBottom: '1px solid rgba(166,120,90,0.3)' }}>{h}</th>
+                    {['Date', 'Head', ...tableSpecies, 'Pounds', 'Lbs/head'].map((h, i) => (
+                      <th key={h} style={{ position: 'sticky', top: 0, background: C.dark, color: C.tan, textAlign: i === 0 ? 'left' : 'right', padding: '0.5rem 0.9rem', borderBottom: '1px solid rgba(166,120,90,0.3)', whiteSpace: 'nowrap' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody style={{ fontVariantNumeric: 'tabular-nums' }}>
-                  {[...view.series].reverse().map(p => (
-                    <tr key={p.d}>
-                      <td style={{ color: C.cream, padding: '0.35rem 0.9rem', borderBottom: `1px solid ${GRID}` }}>{dateLabel(p.d, { month: 'short', day: 'numeric', year: 'numeric' })}</td>
-                      <td style={{ color: C.cream, textAlign: 'right', padding: '0.35rem 0.9rem', borderBottom: `1px solid ${GRID}` }}>{fmt(p.head)}</td>
-                      <td style={{ color: C.cream, textAlign: 'right', padding: '0.35rem 0.9rem', borderBottom: `1px solid ${GRID}` }}>{fmt(p.lbs)}</td>
-                    </tr>
-                  ))}
+                  {[...view.series].reverse().map(p => {
+                    const cell = { color: C.cream, textAlign: 'right' as const, padding: '0.35rem 0.9rem', borderBottom: `1px solid ${GRID}` }
+                    return (
+                      <tr key={p.d}>
+                        <td style={{ ...cell, textAlign: 'left', whiteSpace: 'nowrap' }}>{dateLabel(p.d, { month: 'short', day: 'numeric', year: 'numeric' })}</td>
+                        <td style={cell}>{fmt(p.head)}</td>
+                        {tableSpecies.map(sp => <td key={sp} style={cell}>{fmt(p.sp?.[sp] ?? 0)}</td>)}
+                        <td style={cell}>{fmt(p.lbs)}</td>
+                        <td style={cell}>{p.head ? fmt(Math.round(p.lbs / p.head)) : '—'}</td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
