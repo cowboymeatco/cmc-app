@@ -33,14 +33,30 @@ if not exist "%SCRIPT_DIR%.env" (
 
 echo.
 
-:: Find Python executable
-for /f "delims=" %%i in ('where python') do set PYTHON_EXE=%%i
+:: Find pythonw.exe - the windowless interpreter, so the scheduled run
+:: doesn't flash a console window every 30 minutes.
+set "PYTHONW_EXE="
+for /f "delims=" %%i in ('where pythonw 2^>nul') do if not defined PYTHONW_EXE set "PYTHONW_EXE=%%i"
+if defined PYTHONW_EXE goto :found_python
+
+:: Not on PATH - derive it from python.exe's install directory
+set "PYTHON_EXE="
+for /f "delims=" %%i in ('where python 2^>nul') do if not defined PYTHON_EXE set "PYTHON_EXE=%%i"
 if not defined PYTHON_EXE (
-    echo ERROR: python not found in PATH.
+    echo ERROR: neither pythonw nor python found in PATH.
     pause
     exit /b 1
 )
-echo Using Python: %PYTHON_EXE%
+for %%i in ("%PYTHON_EXE%") do set "PYTHONW_EXE=%%~dpipythonw.exe"
+
+:found_python
+if not exist "%PYTHONW_EXE%" (
+    echo ERROR: pythonw.exe not found at: %PYTHONW_EXE%
+    echo        This Python install may be missing the windowless launcher.
+    pause
+    exit /b 1
+)
+echo Using Python ^(windowless^): %PYTHONW_EXE%
 
 echo.
 
@@ -48,7 +64,7 @@ echo.
 echo Registering Windows Scheduled Task "CMC ThermoWorks Sync"...
 schtasks /create ^
   /tn "CMC ThermoWorks Sync" ^
-  /tr "\"%PYTHON_EXE%\" \"%SCRIPT_DIR%sync.py\"" ^
+  /tr "\"%PYTHONW_EXE%\" \"%SCRIPT_DIR%sync.py\"" ^
   /sc minute ^
   /mo 30 ^
   /f
