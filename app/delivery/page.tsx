@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { DeliveryScan } from '@/lib/types'
 import { isoDateTime } from '@/lib/dates'
 
-type Tab = 'new' | 'log' | 'baker'
+type Tab = 'new' | 'loadout' | 'log' | 'baker'
 type LogFilter = 'all' | 'pending' | 'reviewed'
 type Destination = 'customer' | 'baker_storage'
 
@@ -30,12 +30,18 @@ function daysSince(sessionDate: string): number {
 const sessionKey = (s: { customer_name: string; session_date: string }) => `${s.customer_name}|${s.session_date}`
 
 // ── Barcode type detection ────────────────────────────────────────────────────
-type BarcodeType = 'ean13' | 'carcass' | 'cmc_box' | 'unknown'
+type BarcodeType = 'ean13' | 'carcass' | 'cmc_box' | 'box_serial' | 'unknown'
+
+// A packed box's printed serial — CMC + YYMMDD + 4 alnum, the Code 39 on our
+// own box label. Not to be confused with cmc_box (CMC-YYYYMMDD-NNN), which is
+// what receiving stamps on product coming *in*.
+const BOX_SERIAL_RE = /^CMC\d{6}[A-Z0-9]{4}$/i
 
 function identifyBarcode(raw: string): BarcodeType {
   if (/^\d{13}$/.test(raw) && raw[0] === '2') return 'ean13'
   if (/^CT-[0-9a-f-]{36}$/i.test(raw))        return 'carcass'
   if (/^CMC-\d{8}-\d{3}$/.test(raw))          return 'cmc_box'
+  if (BOX_SERIAL_RE.test(raw))                return 'box_serial'
   return 'unknown'
 }
 
@@ -64,6 +70,14 @@ function barcodeLabel(barcode: string, pluMap: Record<string, string>): { icon: 
     // CT-{uuid} — show short tag
     const short = barcode.slice(0, 11) + '…'
     return { icon: '🐄', primary: 'Carcass', secondary: short }
+  }
+  if (type === 'box_serial') {
+    // CMC260724373E → 📦 Box · packed Jul 24
+    const m = barcode.match(/^CMC(\d{2})(\d{2})(\d{2})/i)
+    const dt = m
+      ? new Date(`20${m[1]}-${m[2]}-${m[3]}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      : undefined
+    return { icon: '📦', primary: 'Box', secondary: dt ? `packed ${dt}` : barcode }
   }
   if (type === 'cmc_box') {
     // CMC-20260411-001 → Box #1 · Apr 11
@@ -788,6 +802,396 @@ function BakerStorageTab() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// LOAD OUT TAB — the customer is at the dock; scan what goes in their truck
+// ══════════════════════════════════════════════════════════════════════════════
+interface LoadOutBox {
+  id:               string
+  serial_number:    string | null
+  customer_name:    string
+  pack_date:        string
+  box_number:       number
+  is_closed:        boolean
+  total_weight_lbs: number | null
+  box_label:        string | null
+  picked_up_at:     string | null
+  picked_up_by:     string | null
+}
+
+interface LoadOutSession {
+  customer_name: string
+  session_date:  string
+  status:        string
+  box_count:     number
+  boxes: {
+    id: string; serial_number: string | null; box_number: number
+    is_closed: boolean; total_weight_lbs: number; picked_up_at: string | null
+  }[]
+}
+
+type ScanFlash = { kind: 'ok' | 'warn' | 'err'; title: string; detail?: string }
+
+function LoadOutTab({ onSaved }: { onSaved: () => void }) {
+  const scanRef = useRef<HTMLInputElement>(null)
+  const [scanInput, setScanInput] = useState('')
+  const [looking,   setLooking]   = useState(false)
+  const [releasing, setReleasing] = useState(false)
+
+  const [releasedBy, setReleasedBy] = useState('')
+  const [notes,      setNotes]      = useState('')
+
+  // Boxes on the truck, in scan order, plus a live snapshot of each box's session.
+  const [scanned,  setScanned]  = useState<{ box: LoadOutBox; scannedAt: string }[]>([])
+  const [sessions, setSessions] = useState<Record<string, LoadOutSession>>({})
+  const [flash,    setFlash]    = useState<ScanFlash | null>(null)
+  const [done,     setDone]     = useState<ScanFlash | null>(null)
+
+  // The gun fires into whatever has focus — keep that the scan box.
+  useEffect(() => { scanRef.current?.focus() }, [])
+
+  function say(f: ScanFlash, ms = 4000) {
+    setFlash(f)
+    setTimeout(() => setFlash(cur => (cur === f ? null : cur)), ms)
+  }
+
+  async function handleScan(raw: string) {
+    const serial = raw.trim().toUpperCase()
+    setScanInput('')
+    if (!serial) return
+
+    if (scanned.some(s => (s.box.serial_number ?? '').toUpperCase() === serial)) {
+      say({ kind: 'warn', title: 'Already on this load', detail: serial })
+      return
+    }
+
+    setLooking(true)
+    let res: Response
+    try {
+      res = await fetch(`/api/delivery/loadout?serial=${encodeURIComponent(serial)}`)
+    } catch {
+      setLooking(false)
+      say({ kind: 'err', title: 'Lookup failed — check the connection', detail: serial }, 6000)
+      return
+    }
+    const data = await res.json().catch(() => null)
+    setLooking(false)
+
+    if (!res.ok) {
+      const why = data?.error === 'not_a_box_label'
+        ? "That's not a CMC box label"
+        : data?.error === 'box_not_found'
+          ? 'No box with that serial'
+          : (data?.error ?? 'Lookup failed')
+      say({ kind: 'err', title: why, detail: serial }, 6000)
+      return
+    }
+
+    const box     = data.box     as LoadOutBox
+    const session = data.session as LoadOutSession
+
+    setSessions(prev => ({ ...prev, [sessionKey({ customer_name: session.customer_name, session_date: session.session_date })]: session }))
+    setScanned(prev => [...prev, { box, scannedAt: new Date().toISOString() }])
+
+    if (box.picked_up_at) {
+      say({
+        kind: 'warn',
+        title: `Box ${box.box_number} · ${box.customer_name} — already picked up`,
+        detail: `Went out ${new Date(box.picked_up_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}${box.picked_up_by ? ` by ${box.picked_up_by}` : ''} — leave it on if that was a mistake.`,
+      }, 8000)
+    } else {
+      say({
+        kind: 'ok',
+        title: `Box ${box.box_number} · ${box.customer_name}`,
+        detail: `${session.boxes.filter(b => b.picked_up_at).length + 1} of ${session.box_count} boxes accounted for`,
+      })
+    }
+    scanRef.current?.focus()
+  }
+
+  function removeScan(id: string) {
+    setScanned(prev => prev.filter(s => s.box.id !== id))
+    scanRef.current?.focus()
+  }
+
+  function clearAll() {
+    setScanned([])
+    setSessions({})
+    setFlash(null)
+    scanRef.current?.focus()
+  }
+
+  // One card per session on the load, in the order they were first scanned.
+  const cards = (() => {
+    const order: string[] = []
+    for (const s of scanned) {
+      const k = sessionKey({ customer_name: s.box.customer_name, session_date: s.box.pack_date })
+      if (!order.includes(k)) order.push(k)
+    }
+    return order.map(k => {
+      const sess       = sessions[k]
+      const onThisLoad = scanned.filter(s => sessionKey({ customer_name: s.box.customer_name, session_date: s.box.pack_date }) === k)
+      const scannedIds = new Set(onThisLoad.map(s => s.box.id))
+      // What's left in the freezer once this load drives off.
+      const remaining  = (sess?.boxes ?? []).filter(b => !b.picked_up_at && !scannedIds.has(b.id))
+      const weight     = onThisLoad.reduce((sum, s) => sum + (Number(s.box.total_weight_lbs) || 0), 0)
+      return { key: k, sess, onThisLoad, scannedIds, remaining, weight }
+    })
+  })()
+
+  const totalWeight = scanned.reduce((sum, s) => sum + (Number(s.box.total_weight_lbs) || 0), 0)
+  const freshBoxes  = scanned.filter(s => !s.box.picked_up_at).length
+  const canRelease  = scanned.length > 0 && !!releasedBy.trim()
+
+  async function release() {
+    if (!canRelease) return
+    setReleasing(true)
+    let res: Response
+    try {
+      res = await fetch('/api/delivery/loadout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          released_by: releasedBy.trim(),
+          notes,
+          serials: scanned.map(s => s.box.serial_number).filter(Boolean),
+        }),
+      })
+    } catch {
+      setReleasing(false)
+      say({ kind: 'err', title: 'Release failed — check the connection' }, 8000)
+      return
+    }
+    const data = await res.json().catch(() => null)
+    setReleasing(false)
+
+    if (!res.ok) {
+      say({ kind: 'err', title: `Release failed — ${data?.error ?? 'try again'}` }, 8000)
+      return
+    }
+
+    const closed  = (data.sessions_closed  ?? []) as { customer_name: string }[]
+    const partial = (data.sessions_partial ?? []) as { customer_name: string; remaining: number }[]
+    setDone({
+      kind: partial.length ? 'warn' : 'ok',
+      title: `✓ ${data.boxes_picked_up} box${data.boxes_picked_up !== 1 ? 'es' : ''} released to ${releasedBy.trim()}`,
+      detail: [
+        closed.length  ? `Picked up in full: ${closed.map(c => c.customer_name).join(', ')}` : '',
+        partial.length ? `Still in the freezer: ${partial.map(p => `${p.customer_name} (${p.remaining} box${p.remaining !== 1 ? 'es' : ''})`).join(', ')}` : '',
+      ].filter(Boolean).join(' · '),
+    })
+    setScanned([])
+    setSessions({})
+    setNotes('')
+    onSaved()
+    scanRef.current?.focus()
+    setTimeout(() => setDone(null), 12000)
+  }
+
+  const flashCfg = (k: ScanFlash['kind']) =>
+    k === 'ok'   ? { bg: 'rgba(76,175,80,0.16)',  bd: 'rgba(76,175,80,0.45)',  fg: C.green }
+  : k === 'warn' ? { bg: 'rgba(217,119,6,0.16)',  bd: 'rgba(217,119,6,0.45)',  fg: C.yellow }
+  :                { bg: 'rgba(229,62,62,0.16)',  bd: 'rgba(229,62,62,0.45)',  fg: C.red }
+
+  // A click on anything that isn't a field or a button hands the gun back to
+  // the scan box — otherwise the next scan lands in Notes and nobody notices.
+  function reclaimFocus(e: React.MouseEvent) {
+    const t = e.target as HTMLElement
+    if (t.closest('input, textarea, button, a, select')) return
+    scanRef.current?.focus()
+  }
+
+  return (
+    <div onClick={reclaimFocus} style={{ display: 'grid', gridTemplateColumns: '380px 1fr', gap: '1.5rem', height: '100%' }}>
+      {/* Left — who's taking it, and the scan gun */}
+      <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1.5rem', overflowY: 'auto' }}>
+        <h3 style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 0.35rem' }}>
+          Load Out
+        </h3>
+        <p style={{ color: C.lightBrown, fontSize: '0.78rem', margin: '0 0 1.25rem', lineHeight: 1.5 }}>
+          Scan every box as it goes in the customer&rsquo;s vehicle. Releasing moves them out of the freezer and marks the order picked up.
+        </p>
+
+        {done && (() => {
+          const c = flashCfg(done.kind)
+          return (
+            <div style={{ background: c.bg, border: `1px solid ${c.bd}`, borderRadius: 4, padding: '0.85rem 1rem', marginBottom: '1rem' }}>
+              <div style={{ color: c.fg, fontSize: '0.88rem', fontWeight: 700 }}>{done.title}</div>
+              {done.detail && <div style={{ color: C.tan, fontSize: '0.78rem', marginTop: '0.3rem', lineHeight: 1.5 }}>{done.detail}</div>}
+            </div>
+          )
+        })()}
+
+        {/* Scan field — big, monospace, always the focus target */}
+        <div style={{ marginBottom: '0.9rem' }}>
+          <label style={LABEL}>Scan Box Label *</label>
+          <input
+            ref={scanRef}
+            style={{ ...INPUT, fontFamily: 'monospace', fontSize: '1.15rem', padding: '0.7rem 0.75rem', letterSpacing: '0.05em' }}
+            value={scanInput}
+            onChange={e => setScanInput(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleScan(scanInput) } }}
+            // The gun fires into whatever has focus, so the scan box takes it
+            // back whenever nothing else on the page actually wants it — but
+            // never steals it from the name or notes field mid-typing.
+            onBlur={e => {
+              const next = e.relatedTarget as HTMLElement | null
+              if (next && ['INPUT', 'TEXTAREA', 'BUTTON', 'SELECT', 'A'].includes(next.tagName)) return
+              setTimeout(() => scanRef.current?.focus(), 120)
+            }}
+            placeholder={looking ? 'Looking up…' : 'CMC260724373E'}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <div style={{ fontSize: '0.74rem', color: C.lightBrown, marginTop: '0.3rem' }}>
+            The serial under the barcode on every CMC box label.
+          </div>
+        </div>
+
+        {/* Last scan result — readable from across the dock */}
+        {flash && (() => {
+          const c = flashCfg(flash.kind)
+          return (
+            <div style={{ background: c.bg, border: `1px solid ${c.bd}`, borderRadius: 4, padding: '0.75rem 1rem', marginBottom: '0.9rem' }}>
+              <div style={{ color: c.fg, fontSize: '0.92rem', fontWeight: 700 }}>
+                {flash.kind === 'ok' ? '✓ ' : flash.kind === 'warn' ? '⚠ ' : '✕ '}{flash.title}
+              </div>
+              {flash.detail && <div style={{ color: C.tan, fontSize: '0.78rem', marginTop: '0.25rem', lineHeight: 1.45 }}>{flash.detail}</div>}
+            </div>
+          )
+        })()}
+
+        <div style={{ marginBottom: '0.9rem' }}>
+          <label style={LABEL}>Released By *</label>
+          <input style={INPUT} value={releasedBy} onChange={e => setReleasedBy(e.target.value)} placeholder="Who handed it over" />
+        </div>
+
+        <div style={{ marginBottom: '1rem' }}>
+          <label style={LABEL}>Notes</label>
+          <textarea style={{ ...INPUT, height: 64, resize: 'vertical' }} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Who picked up, anything short, etc." />
+        </div>
+
+        <button
+          style={{ ...BTN(canRelease ? C.green : C.medBrown, canRelease ? C.dark : C.cream), width: '100%', padding: '0.75rem', fontSize: '0.92rem', opacity: canRelease ? 1 : 0.55 }}
+          onClick={release}
+          disabled={releasing || !canRelease}
+        >
+          {releasing ? 'Releasing…' : `📦 Release ${scanned.length || ''} Box${scanned.length !== 1 ? 'es' : ''} to Customer`}
+        </button>
+        {scanned.length > 0 && !releasedBy.trim() && (
+          <div style={{ color: C.yellow, fontSize: '0.76rem', marginTop: '0.5rem', textAlign: 'center' }}>
+            Enter who&rsquo;s releasing it first.
+          </div>
+        )}
+      </div>
+
+      {/* Right — the load, grouped by order */}
+      <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.12em' }}>
+            On the truck
+          </span>
+          <span style={{ fontSize: '0.82rem', color: C.tan }}>
+            {scanned.length} box{scanned.length !== 1 ? 'es' : ''}
+            {totalWeight > 0 && ` · ${totalWeight.toFixed(1)} lbs`}
+          </span>
+        </div>
+
+        <div style={{ overflowY: 'auto', flex: 1, padding: cards.length ? '0.85rem 1.25rem' : 0 }}>
+          {cards.length === 0 && (
+            <p style={{ color: C.lightBrown, fontSize: '0.88rem', padding: '2.5rem 1.5rem', textAlign: 'center', lineHeight: 1.6 }}>
+              Nothing scanned yet.<br />
+              <span style={{ fontSize: '0.8rem' }}>Pull the trigger on the first box — the order it belongs to appears here.</span>
+            </p>
+          )}
+
+          {cards.map(({ key, sess, onThisLoad, scannedIds, remaining, weight }) => {
+            const complete = remaining.length === 0
+            return (
+              <div key={key} style={{
+                border: `1px solid ${complete ? 'rgba(76,175,80,0.4)' : 'rgba(217,119,6,0.35)'}`,
+                borderRadius: 4, marginBottom: '0.85rem', overflow: 'hidden',
+                background: 'rgba(255,255,255,0.03)',
+              }}>
+                <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid rgba(166,120,90,0.15)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ color: C.cream, fontWeight: 700, fontSize: '0.95rem' }}>{sess?.customer_name ?? onThisLoad[0].box.customer_name}</div>
+                    <div style={{ color: C.lightBrown, fontSize: '0.75rem', marginTop: '0.15rem' }}>
+                      packed {new Date((sess?.session_date ?? onThisLoad[0].box.pack_date) + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                      {weight > 0 && ` · ${weight.toFixed(1)} lbs on this load`}
+                    </div>
+                  </div>
+                  <span style={{
+                    flexShrink: 0, fontSize: '0.72rem', fontWeight: 700, borderRadius: 99, padding: '3px 10px',
+                    background: complete ? 'rgba(76,175,80,0.18)' : 'rgba(217,119,6,0.18)',
+                    color: complete ? C.green : C.yellow,
+                  }}>
+                    {complete
+                      ? 'COMPLETE ORDER'
+                      : `${remaining.length} BOX${remaining.length !== 1 ? 'ES' : ''} LEFT BEHIND`}
+                  </span>
+                </div>
+
+                {/* Every box in the order, so a short load is obvious before they drive off */}
+                <div style={{ padding: '0.5rem 0.35rem' }}>
+                  {(sess?.boxes ?? []).map(b => {
+                    const onLoad  = scannedIds.has(b.id)
+                    const already = !!b.picked_up_at && !onLoad
+                    return (
+                      <div key={b.id} style={{
+                        display: 'flex', alignItems: 'center', gap: '0.6rem',
+                        padding: '0.4rem 0.75rem', opacity: onLoad ? 1 : 0.6,
+                      }}>
+                        <span style={{ fontSize: '0.95rem', lineHeight: 1, color: onLoad ? C.green : already ? C.lightBrown : C.yellow }}>
+                          {onLoad ? '☑' : already ? '↗' : '☐'}
+                        </span>
+                        <span style={{ color: C.cream, fontSize: '0.85rem', fontWeight: onLoad ? 600 : 400, minWidth: 62 }}>
+                          Box {b.box_number}
+                        </span>
+                        <span style={{ fontFamily: 'monospace', color: C.lightBrown, fontSize: '0.72rem' }}>{b.serial_number}</span>
+                        <span style={{ color: C.tan, fontSize: '0.76rem' }}>
+                          {b.total_weight_lbs > 0 ? `${b.total_weight_lbs.toFixed(1)} lb` : b.is_closed ? '' : 'open'}
+                        </span>
+                        {already && (
+                          <span style={{ color: C.lightBrown, fontSize: '0.72rem', fontStyle: 'italic' }}>
+                            left {new Date(b.picked_up_at!).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                          </span>
+                        )}
+                        {onLoad && (
+                          <button
+                            onClick={() => removeScan(b.id)}
+                            style={{ marginLeft: 'auto', background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '1rem', padding: '0 0.25rem', lineHeight: 1 }}
+                            title="Take back off the load"
+                          >
+                            ×
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
+        {scanned.length > 0 && (
+          <div style={{ padding: '0.75rem 1.25rem', borderTop: '1px solid rgba(166,120,90,0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '0.8rem', color: C.tan }}>
+              {freshBoxes} new{scanned.length !== freshBoxes && ` · ${scanned.length - freshBoxes} already gone`}
+            </span>
+            <button
+              onClick={clearAll}
+              style={{ background: 'none', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, color: C.lightBrown, cursor: 'pointer', fontSize: '0.78rem', padding: '0.3rem 0.75rem' }}
+            >
+              Clear Load
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // PAGE
 // ══════════════════════════════════════════════════════════════════════════════
 export default function DeliveryPage() {
@@ -822,7 +1226,7 @@ export default function DeliveryPage() {
         </div>
 
         <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden' }}>
-          {(['new', 'log', 'baker'] as Tab[]).map(t => (
+          {(['new', 'loadout', 'log', 'baker'] as Tab[]).map(t => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -834,7 +1238,7 @@ export default function DeliveryPage() {
                 transition: 'background 0.15s',
               }}
             >
-              {t === 'new' ? '🚚 New Delivery' : t === 'log' ? '📋 Delivery Log' : '🏔 Baker Storage'}
+              {t === 'new' ? '🚚 New Delivery' : t === 'loadout' ? '📦 Load Out' : t === 'log' ? '📋 Delivery Log' : '🏔 Baker Storage'}
             </button>
           ))}
         </div>
@@ -842,6 +1246,7 @@ export default function DeliveryPage() {
 
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1300px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
         {tab === 'new'  && <NewDeliveryTab onSaved={() => setLogKey(k => k + 1)} pluMap={pluMap} />}
+        {tab === 'loadout' && <LoadOutTab onSaved={() => setLogKey(k => k + 1)} />}
         {tab === 'log'  && <DeliveryLogTab key={logKey} pluMap={pluMap} />}
         {tab === 'baker' && <BakerStorageTab key={logKey} />}
       </main>
