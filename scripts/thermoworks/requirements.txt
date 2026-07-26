@@ -1,4 +1,0 @@
-thermoworks-cloud
-requests
-python-dotenv
-aiohttp
