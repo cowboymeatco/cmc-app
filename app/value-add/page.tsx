@@ -43,6 +43,7 @@ const C = {
   yellow:     '#D97706',
   blue:       '#3B82F6',
   orange:     '#E8883A',
+  purple:     '#A78BFA',   // pinned / hand-linked — same meaning as on the schedule board
 }
 
 const INPUT: React.CSSProperties = {
@@ -113,17 +114,173 @@ function YieldBadge({ weightIn, weightOut }: { weightIn: number | null; weightOu
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// BOX PICKER — point a job at specific boxes by hand
+// ══════════════════════════════════════════════════════════════════════════════
+interface BoxSummary {
+  box_id:        string
+  box_label:     string | null
+  customer_name: string | null
+  pack_date:     string | null
+  total_lbs:     number
+  packages:      number
+  items:         { plu_number: string | null; item_name: string | null; lbs: number }[]
+  linked:        boolean
+}
+
+// The automatic match works off PLU and pack date. When it can't find the
+// boxes — product went out under a different PLU, the job never had one, or it
+// was packed off way after the cook — this is how a person says which boxes
+// hold the job's output. Linking any box switches the job off the automatic
+// search entirely.
+function BoxPicker({ job, onChanged }: { job: ValueAddJob; onChanged: () => void }) {
+  const [linked,  setLinked]  = useState<BoxSummary[]>([])
+  const [results, setResults] = useState<BoxSummary[]>([])
+  const [q,       setQ]       = useState('')
+  const [loading, setLoading] = useState(true)
+  const [busy,    setBusy]    = useState<string | null>(null)
+  const [searched, setSearched] = useState(false)
+
+  const loadLinked = useCallback(async () => {
+    setLoading(true)
+    const r = await fetch(`/api/value-add/box-link?job_id=${job.id}`).then(x => x.json()).catch(() => null)
+    setLinked(Array.isArray(r?.linked) ? r.linked : [])
+    setLoading(false)
+  }, [job.id])
+
+  useEffect(() => { loadLinked() }, [loadLinked])
+
+  async function search() {
+    if (!q.trim()) return
+    setLoading(true)
+    setSearched(true)
+    const r = await fetch(`/api/value-add/box-link?job_id=${job.id}&q=${encodeURIComponent(q.trim())}`)
+      .then(x => x.json()).catch(() => null)
+    setLinked(Array.isArray(r?.linked) ? r.linked : [])
+    setResults(Array.isArray(r?.candidates) ? r.candidates : [])
+    setLoading(false)
+  }
+
+  async function link(box: BoxSummary) {
+    setBusy(box.box_id)
+    await fetch('/api/value-add/box-link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: job.id, box_id: box.box_id }),
+    })
+    setResults(prev => prev.filter(b => b.box_id !== box.box_id))
+    setBusy(null)
+    await loadLinked()
+    onChanged()
+  }
+
+  async function unlink(box: BoxSummary) {
+    setBusy(box.box_id)
+    await fetch(`/api/value-add/box-link?job_id=${job.id}&box_id=${box.box_id}`, { method: 'DELETE' })
+    setBusy(null)
+    await loadLinked()
+    onChanged()
+  }
+
+  const Row = ({ box, action }: { box: BoxSummary; action: 'link' | 'unlink' }) => (
+    <div style={{
+      display: 'flex', gap: '0.5rem', alignItems: 'center',
+      padding: '0.4rem 0.55rem', borderRadius: 3,
+      background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(166,120,90,0.15)',
+      fontSize: '0.75rem',
+    }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ color: C.cream, fontWeight: 600 }}>
+          {box.customer_name ?? '—'}
+          <span style={{ fontFamily: 'monospace', color: C.lightBrown, marginLeft: '0.5rem', fontWeight: 400 }}>
+            {box.box_label ?? ''}
+          </span>
+        </div>
+        <div style={{ color: C.lightBrown, fontSize: '0.7rem' }}>
+          {box.pack_date} · {box.total_lbs.toFixed(1)} lbs · {box.packages} pkg
+          {box.items.length > 0 && (
+            <> · {box.items.slice(0, 3).map(i => `${i.item_name ?? i.plu_number} ${i.lbs.toFixed(1)}`).join(', ')}
+              {box.items.length > 3 ? ` +${box.items.length - 3} more` : ''}</>
+          )}
+        </div>
+      </div>
+      <button
+        onClick={() => (action === 'link' ? link(box) : unlink(box))}
+        disabled={busy === box.box_id}
+        style={{
+          background: 'transparent',
+          border: `1px solid ${action === 'link' ? C.green : C.red}`,
+          color: action === 'link' ? C.green : C.red,
+          borderRadius: 3, cursor: 'pointer', fontSize: '0.72rem',
+          padding: '0.22rem 0.6rem', whiteSpace: 'nowrap',
+        }}>
+        {busy === box.box_id ? '…' : action === 'link' ? '+ Link' : 'Unlink'}
+      </button>
+    </div>
+  )
+
+  return (
+    <div style={{
+      background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(166,120,90,0.2)',
+      borderRadius: 3, padding: '0.65rem 0.8rem', marginBottom: '0.75rem',
+    }}>
+      <div style={{ fontSize: '0.7rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.09em', marginBottom: '0.5rem' }}>
+        Link boxes by hand
+      </div>
+
+      {linked.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginBottom: '0.6rem' }}>
+          {linked.map(b => <Row key={b.box_id} box={b} action="unlink" />)}
+          <div style={{ fontSize: '0.68rem', color: C.blue }}>
+            These boxes set this job&apos;s finished weight. The automatic PLU and date search is switched off while any box is linked.
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: '0.4rem' }}>
+        <input
+          style={{ ...INPUT, flex: 1 }}
+          value={q}
+          onChange={e => setQ(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') search() }}
+          placeholder="Customer, box label, or pack date (2026-07-07)"
+        />
+        <button style={{ ...BTN(C.tan), fontSize: '0.78rem', padding: '0.4rem 0.9rem' }} onClick={search}>
+          Search
+        </button>
+      </div>
+
+      {loading && <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.4rem' }}>Loading…</div>}
+
+      {!loading && searched && results.length === 0 && (
+        <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.4rem' }}>
+          No boxes matched. Try the customer name as it was typed on the box, or the pack date.
+        </div>
+      )}
+
+      {results.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginTop: '0.5rem' }}>
+          {results.map(b => <Row key={b.box_id} box={b} action="link" />)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // JOB CARD (in active list)
 // ══════════════════════════════════════════════════════════════════════════════
-function JobCard({ job, proposal, onUpdated }: {
+function JobCard({ job, proposal, onUpdated, onBoxLinksChanged }: {
   job:      ValueAddJob
   proposal: WeightProposal | null
   onUpdated: (j: ValueAddJob) => void
+  /** Re-pull the weight proposals — linking a box changes what they say. */
+  onBoxLinksChanged: () => void
 }) {
   const [advancing, setAdvancing]       = useState(false)
   const [editingWeights, setEditingWeights] = useState(false)
   const [applying, setApplying]         = useState(false)
   const [showBoxes, setShowBoxes]       = useState(false)
+  const [picking, setPicking]           = useState(false)
   const [wIn,  setWIn]  = useState(String(job.weight_in_lbs  ?? ''))
   const [wOut, setWOut] = useState(String(job.weight_out_lbs ?? ''))
 
@@ -306,9 +463,15 @@ function JobCard({ job, proposal, onUpdated }: {
             <span style={{ fontSize: '0.8rem', color: C.blue, fontWeight: 700 }}>
               📦 {proposal.lbs.toFixed(1)} lbs scanned
             </span>
+            {proposal.manual && (
+              <span title="From boxes linked by hand, not the automatic search"
+                    style={{ fontSize: '0.68rem', color: C.purple, fontWeight: 700, border: `1px solid ${C.purple}55`, borderRadius: 99, padding: '1px 7px' }}>
+                hand-linked
+              </span>
+            )}
             <span style={{ fontSize: '0.72rem', color: C.lightBrown }}>
               {proposal.packages} package{proposal.packages === 1 ? '' : 's'} in {proposal.boxes.length} box{proposal.boxes.length === 1 ? '' : 'es'}
-              {!proposal.narrowedToCustomer && job.customer_name && ' · not matched to this customer'}
+              {!proposal.manual && !proposal.narrowedToCustomer && job.customer_name && ' · not matched to this customer'}
             </span>
             <button
               style={{ ...BTN(C.blue, C.cream), fontSize: '0.75rem', padding: '0.3rem 0.75rem' }}
@@ -333,9 +496,20 @@ function JobCard({ job, proposal, onUpdated }: {
             </div>
           )}
 
+          {proposal.countedWholeBox && (
+            <div style={{ fontSize: '0.7rem', color: C.yellow, marginTop: '0.35rem' }}>
+              ⚠️ {proposal.plu
+                ? <>None of the linked boxes hold PLU {proposal.plu}, so <strong>everything in them</strong> is counted.</>
+                : <>This job has no output PLU, so <strong>everything in the linked boxes</strong> is counted.</>}
+              {' '}Check the box contents before using this.
+            </div>
+          )}
+
           <div style={{ fontSize: '0.68rem', color: C.lightBrown, marginTop: '0.35rem' }}>
-            Boxes packed {proposal.windowFrom} → {proposal.windowTo}
-            {proposal.boundedByNextJob && ' · stops at the next cook of this product'}
+            {proposal.manual
+              ? `From ${proposal.boxes.length} hand-linked box${proposal.boxes.length === 1 ? '' : 'es'}`
+              : <>Boxes packed {proposal.windowFrom} → {proposal.windowTo}
+                  {proposal.boundedByNextJob && ' · stops at the next cook of this product'}</>}
           </div>
 
           {showBoxes && (
@@ -352,6 +526,8 @@ function JobCard({ job, proposal, onUpdated }: {
           )}
         </div>
       )}
+
+      {picking && <BoxPicker job={job} onChanged={onBoxLinksChanged} />}
 
       {job.notes && (
         <div style={{ fontSize: '0.78rem', color: C.tan, fontStyle: 'italic', marginBottom: '0.6rem' }}>{job.notes}</div>
@@ -373,6 +549,17 @@ function JobCard({ job, proposal, onUpdated }: {
           onClick={() => printWIPTag(job.id)}
         >
           🏷 Print WIP Tag
+        </button>
+        <button
+          style={{
+            ...BTN('transparent', picking ? C.purple : C.lightBrown),
+            border: `1px solid ${picking ? C.purple : 'rgba(166,120,90,0.35)'}`,
+            fontSize: '0.78rem', padding: '0.35rem 0.9rem',
+          }}
+          onClick={() => setPicking(p => !p)}
+          title="Point this job at specific boxes when the automatic match can't find them"
+        >
+          📦 Link Boxes
         </button>
       </div>
     </div>
@@ -627,16 +814,10 @@ function ActiveJobsTab() {
   const [proposals, setProposals] = useState<Map<string, WeightProposal>>(new Map())
   const [loading, setLoading] = useState(true)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    const res  = await fetch('/api/value-add')
-    const data = await res.json()
-    const active = Array.isArray(data) ? data.filter((j: ValueAddJob) => j.status !== 'complete') : []
-    setJobs(active)
-    setLoading(false)
-
-    // Scanned weights load after the list so a slow scan sweep never holds up
-    // the jobs themselves; the cards fill in when it lands.
+  // Scanned weights load after the list so a slow scan sweep never holds up the
+  // jobs themselves; the cards fill in when it lands. Also re-run on its own
+  // after a box is linked or unlinked, which changes what the proposals say.
+  const loadProposals = useCallback(() => {
     fetch('/api/value-add/box-weight')
       .then(r => r.json())
       .then((d: { proposals?: WeightProposal[] }) => {
@@ -646,6 +827,16 @@ function ActiveJobsTab() {
       })
       .catch(() => {})
   }, [])
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const res  = await fetch('/api/value-add')
+    const data = await res.json()
+    const active = Array.isArray(data) ? data.filter((j: ValueAddJob) => j.status !== 'complete') : []
+    setJobs(active)
+    setLoading(false)
+    loadProposals()
+  }, [loadProposals])
 
   useEffect(() => { load() }, [load])
 
@@ -679,7 +870,13 @@ function ActiveJobsTab() {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
               {group.map(j => (
-                <JobCard key={j.id} job={j} proposal={proposals.get(j.id) ?? null} onUpdated={handleUpdated} />
+                <JobCard
+                  key={j.id}
+                  job={j}
+                  proposal={proposals.get(j.id) ?? null}
+                  onUpdated={handleUpdated}
+                  onBoxLinksChanged={loadProposals}
+                />
               ))}
             </div>
           </div>

@@ -2,7 +2,7 @@ export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import {
-  proposeWeightOut, BoxScanRow, packWindow, jobBaseDate,
+  proposeWeightOut, proposeFromLinkedBoxes, BoxScanRow, packWindow, jobBaseDate,
   MatchWindowSettings, DEFAULT_WINDOW,
 } from '@/lib/boxWeight'
 
@@ -15,10 +15,11 @@ import {
 export async function GET(req: NextRequest) {
   const id = new URL(req.url).searchParams.get('id')
 
+  // No output_plu filter here. A job with no PLU can still have boxes pointed
+  // at it by hand — that missing PLU is one of the reasons somebody would.
   let jobQuery = supabase
     .from('value_add_jobs')
     .select('id, output_plu, customer_name, completed_date, requested_date, scheduled_start, weight_out_lbs, weight_out_source')
-    .not('output_plu', 'is', null)
 
   jobQuery = id ? jobQuery.eq('id', id) : jobQuery.neq('status', 'complete')
 
@@ -68,6 +69,8 @@ export async function GET(req: NextRequest) {
   const from = windows.reduce((m, w) => (w.from < m ? w.from : m), windows[0].from)
   const to   = windows.reduce((m, w) => (w.to   > m ? w.to   : m), windows[0].to)
 
+  // The automatic PLU + date search.
+  //
   // box_scans holds the weights; boxes holds the customer and pack date, and
   // there is no foreign key between them, so this is two queries joined here.
   //
@@ -76,55 +79,108 @@ export async function GET(req: NextRequest) {
   // quietly returns a wrong weight) or a box-id IN list long enough to overflow
   // the query string. Scans filtered to a handful of PLUs is a much smaller
   // set, so we start there and fetch only the boxes those scans reference.
-  const PAGE = 1000
+  async function windowScans(): Promise<BoxScanRow[]> {
+    const PAGE = 1000
 
-  const scanRows: { box_id: string; plu_number: string | null; item_name: string | null; weight_lbs: number | null; quantity: number | null }[] = []
-  for (let offset = 0; ; offset += PAGE) {
-    const { data, error: e } = await supabase
-      .from('box_scans')
-      .select('box_id, plu_number, item_name, weight_lbs, quantity')
-      .in('plu_number', plus)
-      .range(offset, offset + PAGE - 1)
-    if (e) return NextResponse.json({ error: e.message }, { status: 500 })
-    scanRows.push(...(data ?? []))
-    if (!data || data.length < PAGE) break
+    const scanRows: { box_id: string; plu_number: string | null; item_name: string | null; weight_lbs: number | null; quantity: number | null }[] = []
+    for (let offset = 0; ; offset += PAGE) {
+      const { data } = await supabase
+        .from('box_scans')
+        .select('box_id, plu_number, item_name, weight_lbs, quantity')
+        .in('plu_number', plus)
+        .range(offset, offset + PAGE - 1)
+      scanRows.push(...(data ?? []))
+      if (!data || data.length < PAGE) break
+    }
+    if (scanRows.length === 0) return []
+
+    // Only the boxes those scans landed in, in chunks small enough that the IN
+    // list stays inside the query string.
+    const CHUNK = 150
+    const boxIds = Array.from(new Set(scanRows.map(r => r.box_id).filter(Boolean)))
+    const boxById = new Map<string, { id: string; box_label: string | null; customer_name: string | null; pack_date: string | null }>()
+
+    for (let i = 0; i < boxIds.length; i += CHUNK) {
+      const { data } = await supabase
+        .from('boxes')
+        .select('id, box_label, customer_name, pack_date')
+        .in('id', boxIds.slice(i, i + CHUNK))
+        .gte('pack_date', from)
+        .lte('pack_date', to)
+      for (const b of data ?? []) boxById.set(b.id as string, b)
+    }
+
+    return scanRows.flatMap(r => {
+      const b = boxById.get(r.box_id)
+      if (!b) return []   // scanned into a box outside the window
+      return [{
+        box_id:        r.box_id,
+        plu_number:    r.plu_number,
+        item_name:     r.item_name,
+        weight_lbs:    r.weight_lbs,
+        quantity:      r.quantity,
+        box_label:     b.box_label     ?? null,
+        customer_name: b.customer_name ?? null,
+        pack_date:     b.pack_date     ?? null,
+      }]
+    })
   }
-  if (scanRows.length === 0) return NextResponse.json({ proposals: [] })
 
-  // Only the boxes those scans landed in, in chunks small enough that the IN
-  // list stays inside the query string.
-  const CHUNK = 150
-  const boxIds = Array.from(new Set(scanRows.map(r => r.box_id).filter(Boolean)))
-  const boxById = new Map<string, { id: string; box_label: string | null; customer_name: string | null; pack_date: string | null }>()
+  // Skipped when no job carries a PLU — the hand-linked path below still runs,
+  // which is the whole point of the escape hatch.
+  const scans: BoxScanRow[] = plus.length ? await windowScans() : []
 
-  for (let i = 0; i < boxIds.length; i += CHUNK) {
-    const { data, error: e } = await supabase
-      .from('boxes')
-      .select('id, box_label, customer_name, pack_date')
-      .in('id', boxIds.slice(i, i + CHUNK))
-      .gte('pack_date', from)
-      .lte('pack_date', to)
-    if (e) return NextResponse.json({ error: e.message }, { status: 500 })
-    for (const b of data ?? []) boxById.set(b.id as string, b)
+  // Hand-linked boxes override the window search entirely: somebody naming the
+  // boxes knows more than a date range does. Their scans are fetched without
+  // any PLU or date filter, since the usual reason for linking by hand is that
+  // one of those filters is what went wrong.
+  const { data: linkRows } = await supabase
+    .from('value_add_job_box')
+    .select('job_id, box_id')
+    .in('job_id', jobs.map(j => j.id))
+
+  const linkedBoxesByJob = new Map<string, string[]>()
+  for (const l of linkRows ?? []) {
+    const list = linkedBoxesByJob.get(l.job_id as string) ?? []
+    list.push(l.box_id as string)
+    linkedBoxesByJob.set(l.job_id as string, list)
   }
 
-  const scans: BoxScanRow[] = scanRows.flatMap(r => {
-    const b = boxById.get(r.box_id)
-    if (!b) return []   // scanned into a box outside the window
-    return [{
-      box_id:        r.box_id,
-      plu_number:    r.plu_number,
-      item_name:     r.item_name,
-      weight_lbs:    r.weight_lbs,
-      quantity:      r.quantity,
-      box_label:     b.box_label     ?? null,
-      customer_name: b.customer_name ?? null,
-      pack_date:     b.pack_date     ?? null,
-    }]
-  })
+  const linkedScans = new Map<string, BoxScanRow[]>()
+  if (linkedBoxesByJob.size > 0) {
+    const allLinked = Array.from(new Set(Array.from(linkedBoxesByJob.values()).flat()))
+    const CHUNK2 = 150
+    const rows: BoxScanRow[] = []
+    for (let i = 0; i < allLinked.length; i += CHUNK2) {
+      const slice = allLinked.slice(i, i + CHUNK2)
+      const [{ data: bs }, { data: bx }] = await Promise.all([
+        supabase.from('box_scans').select('box_id, plu_number, item_name, weight_lbs, quantity').in('box_id', slice),
+        supabase.from('boxes').select('id, box_label, customer_name, pack_date').in('id', slice),
+      ])
+      const meta = new Map((bx ?? []).map(b => [b.id as string, b]))
+      for (const s of bs ?? []) {
+        const b = meta.get(s.box_id as string)
+        rows.push({
+          box_id: s.box_id as string,
+          plu_number: s.plu_number, item_name: s.item_name,
+          weight_lbs: s.weight_lbs, quantity: s.quantity,
+          box_label:     (b?.box_label as string)     ?? null,
+          customer_name: (b?.customer_name as string) ?? null,
+          pack_date:     (b?.pack_date as string)     ?? null,
+        })
+      }
+    }
+    for (const [jobId, boxIds] of linkedBoxesByJob) {
+      const set = new Set(boxIds)
+      linkedScans.set(jobId, rows.filter(r => set.has(r.box_id)))
+    }
+  }
 
   const proposals = jobs.flatMap(job => {
-    const p = proposeWeightOut(job, scans, windowSettings, nextDateFor(job))
+    const manual = linkedScans.get(job.id)
+    const p = manual?.length
+      ? proposeFromLinkedBoxes(job, manual)
+      : proposeWeightOut(job, scans, windowSettings, nextDateFor(job))
     if (!p) return []
     return [{
       job_id:       job.id,

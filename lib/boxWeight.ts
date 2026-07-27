@@ -54,6 +54,10 @@ export interface WeightOutProposal {
   windowTo:       string
   /** The window was cut short by the next cook of this same product. */
   boundedByNextJob: boolean
+  /** Boxes were named by a person rather than found by PLU and date. */
+  manual:         boolean
+  /** Hand-linked boxes held none of the job's PLU, so everything in them counts. */
+  countedWholeBox: boolean
 }
 
 // Strip the ticket numbers and hanging weights the packing screen tacks onto a
@@ -200,5 +204,58 @@ export function proposeWeightOut(
     windowTo:   to,
     boundedByNextJob: !!nextSamePluDate &&
       to < shiftDays(jobBaseDate(job), Math.abs(settings.match_window_days)),
+    manual:          false,
+    countedWholeBox: false,
+  }
+}
+
+/**
+ * Weight from boxes a person named, ignoring dates entirely.
+ *
+ * Within those boxes we still prefer the job's own PLU — a customer's box holds
+ * their whole order, and only the sticks in it came out of a stick cook. But if
+ * the job's PLU appears nowhere in the boxes chosen, that is usually the very
+ * reason somebody linked by hand (product went out under a different PLU, or
+ * the job never had one). In that case everything in the boxes counts, and the
+ * caller is told so rather than being handed a silent zero.
+ */
+export function proposeFromLinkedBoxes(
+  job:   { output_plu: string | null; customer_name: string | null },
+  scans: BoxScanRow[]
+): WeightOutProposal | null {
+  if (scans.length === 0) return null
+
+  const ofPlu = job.output_plu ? scans.filter(s => s.plu_number === job.output_plu) : []
+  const countedWholeBox = ofPlu.length === 0
+  const counted = countedWholeBox ? scans : ofPlu
+
+  const byBox = new Map<string, BoxContribution>()
+  for (const s of counted) {
+    const cur = byBox.get(s.box_id) ?? {
+      box_id: s.box_id, box_label: s.box_label, customer_name: s.customer_name,
+      pack_date: s.pack_date, lbs: 0, packages: 0,
+      customerMatch: sameCustomer(job.customer_name, s.customer_name),
+    }
+    cur.lbs      += Number(s.weight_lbs ?? 0)
+    cur.packages += Number(s.quantity ?? 1)
+    byBox.set(s.box_id, cur)
+  }
+
+  const boxes = Array.from(byBox.values())
+    .sort((a, b) => String(a.pack_date).localeCompare(String(b.pack_date)))
+  const dates = boxes.map(b => b.pack_date).filter(Boolean).sort() as string[]
+
+  return {
+    lbs:      Math.round(boxes.reduce((s, b) => s + b.lbs, 0) * 10) / 10,
+    packages: boxes.reduce((s, b) => s + b.packages, 0),
+    boxes,
+    narrowedToCustomer: false,
+    otherCustomerBoxes: 0,
+    plu:        job.output_plu ?? '',
+    windowFrom: dates[0] ?? '',
+    windowTo:   dates[dates.length - 1] ?? '',
+    boundedByNextJob: false,
+    manual:          true,
+    countedWholeBox,
   }
 }
