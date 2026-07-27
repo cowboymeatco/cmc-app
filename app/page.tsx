@@ -145,8 +145,8 @@ export default function Dashboard() {
     },
     {
       href: '/delivery',  icon: '🚚', color: '#E879A0',
-      title: 'Delivery',
-      desc:  'Route & deliver',
+      title: 'Load Out & Delivery',
+      desc:  'Load out · Route & deliver',
       when:  'Pickup or delivery day',
       count: delivery,
     },
@@ -185,23 +185,8 @@ export default function Dashboard() {
 
         {/* Secondary links */}
         <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          <Link href="/scanner" style={{ textDecoration: 'none' }}>
-            <div style={{
-              background: 'var(--dark)', border: '1px solid rgba(166,120,90,0.18)',
-              borderLeft: '3px solid #4CAF50',
-              borderRadius: 4, padding: '0.75rem 1.25rem',
-              display: 'flex', alignItems: 'center', gap: '0.75rem',
-              cursor: 'pointer',
-            }}>
-              <span style={{ fontSize: '1.1rem' }}>🔍</span>
-              <div>
-                <span style={{ color: C.cream, fontWeight: 600, fontSize: '0.88rem' }}>Processing Scanner</span>
-                <span style={{ color: C.lightBrown, fontSize: '0.78rem', marginLeft: '0.75rem' }}>Full-screen barcode scanning for the cutting floor</span>
-              </div>
-              <span style={{ marginLeft: 'auto', color: C.lightBrown, fontSize: '0.8rem' }}>Open ›</span>
-            </div>
-          </Link>
-
+          {/* Processing Scanner lives in the Processing module header — that's how the
+              crew reaches it, so it is deliberately not repeated here. */}
           <Link href="/haccp" style={{ textDecoration: 'none' }}>
             <div style={{
               background: 'var(--dark)', border: '1px solid rgba(166,120,90,0.18)',

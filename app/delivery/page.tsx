@@ -1225,7 +1225,7 @@ export default function DeliveryPage() {
           <Link href="/" style={{ color: C.lightBrown, textDecoration: 'none', fontSize: '0.82rem' }}>← Dashboard</Link>
           <span style={{ color: 'rgba(166,120,90,0.4)' }}>|</span>
           <h1 style={{ fontFamily: 'Georgia, serif', fontSize: '1.1rem', fontWeight: 700, color: C.cream, letterSpacing: '0.08em', textTransform: 'uppercase', margin: 0 }}>
-            Delivery
+            Load Out &amp; Delivery
           </h1>
         </div>
 

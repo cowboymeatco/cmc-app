@@ -388,6 +388,27 @@ export default function HACCPPage() {
 
       <main style={{ flex: 1, padding: '2rem', maxWidth: '1100px', width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
 
+        {/* Plan & Programs — the written documents behind everything below */}
+        <Link href="/haccp/documents" style={{ textDecoration: 'none' }}>
+          <div style={{
+            background: C.dark, border: '1px solid rgba(166,120,90,0.25)',
+            borderLeft: `4px solid ${C.green}`, borderRadius: 4,
+            padding: '1rem 1.25rem', marginBottom: '1.5rem',
+            display: 'flex', alignItems: 'center', gap: '1rem', cursor: 'pointer',
+          }}>
+            <span style={{ fontSize: '1.3rem' }}>📚</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '0.95rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                HACCP Plan &amp; Programs
+              </div>
+              <div style={{ fontSize: '0.77rem', color: C.lightBrown, marginTop: '0.2rem' }}>
+                Upload and keep the written plan, hazard analysis, prerequisite programs, SSOPs and blank forms — the library an inspector portal reads from
+              </div>
+            </div>
+            <span style={{ color: C.green, fontSize: '0.8rem', fontWeight: 600 }}>Open →</span>
+          </div>
+        </Link>
+
         {/* Date selector */}
         <div style={{
           background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4,

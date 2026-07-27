@@ -1530,6 +1530,81 @@ function BoxLabelsTab() {
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // PAGE
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+interface TabDef { id: Tab; label: string }
+
+// Used every shift — always visible.
+const DAILY_TABS: TabDef[] = [
+  { id: 'cut-schedule', label: '📋 Cut Schedule' },
+  { id: 'box-labels',   label: '🏷️ Box Labels' },
+  { id: 'browser',      label: '🔪 PLU Browser' },
+]
+// Catalog plumbing — opened occasionally, so they hide behind a menu.
+const INTEGRATION_TABS: TabDef[] = [
+  { id: 'alignment',    label: '🔗 Alignment' },
+  { id: 'clover',       label: '🍀 Clover' },
+  { id: 'quickbooks',   label: '📗 QuickBooks' },
+]
+const PLU_TOOL_TABS: TabDef[] = [
+  { id: 'export',       label: '📤 Export' },
+  { id: 'cleanup',      label: '🧹 Cleanup' },
+  { id: 'upload',       label: '📂 Upload File' },
+]
+
+// Dropdown of tabs. Collapsed it shows the group name, or the open tab's label
+// when the active tab is one of its own, so you can always see where you are.
+function TabMenu({ label, items, tab, setTab }: {
+  label: string; items: TabDef[]; tab: Tab; setTab: (t: Tab) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  const active = items.find(i => i.id === tab)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button onClick={() => setOpen(o => !o)} style={{
+        padding: '0.45rem 0.9rem', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
+        background: active ? C.medBrown : 'rgba(255,255,255,0.05)',
+        border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4,
+        color: active ? C.cream : C.lightBrown,
+        letterSpacing: '0.04em', whiteSpace: 'nowrap',
+      }}>
+        {active ? active.label : label} <span style={{ fontSize: '0.65rem' }}>▾</span>
+      </button>
+      {open && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 40, minWidth: 180,
+          background: C.dark, border: '1px solid rgba(166,120,90,0.35)', borderRadius: 4,
+          boxShadow: '0 8px 24px rgba(0,0,0,0.5)', overflow: 'hidden',
+        }}>
+          {items.map(i => (
+            <button key={i.id} onClick={() => { setTab(i.id); setOpen(false) }} style={{
+              display: 'block', width: '100%', textAlign: 'left',
+              padding: '0.55rem 0.95rem', border: 'none', cursor: 'pointer',
+              fontSize: '0.8rem', fontWeight: 600, letterSpacing: '0.04em',
+              background: tab === i.id ? C.medBrown : 'transparent',
+              color: tab === i.id ? C.cream : C.lightBrown,
+            }}>{i.label}</button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function ProcessingPage() {
   const [tab, setTab] = useState<Tab>('browser')
 
@@ -1537,18 +1612,6 @@ export default function ProcessingPage() {
   useEffect(() => {
     if (new URLSearchParams(window.location.search).has('qbo')) setTab('quickbooks')
   }, [])
-
-  const tabs: { id: Tab; label: string }[] = [
-    { id: 'cut-schedule', label: '📋 Cut Schedule' },
-    { id: 'box-labels',   label: '🏷️ Box Labels' },
-    { id: 'browser',      label: '🔪 PLU Browser' },
-    { id: 'alignment',    label: '🔗 Alignment' },
-    { id: 'clover',       label: '🍀 Clover' },
-    { id: 'quickbooks',   label: '📗 QuickBooks' },
-    { id: 'export',       label: '📤 Export' },
-    { id: 'cleanup',      label: '🧹 Cleanup' },
-    { id: 'upload',       label: '📂 Upload File' },
-  ]
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--dark-brown)', display: 'flex', flexDirection: 'column' }}>
@@ -1561,15 +1624,21 @@ export default function ProcessingPage() {
           <Link href="/scanner" style={{ background: C.green, color: C.dark, textDecoration: 'none', fontSize: '0.78rem', fontWeight: 700, padding: '0.3rem 0.75rem', borderRadius: 3, letterSpacing: '0.04em' }}>🔍 Processing Scanner ↗</Link>
           <Link href="/plu-book" style={{ background: C.tan, color: C.dark, textDecoration: 'none', fontSize: '0.78rem', fontWeight: 700, padding: '0.3rem 0.75rem', borderRadius: 3, letterSpacing: '0.04em' }}>📖 Barcode Book ↗</Link>
         </div>
-        <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden' }}>
-          {tabs.map(t => (
-            <button key={t.id} onClick={() => setTab(t.id)} style={{
-              padding: '0.45rem 1.1rem', border: 'none', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
-              background: tab === t.id ? C.medBrown : 'transparent',
-              color: tab === t.id ? C.cream : C.lightBrown,
-              letterSpacing: '0.04em', transition: 'background 0.15s',
-            }}>{t.label}</button>
-          ))}
+        {/* Day-to-day tabs stay flat; the catalog-plumbing tabs live behind two
+            menus so the header is 5 controls wide instead of 9. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden' }}>
+            {DAILY_TABS.map(t => (
+              <button key={t.id} onClick={() => setTab(t.id)} style={{
+                padding: '0.45rem 1.1rem', border: 'none', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
+                background: tab === t.id ? C.medBrown : 'transparent',
+                color: tab === t.id ? C.cream : C.lightBrown,
+                letterSpacing: '0.04em', transition: 'background 0.15s',
+              }}>{t.label}</button>
+            ))}
+          </div>
+          <TabMenu label="🔗 Integrations" items={INTEGRATION_TABS} tab={tab} setTab={setTab} />
+          <TabMenu label="🗂 PLU Tools"    items={PLU_TOOL_TABS}    tab={tab} setTab={setTab} />
         </div>
       </header>
 
