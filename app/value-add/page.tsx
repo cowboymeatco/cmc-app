@@ -333,6 +333,11 @@ function JobCard({ job, proposal, onUpdated }: {
             </div>
           )}
 
+          <div style={{ fontSize: '0.68rem', color: C.lightBrown, marginTop: '0.35rem' }}>
+            Boxes packed {proposal.windowFrom} → {proposal.windowTo}
+            {proposal.boundedByNextJob && ' · stops at the next cook of this product'}
+          </div>
+
           {showBoxes && (
             <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
               {proposal.boxes.map(b => (

@@ -52,6 +52,8 @@ export interface WeightOutProposal {
   plu:            string
   windowFrom:     string
   windowTo:       string
+  /** The window was cut short by the next cook of this same product. */
+  boundedByNextJob: boolean
 }
 
 // Strip the ticket numbers and hanging weights the packing screen tacks onto a
@@ -89,19 +91,58 @@ export function isoDay(d: Date): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
-/**
- * The pack-date window a job's output could plausibly fall in. Opens the day
- * before the cook (a cook started late on the 6th can pack on the 6th) and runs
- * two weeks out, which covers product boxed as customers come to collect.
- */
-export function packWindow(job: { completed_date: string | null; requested_date: string; scheduled_start?: string | null }): { from: string; to: string } {
-  const base = job.completed_date
+export interface MatchWindowSettings {
+  match_window_days:      number
+  match_window_back_days: number
+}
+
+export const DEFAULT_WINDOW: MatchWindowSettings = {
+  match_window_days:      45,
+  match_window_back_days: 1,
+}
+
+/** The date a job's cook is anchored to. */
+export function jobBaseDate(job: { completed_date: string | null; requested_date: string; scheduled_start?: string | null }): string {
+  return job.completed_date
     ?? (job.scheduled_start ? job.scheduled_start.slice(0, 10) : null)
     ?? job.requested_date
-  const start = new Date(`${base}T12:00:00`)
-  const from = new Date(start); from.setDate(from.getDate() - 1)
-  const to   = new Date(start); to.setDate(to.getDate() + 14)
-  return { from: isoDay(from), to: isoDay(to) }
+}
+
+function shiftDays(iso: string, days: number): string {
+  const d = new Date(`${iso}T12:00:00`)
+  d.setDate(d.getDate() + days)
+  return isoDay(d)
+}
+
+/**
+ * The pack-date window a job's output could plausibly fall in.
+ *
+ * Opens the day before the cook (one started late on the 6th can pack on the
+ * 6th) and runs well past it, so a job left open for weeks can still pick up
+ * its own weight.
+ *
+ * `nextSamePluDate` is what makes a long window safe. Snack sticks cook roughly
+ * every 8 days; without a stop, a 45-day window would happily sum three later
+ * runs into this job. So the window is cut the day before the next job for the
+ * same PLU — boxes from that point on belong to that cook, not this one.
+ */
+export function packWindow(
+  job: { completed_date: string | null; requested_date: string; scheduled_start?: string | null },
+  settings: MatchWindowSettings = DEFAULT_WINDOW,
+  nextSamePluDate: string | null = null
+): { from: string; to: string } {
+  const base = jobBaseDate(job)
+  const from = shiftDays(base, -Math.abs(settings.match_window_back_days))
+  let   to   = shiftDays(base,  Math.abs(settings.match_window_days))
+
+  if (nextSamePluDate) {
+    const boundary = shiftDays(nextSamePluDate, -1)
+    if (boundary < to) to = boundary
+  }
+  // A boundary earlier than the job itself would invert the window; an empty
+  // range is the honest result, not a backwards one.
+  if (to < from) to = from
+  return { from, to }
 }
 
 /**
@@ -113,12 +154,14 @@ export function packWindow(job: { completed_date: string | null; requested_date:
  * a shelf-stock run has no customer to narrow by, and the crew confirms.
  */
 export function proposeWeightOut(
-  job:   { output_plu: string | null; customer_name: string | null; completed_date: string | null; requested_date: string; scheduled_start?: string | null },
-  scans: BoxScanRow[]
+  job:      { output_plu: string | null; customer_name: string | null; completed_date: string | null; requested_date: string; scheduled_start?: string | null },
+  scans:    BoxScanRow[],
+  settings: MatchWindowSettings = DEFAULT_WINDOW,
+  nextSamePluDate: string | null = null
 ): WeightOutProposal | null {
   if (!job.output_plu) return null
 
-  const { from, to } = packWindow(job)
+  const { from, to } = packWindow(job, settings, nextSamePluDate)
 
   const inWindow = scans.filter(s =>
     s.plu_number === job.output_plu &&
@@ -155,5 +198,7 @@ export function proposeWeightOut(
     plu:        job.output_plu,
     windowFrom: from,
     windowTo:   to,
+    boundedByNextJob: !!nextSamePluDate &&
+      to < shiftDays(jobBaseDate(job), Math.abs(settings.match_window_days)),
   }
 }
