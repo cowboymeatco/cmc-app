@@ -262,6 +262,8 @@ export interface ValueAddJob {
   output_item_name:              string
   weight_in_lbs:                 number | null
   weight_out_lbs:                number | null
+  // 'boxes' = summed off the Hobart scans in the box label, 'manual' = typed.
+  weight_out_source:             'boxes' | 'manual' | null
   assigned_to:                   string
   requested_date:                string
   completed_date:                string | null
