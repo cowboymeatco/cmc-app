@@ -31,12 +31,13 @@ const BTN = (bg: string, fg = C.dark): React.CSSProperties => ({
 
 // Units in display order — coolers ≤45°F, freezers no upper limit shown
 const UNITS = [
-  { key: 'showcase_freezer_f',   label: 'Showcase\nFreezer',      isFreezer: true  },
-  { key: 'showcase_cooler_f',    label: 'Showcase\nCooler',       isFreezer: false },
-  { key: 'retail_freezer_f',     label: 'Retail\nFreezer',        isFreezer: true  },
-  { key: 'custom_freezer_f',     label: 'Custom\nFreezer',        isFreezer: true  },
-  { key: 'new_carcass_cooler_f', label: 'New Carcass\nCooler',    isFreezer: false },
-  { key: 'old_carcass_cooler_f', label: 'Old Carcass\nCooler',    isFreezer: false },
+  { key: 'showcase_freezer_f',      label: 'Showcase\nFreezer',      isFreezer: true  },
+  { key: 'showcase_cooler_f',       label: 'Showcase\nCooler',       isFreezer: false },
+  { key: 'retail_freezer_f',        label: 'Retail\nFreezer',        isFreezer: true  },
+  { key: 'custom_freezer_middle_f', label: 'Custom Freezer\nMiddle', isFreezer: true  },
+  { key: 'custom_freezer_east_f',   label: 'Custom Freezer\nEast',   isFreezer: true  },
+  { key: 'new_carcass_cooler_f',    label: 'New Carcass\nCooler',    isFreezer: false },
+  { key: 'old_carcass_cooler_f',    label: 'Old Carcass\nCooler',    isFreezer: false },
 ] as const
 
 type UnitKey = typeof UNITS[number]['key']
@@ -62,12 +63,13 @@ function printColdStorageReport(logs: ColdStorageLog[], start: string, end: stri
   const rows = sorted.map(log => `
     <tr>
       <td>${fmtDate(log.recorded_date)}</td>
-      <td${flag('showcase_freezer_f',   log.showcase_freezer_f)}>${fmtT(log.showcase_freezer_f)}</td>
-      <td${flag('showcase_cooler_f',    log.showcase_cooler_f)}>${fmtT(log.showcase_cooler_f)}</td>
-      <td${flag('retail_freezer_f',     log.retail_freezer_f)}>${fmtT(log.retail_freezer_f)}</td>
-      <td${flag('custom_freezer_f',     log.custom_freezer_f)}>${fmtT(log.custom_freezer_f)}</td>
-      <td${flag('new_carcass_cooler_f', log.new_carcass_cooler_f)}>${fmtT(log.new_carcass_cooler_f)}</td>
-      <td${flag('old_carcass_cooler_f', log.old_carcass_cooler_f)}>${fmtT(log.old_carcass_cooler_f)}</td>
+      <td${flag('showcase_freezer_f',      log.showcase_freezer_f)}>${fmtT(log.showcase_freezer_f)}</td>
+      <td${flag('showcase_cooler_f',       log.showcase_cooler_f)}>${fmtT(log.showcase_cooler_f)}</td>
+      <td${flag('retail_freezer_f',        log.retail_freezer_f)}>${fmtT(log.retail_freezer_f)}</td>
+      <td${flag('custom_freezer_middle_f', log.custom_freezer_middle_f)}>${fmtT(log.custom_freezer_middle_f)}</td>
+      <td${flag('custom_freezer_east_f',   log.custom_freezer_east_f)}>${fmtT(log.custom_freezer_east_f)}</td>
+      <td${flag('new_carcass_cooler_f',    log.new_carcass_cooler_f)}>${fmtT(log.new_carcass_cooler_f)}</td>
+      <td${flag('old_carcass_cooler_f',    log.old_carcass_cooler_f)}>${fmtT(log.old_carcass_cooler_f)}</td>
       <td style="text-align:center">${log.initials}</td>
     </tr>`).join('')
 
@@ -149,14 +151,15 @@ export default function ColdStoragePage() {
   const emptyForm = () => ({
     recorded_date:        today,
     recorded_time:        nowTime,
-    showcase_freezer_f:   '',
-    showcase_cooler_f:    '',
-    retail_freezer_f:     '',
-    custom_freezer_f:     '',
-    new_carcass_cooler_f: '',
-    old_carcass_cooler_f: '',
-    initials:             '',
-    notes:                '',
+    showcase_freezer_f:      '',
+    showcase_cooler_f:       '',
+    retail_freezer_f:        '',
+    custom_freezer_middle_f: '',
+    custom_freezer_east_f:   '',
+    new_carcass_cooler_f:    '',
+    old_carcass_cooler_f:    '',
+    initials:                '',
+    notes:                   '',
   })
 
   const [form,        setForm]        = useState(emptyForm)

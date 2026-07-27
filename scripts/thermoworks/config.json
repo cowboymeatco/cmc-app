@@ -1,5 +1,48 @@
 {
-  "cold_storage": [],
+  "cold_storage": [
+    {
+      "serial": "24:4C:AB:D7:2B:FC",
+      "channel": 1,
+      "channel_label": "Showcase Freezer",
+      "unit_key": "showcase_freezer_f"
+    },
+    {
+      "serial": "24:4C:AB:D7:15:E8",
+      "channel": 1,
+      "channel_label": "Showcase Cooler (named 'Retail Cooler' in ThermoWorks)",
+      "unit_key": "showcase_cooler_f"
+    },
+    {
+      "serial": "10:97:BD:34:82:34",
+      "channel": 1,
+      "channel_label": "Retail Freezer (channel mislabelled 'Hog Cooler' in ThermoWorks)",
+      "unit_key": "retail_freezer_f"
+    },
+    {
+      "serial": "B0:A7:32:C5:C7:48",
+      "channel": 1,
+      "channel_label": "Custom Freezer - Middle",
+      "unit_key": "custom_freezer_middle_f"
+    },
+    {
+      "serial": "24:4C:AB:D7:22:44",
+      "channel": 1,
+      "channel_label": "Custom Freezer - East Side",
+      "unit_key": "custom_freezer_east_f"
+    },
+    {
+      "serial": "70:B8:F6:99:16:58",
+      "channel": 1,
+      "channel_label": "New Carcass Cooler",
+      "unit_key": "new_carcass_cooler_f"
+    },
+    {
+      "serial": "94:B5:55:8E:29:E0",
+      "channel": 1,
+      "channel_label": "Old Carcass Cooler",
+      "unit_key": "old_carcass_cooler_f"
+    }
+  ],
   "cook_logger": {
     "serial": "D24380282",
     "channels": [

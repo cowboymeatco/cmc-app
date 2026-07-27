@@ -27,7 +27,8 @@ COLD_STORAGE_KEYS = [
     'showcase_freezer_f',
     'showcase_cooler_f',
     'retail_freezer_f',
-    'custom_freezer_f',
+    'custom_freezer_middle_f',
+    'custom_freezer_east_f',
     'new_carcass_cooler_f',
     'old_carcass_cooler_f',
 ]
@@ -113,6 +114,14 @@ async def main():
 
         config = {'cold_storage': config_cold, 'cook_logger': config_cook}
         config_path = Path(__file__).parent / 'config.json'
+
+        # Never clobber a working mapping — this script regenerates a blank
+        # template, so keep a copy of whatever was there before.
+        if config_path.exists():
+            backup = config_path.with_suffix('.json.bak')
+            backup.write_text(config_path.read_text())
+            print(f'\nExisting config backed up to {backup}')
+
         config_path.write_text(json.dumps(config, indent=2))
 
         print(f'\nconfig.json written to {config_path}')

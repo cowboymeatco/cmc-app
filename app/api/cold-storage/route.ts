@@ -29,15 +29,16 @@ export async function POST(req: NextRequest) {
     .from('cold_storage_log')
     .insert([{
       recorded_date:        body.recorded_date,
-      recorded_time:        body.recorded_time        ?? null,
-      showcase_freezer_f:   body.showcase_freezer_f   ?? null,
-      showcase_cooler_f:    body.showcase_cooler_f    ?? null,
-      retail_freezer_f:     body.retail_freezer_f     ?? null,
-      custom_freezer_f:     body.custom_freezer_f     ?? null,
-      new_carcass_cooler_f: body.new_carcass_cooler_f ?? null,
-      old_carcass_cooler_f: body.old_carcass_cooler_f ?? null,
-      initials:             body.initials             ?? '',
-      notes:                body.notes                ?? '',
+      recorded_time:           body.recorded_time           ?? null,
+      showcase_freezer_f:      body.showcase_freezer_f      ?? null,
+      showcase_cooler_f:       body.showcase_cooler_f       ?? null,
+      retail_freezer_f:        body.retail_freezer_f        ?? null,
+      custom_freezer_middle_f: body.custom_freezer_middle_f ?? null,
+      custom_freezer_east_f:   body.custom_freezer_east_f   ?? null,
+      new_carcass_cooler_f:    body.new_carcass_cooler_f    ?? null,
+      old_carcass_cooler_f:    body.old_carcass_cooler_f    ?? null,
+      initials:                body.initials                ?? '',
+      notes:                   body.notes                   ?? '',
     }])
     .select()
     .single()

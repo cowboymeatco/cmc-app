@@ -199,19 +199,22 @@ export interface ChillLog {
 // ── Cold Storage Temperature Log ─────────────────────────────────────────────
 
 export interface ColdStorageLog {
-  id:                   string
-  created_at:           string
-  recorded_date:        string        // ISO date
-  recorded_time:        string | null // HH:MM:SS
-  showcase_freezer_f:   number | null
-  showcase_cooler_f:    number | null
-  retail_freezer_f:     number | null
-  custom_freezer_f:     number | null
-  new_carcass_cooler_f: number | null
-  old_carcass_cooler_f: number | null
-  initials:             string
-  notes:                string
-  source:               string | null  // 'manual' | 'TW-AUTO'
+  id:                      string
+  created_at:              string
+  recorded_date:           string        // ISO date
+  recorded_time:           string | null // HH:MM:SS
+  showcase_freezer_f:      number | null
+  showcase_cooler_f:       number | null
+  retail_freezer_f:        number | null
+  // The Custom Freezer spans two spaces, each with its own probe — logged
+  // separately so a problem in one half can't be averaged away.
+  custom_freezer_middle_f: number | null
+  custom_freezer_east_f:   number | null
+  new_carcass_cooler_f:    number | null
+  old_carcass_cooler_f:    number | null
+  initials:                string
+  notes:                   string
+  source:                  string | null  // 'manual' | 'TW-AUTO'
 }
 
 // ── Cook Sessions & Readings (ThermoWorks) ────────────────────────────────────
