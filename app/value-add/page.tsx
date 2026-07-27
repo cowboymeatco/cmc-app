@@ -3,34 +3,14 @@
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { isoDate } from '@/lib/dates'
+import {
+  ValueAddJob, ValueAddJobType as JobType,
+  ValueAddStatus as JobStatus, ValueAddSourceType as SourceType,
+} from '@/lib/types'
+import { fmtDayClock } from '@/lib/cookPredict'
+import ScheduleTab from './ScheduleTab'
 
-type JobStatus = 'pending' | 'in_progress' | 'complete'
-type JobType   = 'smokehouse' | 'patties' | 'sausage' | 'other'
-type SourceType = 'retail_order' | 'cutting_instruction' | 'general'
-type Tab = 'active' | 'new' | 'history'
-
-interface ValueAddJob {
-  id:                            string
-  created_at:                    string
-  updated_at:                    string
-  job_type:                      JobType
-  description:                   string
-  source_type:                   SourceType
-  linked_order_id:               string | null
-  linked_cutting_instruction_id: string | null
-  output_plu:                    string | null
-  output_item_name:              string
-  weight_in_lbs:                 number | null
-  weight_out_lbs:                number | null
-  assigned_to:                   string
-  requested_date:                string
-  completed_date:                string | null
-  status:                        JobStatus
-  notes:                         string
-  customer_name:                 string | null
-  source_description:            string | null
-  tag_code:                      string | null
-}
+type Tab = 'active' | 'schedule' | 'new' | 'history'
 
 // The WIP tag rides with the tub to value add — opens in its own window and
 // prints itself, same as the box label.
@@ -195,6 +175,24 @@ function JobCard({ job, onUpdated }: { job: ValueAddJob; onUpdated: (j: ValueAdd
           <StatusBadge status={job.status} />
         </div>
       </div>
+
+      {/* Published slot — what the Schedule tab committed this job to. Shown
+          here so the crew working the active list sees the same times the
+          board does, without switching tabs. */}
+      {job.scheduled_start && (
+        <div style={{
+          display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.4rem',
+          fontSize: '0.78rem', color: C.orange, fontWeight: 600,
+        }}>
+          <span>🔥 In {fmtDayClock(new Date(job.scheduled_start))}</span>
+          {job.predicted_minutes != null && (
+            <span style={{ color: C.lightBrown, fontWeight: 400 }}>
+              → out {fmtDayClock(new Date(new Date(job.scheduled_start).getTime() + job.predicted_minutes * 60000))}
+            </span>
+          )}
+          {job.schedule_locked && <span title="Pinned to this time">📌</span>}
+        </div>
+      )}
 
       {/* Customer — blank means CMC shelf stock, named means keep it separate */}
       {job.customer_name && (
@@ -688,9 +686,10 @@ export default function ValueAddPage() {
   }, [])
 
   const tabs = [
-    { id: 'active'  as Tab, label: '⚙️ Active Jobs' },
-    { id: 'new'     as Tab, label: '+ New Job' },
-    { id: 'history' as Tab, label: '📜 History' },
+    { id: 'active'   as Tab, label: '⚙️ Active Jobs' },
+    { id: 'schedule' as Tab, label: '📅 Schedule' },
+    { id: 'new'      as Tab, label: '+ New Job' },
+    { id: 'history'  as Tab, label: '📜 History' },
   ]
 
   const cookLogHref = '/value-add/cooking'
@@ -722,9 +721,10 @@ export default function ValueAddPage() {
       </header>
 
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1200px', width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
-        {tab === 'active'  && <ActiveJobsTab key={newKey} />}
-        {tab === 'new'     && <NewJobTab key={newKey} onSaved={() => { setNewKey(k => k + 1); setTab('active') }} orders={orders} cuttingInstructions={cuttingInstructions} pluList={pluList} />}
-        {tab === 'history' && <HistoryTab />}
+        {tab === 'active'   && <ActiveJobsTab key={newKey} />}
+        {tab === 'schedule' && <ScheduleTab />}
+        {tab === 'new'      && <NewJobTab key={newKey} onSaved={() => { setNewKey(k => k + 1); setTab('active') }} orders={orders} cuttingInstructions={cuttingInstructions} pluList={pluList} />}
+        {tab === 'history'  && <HistoryTab />}
       </main>
 
       <footer style={{ background: 'var(--dark)', borderTop: '1px solid rgba(166,120,90,0.2)', padding: '0.5rem 2rem', textAlign: 'center', fontSize: '0.72rem', color: C.lightBrown, flexShrink: 0 }}>

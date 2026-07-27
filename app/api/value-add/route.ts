@@ -71,6 +71,11 @@ export async function POST(req: NextRequest) {
       notes:                         body.notes                         ?? '',
       customer_name:                 body.customer_name                 ?? null,
       source_description:            body.source_description            ?? null,
+      scheduled_start:               body.scheduled_start               ?? null,
+      predicted_minutes:             body.predicted_minutes             ?? null,
+      profile_key:                   body.profile_key                   ?? null,
+      batch_count:                   body.batch_count                   ?? null,
+      resource:                      body.resource                      ?? 'smokehouse',
       tag_code:                      await nextTagCode(requestedDate),
     }])
     .select()
@@ -99,4 +104,43 @@ export async function PATCH(req: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json(data)
+}
+
+// PUT /api/value-add — commit a whole schedule at once.
+//
+// The planner lays out the entire house queue and the crew presses Publish
+// once; sending one request per job would let a dropped connection leave half
+// a schedule on the board. Body: { schedule: [{ id, scheduled_start,
+// predicted_minutes, profile_key, batch_count, schedule_locked }] }.
+export async function PUT(req: NextRequest) {
+  const body = await req.json()
+  const rows = Array.isArray(body.schedule) ? body.schedule : null
+  if (!rows) return NextResponse.json({ error: 'schedule array required' }, { status: 400 })
+
+  const now = new Date().toISOString()
+  const results = await Promise.all(rows.map((r: Record<string, unknown>) =>
+    supabase
+      .from('value_add_jobs')
+      .update({
+        scheduled_start:   r.scheduled_start   ?? null,
+        predicted_minutes: r.predicted_minutes ?? null,
+        profile_key:       r.profile_key       ?? null,
+        batch_count:       r.batch_count       ?? null,
+        resource:          r.resource          ?? 'smokehouse',
+        schedule_locked:   r.schedule_locked   ?? false,
+        updated_at:        now,
+      })
+      .eq('id', r.id)
+      .select()
+      .single()
+  ))
+
+  const failed = results.filter(r => r.error)
+  if (failed.length) {
+    return NextResponse.json(
+      { error: failed[0].error?.message, failed: failed.length, saved: rows.length - failed.length },
+      { status: 500 }
+    )
+  }
+  return NextResponse.json(results.map(r => r.data))
 }

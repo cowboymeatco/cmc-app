@@ -243,6 +243,43 @@ export interface CookReading {
   temp_f:        number | null
 }
 
+// ── Value Add ────────────────────────────────────────────────────────────────
+
+export type ValueAddStatus = 'pending' | 'in_progress' | 'complete'
+export type ValueAddJobType = 'smokehouse' | 'patties' | 'sausage' | 'other'
+export type ValueAddSourceType = 'retail_order' | 'cutting_instruction' | 'general'
+
+export interface ValueAddJob {
+  id:                            string
+  created_at:                    string
+  updated_at:                    string
+  job_type:                      ValueAddJobType
+  description:                   string
+  source_type:                   ValueAddSourceType
+  linked_order_id:               string | null
+  linked_cutting_instruction_id: string | null
+  output_plu:                    string | null
+  output_item_name:              string
+  weight_in_lbs:                 number | null
+  weight_out_lbs:                number | null
+  assigned_to:                   string
+  requested_date:                string
+  completed_date:                string | null
+  status:                        ValueAddStatus
+  notes:                         string
+  customer_name:                 string | null
+  source_description:            string | null
+  tag_code:                      string | null
+  // Scheduling — see lib/cookPredict.ts. All nullable: an unscheduled job is
+  // still a perfectly good job.
+  scheduled_start:               string | null
+  predicted_minutes:             number | null
+  profile_key:                   string | null
+  batch_count:                   number | null
+  resource:                      string | null
+  schedule_locked:               boolean
+}
+
 // ── Cut Schedule ─────────────────────────────────────────────────────────────
 
 export interface CutScheduleItem {
