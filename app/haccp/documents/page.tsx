@@ -90,6 +90,8 @@ export default function HaccpDocumentsPage() {
 
         <UploadCard onUploaded={m => { setMsg(m); load() }} />
 
+        <InspectorPortalCard />
+
         {!loading && docs.length === 0 && (
           <div style={{ background: C.dark, border: '1px dashed rgba(166,120,90,0.3)', borderRadius: 4, padding: '2rem', textAlign: 'center', color: C.lightBrown, fontSize: '0.85rem' }}>
             Nothing uploaded yet. Start with the HACCP plan and the hazard analysis.
@@ -135,6 +137,169 @@ export default function HaccpDocumentsPage() {
       <footer style={{ background: 'var(--dark)', borderTop: '1px solid rgba(166,120,90,0.2)', padding: '0.5rem 2rem', textAlign: 'center', fontSize: '0.72rem', color: C.lightBrown }}>
         Cowboy Meat Company · 1109 Front St, Forsyth MT · (406) 346-7660
       </footer>
+    </div>
+  )
+}
+
+// ── Inspector portal admin ────────────────────────────────────────────────────
+
+interface Network { id: string; network: string; label: string | null; added_at: string }
+interface NetworkState { yourIp: string; yourIpAllowed: boolean; networks: Network[] }
+interface VisitActivity { action: string; detail: string | null; at: string }
+interface VisitRow {
+  id: string; inspector: string; agency: string | null; ip: string | null
+  started_at: string; activity: VisitActivity[]
+}
+
+// Charlie manages the plant allowlist from here rather than from a hosting
+// dashboard: stand in the office, press the button, that network is authorized.
+function InspectorPortalCard() {
+  const [net,     setNet]     = useState<NetworkState | null>(null)
+  const [visits,  setVisits]  = useState<VisitRow[]>([])
+  const [manual,  setManual]  = useState('')
+  const [busy,    setBusy]    = useState(false)
+  const [err,     setErr]     = useState('')
+  const [showLog, setShowLog] = useState(false)
+
+  const load = useCallback(async () => {
+    const [n, v] = await Promise.all([
+      fetch('/api/inspector/network').then(r => r.ok ? r.json() : null),
+      fetch('/api/inspector/visits').then(r => r.ok ? r.json() : []),
+    ])
+    setNet(n); setVisits(v)
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  async function add(network?: string, label?: string) {
+    setBusy(true); setErr('')
+    const res = await fetch('/api/inspector/network', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ network, label }),
+    })
+    setBusy(false)
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      setErr(body.error ?? 'Could not add that network')
+      return
+    }
+    setManual('')
+    load()
+  }
+
+  async function remove(id: string) {
+    if (!confirm('Remove this network? Inspectors on it lose access immediately.')) return
+    await fetch(`/api/inspector/network?id=${id}`, { method: 'DELETE' })
+    load()
+  }
+
+  return (
+    <div style={{
+      background: C.dark, border: '1px solid rgba(166,120,90,0.25)',
+      borderLeft: `4px solid #60A5FA`, borderRadius: 4,
+      padding: '1.1rem 1.25rem', marginBottom: '1.75rem',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.6rem' }}>
+        <div style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '0.9rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          Inspector Portal
+        </div>
+        <Link href="/inspector" style={{ color: '#60A5FA', fontSize: '0.78rem', textDecoration: 'none' }}>Open /inspector ↗</Link>
+      </div>
+
+      <p style={{ fontSize: '0.78rem', color: C.lightBrown, lineHeight: 1.5, margin: '0 0 0.9rem' }}>
+        Inspectors see the documents above plus live cold storage and kill day records — read only, and only from a
+        network on this list. Every visitor types their name first and everything they open is logged.
+      </p>
+
+      {net && (
+        <div style={{
+          background: net.yourIpAllowed ? 'rgba(76,175,80,0.1)' : 'rgba(245,158,11,0.1)',
+          border: `1px solid ${net.yourIpAllowed ? C.green : C.amber}44`,
+          borderRadius: 3, padding: '0.6rem 0.85rem', marginBottom: '0.85rem',
+          display: 'flex', alignItems: 'center', gap: '0.85rem', flexWrap: 'wrap',
+        }}>
+          <span style={{ fontSize: '0.82rem', color: C.cream }}>
+            This device is at <strong>{net.yourIp}</strong> —{' '}
+            {net.yourIpAllowed ? 'already authorized' : 'not on the list'}
+          </span>
+          {!net.yourIpAllowed && (
+            <button onClick={() => add(undefined, 'Plant network')} disabled={busy} style={{
+              background: C.green, color: C.dark, border: 'none', borderRadius: 3,
+              padding: '0.35rem 0.9rem', fontSize: '0.78rem', fontWeight: 700, cursor: 'pointer',
+            }}>Authorize this network</button>
+          )}
+        </div>
+      )}
+
+      {net && net.networks.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginBottom: '0.85rem' }}>
+          {net.networks.map(n => (
+            <div key={n.id} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.82rem', color: C.cream }}>
+              <span style={{ fontFamily: 'monospace' }}>{n.network}</span>
+              <span style={{ color: C.lightBrown, fontSize: '0.76rem' }}>{n.label ?? ''}</span>
+              <button onClick={() => remove(n.id)} style={{
+                marginLeft: 'auto', background: 'none', border: 'none',
+                color: C.lightBrown, cursor: 'pointer', fontSize: '0.78rem',
+              }}>Remove</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.6rem' }}>
+        <input
+          value={manual}
+          onChange={e => setManual(e.target.value)}
+          placeholder="Add another address or range, e.g. 24.116.40.0/24"
+          style={{ ...INPUT, flex: 1, fontSize: '0.82rem', padding: '0.4rem 0.6rem' }}
+        />
+        <button onClick={() => manual.trim() && add(manual.trim())} disabled={busy || !manual.trim()} style={{
+          background: 'transparent', border: '1px solid rgba(166,120,90,0.35)', color: C.tan,
+          borderRadius: 3, padding: '0.4rem 0.9rem', fontSize: '0.8rem', cursor: 'pointer',
+        }}>Add</button>
+      </div>
+
+      {err && <div style={{ color: C.red, fontSize: '0.8rem', marginBottom: '0.6rem' }}>{err}</div>}
+
+      {net && net.networks.length === 0 && (
+        <div style={{ fontSize: '0.78rem', color: C.amber, marginBottom: '0.6rem' }}>
+          No networks authorized yet — the portal is closed to everyone. Open this page from the plant and press
+          Authorize.
+        </div>
+      )}
+
+      <button onClick={() => setShowLog(s => !s)} style={{
+        background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer',
+        fontSize: '0.8rem', padding: 0,
+      }}>
+        {showLog ? '▾' : '▸'} Visitor log ({visits.length})
+      </button>
+
+      {showLog && (
+        <div style={{ marginTop: '0.7rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          {visits.length === 0 && <span style={{ fontSize: '0.8rem', color: C.lightBrown }}>No inspector has signed in yet.</span>}
+          {visits.map(v => (
+            <div key={v.id} style={{ borderTop: '1px solid rgba(166,120,90,0.15)', paddingTop: '0.45rem' }}>
+              <div style={{ fontSize: '0.83rem', color: C.cream }}>
+                <strong>{v.inspector}</strong>
+                {v.agency ? ` · ${v.agency}` : ''}
+                <span style={{ color: C.lightBrown, fontSize: '0.76rem' }}>
+                  {' '}· {new Date(v.started_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                  {v.ip ? ` · ${v.ip}` : ''}
+                </span>
+              </div>
+              {v.activity.length > 0 && (
+                <div style={{ fontSize: '0.75rem', color: C.lightBrown, marginTop: '0.2rem' }}>
+                  {v.activity.map((a, i) => (
+                    <span key={i}>{i > 0 ? ' · ' : ''}{a.action.replace(/_/g, ' ')}{a.detail ? `: ${a.detail}` : ''}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

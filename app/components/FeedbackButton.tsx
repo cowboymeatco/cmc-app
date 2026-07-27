@@ -27,6 +27,10 @@ export default function FeedbackButton() {
 
   // Install client telemetry once (console errors, click/fetch/nav breadcrumbs).
   useEffect(() => { installTelemetry() }, [])
+
+  // Staff tool — it stays off the inspector portal, which is a visitor-facing
+  // read-only surface and not somewhere to file into Charlie's punch list.
+  const hidden = pathname?.startsWith('/inspector') ?? false
   // Record route changes as breadcrumbs.
   useEffect(() => { addBreadcrumb('nav', `page → ${pathname}`) }, [pathname])
 
@@ -72,6 +76,8 @@ export default function FeedbackButton() {
       setSending(false)
     }
   }
+
+  if (hidden) return null
 
   return (
     <>
