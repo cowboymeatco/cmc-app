@@ -33,6 +33,17 @@ const SHOP_TZ = "America/Denver";
 
 const CHANNEL_TIMEOUT_MS = 30_000;
 
+/**
+ * Drop any reading whose probe hasn't reported in this long.
+ *
+ * A probe that has gone quiet keeps serving its last temperature. Recording
+ * that as a current reading turns a dead probe into a passing HACCP record.
+ *
+ * Measured 2026-07-26: healthy probes were 17-82 min behind; the wifi-flaky
+ * New Carcass Cooler was 28.5 h. 3 h clears normal variance with room to spare.
+ */
+const STALE_AFTER_MINUTES = 180;
+
 type ColdStorageMapping = {
   serial: string;
   channel: number;
@@ -129,12 +140,19 @@ function toFahrenheit(value: number, units: string | null): number {
   return Math.round(f * 10) / 10;
 }
 
-/** Returns the channel temperature in °F, or null if unavailable/offline. */
+type Reading = { tempF: number; ageMinutes: number | null };
+
+/** An unknown age counts as fresh, so a missing field can't blank a working probe. */
+function isStale(ageMinutes: number | null): boolean {
+  return ageMinutes !== null && ageMinutes > STALE_AFTER_MINUTES;
+}
+
+/** Returns the reading and how long ago the device sent it, or null if unavailable. */
 async function readChannel(
   tw: { idToken: string; firestoreBase: string },
   serial: string,
   channel: number,
-): Promise<number | null> {
+): Promise<Reading | null> {
   const url =
     `${tw.firestoreBase}/documents/devices/${serial}/channels/${channel}?key=${TW_API_KEY}`;
   try {
@@ -151,7 +169,17 @@ async function readChannel(
     // Firestore returns numbers as either doubleValue or integerValue
     const raw = fields.value?.doubleValue ?? fields.value?.integerValue;
     if (raw === undefined || raw === null) return null;
-    return toFahrenheit(Number(raw), fields.units?.stringValue ?? null);
+
+    const sentAt = fields.lastTelemetrySaved?.timestampValue ??
+      fields.lastSeen?.timestampValue ?? null;
+    const ageMinutes = sentAt
+      ? (Date.now() - new Date(sentAt).getTime()) / 60_000
+      : null;
+
+    return {
+      tempF: toFahrenheit(Number(raw), fields.units?.stringValue ?? null),
+      ageMinutes,
+    };
   } catch (e) {
     const why = e instanceof DOMException && e.name === "TimeoutError"
       ? "timeout — device may be offline"
@@ -236,17 +264,35 @@ async function syncColdStorage(
   };
 
   let hasData = false;
+  const offline: string[] = [];
   for (const m of mappings) {
     if (m.unit_key.startsWith("←")) {
       note(`  Skipping unmapped channel: ${m.channel_label} (edit config)`);
       continue;
     }
-    const temp = await readChannel(tw, m.serial, m.channel);
-    if (temp !== null) {
-      row[m.unit_key] = temp;
-      hasData = true;
-      note(`  ${m.unit_key}: ${temp}°F`);
+    const reading = await readChannel(tw, m.serial, m.channel);
+    if (reading === null) continue;
+
+    if (isStale(reading.ageMinutes)) {
+      offline.push(m.unit_key);
+      note(
+        `  ${m.unit_key}: SKIPPED — probe silent for ${
+          (reading.ageMinutes! / 60).toFixed(1)
+        } h`,
+      );
+      continue;
     }
+
+    row[m.unit_key] = reading.tempF;
+    hasData = true;
+    note(`  ${m.unit_key}: ${reading.tempF}°F`);
+  }
+
+  // Leave the gap visible on the record, not just in the function logs.
+  if (offline.length) {
+    row.notes = `${row.notes}. No reading from ${
+      offline.join(", ")
+    } — probe offline`;
   }
 
   if (!hasData) {
@@ -280,18 +326,27 @@ async function syncCookReadings(
   const readings: Record<string, unknown>[] = [];
   for (const ch of cook.channels ?? []) {
     const label = ch.label ?? `Ch${ch.channel}`;
-    const temp = await readChannel(tw, serial, ch.channel);
-    if (temp !== null) {
-      readings.push({
-        session_id: sessionId,
-        device_serial: serial,
-        read_at: readAt,
-        channel: ch.channel,
-        channel_label: label,
-        temp_f: temp,
-      });
-      note(`  ${label}: ${temp}°F`);
+    const reading = await readChannel(tw, serial, ch.channel);
+    if (reading === null) continue;
+
+    if (isStale(reading.ageMinutes)) {
+      note(
+        `  ${label}: SKIPPED — probe silent for ${
+          (reading.ageMinutes! / 60).toFixed(1)
+        } h`,
+      );
+      continue;
     }
+
+    readings.push({
+      session_id: sessionId,
+      device_serial: serial,
+      read_at: readAt,
+      channel: ch.channel,
+      channel_label: label,
+      temp_f: reading.tempF,
+    });
+    note(`  ${label}: ${reading.tempF}°F`);
   }
 
   if (!readings.length) {

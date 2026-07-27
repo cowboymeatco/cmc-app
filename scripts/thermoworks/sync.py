@@ -26,6 +26,9 @@ from thermoworks_cloud import AuthFactory, ThermoworksCloud, ResourceNotFoundErr
 
 load_dotenv(Path(__file__).parent / '.env')
 
+# Drop any reading whose probe hasn't reported in this long — see is_stale().
+STALE_AFTER_MINUTES = 180
+
 LOG_FILE = Path(__file__).parent / 'sync.log'
 logging.basicConfig(
     level=logging.INFO,
@@ -81,7 +84,18 @@ def to_fahrenheit(value: float, units: str | None) -> float:
     return round(value, 1)
 
 
-async def read_channel(tw: ThermoworksCloud, serial: str, channel: int) -> float | None:
+def channel_age_minutes(ch) -> float | None:
+    """How long ago the device last sent data. None if the device doesn't say."""
+    ts = ch.last_telemetry_saved or ch.last_seen
+    if ts is None:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - ts).total_seconds() / 60
+
+
+async def read_channel(tw: ThermoworksCloud, serial: str, channel: int):
+    """Returns (temp_f, age_minutes) or None. age_minutes is None if unknown."""
     try:
         ch = await asyncio.wait_for(
             tw.get_device_channel(device_serial=serial, channel=str(channel)),
@@ -89,7 +103,7 @@ async def read_channel(tw: ThermoworksCloud, serial: str, channel: int) -> float
         )
         if ch.value is None:
             return None
-        return to_fahrenheit(ch.value, ch.units)
+        return to_fahrenheit(ch.value, ch.units), channel_age_minutes(ch)
     except asyncio.TimeoutError:
         log.warning(f'    timeout ({serial} ch{channel}) — device may be offline')
         return None
@@ -98,6 +112,18 @@ async def read_channel(tw: ThermoworksCloud, serial: str, channel: int) -> float
     except Exception as e:
         log.error(f'    read error ({serial} ch{channel}): {e}')
         return None
+
+
+def is_stale(age_minutes: float | None) -> bool:
+    """A probe that has gone quiet keeps serving its last temperature. Recording
+    that as a current reading turns a dead probe into a passing HACCP record, so
+    a stale value is dropped rather than logged.
+
+    Threshold measured 2026-07-26: healthy probes were 17-82 min behind, the
+    wifi-flaky New Carcass Cooler was 28.5 h. An unknown age is treated as fresh
+    so a missing field can't blank a working probe.
+    """
+    return age_minutes is not None and age_minutes > STALE_AFTER_MINUTES
 
 
 # ── Cold storage sync ─────────────────────────────────────────────────────────
@@ -113,17 +139,30 @@ async def sync_cold_storage(tw: ThermoworksCloud, mappings: list, db: SupabaseCl
     }
 
     has_data = False
+    offline = []
     for m in mappings:
         unit_key = m['unit_key']
         if unit_key.startswith('←'):
             log.warning(f'  Skipping unmapped channel: {m.get("channel_label")} (edit config.json)')
             continue
 
-        temp = await read_channel(tw, m['serial'], m['channel'])
-        if temp is not None:
-            row[unit_key] = temp
-            has_data = True
-            log.info(f'  {unit_key}: {temp}°F')
+        reading = await read_channel(tw, m['serial'], m['channel'])
+        if reading is None:
+            continue
+
+        temp, age = reading
+        if is_stale(age):
+            offline.append(unit_key)
+            log.warning(f'  {unit_key}: SKIPPED — probe silent for {age / 60:.1f} h')
+            continue
+
+        row[unit_key] = temp
+        has_data = True
+        log.info(f'  {unit_key}: {temp}°F')
+
+    # Leave the gap visible on the record rather than only in this log file.
+    if offline:
+        row['notes'] += f'. No reading from {", ".join(offline)} — probe offline'
 
     if has_data:
         result = db.insert('cold_storage_log', row)
@@ -148,10 +187,14 @@ async def sync_cook_readings(tw: ThermoworksCloud, cook_cfg: dict, db: SupabaseC
 
     readings = []
     for ch_cfg in cook_cfg.get('channels', []):
-        ch_num = ch_cfg['channel']
-        label  = ch_cfg.get('label', f'Ch{ch_num}')
-        temp   = await read_channel(tw, serial, ch_num)
-        if temp is not None:
+        ch_num  = ch_cfg['channel']
+        label   = ch_cfg.get('label', f'Ch{ch_num}')
+        reading = await read_channel(tw, serial, ch_num)
+        if reading is not None:
+            temp, age = reading
+            if is_stale(age):
+                log.warning(f'  {label}: SKIPPED — probe silent for {age / 60:.1f} h')
+                continue
             readings.append({
                 'session_id':    session_id,
                 'device_serial': serial,
