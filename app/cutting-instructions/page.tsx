@@ -37,14 +37,25 @@ function speciesEmblem(s?: string | null): string {
   return SPECIES_EMBLEM[speciesKey(s)] ?? '🥩'
 }
 
+// Bagged trim (trim.dest === 'bag'): the customer takes their trim un-ground in
+// bulk bags, so none of the grind/patty/flavor answers exist on the card. The
+// cutters' line has to be loud about it — trim reaching a grinder is not
+// recoverable (Jill, 2026-07-28).
+const trimIsBagged = (t: any) => t?.dest === 'bag'
+const bagSizeLabel = (t: any) => (t?.bagSize ? `${t.bagSize} lb bags` : 'bag size not specified')
+const baggedTrimCutterRows = (): Array<[string, string]> => [['Trim', 'BAG — do not grind']]
+const baggedTrimPackRows   = (t: any): Array<[string, string]> => [['Bagged Trim', bagSizeLabel(t)]]
+
 // v2 beef `trim` prefs split by audience: the blend is the cutters' call
 // (cut card), packaging style & size is the packaging side's (packaging sheet)
 function beefTrimCutterRows(t: any): Array<[string, string]> {
+  if (trimIsBagged(t)) return baggedTrimCutterRows()
   return t?.fatPct ? [['Grind Blend', t.fatPct]] : []
 }
 
 function beefTrimPackRows(t: any): Array<[string, string]> {
   if (!t) return []
+  if (trimIsBagged(t)) return baggedTrimPackRows(t)
   const rows: Array<[string, string]> = []
   const pattyPct = Number(t.pattyPct ?? 0)
   if (pattyPct < 100) {
@@ -82,6 +93,7 @@ const trimSplitOf = (t: any) => t?.split === 'yes' && !!t?.flavor2
 // the trim gets divided at the table instead of guessed at (Jill, 2026-07-21).
 function porkTrimCutterRows(t: any, f: (s: string) => string): Array<[string, string]> {
   if (!t) return []
+  if (trimIsBagged(t)) return baggedTrimCutterRows()
   const split = trimSplitOf(t)
   const share = split ? '50% of trim' : 'all trim'
   const rows: Array<[string, string]> = []
@@ -92,6 +104,7 @@ function porkTrimCutterRows(t: any, f: (s: string) => string): Array<[string, st
 
 function porkTrimRows(t: any, f: (s: string) => string): Array<[string, string]> {
   if (!t) return []
+  if (trimIsBagged(t)) return [...baggedTrimCutterRows(), ...baggedTrimPackRows(t)]
   const split = trimSplitOf(t)
   const share = split ? '50% of trim' : ''
   const rows: Array<[string, string]> = []
@@ -106,11 +119,12 @@ function porkTrimRows(t: any, f: (s: string) => string): Array<[string, string]>
 // unknown value falls back to its own name instead of a confident lie.
 // `species` names the sausage — "Lamb Sausage", not "Breakfast Sausage" — so the
 // card matches what goes on the label (Jill, 2026-07-21).
-function lgTrimLabel(style?: string | null, species?: string | null): string {
+function lgTrimLabel(style?: string | null, species?: string | null, bagSize?: string | null): string {
   if (!style) return ''
   if (style === 'grind')   return 'Ground — 1 lb packs'
   if (style === 'stew')    return 'Stew — 1 lb packs'
   if (style === 'sausage') return `${v2fmt(species ?? '') || 'Lamb'} Sausage — 1 lb packs`
+  if (style === 'bag')     return `BAG — do not grind · ${bagSize ? `${bagSize} lb bags` : 'bag size not specified'}`
   return v2fmt(style)
 }
 
@@ -954,7 +968,7 @@ function renderV2Detail(ci: RawInstruction) {
           )}
           <V2Field label="Shoulder" value={sidePair(v2fmt(d.shoulder?.cut), v2fmt(d.shoulder?.cut2))} />
           <V2Field label="Shank" value={v2fmt(d.shank?.cut)} />
-          <V2Field label="Trim" value={lgTrimLabel(d.trim?.style, sp === 'goat' ? 'Goat' : 'Lamb') || undefined} />
+          <V2Field label="Trim" value={lgTrimLabel(d.trim?.style, sp === 'goat' ? 'Goat' : 'Lamb', d.trim?.bagSize) || undefined} />
         </V2Section>
       )}
 
@@ -1143,7 +1157,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
   }
 
   if (isBeef) {
-    cutSections += sec('Trim & Ground Beef', beefTrimCutterRows(d.trim).map(([l, v]) => row(l, v)).join(''))
+    cutSections += sec(trimIsBagged(d.trim) ? 'Trim' : 'Trim & Ground Beef', beefTrimCutterRows(d.trim).map(([l, v]) => row(l, v)).join(''))
   }
 
   if (isPork && !d.grindWhole) {
@@ -1168,7 +1182,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
   }
 
   if (isPork) {
-    cutSections += sec('Sausage / Trim', porkTrimCutterRows(d.trim, fmt).map(([l, v]) => row(l, v)).join(''))
+    cutSections += sec(trimIsBagged(d.trim) ? 'Trim' : 'Sausage / Trim', porkTrimCutterRows(d.trim, fmt).map(([l, v]) => row(l, v)).join(''))
   }
 
   if (isLG) {
@@ -1182,7 +1196,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
       lgLegSteaks(d.leg) && d.leg?.steakPack ? row('Per Pack', d.leg.steakPack) : '',
       row('Shoulder', sidePair(fmt(d.shoulder?.cut), fmt(d.shoulder?.cut2))),
       row('Shank',    fmt(d.shank?.cut)),
-      d.trim?.style ? row('Trim', lgTrimLabel(d.trim.style, species)) : '',
+      d.trim?.style ? row('Trim', lgTrimLabel(d.trim.style, species, d.trim.bagSize)) : '',
     ].join(''))
   }
 
@@ -1438,7 +1452,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
     if (d.shoulder?.cut2 && d.shoulder.cut2 !== d.shoulder.cut) { packShoulder(d.shoulder.cut, ' (1)'); packShoulder(d.shoulder.cut2, ' (2)') }
     else packShoulder(d.shoulder?.cut ?? '', '')
     if (d.shank?.cut)    { d.shank.cut    === 'grind' ? pg('Shank')    : pc('Shank',    fmt(d.shank.cut)) }
-    if (d.trim?.style)   { d.trim.style   === 'grind' ? pg('Trim')     : pc('Trim',     lgTrimLabel(d.trim.style, species)) }
+    if (d.trim?.style)   { d.trim.style   === 'grind' ? pg('Trim')     : pc('Trim',     lgTrimLabel(d.trim.style, species, d.trim.bagSize)) }
   }
 
   // Strip section headers that have no cut rows under them
@@ -1453,7 +1467,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
   // Ground/trim section: packaging style & size from the v2 trim step, plus which cuts went to grind
   const trimPrs = isBeef ? beefTrimPackRows(d.trim) : isPork ? porkTrimRows(d.trim, fmt) : []
   if (trimPrs.length || grindFrom.length) {
-    filteredPrs.push({ sectionTitle: isPork ? 'Sausage / Trim' : `Ground ${species}` })
+    filteredPrs.push({ sectionTitle: trimIsBagged(d.trim) ? 'Trim' : isPork ? 'Sausage / Trim' : `Ground ${species}` })
     trimPrs.forEach(([l, v]) => filteredPrs.push({ cut: l, spec: v }))
     // On pork everything sent to grind BECOMES the sausage listed above, so a
     // separate "Ground Pork · From: Hams" row read as though the ham were a
