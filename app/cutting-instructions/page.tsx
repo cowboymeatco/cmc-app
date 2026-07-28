@@ -190,7 +190,10 @@ function rawWeighInRows(d: any, f: (s: string) => string): Array<[string, string
   const billable = (flavor?: string | null) => !!flavor && flavor !== 'ground-pork'
   if (billable(t?.flavor1)) rows.push([f(t.flavor1), f(t.format1 ?? '')])
   if (t?.split === 'yes' && billable(t?.flavor2)) rows.push([f(t.flavor2), f(t.format2 ?? '')])
-  for (const [label, spec] of smokehouseRows(d?.smokehouse, f)) rows.push([label, spec])
+  // Smokehouse products used to be repeated down here for their weigh-in
+  // blank, which put a "Curing & Sausage" heading on beef cards that have
+  // neither (Jill, 2026-07-27). They're weighed on their own Smokehouse rows
+  // now, so a beef card with no cure work prints no section at all.
   return rows
 }
 
@@ -769,6 +772,9 @@ function renderV2Detail(ci: RawInstruction) {
         <V2Field label="Email" value={d.customerEmail} />
         <V2Field label="Kill Date" value={d.killDate} />
         <V2Field label="Portion" value={v2fmt(d.portion)} />
+        {/* Grinding it all replaces every primal answer, so it reads up here
+            with the portion rather than as a missing section below. */}
+        <V2Field label="Cut Style" value={d.grindWhole ? 'GRIND WHOLE ANIMAL — no steaks or roasts' : undefined} />
         {/* Asked once for the whole order, so it lives here rather than on each cut. */}
         <V2Field label="Steaks Per Pack" value={d.steakPack} />
         <V2Field label="Notes" value={d.notes} />
@@ -785,6 +791,7 @@ function renderV2Detail(ci: RawInstruction) {
 
       {isBeef && (
         <>
+          {!d.grindWhole && (<>
           <V2Section title="Chuck">
             <V2Field label="Brisket" value={
               d.brisket?.cut2
@@ -882,6 +889,7 @@ function renderV2Detail(ci: RawInstruction) {
             <V2Field label="Top Round Add-ons" value={v2adds(d.topRound?.addons)} addon />
             <V2Field label="Round Shank / Marrow" value={v2fmt(d.roundShank?.marrow)} />
           </V2Section>
+          </>)}
           {beefTrimRows(d.trim).length > 0 && (
             <V2Section title="Trim & Ground Beef">
               {beefTrimRows(d.trim).map(([label, value]) => <V2Field key={label} label={label} value={value} />)}
@@ -892,6 +900,7 @@ function renderV2Detail(ci: RawInstruction) {
 
       {isPork && (
         <>
+          {!d.grindWhole && (<>
           <V2Section title="Shoulder">
             {(d.shoulder?.shoulder2
               ? mergeSides(shoulderFields(d.shoulder, v2fmt, v2thick), shoulderFields(d.shoulder.shoulder2, v2fmt, v2thick))
@@ -917,6 +926,7 @@ function renderV2Detail(ci: RawInstruction) {
           <V2Section title="Country Style Ribs">
             <V2Field label="Country Style Ribs" value={v2fmt(d.spareRibs?.cut)} />
           </V2Section>
+          </>)}
           {porkTrimRows(d.trim, v2fmt).length > 0 && (
             <V2Section title="Sausage / Trim">
               {porkTrimRows(d.trim, v2fmt).map(([label, value]) => <V2Field key={label} label={label} value={value} />)}
@@ -1049,7 +1059,10 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
   // 2026-07-22). Whatever the customer is keeping still reaches the floor on
   // the packaging sheet, where it's actually packed.
 
-  if (isBeef) {
+  // Grinding the whole animal: the band up top is the instruction, and no
+  // primal section may contradict it — an order that once had cut answers and
+  // was later switched to all-grind must not print them (Jill, 2026-07-27).
+  if (isBeef && !d.grindWhole) {
     cutSections += sec('Chuck', [
       row('Brisket', d.brisket?.cut2 ? sidePair(brisketLabel(d.brisket.cut, d.brisket.half, fmt), brisketLabel(d.brisket.cut2, d.brisket.half2, fmt)) : brisketLabel(d.brisket?.cut, d.brisket?.half, fmt)),
       d.brisket?.fat ? row('  Brisket Fat', fmt(d.brisket.fat)) : '',
@@ -1127,10 +1140,13 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
       d.topRound?.addons?.length ? row('  Add-ons', adds(d.topRound.addons), true) : '',
       row('Round Shank / Marrow', fmt(d.roundShank?.marrow)),
     ].join(''))
+  }
+
+  if (isBeef) {
     cutSections += sec('Trim & Ground Beef', beefTrimCutterRows(d.trim).map(([l, v]) => row(l, v)).join(''))
   }
 
-  if (isPork) {
+  if (isPork && !d.grindWhole) {
     const loin = d.loin ?? {}
     cutSections += sec('Shoulder', (d.shoulder?.shoulder2
       ? mergeSides(shoulderFields(d.shoulder, fmt, thick), shoulderFields(d.shoulder.shoulder2, fmt, thick))
@@ -1149,6 +1165,9 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
     cutSections += sec('Country Style Ribs', [
       row('Country Style Ribs', fmt(d.spareRibs?.cut)),
     ].join(''))
+  }
+
+  if (isPork) {
     cutSections += sec('Sausage / Trim', porkTrimCutterRows(d.trim, fmt).map(([l, v]) => row(l, v)).join(''))
   }
 
@@ -1216,7 +1235,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
     if (orgPacks.length) { ps('Organs'); orgPacks.forEach(o => pc(o, '')) }
   }
 
-  if (isBeef) {
+  if (isBeef && !d.grindWhole) {
     ps('Chuck')
     if (d.brisket?.cut) {
       if (d.brisket.cut === 'grind') { pg('Brisket') }
@@ -1338,7 +1357,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
     if (wanted(d.roundShank?.marrow)) pc('Round Shank / Marrow', fmt(d.roundShank.marrow))
   }
 
-  if (isPork) {
+  if (isPork && !d.grindWhole) {
     const loin = d.loin ?? {}
     ps('Shoulder')
     // A whole hog's two shoulders can be cut differently — pack each one that
@@ -1450,7 +1469,10 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
   const smokeRows = smokehouseRows(d.smokehouse, fmt)
   if (smokeRows.length) {
     filteredPrs.push({ sectionTitle: 'Smokehouse' })
-    smokeRows.forEach(([l, v]) => filteredPrs.push({ cut: l, spec: v }))
+    // Each product gets a ruled blank for the raw trim weight going in — the
+    // number the making charge is billed on, which nothing captured before
+    // (Jill, 2026-07-27).
+    smokeRows.forEach(([l, v]) => filteredPrs.push({ cut: l, spec: v, writeIn: true }))
     const totalLbs = smokehouseTotalLbs(d.smokehouse)
     if (totalLbs > 0) {
       filteredPrs.push({ cut: 'Trim to save', spec: `${+totalLbs.toFixed(1)} lbs total for the smokehouse`, isGrind: true })
@@ -1577,6 +1599,15 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
        </div>
      </div>`
 
+  // "Grind the whole animal" overrides every section below it, so it prints as
+  // a band across the top rather than a row someone has to find (Jill,
+  // 2026-07-27). The primal sections are empty on these cards and drop out.
+  const grindBand = d.grindWhole
+    ? `<div style="background:#1A0A04;color:#F2E8D9;padding:5px 12px;font-size:19px;font-weight:bold;letter-spacing:0.08em;margin-bottom:8px">
+         GRIND THE WHOLE ${species.toUpperCase()} — NO STEAKS, CHOPS OR ROASTS
+       </div>`
+    : ''
+
   const infoGrid = (carcass: CarcassInfo) =>
     `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;border:1.5px solid #C9A882;margin-bottom:8px">
        <div style="padding:6px 11px;border-right:1px solid #C9A882">
@@ -1633,6 +1664,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
 <div class="page pagebreak">
   ${hdr('Cut Card' + ofN)}
   ${unassignedBand(carcass)}
+  ${grindBand}
   ${infoGrid(carcass)}
   <div style="column-count:3;column-gap:14px">
     ${cutSections}
@@ -1643,6 +1675,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
 <div class="page packsheet${last ? '' : ' pagebreak'}">
   ${hdr('Packaging Sheet' + ofN)}
   ${unassignedBand(carcass)}
+  ${grindBand}
   <div style="font-size:16px;color:#555;margin-bottom:8px">
     <strong>${d.customerName ?? '—'}</strong>${d.portion ? ' · ' + fmt(d.portion) : ''} · Kill Date: ${d.killDate ?? '—'}
     <span style="margin-left:14px">Producer: <span style="font-weight:bold">${carcass.producer || wline(110)}</span></span>
