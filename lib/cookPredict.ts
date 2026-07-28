@@ -67,6 +67,10 @@ export const DEFAULT_SETTINGS: CookSettings = {
 const NOISE = new Set([
   'make', 'the', 'and', 'with', 'lb', 'lbs', 'oz', 'pack', 'pkg', 'bulk',
   'retail', 'smoked', 'smkd', 'fresh', 'raw', 'cmc', 'beef', 'pork', 'a', 'of',
+  // Connectors. 'in' in particular used to count as a real token, which let
+  // "BEEF BONE-IN RIB STEAK" cover two thirds of "BONE IN HAM" and get
+  // scheduled as a ten-hour ham cook.
+  'in', 'on', 'to', 'no', 'for',
 ])
 
 function tokens(s: string): string[] {
@@ -146,6 +150,13 @@ export function matchProfile(
     const nameTokens = expand(`${p.profile_key} ${p.display_name}`)
     if (nameTokens.size === 0) continue
 
+    // The product noun the profile is actually named for — HAM, STICK, BACON.
+    // Shared modifiers are not enough on their own: "bone" is common to
+    // BONE IN HAM and BONE IN PORKCHOP and to half the retail steak case, so a
+    // match that misses the noun is not a match at all.
+    const head = headNoun(p.profile_key) ?? headNoun(p.display_name)
+    if (head && !jobTokens.has(head)) continue
+
     let hit = 0
     for (const t of nameTokens) if (jobTokens.has(t)) hit++
     if (hit === 0) continue
@@ -159,8 +170,15 @@ export function matchProfile(
   }
 
   // A single shared word out of a long name ("beef" against BEEF JERKY) is
-  // noise, not a match. Demand at least half the profile name.
-  return best && best.score >= 0.5 ? best : null
+  // noise, not a match. Demand most of the profile name: at half, "PORK
+  // SAUSAGE" covered SUMMER SAUSAGE and fresh sausage read as summer sausage.
+  return best && best.score >= 0.6 ? best : null
+}
+
+/** Last meaningful word of a product name — what the thing actually is. */
+function headNoun(name: string): string | null {
+  const t = tokens(name).map(normalize)
+  return t.length ? t[t.length - 1] : null
 }
 
 // ── Duration ─────────────────────────────────────────────────────────────────

@@ -10,8 +10,9 @@ import { useEffect, useState, useCallback, useMemo } from 'react'
 import { ValueAddJob } from '@/lib/types'
 import {
   CookProfile, CookSettings, DEFAULT_SETTINGS, PlannedJob,
-  planHouse, matchProfile, predict, fmtDuration, fmtClock, fmtDayClock,
+  planHouse, fmtDuration, fmtClock, fmtDayClock,
 } from '@/lib/cookPredict'
+import { MIN_JOBS_FOR_SUGGESTION } from '@/lib/loadLearning'
 
 const C = {
   dark:       '#1A0A04',
@@ -612,6 +613,63 @@ export default function ScheduleTab() {
 
 // ── Profile reference / tuning ───────────────────────────────────────────────
 
+interface LoadObservation {
+  profile_key:   string
+  display_name:  string
+  jobs:          number
+  maxLoadLbs:    number | null
+  medianLoadLbs: number | null
+  suggestion:    number | null
+  confidence:    'none' | 'low' | 'medium' | 'high'
+  jobsNeeded:    number
+  reason:        string
+  current_lbs_per_batch: number | null
+  yield:         { n: number; medianYieldPct: number | null }
+}
+
+// What the jobs run so far say about how much goes into a load. The controller
+// logs never recorded it, so this is the only route to the number — and it only
+// speaks up once there is enough behind it to mean something.
+function ObservedLoad({ obs, onApply }: { obs: LoadObservation; onApply: (lbs: number) => void }) {
+  // Nothing to say yet, and no stored value to explain — stay out of the way.
+  if (obs.jobs === 0 && obs.yield.n === 0 && obs.current_lbs_per_batch == null) return null
+
+  const color = obs.suggestion ? C.green : obs.jobs > 0 ? C.yellow : C.lightBrown
+
+  return (
+    <div style={{ marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px dashed rgba(166,120,90,0.2)', fontSize: '0.72rem' }}>
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        <span style={{ color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.08em', fontSize: '0.65rem' }}>
+          Learned load size
+        </span>
+        {obs.jobs > 0 && (
+          <span style={{ color: C.tan }}>
+            {obs.jobs} single-load job{obs.jobs === 1 ? '' : 's'} · biggest {obs.maxLoadLbs} lbs in
+          </span>
+        )}
+        {obs.yield.n > 0 && obs.yield.medianYieldPct != null && (
+          <Pill color={C.blue} title={`From ${obs.yield.n} job${obs.yield.n === 1 ? '' : 's'} with both weights recorded`}>
+            {obs.yield.medianYieldPct}% yield
+          </Pill>
+        )}
+        {obs.suggestion != null && (
+          <button
+            style={{ ...BTN(C.green), fontSize: '0.72rem', padding: '0.2rem 0.6rem' }}
+            onClick={() => onApply(obs.suggestion as number)}
+          >
+            Use {obs.suggestion} lbs/load
+          </button>
+        )}
+      </div>
+      <div style={{ color, marginTop: '0.25rem' }}>
+        {obs.reason}
+        {obs.jobsNeeded > 0 && obs.jobs > 0 &&
+          ` ${obs.jobsNeeded} more single-load job${obs.jobsNeeded === 1 ? '' : 's'} and this can set the load size.`}
+      </div>
+    </div>
+  )
+}
+
 function ProfilePanel({
   profiles, settings, onChanged,
 }: { profiles: CookProfile[]; settings: CookSettings; onChanged: () => void }) {
@@ -619,6 +677,32 @@ function ProfilePanel({
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState<{ setup: string; teardown: string; lbs: string }>({ setup: '', teardown: '', lbs: '' })
   const [busy, setBusy] = useState(false)
+  const [observed, setObserved] = useState<Map<string, LoadObservation>>(new Map())
+
+  // Only fetched once the panel is opened — it reads every box scan, which is
+  // far too much work to do behind a collapsed section nobody has expanded.
+  useEffect(() => {
+    if (!open) return
+    fetch('/api/cook-profile/observed')
+      .then(r => r.json())
+      .then((d: { observations?: LoadObservation[] }) => {
+        if (Array.isArray(d?.observations)) {
+          setObserved(new Map(d.observations.map(o => [o.profile_key, o])))
+        }
+      })
+      .catch(() => {})
+  }, [open])
+
+  async function applyLearned(p: CookProfile, lbs: number) {
+    setBusy(true)
+    await fetch('/api/cook-profile', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: p.id, lbs_per_batch: lbs }),
+    })
+    setBusy(false)
+    onChanged()
+  }
 
   function startEdit(p: CookProfile) {
     setEditing(p.id)
@@ -676,6 +760,10 @@ function ProfilePanel({
             <br />
             <strong style={{ color: C.yellow }}>Prep, pack-out, and batch size are not in the controller log</strong> —
             they start at zero, and the schedule only accounts for them once you set them here.
+            <br />
+            Load size is also being <strong style={{ color: C.tan }}>learned from the jobs you run</strong>: each
+            completed job records the pounds that went in, and once a product has{' '}
+            {MIN_JOBS_FOR_SUGGESTION} single-load jobs behind it, the figure below can set it for you.
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
@@ -746,6 +834,13 @@ function ProfilePanel({
                 )}
 
                 {editing === p.id && <div style={{ marginTop: '0.6rem' }}><StagePlanBar profile={p} /></div>}
+
+                {observed.get(p.profile_key) && (
+                  <ObservedLoad
+                    obs={observed.get(p.profile_key) as LoadObservation}
+                    onApply={lbs => applyLearned(p, lbs)}
+                  />
+                )}
               </div>
             ))}
           </div>
