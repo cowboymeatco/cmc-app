@@ -1224,6 +1224,11 @@ export default function ScannerPage() {
   const poolYieldPct   = sharedActive ? ((totalOutputLbs + sharedYield.other_output_lbs) / sharedYield.pool_input_lbs) * 100 : 0
   const poolYieldColor = poolYieldPct >= 80 ? C.green : poolYieldPct >= 65 ? C.yellow : C.red
   const partnerNames   = sharedActive ? Array.from(new Set(sharedYield.partners.map(p => p.customer_name))).join(', ') : ''
+  // More than one thing was scanned in (e.g. a CMC session with four carcass
+  // sides). The yield then spans all of them — it is NOT one case's yield — so
+  // it gets labelled "combined" and the per-input breakdown is shown, not hidden
+  // behind the collapse (Charlie, 2026-07-29).
+  const multiInput     = inputs.length > 1
 
   // ══════════════════════════════════════════════════════════════════════════════
   // SETUP SCREEN
@@ -1687,7 +1692,7 @@ export default function ScannerPage() {
             </span>
           ) : totalInputLbs > 0 && totalOutputLbs > 0 && (
             <span style={{ fontSize: '0.78rem', fontWeight: 700, color: yieldColor, fontFamily: 'monospace' }}>
-              {yieldPct.toFixed(1)}% yield
+              {yieldPct.toFixed(1)}% {multiInput ? `combined (${inputs.length} in)` : 'yield'}
             </span>
           )}
           <span style={{ fontSize: '0.72rem', color: C.lightBrown }}>{Object.keys(pluMap).length} PLUs</span>
@@ -1957,12 +1962,12 @@ export default function ScannerPage() {
                 <span style={{ fontSize: '0.68rem', color: 'rgba(166,120,90,0.35)' }}>→</span>
                 <span style={{ fontSize: '0.78rem', color: C.cream }}>{totalOutputLbs.toFixed(2)} lbs out</span>
                 {!sharedActive && (
-                  <span style={{
+                  <span title={multiInput ? `Combined across all ${inputs.length} inputs scanned in — not one case on its own` : undefined} style={{
                     fontSize: '0.74rem', fontWeight: 700, borderRadius: 3, padding: '0.1rem 0.45rem', flexShrink: 0,
                     background: yieldPct >= 80 ? 'rgba(76,175,80,0.18)' : yieldPct >= 65 ? 'rgba(217,119,6,0.18)' : 'rgba(229,62,62,0.18)',
                     color: yieldColor,
                   }}>
-                    {yieldPct.toFixed(1)}% yield
+                    {yieldPct.toFixed(1)}% {multiInput ? 'combined' : 'yield'}
                   </span>
                 )}
               </>
@@ -1984,6 +1989,24 @@ export default function ScannerPage() {
             )}
             <span style={{ marginLeft: 'auto', fontSize: '0.68rem', color: C.lightBrown }}>{showInputs ? '▲' : '▼'}</span>
           </div>
+
+          {/* When several things were scanned in, list them right under the header
+              even while collapsed, so it's plain that the yield above is those N
+              inputs combined — not the one case (Charlie, 2026-07-29). */}
+          {!showInputs && multiInput && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem', padding: '0.35rem 0.2rem 0.1rem' }}>
+              {inputs.map(inp => (
+                <span key={inp.id} style={{
+                  fontSize: '0.7rem', color: C.tan, background: 'rgba(0,0,0,0.25)',
+                  border: '1px solid rgba(166,120,90,0.18)', borderRadius: 3, padding: '0.12rem 0.4rem',
+                }}>
+                  {inp.input_type === 'premade' ? '📦' : inp.input_type === 'carcass' ? '🐄' : '🥩'}{' '}
+                  {inp.box_identifier || inp.description || '—'}
+                  {inp.weight_lbs != null && <span style={{ color: C.lightBrown, fontFamily: 'monospace' }}> · {Number(inp.weight_lbs).toFixed(1)}lb</span>}
+                </span>
+              ))}
+            </div>
+          )}
 
           {showInputs && (
             <div style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(166,120,90,0.18)', borderTop: 'none', borderRadius: '0 0 4px 4px', padding: '0.55rem 0.65rem' }}>
