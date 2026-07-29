@@ -71,6 +71,21 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(results)
   }
 
+  if (type === 'producer_customer') {
+    // One row per (animal × cut-customer tie) from v_producer_customer_ties.
+    // Producer is on the animal; the customer is the physical carcass
+    // assignment when there is one, else the customer booked on the appointment.
+    let q = supabase
+      .from('v_producer_customer_ties')
+      .select('harvest_date,species,carcass_tag,kill_type,hcw_lbs,producer,producer_id,customer_name,customer_id,portion,assigned,has_cut_sheet,payment_responsibility,producer_differs,harvest_log_id')
+      .order('harvest_date', { ascending: false })
+    if (from) q = q.gte('harvest_date', from)
+    if (to)   q = q.lte('harvest_date', to)
+    const { data, error } = await q
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json(data)
+  }
+
   if (type === 'appointments') {
     let q = supabase
       .from('harvest_appointments')
