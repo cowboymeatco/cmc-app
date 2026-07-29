@@ -96,6 +96,42 @@ async function linkCustomers(list: unknown): Promise<unknown> {
   return out
 }
 
+// A drop-off booking is created with a blank customer slot (just a portion) —
+// the buyer's name only arrives later, on the cut sheet they submit. When a slot
+// is linked to a cut sheet but still has no name, copy the name off the sheet.
+// The Cut Schedule and the producer/customer report both read the slot, not the
+// sheet, so without this the buyer Jill just linked shows up blank on both
+// (Jill/Charlie, 2026-07-29).
+async function backfillLinkedNames(list: unknown): Promise<unknown> {
+  if (!Array.isArray(list) || list.length === 0) return list ?? []
+  const slots = list as ApptCustomer[]
+  const needy = slots.filter(c =>
+    !(c.customer_name ?? '').toString().trim() &&
+    typeof c.linked_cutting_instruction_id === 'string' &&
+    (c.linked_cutting_instruction_id as string).length > 0
+  )
+  if (needy.length === 0) return slots
+
+  const ids = [...new Set(needy.map(c => c.linked_cutting_instruction_id as string))]
+  const { data } = await supabase
+    .from('cutting_instructions')
+    .select('id, customer_name, data')
+    .in('id', ids)
+
+  const nameById = new Map<string, string>()
+  for (const ci of data ?? []) {
+    const nm = ((ci.customer_name as string) ?? (ci.data as { customerName?: string } | null)?.customerName ?? '').trim()
+    if (nm) nameById.set(ci.id as string, nm)
+  }
+
+  return slots.map(c => {
+    if ((c.customer_name ?? '').toString().trim()) return c
+    const id = c.linked_cutting_instruction_id as string | undefined
+    const nm = id ? nameById.get(id) : undefined
+    return nm ? { ...c, customer_name: nm } : c
+  })
+}
+
 // Resolve the source (ranch / producer name) to a customers-table row,
 // creating one (role 'producer') when the name is new — same treatment the
 // buying customers get. producer_id is what puts the record on the /customers
@@ -162,8 +198,11 @@ export async function PATCH(req: NextRequest) {
   const body = await req.json()
   const { id, ...updates } = body
 
-  // Only touch `customers` when the edit actually carries it.
+  // Only touch `customers` when the edit actually carries it. Backfill any
+  // just-linked-but-unnamed slot from its cut sheet FIRST, so linkCustomers
+  // then resolves a customer_id for the newly filled name.
   if ('customers' in updates) {
+    updates.customers = await backfillLinkedNames(updates.customers)
     updates.customers = await linkCustomers(updates.customers)
   }
 
