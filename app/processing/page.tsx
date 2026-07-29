@@ -35,6 +35,10 @@ interface PluItem {
   notes:              string
   updated_at:         string
   raw_data:           Record<string, string>
+  // This PLU's RT89 record as captured from a scale backup. Carries the fields
+  // the app doesn't own — above all l1, the label format. Null for a PLU the
+  // scale has never seen.
+  ht_skeleton:        Record<string, string> | null
 }
 
 const C = {
@@ -386,7 +390,9 @@ function BrowserTab() {
       id: '', plu_number: '', item_name: '', price: null, retail_price: null, wholesale_price: null,
       tare_weight: 0, department: '0', unit: '02', species: '', description: '',
       is_retail: false, is_wholesale: false, clover_item_id: '', quickbooks_item_id: '', upc: '', ingredients: '', label_message: '',
-      sell_by_weight: true, active: true, notes: '', updated_at: '', raw_data: {},
+      // No skeleton: the scale has never seen this PLU, so the export falls back
+      // to the canonical new-PLU defaults — which is the right layout for it.
+      sell_by_weight: true, active: true, notes: '', updated_at: '', raw_data: {}, ht_skeleton: null,
     })
   }
 
@@ -513,6 +519,11 @@ function ExportTab() {
   // fine and print a label with no ingredients on it — the gap only shows up at
   // the packing table, so it gets called out here instead.
   const [missingIng, setMissingIng] = useState<PluItem[]>([])
+  // Items that HAVE a statement here but whose record on the scale carries no
+  // Ec pointer at it. The text is in the scale's expanded-text library and the
+  // label still prints blank, because nothing references it. Importing a fresh
+  // .ht repairs the link — this is what actually bit the jerky.
+  const [unlinkedIng, setUnlinkedIng] = useState<PluItem[]>([])
 
   useEffect(() => {
     fetch('/api/processing?active=false')
@@ -532,6 +543,10 @@ function ExportTab() {
     setCount(filtered.length)
     setMissingIng(filtered.filter(i =>
       needsIngredientStatement(i.item_name) && (i.ingredients ?? '').trim() === ''
+    ))
+    setUnlinkedIng(filtered.filter(i =>
+      (i.ingredients ?? '').trim() !== '' &&
+      i.ht_skeleton != null && (i.ht_skeleton.Ec ?? '').trim() === ''
     ))
     return filtered
   }
@@ -599,6 +614,7 @@ function ExportTab() {
       department:    i.department,
       label_message: i.label_message,
       ingredients:   i.ingredients, // drives the Ec "Expanded text" reference
+      skeleton:      i.ht_skeleton, // this item's own on-scale fields (label format et al)
     }))
     const ht = buildHtFile(plus)
     // Encode latin-1 (one byte per char) so the 0x1E/0x1F framing bytes match
@@ -690,6 +706,34 @@ function ExportTab() {
         <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 4, padding: '0.85rem 1rem', margin: '1rem 0', fontSize: '0.85rem', color: C.tan }}>
           {count !== null ? <><strong style={{ color: C.cream }}>{count}</strong> items will be exported</> : 'Calculating…'}
         </div>
+
+        {/* Statement present here, no pointer to it on the scale. The text is
+            already in the scale's expanded-text library; the PLU record just
+            doesn't reference it, so the label prints blank. A fresh .ht import
+            writes the Ec pointer and fixes it (Charlie's jerky, 2026-07-29). */}
+        {unlinkedIng.length > 0 && (
+          <div style={{ background: 'rgba(245,158,11,0.10)', border: `1px solid ${C.yellow}`, borderRadius: 4, padding: '0.85rem 1rem', margin: '1rem 0' }}>
+            <div style={{ color: C.yellow, fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.3rem' }}>
+              🔗 {unlinkedIng.length} {unlinkedIng.length === 1 ? 'item has' : 'items have'} an ingredient statement the scale isn&apos;t linked to
+            </div>
+            <div style={{ color: C.lightBrown, fontSize: '0.78rem', lineHeight: 1.6, marginBottom: '0.5rem' }}>
+              These have a statement here, and the text is already in the scale&apos;s expanded-text
+              library — but the PLU record on the scale carries no reference to it, so the label
+              prints without ingredients anyway. Downloading the <strong style={{ color: C.tan }}>.ht</strong> below
+              and importing it in HCT writes the link and fixes them.
+              <div style={{ marginTop: '0.3rem', opacity: 0.8 }}>
+                Reflects the last scale capture — items already repaired by a later import will clear on the next capture.
+              </div>
+            </div>
+            <div style={{ maxHeight: 160, overflowY: 'auto', fontSize: '0.76rem', color: C.tan, lineHeight: 1.75 }}>
+              {unlinkedIng.map(i => (
+                <div key={i.id}>
+                  <span style={{ fontFamily: 'monospace', color: C.lightBrown }}>{i.plu_number}</span>{' '}{i.item_name}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Blank ingredient statements. These export without complaint and then
             print a label with no ingredients — nobody finds out until the

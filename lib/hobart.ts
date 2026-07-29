@@ -42,6 +42,12 @@ export interface HobartPlu {
   ingredients?: string | null   // if non-empty → sets Ec (the "Expanded text" ref) = plu_number,
                                 //   linking this PLU to its EXPTXT record. The text itself lives
                                 //   in EXPTXT.DAT (see buildExptxtCsv), never on the PLU record.
+  // This PLU's own RT89 field map as captured from a scale backup (plu_items.
+  // ht_skeleton). Supplies every field the app does not own — most importantly
+  // l1, the LABEL FORMAT. Without it each record inherits PLU 100's defaults,
+  // which stamps format 201 on everything and moves jerky (203), snack sticks
+  // and summer sausage (202) and wild game (300) onto the wrong label.
+  skeleton?: Record<string, string> | null
 }
 
 // Canonical RT89 skeleton: [code, defaultValue] in exact on-scale order (PLU 100).
@@ -112,8 +118,14 @@ export function buildRT89(plu: HobartPlu): string {
   // number, matching the EXPTXT record buildExptxtCsv() emits. Only set when the
   // PLU actually has a statement, so we never blank an existing reference.
   if (String(plu.ingredients ?? '').trim() !== '') overrides['Ec'] = pluNo
+  // Prefer this item's own on-scale values for everything we don't override.
+  // Falling back to the PLU-100 skeleton is only right for a PLU the scale has
+  // never seen; using it for an existing item rewrites its label format.
+  const skel = plu.skeleton ?? null
   const fields = RT89_TEMPLATE.map(([code, def]) =>
-    code + (code in overrides ? overrides[code] : def),
+    code + (code in overrides ? overrides[code]
+          : skel && code in skel ? sanitize(String(skel[code] ?? ''))
+          : def),
   )
   return 'RT89' + US + fields.join(US)
 }
