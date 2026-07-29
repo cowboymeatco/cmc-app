@@ -400,9 +400,14 @@ function resolveCarcass(
   appt: HarvestAppointment,
   logs: any[],
   asgs: any[],
+  // Every carcass in play, not just this booking's. A producer's buyer can be
+  // moved onto the animal booked under a sibling appointment, and the card still
+  // has to print that animal's tag and weight (Jill, 2026-07-28).
+  allLogs?: any[],
 ): CarcassInfo {
   const animals = Array.isArray(logs) ? logs : []
   const rows    = Array.isArray(asgs) ? asgs : []
+  const pool    = Array.isArray(allLogs) && allLogs.length ? allLogs : animals
   // Match on the customer slot first. Carcasses are normally assigned at
   // harvest, before the cut sheet has even arrived, so the assignment row's
   // own linked_cutting_instruction_id is empty on exactly the rows that matter
@@ -412,7 +417,7 @@ function resolveCarcass(
     (slot && a.appointment_customer_id === slot.id) || a.linked_cutting_instruction_id === ciId) ?? null
 
   const log = animals.length === 0 ? null
-    : asg ? animals.find((l: any) => l.id === asg.harvest_log_id) ?? null
+    : asg ? pool.find((l: any) => l.id === asg.harvest_log_id) ?? null
     : animals.length === 1 ? animals[0] : null
 
   const state: CarcassState =
@@ -470,7 +475,20 @@ async function carcassInfoForAppt(ci: RawInstruction, appt: HarvestAppointment):
       fetch(`/api/harvest?appointment_id=${encodeURIComponent(appt.id)}`),
       fetch(`/api/carcass-assignments?appointment_id=${encodeURIComponent(appt.id)}`),
     ])
-    return resolveCarcass(ci.id, appt, await logsRes.json(), await asgRes.json())
+    const logs = await logsRes.json()
+    const asgs = await asgRes.json()
+    const own  = Array.isArray(logs) ? logs : []
+    const rows = Array.isArray(asgs) ? asgs : []
+    // A buyer moved onto one of the producer's other animals has an assignment
+    // pointing outside this booking — pull that carcass in so the card still
+    // prints its tag and weight.
+    const away = [...new Set(rows.map((a: any) => a.harvest_log_id)
+      .filter((id: string) => id && !own.some((l: any) => l.id === id)))]
+    const extra = away.length
+      ? await fetch(`/api/harvest?ids=${encodeURIComponent(away.join(','))}`)
+          .then(r => r.json()).then(d => (Array.isArray(d) ? d : [])).catch(() => [])
+      : []
+    return resolveCarcass(ci.id, appt, own, rows, [...own, ...extra])
   } catch {
     return EMPTY_CARCASS
   }
@@ -1107,20 +1125,25 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
       d.shortRibs?.addons?.length ? row('  Add-ons', adds(d.shortRibs.addons), true) : '',
       row('Plate', fmt(d.plate?.cut)),
     ].join(''))
-    cutSections += sec('Ribeye', [
-      row('Style', d.ribeye?.ribeye2
-        ? sidePair(fmt(d.ribeye.style), fmt(d.ribeye.ribeye2.style))
-        : fmt(d.ribeye?.style)),
-      row('Cut', d.ribeye?.ribeye2
-        ? sidePair(withT(d.ribeye.cut ?? '', d.ribeye.thickness ?? ''), withT(d.ribeye.ribeye2.cut ?? '', d.ribeye.ribeye2.thickness ?? ''))
-        : withT(d.ribeye?.cut ?? '', d.ribeye?.thickness ?? '')),
-      d.ribeye?.ribeye2
-        ? [
-            ribeyeAdds(d.ribeye).length ? row('  Add-ons (1)', adds(ribeyeAdds(d.ribeye)), true) : '',
-            ribeyeAdds(d.ribeye.ribeye2).length ? row('  Add-ons (2)', adds(ribeyeAdds(d.ribeye.ribeye2)), true) : '',
-          ].join('')
-        : (ribeyeAdds(d.ribeye).length ? row('  Add-ons', adds(ribeyeAdds(d.ribeye)), true) : ''),
-    ].join(''))
+    // A split ribeye prints one line per side — style and cut together — the same
+    // shape the packaging sheet uses. A Style row and a Cut row each carrying
+    // "1: … / 2: …" made the cutter read across two rows to work out what side 2
+    // actually was (Jill, 2026-07-28).
+    const ribeyeLine = (r?: { style?: string | null; cut?: string | null; thickness?: string | null } | null) =>
+      [fmt(r?.style ?? ''), withT(r?.cut ?? '', r?.thickness ?? '')].filter(Boolean).join(' · ')
+    cutSections += sec('Ribeye', (d.ribeye?.ribeye2
+      ? [
+          row('Ribeye (1)', ribeyeLine(d.ribeye)),
+          ribeyeAdds(d.ribeye).length ? row('  Add-ons (1)', adds(ribeyeAdds(d.ribeye)), true) : '',
+          row('Ribeye (2)', ribeyeLine(d.ribeye.ribeye2)),
+          ribeyeAdds(d.ribeye.ribeye2).length ? row('  Add-ons (2)', adds(ribeyeAdds(d.ribeye.ribeye2)), true) : '',
+        ]
+      : [
+          row('Style', fmt(d.ribeye?.style)),
+          row('Cut', withT(d.ribeye?.cut ?? '', d.ribeye?.thickness ?? '')),
+          ribeyeAdds(d.ribeye).length ? row('  Add-ons', adds(ribeyeAdds(d.ribeye)), true) : '',
+        ]
+    ).join(''))
     const sl = d.shortLoin ?? {}
     cutSections += sec('Short Loin', (sl.loin2
       ? mergeSides(shortLoinFields(sl, fmt, thick), shortLoinFields(sl.loin2, fmt, thick))
@@ -1916,6 +1939,7 @@ export default function CuttingInstructionsPage() {
           ciRow.id, a,
           logList.filter((l: any) => l.appointment_id === a.id),
           asgList.filter((x: any) => x.appointment_id === a.id),
+          logList,
         ))
       }
       setCarcassStates(next)
