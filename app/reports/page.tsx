@@ -251,6 +251,26 @@ export default function ReportsPage() {
           </div>
         </Link>
 
+        <Link href="/reports/value-add" style={{ textDecoration: 'none' }}>
+          <div style={{
+            background: C.dark, border: `1px solid ${'#4CAF50'}55`, borderRadius: 4,
+            padding: '1.1rem 1.25rem', marginBottom: '1.5rem', display: 'flex',
+            alignItems: 'center', gap: '1rem', cursor: 'pointer',
+          }}>
+            <span style={{ fontSize: '1.6rem' }}>🌭</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontFamily: 'Georgia, serif', fontSize: '1rem', fontWeight: 700, color: C.cream, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Value-Add Output
+              </div>
+              <p style={{ fontSize: '0.78rem', color: C.tan, margin: '0.25rem 0 0', lineHeight: 1.5 }}>
+                Who got value-add product — shoulder bacon to brats — by processing date. Sort &amp; filter by
+                date and species. On-screen &amp; filterable.
+              </p>
+            </div>
+            <span style={{ color: '#4CAF50', fontSize: '0.82rem', fontWeight: 700, whiteSpace: 'nowrap' }}>View →</span>
+          </div>
+        </Link>
+
         {/* Export cards */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1rem' }}>
           {exports.map(e => (

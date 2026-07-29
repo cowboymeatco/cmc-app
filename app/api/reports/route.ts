@@ -86,6 +86,20 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(data)
   }
 
+  if (type === 'value_add') {
+    // Who got which value-add product, by pack (processing) date, from
+    // v_value_add_output. Filtered on pack_date.
+    let q = supabase
+      .from('v_value_add_output')
+      .select('customer_name,pack_date,plu_number,item_name,species,weight_lbs,pieces,boxes')
+      .order('pack_date', { ascending: false })
+    if (from) q = q.gte('pack_date', from)
+    if (to)   q = q.lte('pack_date', to)
+    const { data, error } = await q
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json(data)
+  }
+
   if (type === 'appointments') {
     let q = supabase
       .from('harvest_appointments')
