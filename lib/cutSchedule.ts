@@ -231,6 +231,11 @@ export function buildEntries(
     if (bucket) bucket.push(a); else assignByLog.set(a.harvest_log_id, [a])
   }
 
+  // Buyers already placed on SOME carcass. A producer's animals can be assigned
+  // across their bookings, so an unassigned carcass must not go on claiming a
+  // customer who has been moved to the animal next door.
+  const placedCustomers = new Set(assignments.map(a => a.appointment_customer_id))
+
   // Per-appointment progress: how many of its cooler carcasses are FULLY
   // assigned (portions sum to a whole) out of the total in the cooler.
   const fillByLog = new Map<string, number>()
@@ -295,11 +300,13 @@ export function buildEntries(
     // carcass is whose. We collapse to the carcass and tie it to the producer.
     // This is now the FALLBACK for carcasses with no assignments yet; once the
     // crew assigns them (Assign button → modal), the branch above takes over.
-    const single = customers.length === 1 ? customers[0] : null
+    const lone   = customers.length === 1 ? customers[0] : null
+    const single = lone && !placedCustomers.has(lone.id) ? lone : null
     const custId = single ? single.id : 'standalone'
+    const open = customers.filter(c => !placedCustomers.has(c.id))
     const hasInstructions = single
       ? !!(single.linked_cutting_instruction_id && instructionIds.has(single.linked_cutting_instruction_id))
-      : customers.some(c => c.linked_cutting_instruction_id && instructionIds.has(c.linked_cutting_instruction_id))
+      : open.some(c => c.linked_cutting_instruction_id && instructionIds.has(c.linked_cutting_instruction_id))
     const saved = savedByKey.get(`${log.id}__${custId}`)
     raw.push({
       key:                     `${log.id}__${custId}`,

@@ -24,6 +24,9 @@ export async function GET(req: NextRequest) {
   // out which ones still need a carcass assigned in one call instead of one per
   // card. An explicitly empty list means "nothing to ask about" — not "all".
   const apptIds = searchParams.get('appointment_ids')
+  // Specific carcasses by id — for a cut card whose customer was moved onto an
+  // animal booked under a sibling appointment, so it isn't in that booking's list.
+  const logIds  = searchParams.get('ids')
   let query = supabase
     .from('harvest_log')
     .select('*')
@@ -36,6 +39,11 @@ export async function GET(req: NextRequest) {
     const ids = apptIds.split(',').map(s => s.trim()).filter(Boolean)
     if (ids.length === 0) return NextResponse.json([])
     query = query.in('appointment_id', ids)
+  }
+  if (logIds !== null) {
+    const ids = logIds.split(',').map(s => s.trim()).filter(Boolean)
+    if (ids.length === 0) return NextResponse.json([])
+    query = query.in('id', ids)
   }
 
   const { data, error } = await query

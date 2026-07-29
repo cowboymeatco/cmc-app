@@ -39,7 +39,7 @@ export default function CutScheduleTab() {
   const [logs,        setLogs]        = useState<HarvestLog[]>([])
   const [appts,       setAppts]       = useState<HarvestAppointment[]>([])
   const [assignments, setAssignments] = useState<CarcassAssignment[]>([])
-  const [assignModal, setAssignModal] = useState<{ appointment: HarvestAppointment; carcasses: HarvestLog[] } | null>(null)
+  const [assignModal, setAssignModal] = useState<{ appointments: HarvestAppointment[]; carcasses: HarvestLog[] } | null>(null)
 
   const todayISO = isoDate()
 
@@ -63,12 +63,27 @@ export default function CutScheduleTab() {
 
   useEffect(() => { loadAll() }, [loadAll])
 
-  // Open the assign modal for the appointment behind a carcass row.
+  // Open the assign modal for the carcass row's whole producer group. A company
+  // dropping several hogs books ONE appointment per buyer, so scoping the modal
+  // to a single booking made a mixed-up tag unfixable — the buyer you want is on
+  // the appointment next door (Jill, 2026-07-28). Group = same producer, species
+  // and kill day; a carcass with no producer falls back to its own booking.
   const openAssign = (entry: ScheduleEntry) => {
     const appt = appts.find(a => a.id === entry.source_appointment_id)
     if (!appt) return
-    const carcasses = logs.filter(l => l.appointment_id === appt.id)
-    setAssignModal({ appointment: appt, carcasses })
+    const producer = entry.producer.trim()
+    const byId = new Map(logs.filter(l => l.appointment_id === appt.id).map(l => [l.id, l]))
+    if (producer) {
+      for (const l of logs) {
+        if ((l.producer ?? '').trim() === producer && l.species === entry.species && l.harvest_date === entry.harvest_date) {
+          byId.set(l.id, l)
+        }
+      }
+    }
+    const carcasses = [...byId.values()]
+    const apptIds = new Set<string>([appt.id, ...carcasses.map(l => l.appointment_id).filter(Boolean)])
+    const appointments = appts.filter(a => apptIds.has(a.id))
+    setAssignModal({ appointments, carcasses })
   }
 
   // ── Recalculate ───────────────────────────────────────────────────────────────
@@ -599,12 +614,15 @@ export default function CutScheduleTab() {
                           </span>
                         )
                       })()}
-                      {/* Assign / reassign carcass → cut customer */}
-                      {entry.source_appointment_id && (entry.assigned || entry.customer_count > 1) && (
+                      {/* Assign / reassign carcass → cut customer. On EVERY carcass
+                          that came off an appointment — a one-animal, one-buyer
+                          booking still gets the wrong tag hung on it sometimes,
+                          and without the button there was no way back (Jill). */}
+                      {entry.source_appointment_id && (
                         <button
                           onClick={e => { e.stopPropagation(); openAssign(entry) }}
                           onDragStart={e => e.stopPropagation()}
-                          title={entry.assigned ? 'Reassign this carcass to a different cut customer' : 'Assign this appointment’s carcasses to specific cut customers'}
+                          title={entry.assigned ? 'Reassign this carcass to a different cut customer' : 'Assign this producer’s carcasses to specific cut customers'}
                           style={{
                             marginLeft: 6, padding: '0 6px', height: 16, lineHeight: '14px', flexShrink: 0,
                             background: entry.assigned ? 'rgba(166,120,90,0.12)' : 'rgba(245,158,11,0.16)',
@@ -754,9 +772,12 @@ export default function CutScheduleTab() {
       {/* Assign carcasses → cut customers */}
       {assignModal && (
         <AssignCarcassesModal
-          appointment={assignModal.appointment}
+          appointments={assignModal.appointments}
           carcasses={assignModal.carcasses}
-          existing={assignments.filter(a => a.appointment_id === assignModal.appointment.id)}
+          existing={assignments.filter(a =>
+            assignModal.appointments.some(ap => ap.id === a.appointment_id) ||
+            assignModal.carcasses.some(l => l.id === a.harvest_log_id)
+          )}
           onClose={() => setAssignModal(null)}
           onSaved={() => { setAssignModal(null); loadAll() }}
         />

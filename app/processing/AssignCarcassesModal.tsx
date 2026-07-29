@@ -35,30 +35,43 @@ function fracLabel(n: number): string {
 interface Placement { logId: string; portion: string }
 
 export default function AssignCarcassesModal({
-  appointment, carcasses, existing, onClose, onSaved,
+  appointments, carcasses, existing, onClose, onSaved,
 }: {
-  appointment: HarvestAppointment
-  carcasses:   HarvestLog[]
-  existing:    CarcassAssignment[]
-  onClose:     () => void
-  onSaved:     () => void
+  // Every appointment a producer has in the cooler for this species and harvest
+  // day, not just the one behind the row that was clicked. A company dropping
+  // several hogs books one appointment per buyer, so a mixed-up tag can only be
+  // put right if all of them are on screen at once (Jill, 2026-07-28).
+  appointments: HarvestAppointment[]
+  carcasses:    HarvestLog[]
+  existing:     CarcassAssignment[]
+  onClose:      () => void
+  onSaved:      () => void
 }) {
-  const customers = appointment.customers ?? []
+  // Flat list of every buyer in the group, each remembering the appointment it
+  // came from — that's what the saved row is filed under.
+  const customers = useMemo(
+    () => appointments.flatMap(a => (a.customers ?? []).map(c => ({ ...c, key: `${a.id}__${c.id}`, apptId: a.id }))),
+    [appointments]
+  )
+  const multiAppt = appointments.length > 1
+  const producer  = appointments[0]?.source || 'Appointment'
+  const species   = appointments[0]?.species
 
-  // placement[customerId] = every carcass that customer has a stake in. A
+  // placement[customerKey] = every carcass that customer has a stake in. A
   // customer buying more than one whole animal's worth spans several.
   const [placement, setPlacement] = useState<Record<string, Placement[]>>(() => {
     const init: Record<string, Placement[]> = {}
     for (const a of existing) {
-      (init[a.appointment_customer_id] ??= []).push({ logId: a.harvest_log_id, portion: a.portion || 'Whole' })
+      const key = `${a.appointment_id}__${a.appointment_customer_id}`
+      ;(init[key] ??= []).push({ logId: a.harvest_log_id, portion: a.portion || 'Whole' })
     }
     return init
   })
   const [saving, setSaving] = useState(false)
   const [error,  setError]  = useState('')
 
-  const basePortion = (custId: string) => customers.find(c => c.id === custId)?.portion || 'Whole'
-  const placedOn    = (custId: string, logId: string) => (placement[custId] ?? []).find(p => p.logId === logId)
+  const basePortion = (custKey: string) => customers.find(c => c.key === custKey)?.portion || 'Whole'
+  const placedOn    = (custKey: string, logId: string) => (placement[custKey] ?? []).find(p => p.logId === logId)
 
   // Fill level per carcass, summed from each stake's own portion.
   const fill = useMemo(() => {
@@ -71,43 +84,44 @@ export default function AssignCarcassesModal({
 
   // Toggle a carcass on/off for a customer. A newly added carcass starts at the
   // customer's own portion, or drops to whatever still fits on that carcass.
-  const place = (custId: string, logId: string) => {
+  const place = (custKey: string, logId: string) => {
     setError('')
     setPlacement(prev => {
-      const list = prev[custId] ?? []
+      const list = prev[custKey] ?? []
       if (list.some(p => p.logId === logId)) {
-        return { ...prev, [custId]: list.filter(p => p.logId !== logId) }
+        return { ...prev, [custKey]: list.filter(p => p.logId !== logId) }
       }
       const room    = 1 - (fill.get(logId) ?? 0)
-      const base    = basePortion(custId)
+      const base    = basePortion(custKey)
       const portion = (FRACTION[base] ?? 1) <= room + 1e-4
         ? base
         : PORTIONS.find(p => (FRACTION[p] ?? 1) <= room + 1e-4) ?? 'Quarter'
-      return { ...prev, [custId]: [...list, { logId, portion }] }
+      return { ...prev, [custKey]: [...list, { logId, portion }] }
     })
   }
 
-  const setPortion = (custId: string, logId: string, portion: string) => {
+  const setPortion = (custKey: string, logId: string, portion: string) => {
     setError('')
     setPlacement(prev => ({
       ...prev,
-      [custId]: (prev[custId] ?? []).map(p => (p.logId === logId ? { ...p, portion } : p)),
+      [custKey]: (prev[custKey] ?? []).map(p => (p.logId === logId ? { ...p, portion } : p)),
     }))
   }
 
-  const totalOf = (custId: string) =>
-    (placement[custId] ?? []).reduce((s, p) => s + (FRACTION[p.portion] ?? 0), 0)
+  const totalOf = (custKey: string) =>
+    (placement[custKey] ?? []).reduce((s, p) => s + (FRACTION[p.portion] ?? 0), 0)
 
-  const assignedCount   = customers.filter(c => (placement[c.id] ?? []).length > 0).length
-  const unassignedNames = customers.filter(c => (placement[c.id] ?? []).length === 0).map(c => c.customer_name)
+  const assignedCount   = customers.filter(c => (placement[c.key] ?? []).length > 0).length
+  const unassignedNames = customers.filter(c => (placement[c.key] ?? []).length === 0).map(c => c.customer_name)
 
   async function save() {
     setSaving(true); setError('')
     // One row per (customer, carcass) — a hog and a half writes two rows, both
     // carrying the same cutting instruction, so each carcass prints its own card.
     const assignments = customers.flatMap(c =>
-      (placement[c.id] ?? []).map(p => ({
+      (placement[c.key] ?? []).map(p => ({
         harvest_log_id:                p.logId,
+        appointment_id:                c.apptId,
         appointment_customer_id:       c.id,
         customer_name:                 c.customer_name,
         portion:                       p.portion || 'Whole',
@@ -117,7 +131,11 @@ export default function AssignCarcassesModal({
     const res  = await fetch('/api/carcass-assignments', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ appointment_id: appointment.id, assignments }),
+      body:    JSON.stringify({
+        appointment_ids: appointments.map(a => a.id),
+        harvest_log_ids: carcasses.map(l => l.id),
+        assignments,
+      }),
     })
     const json = await res.json().catch(() => ({}))
     setSaving(false)
@@ -134,7 +152,8 @@ export default function AssignCarcassesModal({
           <div>
             <div style={{ color: C.cream, fontWeight: 700, fontSize: '1.05rem' }}>Assign carcasses to cut customers</div>
             <div style={{ color: C.lightBrown, fontSize: '0.82rem', marginTop: '0.2rem' }}>
-              {appointment.source || 'Appointment'} · {appointment.species} · {carcasses.length} {carcasses.length === 1 ? 'carcass' : 'carcasses'} · {customers.length} customers
+              {producer} · {species} · {carcasses.length} {carcasses.length === 1 ? 'carcass' : 'carcasses'} · {customers.length} {customers.length === 1 ? 'customer' : 'customers'}
+              {multiAppt && ` · ${appointments.length} bookings`}
             </div>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.lightBrown, fontSize: '1.3rem', cursor: 'pointer', padding: '0 0.2rem' }}>✕</button>
@@ -143,6 +162,7 @@ export default function AssignCarcassesModal({
         <p style={{ fontSize: '0.78rem', color: C.lightBrown, lineHeight: 1.5, margin: '0.4rem 0 1rem' }}>
           Tap a carcass for each customer. A <strong style={{ color: C.cream }}>Whole</strong> fills a carcass; two <strong style={{ color: C.cream }}>Halves</strong> share one. A carcass can&apos;t be filled past one whole.
           Someone taking more than one animal&apos;s worth can be put on several carcasses — tap each one and set how much of it is theirs. A hog and a half is a <strong style={{ color: C.cream }}>Whole</strong> on one plus a <strong style={{ color: C.cream }}>½</strong> on another, and both carcasses print her card.
+          {multiAppt && <> Every one of {producer}&apos;s animals from this kill day is listed, so a buyer can be moved from one to another — tap their old carcass to clear it, then tap the right one.</>}
         </p>
 
         {/* Carcass fill summary */}
@@ -168,11 +188,11 @@ export default function AssignCarcassesModal({
         {/* Per-customer carcass picker */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {customers.map(cust => {
-            const mine    = placement[cust.id] ?? []
-            const total   = totalOf(cust.id)
+            const mine    = placement[cust.key] ?? []
+            const total   = totalOf(cust.key)
             const pColor  = portionColor(cust.portion || 'Whole')
             return (
-              <div key={cust.id} style={{
+              <div key={cust.key} style={{
                 display: 'flex', flexDirection: 'column', gap: '0.5rem',
                 background: C.dark, border: `1px solid ${mine.length ? 'rgba(76,175,80,0.3)' : 'rgba(166,120,90,0.2)'}`,
                 borderRadius: 4, padding: '0.55rem 0.75rem',
@@ -190,7 +210,7 @@ export default function AssignCarcassesModal({
 
                   <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
                     {carcasses.map(log => {
-                      const stake    = placedOn(cust.id, log.id)
+                      const stake    = placedOn(cust.key, log.id)
                       const selected = !!stake
                       const used     = fill.get(log.id) ?? 0
                       // Room for the smallest portion is enough to join a carcass —
@@ -200,7 +220,7 @@ export default function AssignCarcassesModal({
                       return (
                         <button
                           key={log.id}
-                          onClick={() => place(cust.id, log.id)}
+                          onClick={() => place(cust.key, log.id)}
                           disabled={disabled}
                           title={disabled ? 'No room left on this carcass' : `Assign to carcass ${log.carcass_tag || '—'}`}
                           style={{
@@ -243,7 +263,7 @@ export default function AssignCarcassesModal({
                             return (
                               <button
                                 key={opt}
-                                onClick={() => setPortion(cust.id, p.logId, opt)}
+                                onClick={() => setPortion(cust.key, p.logId, opt)}
                                 disabled={!room && !on}
                                 title={!room && !on ? 'Not enough room left on this carcass' : `${opt} of carcass ${log?.carcass_tag || ''}`}
                                 style={{
