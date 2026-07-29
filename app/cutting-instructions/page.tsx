@@ -1886,6 +1886,9 @@ export default function CuttingInstructionsPage() {
   const [selected, setSelected]         = useState<RawInstruction | null>(null)
   const [filterStatus, setFilterStatus] = useState<string>('all')
   const [filterSpecies, setFilterSpecies] = useState<string>('all')
+  // Slaughter (kill) date filter — Jill works a kill day at a time when linking
+  // cut sheets to animals (Jill, 2026-07-29). '' = all dates.
+  const [filterSlaughter, setFilterSlaughter] = useState<string>('')
   const [showLinkPicker, setShowLinkPicker] = useState(false)
   const [linking, setLinking]           = useState(false)
   // Which carcass each linked card sits on, keyed by instruction id. Loaded in
@@ -2023,8 +2026,22 @@ export default function CuttingInstructionsPage() {
       const match = filterSpecies === 'Hog' ? (species === 'Hog' || species === 'Pork') : species === filterSpecies
       if (!match) return false
     }
+    if (filterSlaughter) {
+      const sd = slaughterDateFor(i, appointments)
+      if (filterSlaughter === '__none__' ? !!sd : sd !== filterSlaughter) return false
+    }
     return true
   })
+
+  // Slaughter dates present in the active (non-archived) cards, newest first, for
+  // the filter dropdown. A card with no scheduled kill date falls under "— none —".
+  const slaughterDates = Array.from(new Set(
+    instructions
+      .filter(i => i.status !== 'archived')
+      .map(i => slaughterDateFor(i, appointments))
+      .filter((d): d is string => !!d)
+  )).sort((a, b) => b.localeCompare(a))
+  const anyNoSlaughter = instructions.some(i => i.status !== 'archived' && !slaughterDateFor(i, appointments))
 
   const pendingCount  = instructions.filter(i => i.status === 'pending').length
   const linkedCount   = instructions.filter(i => i.status === 'linked').length
@@ -2201,6 +2218,26 @@ export default function CuttingInstructionsPage() {
                 <button key={s} onClick={() => setFilterSpecies(s)} style={tabBtn(filterSpecies === s)}>{s}</button>
               ))}
             </div>
+            {/* Slaughter (kill) date — Jill links a kill day at a time. */}
+            <select
+              value={filterSlaughter}
+              onChange={e => setFilterSlaughter(e.target.value)}
+              title="Filter by scheduled slaughter date"
+              style={{
+                background: filterSlaughter ? 'var(--med-brown)' : 'rgba(0,0,0,0.25)',
+                color: filterSlaughter ? 'var(--cream)' : 'var(--tan)',
+                border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3,
+                padding: '0.3rem 0.5rem', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer', outline: 'none',
+              }}
+            >
+              <option value="">🔪 All kill dates</option>
+              {slaughterDates.map(d => (
+                <option key={d} value={d}>
+                  {new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                </option>
+              ))}
+              {anyNoSlaughter && <option value="__none__">— no kill date —</option>}
+            </select>
             <button onClick={load} style={{ ...btnStyle('transparent', 'var(--tan)'), border: '1px solid rgba(166,120,90,0.3)', marginLeft: 'auto' }}>↺</button>
           </div>
 
