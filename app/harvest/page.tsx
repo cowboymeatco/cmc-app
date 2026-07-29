@@ -1292,8 +1292,15 @@ interface WSRow {
   half2:      number | null
   total:      number | null
   carcassTag: string | null
+  // 1-based position this animal holds in its producer's check-in, straight off
+  // animal_index. Numbering is by SLOT, not by surviving row — see WSGroup.slots.
+  slot:       number
 }
-interface WSGroup { producer: string; species: string; rows: WSRow[] }
+// `slots` is how many carcass IDs this producer's check-in reserves, which is NOT
+// rows.length: an animal taken off the day (no-show, or removed as a mis-count)
+// keeps its number so the animals behind it don't slide up onto tags that are
+// already printed and hanging (Jill, 2026-07-29).
+interface WSGroup { producer: string; species: string; rows: WSRow[]; slots: number }
 
 // Brother QL-810W, 2.4in (62mm DK-2205) continuous roll: one tag per label.
 // Each .tag fills the printable page height so the printer feeds & cuts a
@@ -1371,10 +1378,20 @@ function WorksheetTab({ date }: { date: string }) {
     const built: { group: WSGroup; producer: string; firstIn: number }[] = []
     for (const a of active) {
       const animals: AnimalReceivingLog[] = await fetch(`/api/receiving?type=animal&appointment_id=${a.id}`).then(r => r.json()).catch(() => [])
-      const live = (Array.isArray(animals) ? animals : [])
+      const all  = Array.isArray(animals) ? animals : []
+      const live = all
         .filter(an => an.status !== 'no_show')
         .sort((x, y) => (x.animal_index ?? 0) - (y.animal_index ?? 0))
       if (live.length === 0) continue
+
+      // Numbers this check-in reserves. A no-show still holds its row, so it's
+      // counted; an animal deleted in Part A leaves a hole in animal_index, which
+      // the max covers; head_count backstops a deletion off the END of the list.
+      const slots = Math.max(
+        all.length,
+        ...all.map(an => an.animal_index ?? 0),
+        a.head_count ?? 0,
+      )
 
       // When this appointment's first animal was checked in at Receiving —
       // the ordering key for the worksheet (see sort below).
@@ -1404,12 +1421,14 @@ function WorksheetTab({ date }: { date: string }) {
         group: {
           producer,
           species:  a.species,
-          rows: live.map(an => {
+          slots,
+          rows: live.map((an, i) => {
             const key    = an.ear_tag || ''
             const cursor = tagCursor.get(key) ?? 0
             const log    = logsByTag.get(key)?.[cursor] ?? null
             tagCursor.set(key, cursor + 1)
             return {
+              slot: an.animal_index ?? i + 1,
               ear_tag: an.ear_tag || '', sex: an.sex || '', breed: an.breed || '', over_30_months: an.over_30_months,
               killOrder:  log?.harvest_order ?? null,
               killType:   log?.kill_type ?? null,
@@ -1451,17 +1470,25 @@ function WorksheetTab({ date }: { date: string }) {
   // printSheet and printKillSheet use, so a printed tag always matches its
   // worksheet row and kill-sheet line.
   const tagStart = parseInt(startNum, 10) || 1
+  // Where each producer's block of reserved numbers begins.
+  const groupStart: number[] = []
+  {
+    let off = tagStart
+    for (const g of groups) { groupStart.push(off); off += g.slots }
+  }
   const flatAnimals = groups
     .flatMap((g, gi) => g.rows.map((r, ri) => ({
       key:      `${gi}:${ri}`,
       producer: g.producer,
       species:  g.species,
       row:      r,
+      // Slot-based, so an animal taken off the day leaves a hole rather than
+      // renumbering everyone behind it.
+      seq:      groupStart[gi] + r.slot - 1,
       // Beef, sows and boars split into sides and need an L tag and an R tag;
       // market hogs, lambs and goats hang whole and take a single tag.
       split:    splitsIntoHalves(g.species, r.sex),
     })))
-    .map((a, i) => ({ ...a, seq: tagStart + i }))
 
   const chosen     = flatAnimals.filter(a => !skipped.has(a.key))
   const chosenTags = chosen.reduce((s, a) => s + (a.split ? 2 : 1), 0)
@@ -1486,11 +1513,16 @@ function WorksheetTab({ date }: { date: string }) {
     // Carcass ID counts up across all animals in worksheet (check-in) order,
     // starting at the same "Start at #" as the pre-printed tags, so each
     // worksheet row's ID matches its physical tag number.
-    let cid = parseInt(startNum, 10) || 1
-    const rowsHtml = groups.map(g => {
+    const rowsHtml = groups.map((g, gi) => {
       const head = `<tr class="grp"><td colspan="9">${esc(g.producer)} — ${esc(g.species)} · ${g.rows.length} head</td></tr>`
+      // Reserved numbers with nobody on them print as a struck-out line, so the
+      // gap reads as "this one came off the day" instead of a numbering mistake.
+      const gaps = Array.from({ length: g.slots }, (_, i) => i + 1)
+        .filter(slot => !g.rows.some(r => r.slot === slot))
+        .map(slot => `<tr class="void"><td class="cid">${String(groupStart[gi] + slot - 1).padStart(2, '0')}</td><td colspan="8">— taken off the day —</td></tr>`)
+        .join('')
       const body = g.rows.map(r => {
-        const cidStr = String(cid).padStart(2, '0'); cid += 1
+        const cidStr = String(groupStart[gi] + r.slot - 1).padStart(2, '0')
         // Anything already saved in Part A/B prints pre-filled; untouched fields
         // stay blank for hand-writing at the rail.
         return `<tr>
@@ -1505,7 +1537,7 @@ function WorksheetTab({ date }: { date: string }) {
         <td class="wt">${r.total != null ? `<span class="pre">${r.total}</span>` : ''}</td>
       </tr>`
       }).join('')
-      return head + body
+      return head + body + gaps
     }).join('')
 
     const css = `
@@ -1526,6 +1558,8 @@ function WorksheetTab({ date }: { date: string }) {
       td.id { font-weight: 600; }
       .pre { font-weight: 700; font-size: 11pt; }
       tr.grp td { background: #ddd; font-weight: 700; font-size: 10pt; letter-spacing: 0.03em; }
+      tr.void td { color: #888; font-style: italic; font-size: 8.5pt; height: 18pt; }
+      tr.void td.cid { text-decoration: line-through; font-weight: 700; font-size: 11pt; }
       .otm { color: #bb0000; font-weight: 700; font-size: 7.5pt; border: 1pt solid #bb0000; padding: 0 2pt; margin-left: 2pt; }
       .sig { margin-top: 24pt; font-size: 9pt; }
       .sig span { display: inline-block; border-top: 0.75pt solid #000; padding-top: 2pt; width: 2.4in; margin-right: 0.6in; }
@@ -1558,12 +1592,11 @@ function WorksheetTab({ date }: { date: string }) {
   function printKillSheet() {
     const esc = (s: string) => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] as string))
     const jul   = julianCode(d)
-    const start = parseInt(startNum, 10) || 1
-    let seq = start
-    const flat = groups.flatMap(g => g.rows.map(r => {
-      const tag = `${jul}-${String(seq).padStart(2, '0')}`
-      seq += 1
-      return { tag, seq: seq - 1, producer: g.producer, species: g.species, ...r }
+    // Same slot numbering as the worksheet and the pre-printed tags, so a run
+    // list line always names the tag actually hanging on the animal.
+    const flat = groups.flatMap((g, gi) => g.rows.map(r => {
+      const seq = groupStart[gi] + r.slot - 1
+      return { tag: `${jul}-${String(seq).padStart(2, '0')}`, seq, producer: g.producer, species: g.species, ...r }
     }))
 
     const bodyRows = flat.map(r => `<tr>
@@ -1843,7 +1876,9 @@ function WorksheetTab({ date }: { date: string }) {
               </tr>
             </thead>
             <tbody>
-              {(() => { let off = parseInt(startNum, 10) || 1; return groups.map((g, gi) => { const startId = off; off += g.rows.length; return <FragmentGroup key={gi} gi={gi} group={g} startId={startId} skipped={skipped} onToggle={toggleAnimal} /> }) })()}
+              {groups.map((g, gi) => (
+                <FragmentGroup key={gi} gi={gi} group={g} startId={groupStart[gi]} skipped={skipped} onToggle={toggleAnimal} />
+              ))}
             </tbody>
           </table>
         </div>
@@ -1884,7 +1919,7 @@ function FragmentGroup({ gi, group, startId, skipped, onToggle }: {
             />
             <div style={{ color: C.lightBrown, fontSize: '0.62rem', fontWeight: 700, marginTop: 1 }}>{split ? '2 ×' : '1 ×'}</div>
           </td>
-          <td style={{ padding: '0.5rem 0.75rem', color: C.tan, fontWeight: 800, fontFamily: 'monospace' }}>{r.carcassTag || String(startId + i).padStart(2, '0')}</td>
+          <td style={{ padding: '0.5rem 0.75rem', color: C.tan, fontWeight: 800, fontFamily: 'monospace' }}>{r.carcassTag || String(startId + r.slot - 1).padStart(2, '0')}</td>
           <td style={{ padding: '0.5rem 0.75rem', color: C.cream, fontWeight: 600 }}>{r.killOrder ?? blank}</td>
           {r.killType
             ? <td style={{ padding: '0.5rem 0.75rem' }}><KillTypeBadge killType={r.killType} /></td>
@@ -1901,6 +1936,21 @@ function FragmentGroup({ gi, group, startId, skipped, onToggle }: {
         </tr>
         )
       })}
+      {/* Reserved numbers nobody is on — an animal taken off the day holds its
+          number so the ones behind it keep the tags already printed. */}
+      {Array.from({ length: group.slots }, (_, i) => i + 1)
+        .filter(slot => !group.rows.some(r => r.slot === slot))
+        .map(slot => (
+          <tr key={`gap${slot}`} style={{ borderBottom: '1px solid rgba(166,120,90,0.1)' }}>
+            <td />
+            <td style={{ padding: '0.5rem 0.75rem', color: 'rgba(166,120,90,0.5)', fontWeight: 800, fontFamily: 'monospace', textDecoration: 'line-through' }}>
+              {String(startId + slot - 1).padStart(2, '0')}
+            </td>
+            <td colSpan={8} style={{ padding: '0.5rem 0.75rem', color: 'rgba(166,120,90,0.55)', fontSize: '0.78rem', fontStyle: 'italic' }}>
+              taken off the day — number held so the tags behind it still match
+            </td>
+          </tr>
+        ))}
     </>
   )
 }
