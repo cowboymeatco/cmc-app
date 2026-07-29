@@ -1107,20 +1107,25 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
       d.shortRibs?.addons?.length ? row('  Add-ons', adds(d.shortRibs.addons), true) : '',
       row('Plate', fmt(d.plate?.cut)),
     ].join(''))
-    cutSections += sec('Ribeye', [
-      row('Style', d.ribeye?.ribeye2
-        ? sidePair(fmt(d.ribeye.style), fmt(d.ribeye.ribeye2.style))
-        : fmt(d.ribeye?.style)),
-      row('Cut', d.ribeye?.ribeye2
-        ? sidePair(withT(d.ribeye.cut ?? '', d.ribeye.thickness ?? ''), withT(d.ribeye.ribeye2.cut ?? '', d.ribeye.ribeye2.thickness ?? ''))
-        : withT(d.ribeye?.cut ?? '', d.ribeye?.thickness ?? '')),
-      d.ribeye?.ribeye2
-        ? [
-            ribeyeAdds(d.ribeye).length ? row('  Add-ons (1)', adds(ribeyeAdds(d.ribeye)), true) : '',
-            ribeyeAdds(d.ribeye.ribeye2).length ? row('  Add-ons (2)', adds(ribeyeAdds(d.ribeye.ribeye2)), true) : '',
-          ].join('')
-        : (ribeyeAdds(d.ribeye).length ? row('  Add-ons', adds(ribeyeAdds(d.ribeye)), true) : ''),
-    ].join(''))
+    // A split ribeye prints one labeled line per side — style and cut together,
+    // add-ons underneath — instead of Style/Cut rows carrying "1: … / 2: …".
+    // That's the shape the packaging sheet already uses, and it's the one the
+    // cutters read without having to line the two rows up (Jill, 2026-07-28).
+    const ribeyeSpec = (r?: { style?: string; cut?: string; thickness?: string } | null) =>
+      [fmt(r?.style ?? ''), withT(r?.cut ?? '', r?.thickness ?? '')].filter(Boolean).join(' · ')
+    cutSections += sec('Ribeye', (d.ribeye?.ribeye2
+      ? [
+          row('Ribeye (1)', ribeyeSpec(d.ribeye)),
+          ribeyeAdds(d.ribeye).length ? row('  Add-ons', adds(ribeyeAdds(d.ribeye)), true) : '',
+          row('Ribeye (2)', ribeyeSpec(d.ribeye.ribeye2)),
+          ribeyeAdds(d.ribeye.ribeye2).length ? row('  Add-ons', adds(ribeyeAdds(d.ribeye.ribeye2)), true) : '',
+        ]
+      : [
+          row('Style', fmt(d.ribeye?.style)),
+          row('Cut', withT(d.ribeye?.cut ?? '', d.ribeye?.thickness ?? '')),
+          ribeyeAdds(d.ribeye).length ? row('  Add-ons', adds(ribeyeAdds(d.ribeye)), true) : '',
+        ]
+    ).join(''))
     const sl = d.shortLoin ?? {}
     cutSections += sec('Short Loin', (sl.loin2
       ? mergeSides(shortLoinFields(sl, fmt, thick), shortLoinFields(sl.loin2, fmt, thick))
