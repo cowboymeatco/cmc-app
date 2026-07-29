@@ -159,6 +159,22 @@ function sanitizeExpText(v: string): string {
     .trim()
 }
 
+// Products that have to carry an ingredient statement on the label: anything
+// built from more than one ingredient — cured, smoked, seasoned, or ground and
+// mixed. A whole-muscle cut (a ribeye, a pork chop) is a single ingredient and
+// needs none, so matching on the name keeps the warning down to the items that
+// actually matter instead of every PLU in the book.
+//
+// A PLU that matches this and has a blank `ingredients` prints a label with no
+// ingredient statement and nothing anywhere says so — which is how a batch of
+// jerky reached the packing table unlabelled (Charlie, 2026-07-29).
+const NEEDS_INGREDIENTS =
+  /jerky|sausage|brat|bacon|\bham\b|snack stick|summer|salami|bologna|hot dog|wiener|frank|seasoned|marinade|marinated|cured|smoked|pepperoni|chorizo|\blink|patty|meatball|loaf/i
+
+export function needsIngredientStatement(itemName: string | null | undefined): boolean {
+  return NEEDS_INGREDIENTS.test(itemName ?? '')
+}
+
 // Build an EXPTXT.DAT "Import CSV" body from expanded-text records. Rows with an
 // empty number are skipped; empty text is allowed (emits `<num>,<dept>,,`).
 export function buildExptxtCsv(rows: ExpandedText[]): string {

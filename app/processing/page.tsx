@@ -6,7 +6,7 @@ import CutScheduleTab from './CutScheduleTab'
 import CloverTab from './CloverTab'
 import QuickBooksTab from './QuickBooksTab'
 import AlignmentTab from './AlignmentTab'
-import { buildHtFile, buildExptxtCsv, type HobartPlu, type ExpandedText } from '@/lib/hobart'
+import { buildHtFile, buildExptxtCsv, needsIngredientStatement, type HobartPlu, type ExpandedText } from '@/lib/hobart'
 import { isoDate } from '@/lib/dates'
 
 type Tab = 'browser' | 'upload' | 'export' | 'cleanup' | 'cut-schedule' | 'box-labels' | 'clover' | 'quickbooks' | 'alignment'
@@ -454,6 +454,12 @@ function BrowserTab() {
               <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: '0.5rem' }}>
                 {item.price != null && <div style={{ color: C.tan, fontSize: '0.85rem', fontWeight: 600 }}>${item.price.toFixed(2)}</div>}
                 {item.is_retail && <div style={{ fontSize: '0.65rem', color: C.blue }}>RETAIL</div>}
+                {/* A processed item with no statement prints a label with no
+                    ingredients on it — flagged here so it's caught while
+                    someone is already looking at the item. */}
+                {item.active && needsIngredientStatement(item.item_name) && (item.ingredients ?? '').trim() === '' && (
+                  <div title="No ingredient statement — this label will print without ingredients" style={{ fontSize: '0.65rem', color: C.yellow, fontWeight: 700 }}>⚠ NO INGR</div>
+                )}
               </div>
             </div>
           ))}
@@ -503,6 +509,10 @@ function ExportTab() {
   // Deleted PLUs — HCT imports merge, so these stay on the scale until someone
   // deletes them at the scale itself. Shown as a standing removal checklist.
   const [retired, setRetired]     = useState<PluItem[]>([])
+  // Processed items in this export with no ingredient statement. They export
+  // fine and print a label with no ingredients on it — the gap only shows up at
+  // the packing table, so it gets called out here instead.
+  const [missingIng, setMissingIng] = useState<PluItem[]>([])
 
   useEffect(() => {
     fetch('/api/processing?active=false')
@@ -520,6 +530,9 @@ function ExportTab() {
     const items: PluItem[] = Array.isArray(json) ? json : []
     const filtered = retailOnly ? items.filter(i => i.is_retail) : items
     setCount(filtered.length)
+    setMissingIng(filtered.filter(i =>
+      needsIngredientStatement(i.item_name) && (i.ingredients ?? '').trim() === ''
+    ))
     return filtered
   }
 
@@ -677,6 +690,30 @@ function ExportTab() {
         <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 4, padding: '0.85rem 1rem', margin: '1rem 0', fontSize: '0.85rem', color: C.tan }}>
           {count !== null ? <><strong style={{ color: C.cream }}>{count}</strong> items will be exported</> : 'Calculating…'}
         </div>
+
+        {/* Blank ingredient statements. These export without complaint and then
+            print a label with no ingredients — nobody finds out until the
+            product is already on the packing table (Charlie, 2026-07-29). */}
+        {missingIng.length > 0 && (
+          <div style={{ background: 'rgba(239,68,68,0.08)', border: `1px solid ${C.yellow}`, borderRadius: 4, padding: '0.85rem 1rem', margin: '1rem 0' }}>
+            <div style={{ color: C.yellow, fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.3rem' }}>
+              ⚠ {missingIng.length} {missingIng.length === 1 ? 'item has' : 'items have'} no ingredient statement
+            </div>
+            <div style={{ color: C.lightBrown, fontSize: '0.78rem', lineHeight: 1.6, marginBottom: '0.5rem' }}>
+              These are processed products — jerky, sausage, snack sticks, anything cured or seasoned — so
+              their labels are supposed to carry ingredients. They will print without one.
+              Add the statement on each item&apos;s <strong style={{ color: C.tan }}>Label</strong> tab in the PLU
+              Browser, then re-export.
+            </div>
+            <div style={{ maxHeight: 190, overflowY: 'auto', fontSize: '0.76rem', color: C.tan, lineHeight: 1.75 }}>
+              {missingIng.map(i => (
+                <div key={i.id}>
+                  <span style={{ fontFamily: 'monospace', color: C.lightBrown }}>{i.plu_number}</span>{' '}{i.item_name}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         <button style={BTN(count ? C.tan : C.medBrown)} onClick={handleExportHt} disabled={exportingHt || !count}>
           {exportingHt ? 'Generating…' : '⬇ Download .ht for Hobart (HCT)'}
