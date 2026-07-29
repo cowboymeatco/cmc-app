@@ -77,7 +77,7 @@ export async function GET(req: NextRequest) {
     // assignment when there is one, else the customer booked on the appointment.
     let q = supabase
       .from('v_producer_customer_ties')
-      .select('harvest_date,species,carcass_tag,kill_type,hcw_lbs,producer,producer_id,customer_name,customer_id,portion,assigned,has_cut_sheet,payment_responsibility,producer_differs,harvest_log_id')
+      .select('harvest_date,species,kill_order,carcass_tag,ear_tag,sex,breed,kill_type,half_1_weight_lbs,half_2_weight_lbs,hanging_weight_lbs,producer,producer_id,customer_name,customer_id,portion,assigned,has_cut_sheet,payment_responsibility,producer_differs,harvest_log_id')
       .order('harvest_date', { ascending: false })
     if (from) q = q.gte('harvest_date', from)
     if (to)   q = q.lte('harvest_date', to)

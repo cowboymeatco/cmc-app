@@ -24,9 +24,15 @@ const INPUT: React.CSSProperties = {
 interface Tie {
   harvest_date:           string
   species:                string | null
+  kill_order:             number | null
   carcass_tag:            string | null
+  ear_tag:                string | null
+  sex:                    string | null
+  breed:                  string | null
   kill_type:              string | null
-  hcw_lbs:                number | null
+  half_1_weight_lbs:      number | null
+  half_2_weight_lbs:      number | null
+  hanging_weight_lbs:     number | null
   producer:               string | null
   producer_id:            string | null
   customer_name:          string | null
@@ -77,6 +83,17 @@ function Stat({ n, label, color }: { n: number; label: string; color: string }) 
   )
 }
 
+// A producer's block: their animals (from the date range) with worksheet
+// identifiers, and the cut customer each ties to.
+interface Group {
+  producer: string
+  rows:     Tie[]
+  animals:  number
+  weight:   number
+  customers: string[]
+  anyDiffers: boolean
+}
+
 export default function ProducerCustomerReport() {
   const today = isoDate()
   // Default to a wide window — this is a "who's tied to what" audit, not a daily.
@@ -92,7 +109,6 @@ export default function ProducerCustomerReport() {
   const [search,    setSearch]    = useState('')
   const [diffOnly,  setDiffOnly]  = useState(false)
   const [untiedOnly, setUntiedOnly] = useState(false)
-  const [assignedOnly, setAssignedOnly] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -117,36 +133,81 @@ export default function ProducerCustomerReport() {
       if (species && r.species !== species) return false
       if (diffOnly && !r.producer_differs) return false
       if (untiedOnly && r.customer_name) return false
-      if (assignedOnly && !r.assigned) return false
       if (q) {
-        const hay = `${r.producer ?? ''} ${r.customer_name ?? ''} ${r.carcass_tag ?? ''}`.toLowerCase()
+        const hay = `${r.producer ?? ''} ${r.customer_name ?? ''} ${r.carcass_tag ?? ''} ${r.ear_tag ?? ''}`.toLowerCase()
         if (!hay.includes(q)) return false
       }
       return true
     })
-  }, [rows, species, search, diffOnly, untiedOnly, assignedOnly])
+  }, [rows, species, search, diffOnly, untiedOnly])
+
+  // Group by producer. Within a producer, animals sort by date then kill order.
+  const groups: Group[] = useMemo(() => {
+    const byProducer = new Map<string, Tie[]>()
+    for (const r of filtered) {
+      const key = r.producer || '— no producer —'
+      const bucket = byProducer.get(key)
+      if (bucket) bucket.push(r); else byProducer.set(key, [r])
+    }
+    const out: Group[] = []
+    for (const [producer, ties] of byProducer) {
+      ties.sort((a, b) =>
+        a.harvest_date.localeCompare(b.harvest_date) ||
+        (a.kill_order ?? 1e9) - (b.kill_order ?? 1e9) ||
+        (a.carcass_tag ?? '').localeCompare(b.carcass_tag ?? ''),
+      )
+      const animalIds = new Set(ties.map(t => t.harvest_log_id))
+      // Sum each distinct animal's hanging weight once (splits repeat the row).
+      const seen = new Set<string>()
+      let weight = 0
+      for (const t of ties) {
+        if (t.hanging_weight_lbs != null && !seen.has(t.harvest_log_id)) {
+          weight += Number(t.hanging_weight_lbs); seen.add(t.harvest_log_id)
+        }
+      }
+      out.push({
+        producer,
+        rows: ties,
+        animals: animalIds.size,
+        weight,
+        customers: [...new Set(ties.map(t => t.customer_name).filter(Boolean) as string[])].sort(),
+        anyDiffers: ties.some(t => t.producer_differs),
+      })
+    }
+    out.sort((a, b) => a.producer.localeCompare(b.producer))
+    return out
+  }, [filtered])
 
   const stats = useMemo(() => {
+    const producers = groups.length
     const animals = new Set(filtered.map(r => r.harvest_log_id))
     const untied  = new Set(filtered.filter(r => !r.customer_name).map(r => r.harvest_log_id))
     return {
+      producers,
       animals: animals.size,
       ties:    filtered.filter(r => r.customer_name).length,
       untied:  untied.size,
-      differs: filtered.filter(r => r.producer_differs).length,
     }
-  }, [filtered])
+  }, [groups, filtered])
 
   function exportCSV() {
-    const out = filtered.map(r => ({
-      harvest_date: r.harvest_date, producer: r.producer ?? '', species: r.species ?? '',
-      carcass_tag: r.carcass_tag ?? '', hcw_lbs: r.hcw_lbs ?? '', kill_type: r.kill_type ?? '',
-      customer: r.customer_name ?? '', portion: r.portion ?? '',
-      pays: r.payment_responsibility ?? '', assigned: r.assigned ? 'yes' : 'booked',
-      cut_sheet: r.has_cut_sheet ? 'yes' : 'no', producer_differs: r.producer_differs ? 'yes' : 'no',
-    }))
+    const out = filtered
+      .slice()
+      .sort((a, b) =>
+        (a.producer ?? '').localeCompare(b.producer ?? '') ||
+        a.harvest_date.localeCompare(b.harvest_date) ||
+        (a.kill_order ?? 1e9) - (b.kill_order ?? 1e9))
+      .map(r => ({
+        producer: r.producer ?? '', harvest_date: r.harvest_date, species: r.species ?? '',
+        kill_order: r.kill_order ?? '', carcass_tag: r.carcass_tag ?? '', ear_tag: r.ear_tag ?? '',
+        hanging_weight_lbs: r.hanging_weight_lbs ?? '', customer: r.customer_name ?? '',
+        portion: r.portion ?? '', pays: r.payment_responsibility ?? '',
+        assigned: r.assigned ? 'yes' : 'booked', cut_sheet: r.has_cut_sheet ? 'yes' : 'no',
+      }))
     download(toCSV(out), `producer-customer_${from}_to_${to}.csv`)
   }
+
+  const HEAD = ['Kill #', 'Tag #', 'Ear Tag', 'Species', 'Hang Wt', 'Customer', 'Portion', 'Pays', 'Cut', 'Status']
 
   return (
     <div style={{ minHeight: '100vh', background: C.darkBrown }}>
@@ -161,7 +222,7 @@ export default function ProducerCustomerReport() {
             Producer &amp; Customer
           </h1>
           <p style={{ fontSize: '0.68rem', color: C.lightBrown, letterSpacing: '0.12em', textTransform: 'uppercase', margin: 0 }}>
-            Which animals tie back to which customer
+            Harvest worksheet, grouped by producer, with each animal&apos;s customer
           </p>
         </div>
       </header>
@@ -191,72 +252,83 @@ export default function ProducerCustomerReport() {
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
           <Pill label="Producer ≠ customer" on={diffOnly} onClick={() => setDiffOnly(v => !v)} color={C.amber} />
           <Pill label="Not tied yet" on={untiedOnly} onClick={() => setUntiedOnly(v => !v)} color={C.blue} />
-          <Pill label="Physically assigned" on={assignedOnly} onClick={() => setAssignedOnly(v => !v)} color={C.green} />
         </div>
 
         {/* Summary */}
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1.25rem' }}>
-          <Stat n={stats.animals} label="Animals" color={C.cream} />
-          <Stat n={stats.ties}    label="Customer ties" color={C.green} />
-          <Stat n={stats.untied}  label="Not tied yet" color={C.blue} />
-          <Stat n={stats.differs} label="Producer ≠ cust." color={C.amber} />
+          <Stat n={stats.producers} label="Producers" color={C.cream} />
+          <Stat n={stats.animals}   label="Animals" color={C.tan} />
+          <Stat n={stats.ties}      label="Customer ties" color={C.green} />
+          <Stat n={stats.untied}    label="Not tied yet" color={C.blue} />
         </div>
 
-        {/* Table */}
-        <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, overflow: 'hidden' }}>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', minWidth: 860 }}>
-              <thead>
-                <tr style={{ background: 'rgba(166,120,90,0.12)' }}>
-                  {['Date', 'Producer', 'Animal', 'HCW', 'Customer', 'Portion', 'Pays', 'Cut sheet', 'Status'].map(h => (
-                    <th key={h} style={{ textAlign: 'left', padding: '0.6rem 0.8rem', color: C.tan, fontWeight: 700, whiteSpace: 'nowrap' }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {loading ? (
-                  <tr><td colSpan={9} style={{ padding: '2rem', textAlign: 'center', color: C.lightBrown }}>Loading…</td></tr>
-                ) : err ? (
-                  <tr><td colSpan={9} style={{ padding: '2rem', textAlign: 'center', color: C.amber }}>{err}</td></tr>
-                ) : !filtered.length ? (
-                  <tr><td colSpan={9} style={{ padding: '2rem', textAlign: 'center', color: C.lightBrown }}>No rows for these filters.</td></tr>
-                ) : filtered.map((r, i) => (
-                  <tr key={`${r.harvest_log_id}-${i}`} style={{
-                    borderTop: '1px solid rgba(166,120,90,0.1)',
-                    background: r.producer_differs ? 'rgba(232,136,58,0.05)' : 'transparent',
-                  }}>
-                    <td style={{ padding: '0.5rem 0.8rem', color: C.lightBrown, whiteSpace: 'nowrap' }}>{r.harvest_date}</td>
-                    <td style={{ padding: '0.5rem 0.8rem', color: C.cream, fontWeight: 600 }}>{r.producer || '—'}</td>
-                    <td style={{ padding: '0.5rem 0.8rem', color: C.tan, whiteSpace: 'nowrap' }}>
-                      {r.species} <span style={{ fontFamily: 'monospace', color: C.lightBrown }}>#{r.carcass_tag || '—'}</span>
-                    </td>
-                    <td style={{ padding: '0.5rem 0.8rem', color: C.lightBrown, whiteSpace: 'nowrap' }}>{r.hcw_lbs != null ? `${r.hcw_lbs} lb` : '—'}</td>
-                    <td style={{ padding: '0.5rem 0.8rem', fontWeight: 600, color: r.customer_name ? C.cream : C.medBrown }}>
-                      {r.customer_name || '— not tied —'}
-                    </td>
-                    <td style={{ padding: '0.5rem 0.8rem', color: C.lightBrown }}>{r.portion || '—'}</td>
-                    <td style={{ padding: '0.5rem 0.8rem', color: C.lightBrown, textTransform: 'capitalize' }}>{r.payment_responsibility || '—'}</td>
-                    <td style={{ padding: '0.5rem 0.8rem', textAlign: 'center' }}>{r.has_cut_sheet ? '✓' : ''}</td>
-                    <td style={{ padding: '0.5rem 0.8rem', whiteSpace: 'nowrap' }}>
-                      <span style={{
-                        fontSize: '0.68rem', fontWeight: 700, padding: '0.15rem 0.5rem', borderRadius: 999,
-                        color: r.assigned ? C.green : C.blue,
-                        border: `1px solid ${r.assigned ? C.green : C.blue}`,
-                      }}>{r.assigned ? 'ASSIGNED' : 'BOOKED'}</span>
-                    </td>
+        {loading ? (
+          <div style={{ padding: '2rem', textAlign: 'center', color: C.lightBrown }}>Loading…</div>
+        ) : err ? (
+          <div style={{ padding: '2rem', textAlign: 'center', color: C.amber }}>{err}</div>
+        ) : !groups.length ? (
+          <div style={{ padding: '2rem', textAlign: 'center', color: C.lightBrown }}>No rows for these filters.</div>
+        ) : groups.map(g => (
+          <div key={g.producer} style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, marginBottom: '1rem', overflow: 'hidden' }}>
+            {/* Producer header */}
+            <div style={{
+              padding: '0.7rem 1rem', background: g.anyDiffers ? 'rgba(232,136,58,0.1)' : 'rgba(166,120,90,0.12)',
+              borderBottom: '1px solid rgba(166,120,90,0.18)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <span style={{ color: C.cream, fontWeight: 700, fontSize: '0.98rem', fontFamily: 'Georgia, serif' }}>{g.producer}</span>
+                <span style={{ color: C.lightBrown, fontSize: '0.78rem' }}>
+                  {g.animals} {g.animals === 1 ? 'animal' : 'animals'} · {g.weight.toLocaleString()} lb hanging
+                </span>
+              </div>
+              <div style={{ color: C.tan, fontSize: '0.76rem', marginTop: '0.2rem' }}>
+                {g.customers.length
+                  ? <>Customers: <span style={{ color: C.cream }}>{g.customers.join(', ')}</span></>
+                  : <span style={{ color: C.medBrown }}>No customers tied yet</span>}
+              </div>
+            </div>
+            {/* Animal rows */}
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', minWidth: 820 }}>
+                <thead>
+                  <tr>
+                    {HEAD.map(h => (
+                      <th key={h} style={{ textAlign: 'left', padding: '0.4rem 0.8rem', color: C.lightBrown, fontWeight: 700, fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {g.rows.map((r, i) => (
+                    <tr key={`${r.harvest_log_id}-${i}`} style={{ borderTop: '1px solid rgba(166,120,90,0.08)' }}>
+                      <td style={{ padding: '0.45rem 0.8rem', color: C.cream, fontWeight: 700, fontFamily: 'monospace' }}>{r.kill_order ?? '—'}</td>
+                      <td style={{ padding: '0.45rem 0.8rem', color: C.tan, fontFamily: 'monospace' }}>{r.carcass_tag || '—'}</td>
+                      <td style={{ padding: '0.45rem 0.8rem', color: C.lightBrown, whiteSpace: 'nowrap' }}>{r.ear_tag || '—'}</td>
+                      <td style={{ padding: '0.45rem 0.8rem', color: C.lightBrown }}>{r.species}</td>
+                      <td style={{ padding: '0.45rem 0.8rem', color: C.lightBrown, whiteSpace: 'nowrap' }}>{r.hanging_weight_lbs != null ? `${r.hanging_weight_lbs} lb` : '—'}</td>
+                      <td style={{ padding: '0.45rem 0.8rem', fontWeight: 600, color: r.customer_name ? C.cream : C.medBrown }}>{r.customer_name || '— not tied —'}</td>
+                      <td style={{ padding: '0.45rem 0.8rem', color: C.lightBrown }}>{r.portion || '—'}</td>
+                      <td style={{ padding: '0.45rem 0.8rem', color: C.lightBrown, textTransform: 'capitalize' }}>{r.payment_responsibility || '—'}</td>
+                      <td style={{ padding: '0.45rem 0.8rem', textAlign: 'center', color: C.green }}>{r.has_cut_sheet ? '✓' : ''}</td>
+                      <td style={{ padding: '0.45rem 0.8rem', whiteSpace: 'nowrap' }}>
+                        <span style={{
+                          fontSize: '0.64rem', fontWeight: 700, padding: '0.12rem 0.45rem', borderRadius: 999,
+                          color: r.assigned ? C.green : C.blue, border: `1px solid ${r.assigned ? C.green : C.blue}`,
+                        }}>{r.assigned ? 'ASSIGNED' : 'BOOKED'}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
+        ))}
 
-        <p style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.75rem', lineHeight: 1.6 }}>
-          <strong style={{ color: C.tan }}>Customer</strong> is the physical carcass assignment when one has been made
+        <p style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.5rem', lineHeight: 1.6 }}>
+          The harvest worksheet grouped by producer, with the cut customer on each animal.
+          <strong style={{ color: C.tan }}> Customer</strong> is the physical carcass assignment once one is made
           (<span style={{ color: C.green }}>ASSIGNED</span>), otherwise the customer booked on the appointment
-          (<span style={{ color: C.blue }}>BOOKED</span>). A split animal appears once per share.
-          Rows shaded amber are where the producer of record and the customer differ — a drop-off where a
-          business brings the animal and an individual receives it.
+          (<span style={{ color: C.blue }}>BOOKED</span>). A split animal lists once per share. Producer blocks
+          shaded amber are drop-offs where a business brings the animal and an individual receives it.
         </p>
       </main>
     </div>
