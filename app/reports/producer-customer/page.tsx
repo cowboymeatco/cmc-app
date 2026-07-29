@@ -45,6 +45,13 @@ interface Tie {
   harvest_log_id:         string
 }
 
+// Carcass tags are mostly numeric with the odd letter suffix ("27B"); sort on
+// the leading number so 9 comes before 10. Untagged sorts last.
+function tagNum(t: string | null): number {
+  const m = (t ?? '').match(/\d+/)
+  return m ? parseInt(m[0], 10) : 1e9
+}
+
 function toCSV(rows: Record<string, unknown>[]): string {
   if (!rows.length) return ''
   const headers = Object.keys(rows[0])
@@ -141,7 +148,8 @@ export default function ProducerCustomerReport() {
     })
   }, [rows, species, search, diffOnly, untiedOnly])
 
-  // Group by producer. Within a producer, animals sort by date then kill order.
+  // Group by producer. Within a producer, animals sort by tag # (carcass tags
+  // repeat across harvest days, so date stays the outer key to keep days coherent).
   const groups: Group[] = useMemo(() => {
     const byProducer = new Map<string, Tie[]>()
     for (const r of filtered) {
@@ -153,7 +161,7 @@ export default function ProducerCustomerReport() {
     for (const [producer, ties] of byProducer) {
       ties.sort((a, b) =>
         a.harvest_date.localeCompare(b.harvest_date) ||
-        (a.kill_order ?? 1e9) - (b.kill_order ?? 1e9) ||
+        tagNum(a.carcass_tag) - tagNum(b.carcass_tag) ||
         (a.carcass_tag ?? '').localeCompare(b.carcass_tag ?? ''),
       )
       const animalIds = new Set(ties.map(t => t.harvest_log_id))
@@ -174,7 +182,15 @@ export default function ProducerCustomerReport() {
         anyDiffers: ties.some(t => t.producer_differs),
       })
     }
-    out.sort((a, b) => a.producer.localeCompare(b.producer))
+    // Producer blocks read in tag order too — each block sits where its first
+    // (earliest date, lowest tag) animal falls, so the page runs 01, 02, 03…
+    // like the worksheet rather than A–Z.
+    out.sort((a, b) => {
+      const ra = a.rows[0], rb = b.rows[0]
+      return ra.harvest_date.localeCompare(rb.harvest_date) ||
+        tagNum(ra.carcass_tag) - tagNum(rb.carcass_tag) ||
+        (ra.carcass_tag ?? '').localeCompare(rb.carcass_tag ?? '')
+    })
     return out
   }, [filtered])
 
@@ -194,9 +210,9 @@ export default function ProducerCustomerReport() {
     const out = filtered
       .slice()
       .sort((a, b) =>
-        (a.producer ?? '').localeCompare(b.producer ?? '') ||
         a.harvest_date.localeCompare(b.harvest_date) ||
-        (a.kill_order ?? 1e9) - (b.kill_order ?? 1e9))
+        tagNum(a.carcass_tag) - tagNum(b.carcass_tag) ||
+        (a.producer ?? '').localeCompare(b.producer ?? ''))
       .map(r => ({
         producer: r.producer ?? '', harvest_date: r.harvest_date, species: r.species ?? '',
         kill_order: r.kill_order ?? '', carcass_tag: r.carcass_tag ?? '', ear_tag: r.ear_tag ?? '',
