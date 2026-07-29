@@ -34,16 +34,91 @@ function fracLabel(n: number): string {
 // a hog and a half is a Whole on one carcass plus a Half on another.
 interface Placement { logId: string; portion: string }
 
+// A cut customer the modal can place on a carcass. Most come from the carcass's
+// own appointment; a guest is borrowed from another one — two hogs from the same
+// producer booked separately still have to be sortable onto the right animal
+// (Jill, 2026-07-28). `apptId` is the appointment the customer belongs to, which
+// is what the save writes against.
+interface RosterCustomer {
+  id:                            string
+  customer_name:                 string
+  portion:                       string
+  linked_cutting_instruction_id: string | null
+  apptId:                        string
+  apptLabel:                     string
+  guest:                         boolean
+}
+
 export default function AssignCarcassesModal({
-  appointment, carcasses, existing, onClose, onSaved,
+  appointment, carcasses, existing, allAppointments, onClose, onSaved,
 }: {
-  appointment: HarvestAppointment
-  carcasses:   HarvestLog[]
-  existing:    CarcassAssignment[]
-  onClose:     () => void
-  onSaved:     () => void
+  appointment:     HarvestAppointment
+  carcasses:       HarvestLog[]
+  existing:        CarcassAssignment[]   // every stake on THESE carcasses, whichever appointment it came from
+  allAppointments: HarvestAppointment[]  // everything in the cooler — the guest search reads this
+  onClose:         () => void
+  onSaved:         () => void
 }) {
-  const customers = appointment.customers ?? []
+  // Every cut customer in the cooler, keyed by the appointment they booked on.
+  const rosterOf = (a: HarvestAppointment): RosterCustomer[] =>
+    (a.customers ?? []).map(c => ({
+      id:                            c.id,
+      customer_name:                 c.customer_name,
+      portion:                       c.portion || 'Whole',
+      linked_cutting_instruction_id: c.linked_cutting_instruction_id || null,
+      apptId:                        a.id,
+      apptLabel:                     a.source || '',
+      guest:                         a.id !== appointment.id,
+    }))
+  const everyCustomer = useMemo(
+    () => allAppointments.flatMap(rosterOf),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [allAppointments, appointment.id],
+  )
+  const homeCustomers = useMemo(() => rosterOf(appointment),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [appointment])
+
+  // Guests: anyone already holding a stake on one of these carcasses who isn't
+  // on this appointment, plus whoever the crew adds through the search.
+  const [guestIds, setGuestIds] = useState<string[]>(() => {
+    const home = new Set((appointment.customers ?? []).map(c => c.id))
+    return Array.from(new Set(
+      existing.filter(a => !home.has(a.appointment_customer_id)).map(a => a.appointment_customer_id)
+    ))
+  })
+  const [search, setSearch] = useState('')
+
+  const customers: RosterCustomer[] = useMemo(() => {
+    const home = new Set(homeCustomers.map(c => c.id))
+    const guests = guestIds.filter(id => !home.has(id)).map(id => {
+      const known = everyCustomer.find(c => c.id === id)
+      if (known) return known
+      // Their appointment isn't in the cooler any more — rebuild from the stake
+      // itself so an existing assignment never silently disappears.
+      const a = existing.find(x => x.appointment_customer_id === id)
+      return {
+        id,
+        customer_name:                 a?.customer_name || 'Unknown',
+        portion:                       a?.portion || 'Whole',
+        linked_cutting_instruction_id: a?.linked_cutting_instruction_id ?? null,
+        apptId:                        a?.appointment_id ?? '',
+        apptLabel:                     '',
+        guest:                         true,
+      } as RosterCustomer
+    })
+    return [...homeCustomers, ...guests]
+  }, [homeCustomers, guestIds, everyCustomer, existing])
+
+  const searchHits = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return []
+    const shown = new Set(customers.map(c => c.id))
+    return everyCustomer
+      .filter(c => !shown.has(c.id))
+      .filter(c => c.customer_name.toLowerCase().includes(q) || c.apptLabel.toLowerCase().includes(q))
+      .slice(0, 8)
+  }, [search, customers, everyCustomer])
 
   // placement[customerId] = every carcass that customer has a stake in. A
   // customer buying more than one whole animal's worth spans several.
@@ -58,6 +133,10 @@ export default function AssignCarcassesModal({
   const [error,  setError]  = useState('')
 
   const basePortion = (custId: string) => customers.find(c => c.id === custId)?.portion || 'Whole'
+  const dropGuest = (custId: string) => {
+    setGuestIds(prev => prev.filter(id => id !== custId))
+    setPlacement(prev => { const next = { ...prev }; delete next[custId]; return next })
+  }
   const placedOn    = (custId: string, logId: string) => (placement[custId] ?? []).find(p => p.logId === logId)
 
   // Fill level per carcass, summed from each stake's own portion.
@@ -101,27 +180,67 @@ export default function AssignCarcassesModal({
   const assignedCount   = customers.filter(c => (placement[c.id] ?? []).length > 0).length
   const unassignedNames = customers.filter(c => (placement[c.id] ?? []).length === 0).map(c => c.customer_name)
 
+  // The API rewrites one appointment's stakes at a time, so a board that mixes
+  // guests writes once per appointment involved. Two rules keep that safe:
+  //   • every appointment that gained OR lost a stake here gets rewritten, so
+  //     dropping a customer actually deletes their row;
+  //   • each rewrite re-reads that appointment's current stakes and carries
+  //     forward the ones on carcasses this modal never showed.
+  // Overfill is caught per carcass in the UI (`fill` spans every placement on
+  // screen); the server only sees one appointment's share of it.
   async function save() {
     setSaving(true); setError('')
+    const visible = new Set(carcasses.map(l => l.id))
+    type Row = {
+      harvest_log_id:                string
+      appointment_customer_id:       string
+      customer_name:                 string
+      portion:                       string
+      linked_cutting_instruction_id: string | null
+    }
+    const byAppt = new Map<string, Row[]>()
+    const touch  = (apptId: string) => {
+      if (apptId && !byAppt.has(apptId)) byAppt.set(apptId, [])
+      return byAppt.get(apptId)
+    }
     // One row per (customer, carcass) — a hog and a half writes two rows, both
     // carrying the same cutting instruction, so each carcass prints its own card.
-    const assignments = customers.flatMap(c =>
-      (placement[c.id] ?? []).map(p => ({
-        harvest_log_id:                p.logId,
-        appointment_customer_id:       c.id,
-        customer_name:                 c.customer_name,
-        portion:                       p.portion || 'Whole',
-        linked_cutting_instruction_id: c.linked_cutting_instruction_id || null,
-      }))
-    )
-    const res  = await fetch('/api/carcass-assignments', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ appointment_id: appointment.id, assignments }),
-    })
-    const json = await res.json().catch(() => ({}))
+    for (const c of customers) {
+      for (const p of placement[c.id] ?? []) {
+        const rows = touch(c.apptId || appointment.id)
+        rows?.push({
+          harvest_log_id:                p.logId,
+          appointment_customer_id:       c.id,
+          customer_name:                 c.customer_name,
+          portion:                       p.portion || 'Whole',
+          linked_cutting_instruction_id: c.linked_cutting_instruction_id || null,
+        })
+      }
+    }
+    touch(appointment.id)
+    for (const a of existing) if (a.appointment_id) touch(a.appointment_id)
+
+    for (const [apptId, rows] of byAppt) {
+      const current = await fetch(`/api/carcass-assignments?appointment_id=${apptId}`)
+        .then(r => r.json()).catch(() => [])
+      const keep: Row[] = (Array.isArray(current) ? current as CarcassAssignment[] : [])
+        .filter(a => !visible.has(a.harvest_log_id))
+        .map(a => ({
+          harvest_log_id:                a.harvest_log_id,
+          appointment_customer_id:       a.appointment_customer_id,
+          customer_name:                 a.customer_name,
+          portion:                       a.portion,
+          linked_cutting_instruction_id: a.linked_cutting_instruction_id,
+        }))
+      const res  = await fetch('/api/carcass-assignments', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ appointment_id: apptId, assignments: [...keep, ...rows] }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (json.error) { setError(json.error); setSaving(false); return }
+    }
     setSaving(false)
-    if (json.error) { setError(json.error); return }
     onSaved()
   }
 
@@ -178,7 +297,7 @@ export default function AssignCarcassesModal({
                 borderRadius: 4, padding: '0.55rem 0.75rem',
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-                  <div style={{ minWidth: 150, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <div style={{ minWidth: 150, display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                     <span style={{
                       background: `${pColor}1A`, border: `1px solid ${pColor}55`, color: pColor,
                       borderRadius: 3, padding: '1px 6px', fontSize: '0.72rem', fontWeight: 700,
@@ -186,6 +305,26 @@ export default function AssignCarcassesModal({
                       {portionLabel(cust.portion || 'Whole')}
                     </span>
                     <span style={{ color: C.cream, fontSize: '0.86rem', fontWeight: 600 }}>{cust.customer_name}</span>
+                    {cust.guest && (
+                      <>
+                        <span
+                          title={`Booked on another appointment${cust.apptLabel ? ` — ${cust.apptLabel}` : ''}`}
+                          style={{
+                            background: 'rgba(245,158,11,0.14)', border: '1px solid rgba(245,158,11,0.45)',
+                            color: C.amber, borderRadius: 3, padding: '0 5px', fontSize: '0.62rem', fontWeight: 700,
+                          }}
+                        >
+                          other appt{cust.apptLabel ? ` · ${cust.apptLabel}` : ''}
+                        </span>
+                        <button
+                          onClick={() => dropGuest(cust.id)}
+                          title="Remove this customer from the board"
+                          style={{ background: 'none', border: 'none', color: C.medBrown, cursor: 'pointer', fontSize: '0.8rem', padding: '0 2px' }}
+                        >
+                          ✕
+                        </button>
+                      </>
+                    )}
                   </div>
 
                   <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
@@ -267,6 +406,45 @@ export default function AssignCarcassesModal({
               </div>
             )
           })}
+        </div>
+
+        {/* Borrow a cut customer from another appointment — the animal in front
+            of you doesn't always belong to the name it was booked under. */}
+        <div style={{ marginTop: '0.75rem' }}>
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Add a cut customer from another appointment…"
+            style={{
+              width: '100%', background: C.dark, border: '1px solid rgba(166,120,90,0.3)',
+              borderRadius: 4, padding: '0.5rem 0.65rem', color: C.cream, fontSize: '0.82rem',
+            }}
+          />
+          {search.trim() && (
+            <div style={{ marginTop: '0.4rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+              {searchHits.length === 0 && (
+                <div style={{ color: C.medBrown, fontSize: '0.76rem', padding: '0.2rem 0.1rem' }}>
+                  No other cut customer in the cooler matches that.
+                </div>
+              )}
+              {searchHits.map(c => (
+                <button
+                  key={c.id}
+                  onClick={() => { setGuestIds(prev => [...prev, c.id]); setSearch('') }}
+                  style={{
+                    textAlign: 'left', background: 'rgba(255,255,255,0.04)',
+                    border: '1px solid rgba(166,120,90,0.25)', borderRadius: 3,
+                    padding: '0.35rem 0.55rem', cursor: 'pointer', color: C.cream, fontSize: '0.8rem',
+                  }}
+                >
+                  {c.customer_name}
+                  <span style={{ color: C.lightBrown }}>
+                    {' · '}{portionLabel(c.portion)}{c.apptLabel ? ` · ${c.apptLabel}` : ''}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Status */}

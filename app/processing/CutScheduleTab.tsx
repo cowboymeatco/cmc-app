@@ -599,12 +599,17 @@ export default function CutScheduleTab() {
                           </span>
                         )
                       })()}
-                      {/* Assign / reassign carcass → cut customer */}
-                      {entry.source_appointment_id && (entry.assigned || entry.customer_count > 1) && (
+                      {/* Assign / reassign carcass → cut customer. Every carcass
+                          that came in on an appointment gets the button — it used
+                          to appear only on rows already assigned or on
+                          appointments with several cut customers, which on a
+                          normal day meant no row on the board had one at all
+                          (Jill, 2026-07-28). */}
+                      {entry.source_appointment_id && (
                         <button
                           onClick={e => { e.stopPropagation(); openAssign(entry) }}
                           onDragStart={e => e.stopPropagation()}
-                          title={entry.assigned ? 'Reassign this carcass to a different cut customer' : 'Assign this appointment’s carcasses to specific cut customers'}
+                          title={entry.assigned ? 'Reassign this carcass to a different cut customer' : 'Assign this carcass to a specific cut customer'}
                           style={{
                             marginLeft: 6, padding: '0 6px', height: 16, lineHeight: '14px', flexShrink: 0,
                             background: entry.assigned ? 'rgba(166,120,90,0.12)' : 'rgba(245,158,11,0.16)',
@@ -751,12 +756,15 @@ export default function CutScheduleTab() {
         </>
       )}
 
-      {/* Assign carcasses → cut customers */}
+      {/* Assign carcasses → cut customers. `existing` is every stake on THESE
+          carcasses, whoever booked them — a customer borrowed from another
+          appointment has to come back up next time the modal opens. */}
       {assignModal && (
         <AssignCarcassesModal
           appointment={assignModal.appointment}
           carcasses={assignModal.carcasses}
-          existing={assignments.filter(a => a.appointment_id === assignModal.appointment.id)}
+          existing={assignments.filter(a => assignModal.carcasses.some(l => l.id === a.harvest_log_id))}
+          allAppointments={appts}
           onClose={() => setAssignModal(null)}
           onSaved={() => { setAssignModal(null); loadAll() }}
         />
