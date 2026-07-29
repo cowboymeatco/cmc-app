@@ -21,19 +21,27 @@ const INPUT: React.CSSProperties = {
   outline: 'none', boxSizing: 'border-box',
 }
 
-interface Row {
+interface VAItem { product: string; category: string; detail?: string }
+interface Sheet {
+  id:            string
   customer_name: string
-  pack_date:     string
-  plu_number:    string | null
-  item_name:     string
-  species:       string
-  weight_lbs:    number
-  pieces:        number
-  boxes:         number
+  species:       string | null
+  date:          string | null
+  products:      VAItem[]
 }
 
-const speciesEmoji = (s: string) =>
-  s === 'Pork' ? '🐷' : s === 'Beef' ? '🐄' : s === 'Lamb' ? '🐑' : s === 'Goat' ? '🐐' : s === 'Processed' ? '🌭' : '🥩'
+// Column order for the value-add matrix — the way the cut walks the hog, ending
+// with the smokehouse. Anything not listed sorts after, alphabetically.
+const COL_ORDER = [
+  'Bacon', 'Shoulder Bacon', 'Cured & Smoked Ham', 'Cured & Smoked Hocks',
+  'Smoked Chops', 'Pulled Pork',
+  'Pork Sausage', 'Italian Sausage', 'Jumpstart Spicy Sausage',
+  'Brats', 'Snack Sticks', 'Summer Sausage', 'Jerky', 'Hot Dogs',
+]
+const colRank = (p: string) => { const i = COL_ORDER.indexOf(p); return i === -1 ? 999 : i }
+
+const speciesEmoji = (s: string | null) =>
+  s === 'Pork' ? '🐷' : s === 'Beef' ? '🐄' : s === 'Lamb' ? '🐑' : s === 'Goat' ? '🐐' : '🥩'
 
 function toCSV(rows: Record<string, unknown>[]): string {
   if (!rows.length) return ''
@@ -54,32 +62,19 @@ function download(content: string, filename: string) {
   document.body.removeChild(a); URL.revokeObjectURL(url)
 }
 
-function Stat({ n, label, color }: { n: string | number; label: string; color: string }) {
-  return (
-    <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '0.7rem 1rem', minWidth: 110 }}>
-      <div style={{ color, fontSize: '1.35rem', fontWeight: 800, fontFamily: 'Georgia, serif' }}>{n}</div>
-      <div style={{ color: C.lightBrown, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</div>
-    </div>
-  )
-}
-
-type SortKey = 'pack_date' | 'customer_name' | 'item_name' | 'weight_lbs'
-
 export default function ValueAddReport() {
   const today = isoDate()
   const yearStart = today.slice(0, 4) + '-01-01'
 
   const [from, setFrom] = useState(yearStart)
   const [to,   setTo]   = useState(today)
-  const [rows, setRows] = useState<Row[]>([])
+  const [sheets, setSheets] = useState<Sheet[]>([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
 
-  // Charlie asked for hogs first, everything eventually — so default to Pork.
-  const [species, setSpecies] = useState('Pork')
+  const [species, setSpecies] = useState('Pork') // hogs first
   const [search,  setSearch]  = useState('')
-  const [sortKey, setSortKey] = useState<SortKey>('pack_date')
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [sortKey, setSortKey] = useState<'date' | 'customer'>('date')
 
   useEffect(() => {
     let cancelled = false
@@ -87,63 +82,55 @@ export default function ValueAddReport() {
     const p = new URLSearchParams({ type: 'value_add', from, to })
     fetch(`/api/reports?${p}`)
       .then(r => r.json())
-      .then(d => { if (!cancelled) setRows(Array.isArray(d) ? d : []) })
+      .then(d => { if (!cancelled) setSheets(Array.isArray(d) ? d : []) })
       .catch(() => { if (!cancelled) setErr('Could not load the report.') })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [from, to])
 
   const speciesList = useMemo(
-    () => [...new Set(rows.map(r => r.species).filter(s => s && s !== '—'))].sort() as string[],
-    [rows],
+    () => [...new Set(sheets.map(s => s.species).filter(Boolean))].sort() as string[],
+    [sheets],
   )
 
-  const filtered = useMemo(() => {
+  const rows = useMemo(() => {
     const q = search.trim().toLowerCase()
-    const out = rows.filter(r => {
-      if (species !== 'all' && r.species !== species) return false
-      if (q) {
-        const hay = `${r.customer_name} ${r.item_name}`.toLowerCase()
-        if (!hay.includes(q)) return false
-      }
+    const out = sheets.filter(s => {
+      if (species !== 'all' && s.species !== species) return false
+      if (q && !s.customer_name.toLowerCase().includes(q)) return false
       return true
     })
-    const dir = sortDir === 'asc' ? 1 : -1
-    out.sort((a, b) => {
-      if (sortKey === 'weight_lbs') return (a.weight_lbs - b.weight_lbs) * dir
-      const av = String(a[sortKey] ?? ''), bv = String(b[sortKey] ?? '')
-      // Secondary key keeps a stable, readable order within the primary sort.
-      return (av.localeCompare(bv) || a.pack_date.localeCompare(b.pack_date) || a.customer_name.localeCompare(b.customer_name)) * dir
-    })
+    out.sort((a, b) =>
+      sortKey === 'customer'
+        ? a.customer_name.localeCompare(b.customer_name) || (a.date ?? '').localeCompare(b.date ?? '')
+        : (b.date ?? '').localeCompare(a.date ?? '') || a.customer_name.localeCompare(b.customer_name),
+    )
     return out
-  }, [rows, species, search, sortKey, sortDir])
+  }, [sheets, species, search, sortKey])
 
-  const stats = useMemo(() => ({
-    customers: new Set(filtered.map(r => r.customer_name)).size,
-    products:  new Set(filtered.map(r => r.item_name)).size,
-    lbs:       Math.round(filtered.reduce((s, r) => s + Number(r.weight_lbs), 0)),
-    lines:     filtered.length,
-  }), [filtered])
+  // Columns present in the filtered rows, in cut order. Cell = the detail
+  // (brats "German · 25 lb") when the sheet carries it, else a plain check.
+  const cols = useMemo(() => {
+    const set = new Set<string>()
+    for (const s of rows) for (const p of s.products) set.add(p.product)
+    return [...set].sort((a, b) => (colRank(a) - colRank(b)) || a.localeCompare(b))
+  }, [rows])
 
-  function setSort(k: SortKey) {
-    if (k === sortKey) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))
-    else { setSortKey(k); setSortDir(k === 'weight_lbs' || k === 'pack_date' ? 'desc' : 'asc') }
-  }
+  const cellFor = (s: Sheet, col: string): VAItem | undefined => s.products.find(p => p.product === col)
+  const colTotals = useMemo(() => cols.map(c => rows.filter(s => cellFor(s, c)).length), [cols, rows])
 
   function exportCSV() {
-    const out = filtered.map(r => ({
-      pack_date: r.pack_date, customer: r.customer_name, product: r.item_name,
-      species: r.species, plu: r.plu_number ?? '', weight_lbs: r.weight_lbs, boxes: r.boxes,
-    }))
+    const out = rows.map(s => {
+      const base: Record<string, unknown> = { date: s.date ?? '', customer: s.customer_name, species: s.species ?? '' }
+      for (const c of cols) { const it = cellFor(s, c); base[c] = it ? (it.detail || 'yes') : '' }
+      base.total = s.products.length
+      return base
+    })
     download(toCSV(out), `value-add_${species}_${from}_to_${to}.csv`)
   }
 
-  const arrow = (k: SortKey) => sortKey === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
-  const th = (label: string, k: SortKey, align: 'left' | 'right' = 'left'): React.ReactNode => (
-    <th onClick={() => setSort(k)} style={{ textAlign: align, padding: '0.6rem 0.8rem', color: C.tan, fontWeight: 700, whiteSpace: 'nowrap', cursor: 'pointer', userSelect: 'none' }}>
-      {label}{arrow(k)}
-    </th>
-  )
+  const totalCustomers = rows.length
+  const totalItems = rows.reduce((n, s) => n + s.products.length, 0)
 
   return (
     <div style={{ minHeight: '100vh', background: C.darkBrown }}>
@@ -158,12 +145,12 @@ export default function ValueAddReport() {
             Value-Add Output
           </h1>
           <p style={{ fontSize: '0.68rem', color: C.lightBrown, letterSpacing: '0.12em', textTransform: 'uppercase', margin: 0 }}>
-            Who got value-add product, by processing date
+            Who ordered value-add — off the cut sheets, by kill date
           </p>
         </div>
       </header>
 
-      <main style={{ padding: '1.5rem 2rem', maxWidth: 1200, margin: '0 auto', boxSizing: 'border-box' }}>
+      <main style={{ padding: '1.5rem 2rem', maxWidth: 1280, margin: '0 auto', boxSizing: 'border-box' }}>
 
         {/* Controls */}
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '1rem' }}>
@@ -175,65 +162,80 @@ export default function ValueAddReport() {
             {speciesList.filter(s => s !== 'Pork').map(s => <option key={s} value={s}>{speciesEmoji(s)} {s}</option>)}
             <option value="all">All species</option>
           </select>
+          <select value={sortKey} onChange={e => setSortKey(e.target.value as 'date' | 'customer')} style={{ ...INPUT, width: 150 }}>
+            <option value="date">Sort: kill date</option>
+            <option value="customer">Sort: customer</option>
+          </select>
           <input
-            placeholder="Search customer or product…"
+            placeholder="Search customer…"
             value={search} onChange={e => setSearch(e.target.value)}
-            style={{ ...INPUT, flex: 1, minWidth: 200 }}
+            style={{ ...INPUT, flex: 1, minWidth: 160 }}
           />
-          <button onClick={exportCSV} disabled={!filtered.length} style={{
-            background: filtered.length ? C.tan : C.medBrown, color: C.dark, border: 'none', borderRadius: 3,
-            padding: '0.5rem 1.1rem', fontSize: '0.82rem', fontWeight: 700, cursor: filtered.length ? 'pointer' : 'default',
+          <button onClick={exportCSV} disabled={!rows.length} style={{
+            background: rows.length ? C.tan : C.medBrown, color: C.dark, border: 'none', borderRadius: 3,
+            padding: '0.5rem 1.1rem', fontSize: '0.82rem', fontWeight: 700, cursor: rows.length ? 'pointer' : 'default',
           }}>⬇ CSV</button>
         </div>
 
-        {/* Summary */}
-        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1.25rem' }}>
-          <Stat n={stats.customers} label="Customers" color={C.cream} />
-          <Stat n={stats.products}  label="Products" color={C.tan} />
-          <Stat n={stats.lbs.toLocaleString()} label="Lbs value-add" color={C.green} />
-          <Stat n={stats.lines}     label="Line items" color={C.blue} />
-        </div>
-
-        {/* Table */}
+        {/* Matrix */}
         <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, overflow: 'hidden' }}>
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', minWidth: 760 }}>
-              <thead>
-                <tr style={{ background: 'rgba(166,120,90,0.12)' }}>
-                  {th('Processing date', 'pack_date')}
-                  {th('Customer', 'customer_name')}
-                  {th('Value-add product', 'item_name')}
-                  <th style={{ textAlign: 'left', padding: '0.6rem 0.8rem', color: C.tan, fontWeight: 700 }}>Species</th>
-                  {th('Weight', 'weight_lbs', 'right')}
-                  <th style={{ textAlign: 'right', padding: '0.6rem 0.8rem', color: C.tan, fontWeight: 700 }}>Boxes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading ? (
-                  <tr><td colSpan={6} style={{ padding: '2rem', textAlign: 'center', color: C.lightBrown }}>Loading…</td></tr>
-                ) : err ? (
-                  <tr><td colSpan={6} style={{ padding: '2rem', textAlign: 'center', color: C.amber }}>{err}</td></tr>
-                ) : !filtered.length ? (
-                  <tr><td colSpan={6} style={{ padding: '2rem', textAlign: 'center', color: C.lightBrown }}>No value-add product for these filters.</td></tr>
-                ) : filtered.map((r, i) => (
-                  <tr key={i} style={{ borderTop: '1px solid rgba(166,120,90,0.1)' }}>
-                    <td style={{ padding: '0.5rem 0.8rem', color: C.lightBrown, whiteSpace: 'nowrap', fontFamily: 'monospace' }}>{r.pack_date}</td>
-                    <td style={{ padding: '0.5rem 0.8rem', color: C.cream, fontWeight: 600 }}>{r.customer_name}</td>
-                    <td style={{ padding: '0.5rem 0.8rem', color: C.tan }}>{r.item_name}</td>
-                    <td style={{ padding: '0.5rem 0.8rem', color: C.lightBrown, whiteSpace: 'nowrap' }}>{speciesEmoji(r.species)} {r.species}</td>
-                    <td style={{ padding: '0.5rem 0.8rem', color: C.cream, textAlign: 'right', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{Number(r.weight_lbs).toFixed(1)} lb</td>
-                    <td style={{ padding: '0.5rem 0.8rem', color: C.lightBrown, textAlign: 'right', fontFamily: 'monospace' }}>{r.boxes}</td>
+            {loading ? (
+              <div style={{ padding: '2rem', textAlign: 'center', color: C.lightBrown }}>Loading…</div>
+            ) : err ? (
+              <div style={{ padding: '2rem', textAlign: 'center', color: C.amber }}>{err}</div>
+            ) : !rows.length ? (
+              <div style={{ padding: '2rem', textAlign: 'center', color: C.lightBrown }}>No value-add orders for these filters.</div>
+            ) : (
+              <table style={{ borderCollapse: 'collapse', fontSize: '0.82rem', minWidth: '100%' }}>
+                <thead>
+                  <tr style={{ background: 'rgba(166,120,90,0.14)' }}>
+                    <th style={{ position: 'sticky', left: 0, background: '#2a160a', textAlign: 'left', padding: '0.6rem 0.8rem', color: C.tan, fontWeight: 700, whiteSpace: 'nowrap', zIndex: 2 }}>Customer</th>
+                    <th style={{ textAlign: 'left', padding: '0.6rem 0.7rem', color: C.tan, fontWeight: 700, whiteSpace: 'nowrap' }}>Kill date</th>
+                    {cols.map(c => (
+                      <th key={c} style={{ padding: '0.6rem 0.6rem', color: C.cream, fontWeight: 700, whiteSpace: 'nowrap', borderLeft: '1px solid rgba(166,120,90,0.12)', fontSize: '0.76rem' }}>{c}</th>
+                    ))}
+                    <th style={{ padding: '0.6rem 0.7rem', color: C.tan, fontWeight: 800, textAlign: 'center', borderLeft: '1px solid rgba(166,120,90,0.3)' }}>Total</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {rows.map(s => (
+                    <tr key={s.id} style={{ borderTop: '1px solid rgba(166,120,90,0.1)' }}>
+                      <td style={{ position: 'sticky', left: 0, background: C.dark, padding: '0.45rem 0.8rem', color: C.cream, fontWeight: 600, whiteSpace: 'nowrap', zIndex: 1 }}>{s.customer_name}</td>
+                      <td style={{ padding: '0.45rem 0.7rem', color: C.lightBrown, whiteSpace: 'nowrap', fontFamily: 'monospace' }}>{s.date ?? '—'}</td>
+                      {cols.map(c => {
+                        const it = cellFor(s, c)
+                        return (
+                          <td key={c} style={{ padding: '0.45rem 0.6rem', textAlign: 'center', borderLeft: '1px solid rgba(166,120,90,0.08)', whiteSpace: 'nowrap', color: it?.detail ? C.tan : C.green }}>
+                            {it ? (it.detail ? <span style={{ fontSize: '0.72rem' }}>{it.detail}</span> : '✓') : <span style={{ color: 'rgba(166,120,90,0.18)' }}>·</span>}
+                          </td>
+                        )
+                      })}
+                      <td style={{ padding: '0.45rem 0.7rem', textAlign: 'center', color: C.cream, fontWeight: 800, borderLeft: '1px solid rgba(166,120,90,0.3)' }}>{s.products.length}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr style={{ borderTop: '2px solid rgba(166,120,90,0.4)', background: 'rgba(166,120,90,0.1)' }}>
+                    <td style={{ position: 'sticky', left: 0, background: '#2a160a', padding: '0.55rem 0.8rem', color: C.tan, fontWeight: 800, whiteSpace: 'nowrap', zIndex: 1 }}>Total · {totalCustomers}</td>
+                    <td />
+                    {colTotals.map((n, i) => (
+                      <td key={i} style={{ padding: '0.55rem 0.6rem', textAlign: 'center', color: C.amber, fontWeight: 800, borderLeft: '1px solid rgba(166,120,90,0.12)' }}>{n}</td>
+                    ))}
+                    <td style={{ padding: '0.55rem 0.7rem', textAlign: 'center', color: C.amber, fontWeight: 800, borderLeft: '1px solid rgba(166,120,90,0.3)' }}>{totalItems}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            )}
           </div>
         </div>
 
         <p style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.75rem', lineHeight: 1.6 }}>
-          Each row is one value-add product scanned into a customer&apos;s boxes on a processing date, weights summed.
-          Value-add = anything smoked, cured, seasoned, or made into a product (bacon, ham, sausage, brats, snack
-          sticks, summer sausage, salami, jerky…); plain fresh cuts are left out. Click a column heading to sort.
+          Built from the <strong style={{ color: C.tan }}>cut sheets</strong> — what each customer ordered, before
+          anything is made — one row per sheet. A check means they ordered it; smokehouse cells show the lbs and
+          flavor. The <strong style={{ color: C.tan }}>Total</strong> column counts a customer&apos;s value-add items;
+          the bottom row counts customers per product. Kill date is the linked appointment&apos;s harvest date, or the
+          date on the sheet. Beef &amp; lamb currently show the shared smokehouse and ground-sausage items only.
         </p>
       </main>
     </div>

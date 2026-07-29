@@ -1,6 +1,7 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { extractValueAdd } from '@/lib/valueAdd'
 
 export const dynamic = 'force-dynamic'
 
@@ -87,17 +88,43 @@ export async function GET(req: NextRequest) {
   }
 
   if (type === 'value_add') {
-    // Who got which value-add product, by pack (processing) date, from
-    // v_value_add_output. Filtered on pack_date.
-    let q = supabase
-      .from('v_value_add_output')
-      .select('customer_name,pack_date,plu_number,item_name,species,weight_lbs,pieces,boxes')
-      .order('pack_date', { ascending: false })
-    if (from) q = q.gte('pack_date', from)
-    if (to)   q = q.lte('pack_date', to)
-    const { data, error } = await q
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-    return NextResponse.json(data)
+    // Who ordered which value-add product, from the CUT SHEETS (what the
+    // customer asked for), not the packed scans — the source of truth before
+    // anything is made. One object per cut sheet with its value-add items; the
+    // page pivots them into a customer × product table.
+    const [{ data: cis, error: ciErr }, { data: appts }] = await Promise.all([
+      supabase.from('cutting_instructions').select('id, customer_name, species, data, status').neq('status', 'archived'),
+      supabase.from('harvest_appointments').select('harvest_date, customers'),
+    ])
+    if (ciErr) return NextResponse.json({ error: ciErr.message }, { status: 500 })
+
+    // ci id → scheduled harvest date, from the appointment slot it's linked to.
+    const dateByCi = new Map<string, string>()
+    for (const a of appts ?? []) {
+      for (const c of (a.customers as Array<Record<string, unknown>> ?? [])) {
+        const id = String(c?.linked_cutting_instruction_id ?? '')
+        if (id && a.harvest_date) dateByCi.set(id, a.harvest_date as string)
+      }
+    }
+
+    const rows = (cis ?? []).map(ci => {
+      const data = ci.data as { killDate?: string } | null
+      const kd = data?.killDate
+      const date = dateByCi.get(ci.id as string) ?? (kd && kd !== 'Unknown' ? kd : null)
+      return {
+        id:            ci.id,
+        customer_name: ci.customer_name,
+        species:       ci.species,
+        date,
+        products:      extractValueAdd(ci.species as string, ci.data),
+      }
+    }).filter(r =>
+      r.products.length > 0 &&
+      (!from || (r.date && r.date >= from)) &&
+      (!to   || (r.date && r.date <= to))
+    )
+
+    return NextResponse.json(rows)
   }
 
   if (type === 'appointments') {
