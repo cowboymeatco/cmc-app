@@ -11,7 +11,7 @@ const C = {
   cream:      '#F2E8D9',
 }
 
-type Lane = 'receiving' | 'harvest' | 'processing' | 'smokehouse' | 'retail'
+type Lane = 'receiving' | 'harvest' | 'processing' | 'smokehouse' | 'retail' | 'pickup'
 type View = 'week' | 'month' | 'quarter'
 
 interface CalEvent {
@@ -24,6 +24,7 @@ const LANES: { key: Lane; label: string; emoji: string; color: string }[] = [
   { key: 'processing', label: 'Processing', emoji: '🔪', color: '#FBBF24' },
   { key: 'smokehouse', label: 'Smokehouse', emoji: '🔥', color: '#FB923C' },
   { key: 'retail',     label: 'Retail',     emoji: '🛒', color: '#34D399' },
+  { key: 'pickup',     label: 'Pickup',     emoji: '💵', color: '#A78BFA' },
 ]
 const LANE_COLOR: Record<Lane, string> = Object.fromEntries(LANES.map(l => [l.key, l.color])) as Record<Lane, string>
 
