@@ -21,7 +21,7 @@ const INPUT: React.CSSProperties = {
   outline: 'none', boxSizing: 'border-box',
 }
 
-interface VAItem { product: string; category: string; detail?: string }
+interface VAItem { product: string; category: string; detail?: string; qty?: number }
 interface Sheet {
   id:            string
   customer_name: string
@@ -116,21 +116,31 @@ export default function ValueAddReport() {
     return [...set].sort((a, b) => (colRank(a) - colRank(b)) || a.localeCompare(b))
   }, [rows])
 
-  const cellFor = (s: Sheet, col: string): VAItem | undefined => s.products.find(p => p.product === col)
-  const colTotals = useMemo(() => cols.map(c => rows.filter(s => cellFor(s, c)).length), [cols, rows])
+  const itemsFor = (s: Sheet, col: string): VAItem[] => s.products.filter(p => p.product === col)
+  const qtyOf    = (it: VAItem) => it.qty ?? 1
+  const rowQty   = (s: Sheet) => s.products.reduce((n, p) => n + qtyOf(p), 0)
+  // Cell text: a bare quantity for plain products ("2"), qty×detail for the ones
+  // that carry a spec ("2× Cut in Half", "German · 25 lb"), joined when a product
+  // has more than one variant on the sheet.
+  const cellText = (items: VAItem[]) =>
+    items.map(it => it.detail ? (qtyOf(it) > 1 ? `${qtyOf(it)}× ${it.detail}` : it.detail) : String(qtyOf(it))).join('  /  ')
+  const colTotals = useMemo(
+    () => cols.map(c => rows.reduce((n, s) => n + itemsFor(s, c).reduce((m, it) => m + qtyOf(it), 0), 0)),
+    [cols, rows],
+  )
 
   function exportCSV() {
     const out = rows.map(s => {
       const base: Record<string, unknown> = { date: s.date ?? '', customer: s.customer_name, species: s.species ?? '' }
-      for (const c of cols) { const it = cellFor(s, c); base[c] = it ? (it.detail || 'yes') : '' }
-      base.total = s.products.length
+      for (const c of cols) { const items = itemsFor(s, c); base[c] = items.length ? cellText(items) : '' }
+      base.total = rowQty(s)
       return base
     })
     download(toCSV(out), `value-add_${species}_${from}_to_${to}.csv`)
   }
 
   const totalCustomers = rows.length
-  const totalItems = rows.reduce((n, s) => n + s.products.length, 0)
+  const totalItems = rows.reduce((n, s) => n + rowQty(s), 0)
 
   return (
     <div style={{ minHeight: '100vh', background: C.darkBrown }}>
@@ -204,14 +214,17 @@ export default function ValueAddReport() {
                       <td style={{ position: 'sticky', left: 0, background: C.dark, padding: '0.45rem 0.8rem', color: C.cream, fontWeight: 600, whiteSpace: 'nowrap', zIndex: 1 }}>{s.customer_name}</td>
                       <td style={{ padding: '0.45rem 0.7rem', color: C.lightBrown, whiteSpace: 'nowrap', fontFamily: 'monospace' }}>{s.date ?? '—'}</td>
                       {cols.map(c => {
-                        const it = cellFor(s, c)
+                        const items = itemsFor(s, c)
+                        const hasDetail = items.some(it => it.detail)
                         return (
-                          <td key={c} style={{ padding: '0.45rem 0.6rem', textAlign: 'center', borderLeft: '1px solid rgba(166,120,90,0.08)', whiteSpace: 'nowrap', color: it?.detail ? C.tan : C.green }}>
-                            {it ? (it.detail ? <span style={{ fontSize: '0.72rem' }}>{it.detail}</span> : '✓') : <span style={{ color: 'rgba(166,120,90,0.18)' }}>·</span>}
+                          <td key={c} style={{ padding: '0.45rem 0.6rem', textAlign: 'center', borderLeft: '1px solid rgba(166,120,90,0.08)', whiteSpace: 'nowrap', color: hasDetail ? C.tan : C.green }}>
+                            {items.length
+                              ? <span style={{ fontSize: hasDetail ? '0.72rem' : '0.86rem', fontWeight: hasDetail ? 400 : 700 }}>{cellText(items)}</span>
+                              : <span style={{ color: 'rgba(166,120,90,0.18)' }}>·</span>}
                           </td>
                         )
                       })}
-                      <td style={{ padding: '0.45rem 0.7rem', textAlign: 'center', color: C.cream, fontWeight: 800, borderLeft: '1px solid rgba(166,120,90,0.3)' }}>{s.products.length}</td>
+                      <td style={{ padding: '0.45rem 0.7rem', textAlign: 'center', color: C.cream, fontWeight: 800, borderLeft: '1px solid rgba(166,120,90,0.3)' }}>{rowQty(s)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -232,10 +245,12 @@ export default function ValueAddReport() {
 
         <p style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.75rem', lineHeight: 1.6 }}>
           Built from the <strong style={{ color: C.tan }}>cut sheets</strong> — what each customer ordered, before
-          anything is made — one row per sheet. A check means they ordered it; smokehouse cells show the lbs and
-          flavor. The <strong style={{ color: C.tan }}>Total</strong> column counts a customer&apos;s value-add items;
-          the bottom row counts customers per product. Kill date is the linked appointment&apos;s harvest date, or the
-          date on the sheet. Beef &amp; lamb currently show the shared smokehouse and ground-sausage items only.
+          anything is made — one row per sheet. Each cell shows <strong style={{ color: C.tan }}>how many</strong> of that
+          product they ordered — a whole hog has two bellies and two hams, so bacon and cured ham often read 2; ham shows
+          its cut and smokehouse cells show the lbs and flavor. The <strong style={{ color: C.tan }}>Total</strong> column
+          sums a customer&apos;s value-add pieces; the bottom row totals the pieces of each product across all customers.
+          Kill date is the linked appointment&apos;s harvest date, or the date on the sheet. Beef &amp; lamb currently
+          show the shared smokehouse and ground-sausage items only.
         </p>
       </main>
     </div>

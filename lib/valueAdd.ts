@@ -12,6 +12,7 @@ export interface ValueAddItem {
   product:  string   // e.g. "Bacon", "Cured & Smoked Ham", "Snack Sticks"
   category: string   // Bacon | Ham | Smoked | Sausage | Smokehouse
   detail?:  string   // flavor / lbs / cheese, when the sheet carries it
+  qty?:     number   // how many of this exact line (set by extractValueAdd)
 }
 
 type Json = Record<string, unknown>
@@ -80,11 +81,23 @@ function sharedValueAdd(d: Json): ValueAddItem[] {
 
 function porkValueAdd(d: Json): ValueAddItem[] {
   const out: ValueAddItem[] = []
+  // A whole hog (incl. the A|B and A|B|C|D shares — one card for the whole
+  // animal) yields TWO of each paired primal; a half/quarter yields one. The
+  // sheet records a paired primal once when both sides are cut the same ("same"
+  // mode) — that one choice covers both sides, so it counts as perAnimal. In
+  // "split" mode each side is its own entry (cut2/style2 set) and counts as one.
+  const perAnimal = str(d.portion).startsWith('whole') ? 2 : 1
+
   const belly = asObj(d.belly)
-  for (const cut of [str(belly.cut), str(belly.cut2)]) {
-    if (cut === 'bacon') out.push({ product: 'Bacon', category: 'Bacon' })
+  if (str(belly.cut2)) {
+    for (const cut of [str(belly.cut), str(belly.cut2)]) {
+      if (cut === 'bacon') out.push({ product: 'Bacon', category: 'Bacon', qty: 1 })
+    }
+  } else if (str(belly.cut) === 'bacon') {
+    out.push({ product: 'Bacon', category: 'Bacon', qty: perAnimal })
   }
   // shoulder.addons is an array of plain strings ('shoulder-bacon', 'pulled-pork').
+  // These are single per-shoulder flags, not paired counts — one each.
   const shoulderAddons = (Array.isArray(asObj(d.shoulder).addons) ? asObj(d.shoulder).addons as unknown[] : []).map(String)
   if (shoulderAddons.includes('shoulder-bacon')) out.push({ product: 'Shoulder Bacon', category: 'Bacon' })
   if (shoulderAddons.includes('pulled-pork'))    out.push({ product: 'Pulled Pork', category: 'Smoked' })
@@ -92,8 +105,12 @@ function porkValueAdd(d: Json): ValueAddItem[] {
   const ham = asObj(d.ham)
   // Pair each ham's style with its own cut (a split order can steak the fresh
   // ham while the cured one stays whole), so the cured ham carries its cut style.
-  for (const [style, cut] of [[ham.style, ham.cut], [ham.style2, ham.cut2]] as [unknown, unknown][]) {
-    if (str(style) === 'cured-smoked') out.push({ product: 'Cured & Smoked Ham', category: 'Ham', detail: hamCutLabel(str(cut)) })
+  if (str(ham.style2)) {
+    for (const [style, cut] of [[ham.style, ham.cut], [ham.style2, ham.cut2]] as [unknown, unknown][]) {
+      if (str(style) === 'cured-smoked') out.push({ product: 'Cured & Smoked Ham', category: 'Ham', detail: hamCutLabel(str(cut)), qty: 1 })
+    }
+  } else if (str(ham.style) === 'cured-smoked') {
+    out.push({ product: 'Cured & Smoked Ham', category: 'Ham', detail: hamCutLabel(str(ham.cut)), qty: perAnimal })
   }
   // Hocks come the same way as the hams — cured & smoked when the ham is.
   if ([str(ham.style), str(ham.style2)].includes('cured-smoked') && str(asObj(d.hocks).cut) !== 'grind') {
@@ -114,12 +131,17 @@ export function extractValueAdd(species: string | null | undefined, data: unknow
   const d = asObj(data)
   const sp = (species ?? str(d.species)).toLowerCase()
   const items = sp === 'pork' || sp === 'hog' ? porkValueAdd(d) : sharedValueAdd(d)
-  // Collapse exact duplicates (same product + detail) that can arise from
-  // split primals both landing on the same choice.
-  const seen = new Set<string>()
-  return items.filter(it => {
-    const k = `${it.product}__${it.detail ?? ''}`
-    if (seen.has(k)) return false
-    seen.add(k); return true
-  })
+  // Roll up identical lines (same product + detail) into a count. A whole hog
+  // has two bellies and two hams, so "bacon" or "cured ham" legitimately lands
+  // twice — Charlie wants that shown as a quantity (2 bacon, 2 ham), not
+  // collapsed to a single check (2026-07-30).
+  const byKey = new Map<string, ValueAddItem>()
+  for (const it of items) {
+    const k   = `${it.product}__${it.detail ?? ''}`
+    const add = it.qty ?? 1
+    const ex  = byKey.get(k)
+    if (ex) ex.qty = (ex.qty ?? 1) + add
+    else byKey.set(k, { ...it, qty: add })
+  }
+  return [...byKey.values()]
 }
