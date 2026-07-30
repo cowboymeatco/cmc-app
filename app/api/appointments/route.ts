@@ -182,6 +182,7 @@ export async function POST(req: NextRequest) {
       species:           body.species,
       head_count:        body.head_count ?? 1,
       source:            body.source ?? '',
+      producer_contact:  body.producer_contact ?? '',
       notes:             body.notes ?? '',
       status:            body.status ?? 'Booked',
       linked_carcass_id: body.linked_carcass_id ?? '',

@@ -50,6 +50,7 @@ export interface HarvestAppointment {
   created_at:       string
   harvest_date:     string          // ISO date string
   receive_date?:    string          // scheduled arrival; defaults to the day before harvest, editable
+  producer_contact?: string         // producer phone/email for scheduling contact
   species:          Species
   head_count:       number
   source:           string

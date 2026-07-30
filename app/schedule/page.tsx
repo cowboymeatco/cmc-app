@@ -147,7 +147,7 @@ function blankCustomer() {
   return { id: crypto.randomUUID(), customer_name: '', portion: 'Whole', payment_responsibility: 'producer' as const, contact_preference: 'Email', contact_value: '', linked_cutting_instruction_id: '', reminder_last_sent_at: null, reminder_count: 0 }
 }
 function blankAppt(date?: string): Partial<HarvestAppointment> {
-  return { harvest_date: date ?? isoDate(), receive_date: '', species: 'Beef', head_count: 1, source: '', notes: '', status: 'Booked', linked_carcass_id: '', customers: [blankCustomer()] }
+  return { harvest_date: date ?? isoDate(), receive_date: '', species: 'Beef', head_count: 1, source: '', producer_contact: '', notes: '', status: 'Booked', linked_carcass_id: '', customers: [blankCustomer()] }
 }
 
 // The receiving default — day before harvest. Some producers bring in the day
@@ -988,6 +988,10 @@ function Modal({ editing, saving, onChange, onSave, onClose }: {
 
         <Field label="Source / Ranch / Producer">
           <SourceInput value={editing.source??''} onChange={v=>onChange({...editing,source:v})} />
+        </Field>
+        <div style={{height:'0.75rem'}}/>
+        <Field label="Producer Phone / Email">
+          <input value={editing.producer_contact??''} onChange={e=>onChange({...editing,producer_contact:e.target.value})} style={inputStyle()} placeholder="Phone or email — for scheduling contact" />
         </Field>
         <div style={{height:'0.75rem'}}/>
         <Field label="Notes">
