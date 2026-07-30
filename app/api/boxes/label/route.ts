@@ -144,19 +144,41 @@ async function resolveCuttingInstruction(box: BoxRecord): Promise<CIMatch | null
   return pick(matches[0], 'name')
 }
 
+type WIPIntentHit = {
+  label:  string
+  source: string
+  // Full order list off the cut card, for the tag's scope block. The assigned
+  // order is flagged so the crew can see where this box lands in the whole.
+  orders: { label: string; lbs: number | null; current: boolean }[]
+}
+
 // Decide what this box is for and remember it. Assignment is sticky: once a box
 // has started filling an order, reprinting its tag must not move it.
-async function resolveWIPIntent(box: BoxRecord, items: { name: string }[], boxLbs: number): Promise<{ label: string; source: string } | null> {
+async function resolveWIPIntent(box: BoxRecord, items: { name: string }[], boxLbs: number): Promise<WIPIntentHit | null> {
+  const product = classifyBoxProduct(items)
+
   // Already assigned on an earlier print — reuse it verbatim. No source note:
   // the decision is settled, and how it was first reached is no longer news.
-  if (box.wip_intent_label) return { label: box.wip_intent_label, source: '' }
+  // The order list still resolves fresh — it's scope, not assignment, and a
+  // two-flavor order must show both flavors even on a reprint.
+  if (box.wip_intent_label) {
+    let orders: WIPIntentHit['orders'] = []
+    if (product === 'trim') {
+      const match = await resolveCuttingInstruction(box)
+      if (match) {
+        orders = parseSmokehouseOrders(match.data)
+          .map(o => ({ label: o.label, lbs: o.lbs, current: o.key === box.wip_intent_key }))
+      }
+    }
+    return { label: box.wip_intent_label, source: '', orders }
+  }
 
   const match = await resolveCuttingInstruction(box)
   if (!match) return null
   const data = match.data
 
-  const product = classifyBoxProduct(items)
   let assignment: { key: string; label: string } | null = null
+  let allOrders: ReturnType<typeof parseSmokehouseOrders> = []
 
   if (product === 'round') {
     const jerky = roundJerkyLabel(data)
@@ -168,6 +190,7 @@ async function resolveWIPIntent(box: BoxRecord, items: { name: string }[], boxLb
   // must not consume the customer's brat order.
   if (!assignment && product === 'trim') {
     const orders = parseSmokehouseOrders(data)
+    allOrders = orders
     if (orders.length) {
       // What the customer's other boxes have already committed to each order.
       const siblings = await supabase
@@ -199,7 +222,11 @@ async function resolveWIPIntent(box: BoxRecord, items: { name: string }[], boxLb
       .eq('id', box.id)
   }
 
-  return { label: assignment.label, source: match.via }
+  return {
+    label:  assignment.label,
+    source: match.via,
+    orders: allOrders.map(o => ({ label: o.label, lbs: o.lbs, current: o.key === assignment!.key })),
+  }
 }
 
 export async function GET(req: NextRequest) {
@@ -259,7 +286,7 @@ export async function GET(req: NextRequest) {
     const base = wipDataFromBox(box, scans, animal)
     const hit  = await resolveWIPIntent(box, base.items, base.weightLbs ?? 0)
     html = generateWIPLabel(
-      hit ? { ...base, intent: hit.label, intentSource: hit.source } : base,
+      hit ? { ...base, intent: hit.label, intentSource: hit.source, orders: hit.orders } : base,
       flags)
   } else if (useCMB) {
     html = generateCMBLabel(box, scans, { productGtin: searchParams.get('product'), lot: searchParams.get('lot') })

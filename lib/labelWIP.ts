@@ -21,6 +21,12 @@ export interface WIPTagData {
   // How the intent was reached, when it came off a cut card. A name match is
   // worth showing — it's the one that can pick the wrong customer.
   intentSource?:     string | null
+  // The customer's FULL smokehouse order list off the cut card. When they
+  // ordered more than one thing (two brat flavors), the tag shows all of them —
+  // the intent line says what this box starts, the list says the whole scope,
+  // so value add never seasons a single-flavor batch against a two-flavor order
+  // (Charlie, 2026-07-30).
+  orders?:           { label: string; lbs: number | null; current: boolean }[]
 }
 
 export interface WIPJob {
@@ -155,6 +161,16 @@ export function generateWIPLabel(data: WIPTagData, flags: LabelFlags = DEFAULT_F
 
   const exemptHTML = flags.retail_exempt ? `<div class="exempt">RETAIL EXEMPT</div>` : ''
 
+  // Only worth ink when there's more than one order — a single order is already
+  // the intent line. The assigned one gets the arrow so the list reads as
+  // "here's everything, this box starts here".
+  const orderRows = (data.orders?.length ?? 0) > 1
+    ? `<div class="orders-k">CUSTOMER'S SMOKEHOUSE ORDERS</div>
+       <div class="orders">${(data.orders ?? []).map(o =>
+         `<div class="order${o.current ? ' cur' : ''}"><span>${o.current ? '&#9656; ' : ''}${esc(o.label)}</span><span>${o.lbs != null ? `${o.lbs} lb` : ''}</span></div>`
+       ).join('')}</div>`
+    : ''
+
   const itemRows = data.items.length > 0
     ? `<hr><div class="items">${data.items.map(i =>
         `<div class="item"><span><b>(${i.count})</b> ${esc(i.name)}</span><span>${i.weight.toFixed(2)} lb</span></div>`
@@ -198,6 +214,11 @@ export function generateWIPLabel(data: WIPTagData, flags: LabelFlags = DEFAULT_F
              font-family: 'Arial Narrow', Arial, sans-serif; font-size: 10.5pt; padding: 0.5px 0; }
   .srcnote { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 7.5pt; text-align: center;
              font-style: italic; margin: -1px 0 3px; }
+  .orders-k{ font-size: 8pt; font-weight: bold; letter-spacing: 0.1em; text-align: center; margin-top: 2px; }
+  .orders  { border: 1.5px solid #000; border-radius: 3px; padding: 2px 4px; margin-bottom: 3px; }
+  .order   { display: flex; justify-content: space-between; align-items: baseline;
+             font-family: 'Arial Narrow', Arial, sans-serif; font-size: 10.5pt; padding: 0.5px 0; }
+  .order.cur { font-weight: bold; font-family: Arial, sans-serif; }
   .batch   { text-align: center; font-size: 10pt; margin-top: 3px; }
   .batch b { font-family: monospace; letter-spacing: 0.1em; font-size: 12pt; }
   .barcode { text-align: center; margin: 3px 0 1px; }
@@ -223,6 +244,7 @@ export function generateWIPLabel(data: WIPTagData, flags: LabelFlags = DEFAULT_F
     : data.intentSource
       ? `<div class="srcnote">from ${esc(data.intentSource)}-linked cut card</div>`
       : ''}
+  ${orderRows}
 
   ${inspection}
 
