@@ -45,10 +45,13 @@ export async function GET(req: NextRequest) {
 
   const events: CalEvent[] = []
 
-  const [animals, boxes, appts, sessions, cooks, retail] = await Promise.all([
-    supabase.from('animal_receiving_log')
-      .select('id, received_at, ear_tag, sex, breed, status, appointment_id')
-      .gte('received_at', `${from}T00:00:00`).lte('received_at', `${to}T23:59:59`),
+  const [recvAppts, boxes, appts, sessions, cooks, retail] = await Promise.all([
+    // Receiving — animals scheduled to arrive, off the receiving calendar
+    // (appointment.receive_date, default the day before harvest). Charlie:
+    // "Receiving should come off of the receiving calendar."
+    supabase.from('harvest_appointments')
+      .select('id, receive_date, source, species, head_count, status')
+      .gte('receive_date', from).lte('receive_date', to),
     supabase.from('box_receiving_log')
       .select('id, received_at, vendor, product, quantity, status')
       .gte('received_at', from).lte('received_at', to),
@@ -68,25 +71,15 @@ export async function GET(req: NextRequest) {
       .gte('due_date', from).lte('due_date', to),
   ])
 
-  // A received animal carries no producer of its own — resolve it through the
-  // harvest appointment it came in on (Charlie: show the producer name, not
-  // "Animal in", which is implied).
-  const apptIds = [...new Set((animals.data ?? []).map(r => r.appointment_id).filter(Boolean) as string[])]
-  const producerByAppt = new Map<string, string>()
-  if (apptIds.length) {
-    const { data } = await supabase.from('harvest_appointments').select('id, source').in('id', apptIds)
-    for (const a of data ?? []) if (a.source) producerByAppt.set(String(a.id), a.source as string)
-  }
-
-  for (const r of animals.data ?? []) {
-    const d = day(r.received_at as string)
+  for (const r of recvAppts.data ?? []) {
+    const d = day(r.receive_date as string)
     if (!d) continue
-    const producer = (r.appointment_id && producerByAppt.get(String(r.appointment_id))) || ''
-    const detail = [r.sex, r.breed, r.ear_tag].filter(Boolean).join(' ')
+    const head = r.head_count ? `${r.head_count} ` : ''
     events.push({
-      id: `animal-${r.id}`, lane: 'receiving', date: d,
-      title: producer ? `🐄 ${producer}` : `🐄 ${r.ear_tag || 'Animal in'}`,
-      subtitle: detail || undefined, status: (r.status as string) ?? undefined, href: LANE_HREF.receiving,
+      id: `recv-${r.id}`, lane: 'receiving', date: d,
+      title: `🐄 ${r.source || r.species || 'Arrival'}`,
+      subtitle: `${head}${r.species || ''}`.trim() || undefined,
+      status: (r.status as string) ?? undefined, href: LANE_HREF.receiving,
     })
   }
 
