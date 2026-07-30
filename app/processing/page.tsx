@@ -33,6 +33,7 @@ interface PluItem {
   sell_by_weight:     boolean
   active:             boolean
   notes:              string
+  photo_url:          string
   updated_at:         string
   raw_data:           Record<string, string>
   // This PLU's RT89 record as captured from a scale backup. Carries the fields
@@ -128,6 +129,24 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
   )
 }
 
+// Shrink a photo to <= `max` px on its longest side and re-encode as JPEG,
+// client-side, so a 12 MP phone shot isn't stored (or downloaded by shoppers)
+// at full size. Keeps the shop fast on mobile.
+async function resizeImage(file: File, max = 1000): Promise<Blob> {
+  const bitmap = await createImageBitmap(file)
+  const scale  = Math.min(1, max / Math.max(bitmap.width, bitmap.height))
+  const w = Math.round(bitmap.width * scale)
+  const h = Math.round(bitmap.height * scale)
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('canvas unavailable')
+  ctx.drawImage(bitmap, 0, 0, w, h)
+  return await new Promise<Blob>((resolve, reject) =>
+    canvas.toBlob(b => (b ? resolve(b) : reject(new Error('resize failed'))), 'image/jpeg', 0.85))
+}
+
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // EDIT PANEL
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -141,8 +160,45 @@ function EditPanel({ item, onSaved, onDeleted, onClose }: {
   const [saving, setSaving]   = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [error, setError]     = useState<string | null>(null)
-  const [editTab, setEditTab] = useState<'basic' | 'pricing' | 'label' | 'connections'>('basic')
+  const [editTab, setEditTab] = useState<'basic' | 'pricing' | 'label' | 'photo' | 'connections'>('basic')
+  const [photoBusy, setPhotoBusy] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
   const isNew = !form.id
+
+  // Photos upload immediately (resized client-side) and write straight to
+  // plu_items.photo_url, so the thumbnail reflects saved state — Cancel won't
+  // undo a photo, same as any image field.
+  async function onPhotoPick(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file || !form.id) return
+    setPhotoBusy(true); setError(null)
+    try {
+      const blob = await resizeImage(file)
+      const fd = new FormData()
+      fd.append('id', form.id)
+      fd.append('file', blob, 'photo.jpg')
+      const res = await fetch('/api/processing/photo', { method: 'POST', body: fd })
+      const data = await res.json()
+      if (!res.ok || data?.error) setError(data?.error ?? 'Photo upload failed.')
+      else setForm(p => ({ ...p, photo_url: data.url }))
+    } catch {
+      setError('Photo upload failed.')
+    }
+    setPhotoBusy(false)
+  }
+
+  async function removePhoto() {
+    if (!form.id) return
+    setPhotoBusy(true); setError(null)
+    const fd = new FormData()
+    fd.append('id', form.id)
+    fd.append('remove', 'true')
+    const res = await fetch('/api/processing/photo', { method: 'POST', body: fd })
+    if (res.ok) setForm(p => ({ ...p, photo_url: '' }))
+    else setError('Could not remove photo.')
+    setPhotoBusy(false)
+  }
 
   const f = (k: keyof PluItem) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm(p => ({ ...p, [k]: e.target.value }))
@@ -186,7 +242,7 @@ function EditPanel({ item, onSaved, onDeleted, onClose }: {
     onDeleted(form.id)
   }
 
-  const editTabs = ['basic', 'pricing', 'label', 'connections'] as const
+  const editTabs = ['basic', 'pricing', 'label', 'photo', 'connections'] as const
 
   return (
     <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -283,6 +339,36 @@ function EditPanel({ item, onSaved, onDeleted, onClose }: {
               <textarea style={{ ...INPUT, height: 80, resize: 'vertical' }} value={form.label_message} onChange={f('label_message')} placeholder="Message printed on scale label" />
             </Field>
           </div>
+        )}
+
+        {/* PHOTO */}
+        {editTab === 'photo' && (
+          isNew ? (
+            <p style={{ color: C.lightBrown, fontSize: '0.85rem' }}>Create the PLU first, then come back to add a photo.</p>
+          ) : (
+            <div style={{ display: 'flex', gap: '1.25rem', alignItems: 'flex-start' }}>
+              <div style={{ width: 150, height: 150, borderRadius: 6, border: '1px solid rgba(166,120,90,0.35)', background: 'rgba(255,255,255,0.04)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 }}>
+                {form.photo_url
+                  // eslint-disable-next-line @next/next/no-img-element
+                  ? <img src={form.photo_url} alt={form.item_name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  : <span style={{ color: C.lightBrown, fontSize: '0.75rem' }}>No photo</span>}
+              </div>
+              <div style={{ flex: 1 }}>
+                <p style={{ color: C.lightBrown, fontSize: '0.8rem', lineHeight: 1.5, margin: '0 0 0.85rem' }}>
+                  A generic photo of this cut. It shows on the customer shop at portal.cowboymeats.com for any product tied to this PLU. Large images are resized automatically.
+                </p>
+                <input ref={fileRef} type="file" accept="image/*" onChange={onPhotoPick} style={{ display: 'none' }} />
+                <div style={{ display: 'flex', gap: '0.6rem' }}>
+                  <button onClick={() => fileRef.current?.click()} disabled={photoBusy} style={BTN(C.tan)}>
+                    {photoBusy ? 'Working…' : form.photo_url ? 'Replace Photo' : 'Upload Photo'}
+                  </button>
+                  {form.photo_url && (
+                    <button onClick={removePhoto} disabled={photoBusy} style={{ ...BTN('transparent', C.red), border: `1px solid ${C.red}` }}>Remove</button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )
         )}
 
         {/* CONNECTIONS */}
@@ -392,7 +478,7 @@ function BrowserTab() {
       is_retail: false, is_wholesale: false, clover_item_id: '', quickbooks_item_id: '', upc: '', ingredients: '', label_message: '',
       // No skeleton: the scale has never seen this PLU, so the export falls back
       // to the canonical new-PLU defaults — which is the right layout for it.
-      sell_by_weight: true, active: true, notes: '', updated_at: '', raw_data: {}, ht_skeleton: null,
+      sell_by_weight: true, active: true, notes: '', photo_url: '', updated_at: '', raw_data: {}, ht_skeleton: null,
     })
   }
 
