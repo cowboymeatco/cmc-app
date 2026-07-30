@@ -15,7 +15,7 @@ type Lane = 'receiving' | 'harvest' | 'processing' | 'smokehouse' | 'retail'
 type View = 'week' | 'month' | 'quarter'
 
 interface CalEvent {
-  id: string; lane: Lane; date: string; title: string; subtitle?: string; status?: string; href?: string
+  id: string; lane: Lane; date: string; title: string; subtitle?: string; status?: string; href?: string; planned?: boolean
 }
 
 const LANES: { key: Lane; label: string; emoji: string; color: string }[] = [
@@ -188,7 +188,13 @@ export default function MasterCalendar() {
 // ── One event pill (clickable → its detail page) ───────────────────────────────
 function EventPill({ e, showSub }: { e: CalEvent; showSub: boolean }) {
   const tip = `${e.title}${e.subtitle ? ` — ${e.subtitle}` : ''}${e.status ? ` (${e.status})` : ''}`
-  const style: React.CSSProperties = {
+  // Planned items read as an outline (dashed, hollow) so they're clearly the
+  // schedule, not an actual record that happened.
+  const style: React.CSSProperties = e.planned ? {
+    display: 'block', border: `1px dashed ${LANE_COLOR[e.lane]}`, background: 'transparent',
+    borderRadius: 3, padding: '0 4px', fontSize: '0.68rem', color: LANE_COLOR[e.lane], textDecoration: 'none',
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontStyle: 'italic',
+  } : {
     display: 'block', borderLeft: `3px solid ${LANE_COLOR[e.lane]}`, background: `${LANE_COLOR[e.lane]}18`,
     borderRadius: 3, padding: '1px 4px', fontSize: '0.68rem', color: C.cream, textDecoration: 'none',
     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
