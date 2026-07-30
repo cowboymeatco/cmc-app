@@ -14,7 +14,7 @@ export async function GET() {
 
   const sessions = (sessionRows ?? []) as Array<{
     id: string; customer_name: string; session_date: string
-    status: string; notes: string; created_at: string; box_type: string | null
+    status: string; notes: string; created_at: string; box_type: string | null; pickup_date: string | null
   }>
   const sessionMap = new Map(sessions.map(s => [`${s.customer_name}|${s.session_date}`, s]))
 
@@ -67,7 +67,7 @@ export async function GET() {
   // 4. Merge
   const result: Array<{
     id: string | null; customer_name: string; session_date: string
-    status: string; notes: string; box_type: string | null
+    status: string; notes: string; box_type: string | null; pickup_date: string | null
     box_count: number; closed_count: number; total_weight: number; total_cuts: number
     animals: string[]
   }> = []
@@ -76,14 +76,14 @@ export async function GET() {
   for (const s of sessions) {
     const key   = `${s.customer_name}|${s.session_date}`
     const stats = boxGroups.get(key) ?? { box_count: 0, closed_count: 0, total_weight: 0, total_cuts: 0 }
-    result.push({ id: s.id, customer_name: s.customer_name, session_date: s.session_date, status: s.status, notes: s.notes, box_type: s.box_type ?? null, ...stats, animals: animalGroups.get(key) ?? [] })
+    result.push({ id: s.id, customer_name: s.customer_name, session_date: s.session_date, status: s.status, notes: s.notes, box_type: s.box_type ?? null, pickup_date: s.pickup_date ?? null, ...stats, animals: animalGroups.get(key) ?? [] })
     seen.add(key)
   }
   // Box groups with no session record yet â†’ derive status
   for (const [key, stats] of boxGroups) {
     if (!seen.has(key)) {
       const { customer_name, session_date, ...rest } = stats
-      result.push({ id: null, customer_name, session_date, status: 'scanning', notes: '', box_type: null, ...rest, animals: animalGroups.get(key) ?? [] })
+      result.push({ id: null, customer_name, session_date, status: 'scanning', notes: '', box_type: null, pickup_date: null, ...rest, animals: animalGroups.get(key) ?? [] })
     }
   }
 

@@ -67,6 +67,7 @@ interface SessionWithStats {
   status:         SessionStatus
   notes:          string
   box_type?:      BoxType | null
+  pickup_date?:   string | null
   box_count:      number
   closed_count:   number
   total_weight:   number
@@ -654,6 +655,19 @@ export default function ScannerPage() {
     await fetch('/api/processing/sessions', {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ customer_name: customer, session_date: date, status }),
+    })
+  }
+
+  // Schedule (or clear) the customer pickup date for a finished order — shows on
+  // the master calendar Pickup lane so we know who's collecting when.
+  async function setPickupDate(s: SessionWithStats, pickup_date: string) {
+    const next = pickup_date || null
+    setSessions(prev => prev.map(x =>
+      x.customer_name === s.customer_name && x.session_date === s.session_date ? { ...x, pickup_date: next } : x
+    ))
+    await fetch('/api/processing/sessions', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customer_name: s.customer_name, session_date: s.session_date, pickup_date: next }),
     })
   }
 
@@ -1367,6 +1381,15 @@ export default function ScannerPage() {
               )}
             </div>
           ) : (
+          <>
+          {(s.status === 'complete' || s.status === 'baker_storage') && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.6rem' }}>
+              <span style={{ fontSize: '0.72rem', color: s.pickup_date ? C.green : C.lightBrown, whiteSpace: 'nowrap' }}>📅 Pickup:</span>
+              <input type="date" value={s.pickup_date ?? ''} onChange={e => setPickupDate(s, e.target.value)}
+                style={{ background: 'rgba(255,255,255,0.05)', border: `1px solid ${s.pickup_date ? 'rgba(76,175,80,0.5)' : 'rgba(166,120,90,0.3)'}`, borderRadius: 3, padding: '0.2rem 0.4rem', color: C.cream, fontSize: '0.75rem', colorScheme: 'dark' }} />
+              {s.pickup_date && <span style={{ fontSize: '0.7rem', color: C.green }}>✓ set</span>}
+            </div>
+          )}
           <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
             {(s.status === 'scanning' || s.status === 'value_add') && (
               <button disabled={!pluLoaded} onClick={() => startSessionFromExisting(s.customer_name, s.session_date)}
@@ -1431,6 +1454,7 @@ export default function ScannerPage() {
               ⇄ Merge
             </button>
           </div>
+          </>
           )}
         </div>
       )

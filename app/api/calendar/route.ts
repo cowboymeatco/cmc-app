@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic'
 //
 // GET /api/calendar?from=YYYY-MM-DD&to=YYYY-MM-DD
 
-type Lane = 'receiving' | 'harvest' | 'processing' | 'smokehouse' | 'retail'
+type Lane = 'receiving' | 'harvest' | 'processing' | 'smokehouse' | 'retail' | 'pickup'
 
 interface CalEvent {
   id:        string
@@ -22,6 +22,7 @@ interface CalEvent {
   subtitle?: string
   status?:   string
   href?:     string          // where the most relevant info for this item lives
+  planned?:  boolean         // a scheduled/planned item (vs an actual record)
 }
 
 // Where clicking an event takes you — the page that holds the most relevant
@@ -33,6 +34,7 @@ const LANE_HREF: Record<Lane, string> = {
   processing: '/scanner',
   smokehouse: '/cooks',
   retail:     '/orders',
+  pickup:     '/scanner',
 }
 
 const day = (v: string | null | undefined): string => (v ? String(v).slice(0, 10) : '')
@@ -45,7 +47,7 @@ export async function GET(req: NextRequest) {
 
   const events: CalEvent[] = []
 
-  const [recvAppts, boxes, appts, sessions, cooks, retail] = await Promise.all([
+  const [recvAppts, boxes, appts, sessions, cooks, retail, planned, pickups] = await Promise.all([
     // Receiving — animals scheduled to arrive, off the receiving calendar
     // (appointment.receive_date, default the day before harvest). Charlie:
     // "Receiving should come off of the receiving calendar."
@@ -69,6 +71,15 @@ export async function GET(req: NextRequest) {
     supabase.from('retail_orders')
       .select('id, due_date, customer_name, fulfillment_type, status')
       .gte('due_date', from).lte('due_date', to),
+    // Planned smokehouse cooks — the schedule built on /value-add. Shown as a
+    // distinct "planned" layer alongside the actual cook cycles (Phase B).
+    supabase.from('value_add_jobs')
+      .select('id, scheduled_start, requested_date, profile_key, batch_count, customer_name, status')
+      .or(`and(requested_date.gte.${from},requested_date.lte.${to}),and(scheduled_start.gte.${from}T00:00:00,scheduled_start.lte.${to}T23:59:59)`),
+    // Pickups — when a finished order is scheduled to be collected (and paid).
+    supabase.from('processing_sessions')
+      .select('id, customer_name, pickup_date, status')
+      .gte('pickup_date', from).lte('pickup_date', to),
   ])
 
   // Recipe names for tagged cooks (small table — one fetch, mapped by key).
@@ -149,6 +160,34 @@ export async function GET(req: NextRequest) {
       title: `🛒 ${r.customer_name || 'Retail order'}`,
       subtitle: (r.fulfillment_type as string) ?? undefined,
       status: (r.status as string) ?? undefined, href: LANE_HREF.retail,
+    })
+  }
+
+  for (const r of planned.data ?? []) {
+    // Planned cook date: its scheduled start, else the requested date.
+    const d = day(r.scheduled_start as string) || day(r.requested_date as string)
+    if (!d || d < from || d > to) continue
+    // A completed job's actual cook already shows via smokehouse_cook — keep the
+    // planned layer to what's still upcoming/open so the two don't duplicate.
+    if ((r.status as string) === 'complete') continue
+    const recipe = r.profile_key ? recipeByKey.get(String(r.profile_key)) : ''
+    events.push({
+      id: `plan-${r.id}`, lane: 'smokehouse', date: d, planned: true,
+      title: `📋 ${recipe || r.customer_name || 'Planned cook'}`,
+      subtitle: [r.batch_count ? `${r.batch_count} batch` : '', 'planned'].filter(Boolean).join(' · '),
+      status: (r.status as string) ?? undefined, href: '/value-add',
+    })
+  }
+
+  for (const r of pickups.data ?? []) {
+    const d = day(r.pickup_date as string)
+    if (!d) continue
+    const collected = (r.status as string) === 'picked_up'
+    events.push({
+      id: `pickup-${r.id}`, lane: 'pickup', date: d,
+      title: `💵 ${r.customer_name || 'Pickup'}`,
+      subtitle: collected ? 'collected ✓' : 'pickup',
+      status: (r.status as string) ?? undefined, href: LANE_HREF.pickup,
     })
   }
 
