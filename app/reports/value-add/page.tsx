@@ -53,6 +53,13 @@ function toCSV(rows: Record<string, unknown>[]): string {
   return [headers.join(','), ...rows.map(r => headers.map(h => esc(r[h])).join(','))].join('\n')
 }
 
+const escHtml = (v: unknown) =>
+  String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string))
+
+// "2026-07-30" → "Jul 30, 2026" (noon avoids the UTC-parse off-by-one)
+const fmtDay = (iso: string) =>
+  iso ? new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'
+
 function download(content: string, filename: string) {
   const blob = new Blob([content], { type: 'text/csv' })
   const url  = URL.createObjectURL(blob)
@@ -139,6 +146,65 @@ export default function ValueAddReport() {
     download(toCSV(out), `value-add_${species}_${from}_to_${to}.csv`)
   }
 
+  // Print the current filtered matrix — a landscape sheet that mirrors what's on
+  // screen (same counts, cut styles and totals), opened in its own window so the
+  // page's dark UI chrome never bleeds into the print.
+  function printReport() {
+    const speciesLabel = species === 'all' ? 'All species' : `${speciesEmoji(species)} ${species}`
+    const headCols = cols.map(c => `<th class="prod">${escHtml(c)}</th>`).join('')
+    const bodyRows = rows.map(s => {
+      const cells = cols.map(c => {
+        const items = itemsFor(s, c)
+        return `<td class="ctr${items.some(it => it.detail) ? ' det' : ''}">${items.length ? escHtml(cellText(items)) : ''}</td>`
+      }).join('')
+      return `<tr><td class="cust">${escHtml(s.customer_name)}</td><td class="date">${escHtml(fmtDay(s.date ?? ''))}</td>${cells}<td class="ctr tot">${rowQty(s)}</td></tr>`
+    }).join('')
+    const totalsRow = colTotals.map(n => `<td class="ctr">${n}</td>`).join('')
+    const generated = new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>Value-Add Output — ${escHtml(from)} to ${escHtml(to)}</title>
+<style>
+  @page { size: letter landscape; margin: 0.5in }
+  * { box-sizing: border-box; margin: 0; padding: 0 }
+  body { font-family: Arial, sans-serif; color: #000; font-size: 9pt }
+  .hdr { text-align: center; margin-bottom: 10px }
+  .company { font-size: 15pt; font-weight: bold; letter-spacing: 0.06em; text-transform: uppercase }
+  .title { font-size: 12pt; font-weight: bold; letter-spacing: 0.14em; text-transform: uppercase; margin-top: 6px; border-top: 2pt solid #000; border-bottom: 2pt solid #000; padding: 4px 0 }
+  .meta { display: flex; justify-content: space-between; margin: 8px 2px; font-size: 9pt; color: #333 }
+  table { width: 100%; border-collapse: collapse; font-size: 8pt }
+  th, td { border: 0.5pt solid #999; padding: 3px 4px }
+  th { background: #eee; font-size: 7.5pt; text-transform: uppercase; letter-spacing: 0.04em }
+  th.prod { text-align: center }
+  td.ctr { text-align: center }
+  td.det { font-size: 7.5pt }
+  td.cust { font-weight: bold; white-space: nowrap }
+  td.date { white-space: nowrap; font-family: monospace; font-size: 7.5pt }
+  td.tot, th.tot { font-weight: bold }
+  tr.totals td { border-top: 1.5pt solid #000; font-weight: bold; background: #f2f2f2 }
+  .foot { margin-top: 8px; font-size: 7.5pt; color: #666; text-align: right }
+</style></head><body>
+  <div class="hdr">
+    <div class="company">Cowboy Meat Company</div>
+    <div class="title">Value-Add Output</div>
+  </div>
+  <div class="meta">
+    <span><strong>Species:</strong> ${escHtml(speciesLabel)}${search.trim() ? ` &nbsp;·&nbsp; <strong>Search:</strong> ${escHtml(search.trim())}` : ''}</span>
+    <span><strong>Kill dates:</strong> ${escHtml(fmtDay(from))} – ${escHtml(fmtDay(to))}</span>
+  </div>
+  <table>
+    <thead><tr><th>Customer</th><th>Kill date</th>${headCols}<th class="tot">Total</th></tr></thead>
+    <tbody>${bodyRows}</tbody>
+    <tfoot><tr class="totals"><td>Total · ${rows.length}</td><td></td>${totalsRow}<td class="ctr">${rows.reduce((n, s) => n + rowQty(s), 0)}</td></tr></tfoot>
+  </table>
+  <div class="foot">Built from the cut sheets · Generated ${escHtml(generated)}</div>
+  <script>window.onload = () => setTimeout(() => window.print(), 200)</script>
+</body></html>`
+
+    const w = window.open('', '_blank')
+    if (w) { w.document.write(html); w.document.close() }
+  }
+
   const totalCustomers = rows.length
   const totalItems = rows.reduce((n, s) => n + rowQty(s), 0)
 
@@ -181,6 +247,10 @@ export default function ValueAddReport() {
             value={search} onChange={e => setSearch(e.target.value)}
             style={{ ...INPUT, flex: 1, minWidth: 160 }}
           />
+          <button onClick={printReport} disabled={!rows.length} style={{
+            background: 'transparent', color: rows.length ? C.tan : C.medBrown, border: `1px solid ${rows.length ? C.tan : C.medBrown}`, borderRadius: 3,
+            padding: '0.5rem 1.1rem', fontSize: '0.82rem', fontWeight: 700, cursor: rows.length ? 'pointer' : 'default',
+          }}>🖨 Print</button>
           <button onClick={exportCSV} disabled={!rows.length} style={{
             background: rows.length ? C.tan : C.medBrown, color: C.dark, border: 'none', borderRadius: 3,
             padding: '0.5rem 1.1rem', fontSize: '0.82rem', fontWeight: 700, cursor: rows.length ? 'pointer' : 'default',
