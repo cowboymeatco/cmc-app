@@ -24,6 +24,18 @@ function humanize(slug: string): string {
   return slug.split(/[-_ ]+/).filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join(' ')
 }
 
+// Ham cut style → a short label for the value-add cell, so the report shows HOW
+// the cured ham is cut (steaks vs quarters) behind the check (Charlie, 2026-07-30).
+// Mirrors the cut sheet's own review wording: half → "Cut in Half",
+// quarters → "Cut in Quarters", everything else humanized (steaks → "Steaks",
+// whole → "Whole", cubed-pork → "Cubed Pork").
+function hamCutLabel(cut: string): string | undefined {
+  if (!cut) return undefined
+  if (cut === 'half')     return 'Cut in Half'
+  if (cut === 'quarters') return 'Cut in Quarters'
+  return humanize(cut)
+}
+
 // Ground-trim flavor → a sausage product name. Plain grind is NOT value-add.
 const PLAIN_GRIND = new Set(['ground-pork', 'ground', 'ground-beef', 'grind', ''])
 function sausageLabel(flavor: string): string | null {
@@ -78,8 +90,10 @@ function porkValueAdd(d: Json): ValueAddItem[] {
   if (shoulderAddons.includes('pulled-pork'))    out.push({ product: 'Pulled Pork', category: 'Smoked' })
 
   const ham = asObj(d.ham)
-  for (const style of [str(ham.style), str(ham.style2)]) {
-    if (style === 'cured-smoked') out.push({ product: 'Cured & Smoked Ham', category: 'Ham' })
+  // Pair each ham's style with its own cut (a split order can steak the fresh
+  // ham while the cured one stays whole), so the cured ham carries its cut style.
+  for (const [style, cut] of [[ham.style, ham.cut], [ham.style2, ham.cut2]] as [unknown, unknown][]) {
+    if (str(style) === 'cured-smoked') out.push({ product: 'Cured & Smoked Ham', category: 'Ham', detail: hamCutLabel(str(cut)) })
   }
   // Hocks come the same way as the hams — cured & smoked when the ham is.
   if ([str(ham.style), str(ham.style2)].includes('cured-smoked') && str(asObj(d.hocks).cut) !== 'grind') {
