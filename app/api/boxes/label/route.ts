@@ -27,6 +27,20 @@ async function isWIPBox(box: BoxRecord): Promise<boolean> {
   return data?.status === 'value_add'
 }
 
+// The compliance/ownership type the crew declared up front for the whole packing
+// session (scanner "Box Type" control). Keyed on customer + pack date like every
+// other session lookup. Null when never set — the label then falls back to the
+// scanned carcass kill type, else USDA-on.
+async function resolveSessionBoxType(box: BoxRecord): Promise<string | null> {
+  const { data } = await supabase
+    .from('processing_sessions')
+    .select('box_type')
+    .eq('customer_name', box.customer_name)
+    .eq('session_date', box.pack_date)
+    .maybeSingle()
+  return (data?.box_type as string | null) ?? null
+}
+
 // A box's animal is whatever carcass(es) the crew scanned into its packing
 // session. Keyed on customer + pack date (how every session keys). If more than
 // one carcass is linked, any Custom makes the whole box Custom (a custom-exempt
@@ -207,17 +221,30 @@ export async function GET(req: NextRequest) {
   // Resolve the animal behind this box from the carcass scans of its packing
   // session (customer + pack date): processing_inputs.linked_harvest_id points
   // at the harvest record, which carries producer, hanging weight and kill type.
-  const animal = await resolveAnimal(box)
+  const [animal, sessionType] = await Promise.all([
+    resolveAnimal(box),
+    resolveSessionBoxType(box),
+  ])
 
-  // Kill type drives the compliance mark: Custom exempt can't carry the USDA
-  // mark and must read NOT FOR SALE. Unknown defaults to USDA on (Charlie).
-  // ?usda / ?nfs still override per-print for the odd unresolved case.
+  // Compliance mark precedence:
+  //   1. ?usda / ?nfs URL params — an explicit per-print override, always win.
+  //   2. A carcass scanned as Custom — custom-exempt meat can't be sold, so this
+  //      is a legal floor: NOT FOR SALE even if the session was tagged USDA/CMC.
+  //   3. The session's declared Box Type (USDA / Custom / CMC).
+  //   4. The scanned carcass USDA kill type.
+  //   5. Default: USDA on (Charlie's rule for the unresolved case).
+  // USDA and CMC both carry the USDA bug (both are inspected, for sale); only
+  // Custom reads NOT FOR SALE.
   const kt = animal?.killType
+  const isCustom =
+    kt === 'Custom' ? true :          // legal floor — can't be sold
+    sessionType === 'Custom' ? true : // crew declared custom-exempt
+    false                             // USDA / CMC / unresolved → USDA-on
   const usdaParam = searchParams.get('usda')
   const nfsParam  = searchParams.get('nfs')
   const flags: LabelFlags = {
-    usda_bug:      usdaParam != null ? usdaParam !== '0' : kt !== 'Custom',
-    not_for_sale:  nfsParam  != null ? nfsParam === '1'  : kt === 'Custom',
+    usda_bug:      usdaParam != null ? usdaParam !== '0' : !isCustom,
+    not_for_sale:  nfsParam  != null ? nfsParam === '1'  : isCustom,
     retail_exempt: searchParams.get('exempt') === '1',
   }
 

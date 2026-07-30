@@ -14,7 +14,7 @@ export async function GET() {
 
   const sessions = (sessionRows ?? []) as Array<{
     id: string; customer_name: string; session_date: string
-    status: string; notes: string; created_at: string
+    status: string; notes: string; created_at: string; box_type: string | null
   }>
   const sessionMap = new Map(sessions.map(s => [`${s.customer_name}|${s.session_date}`, s]))
 
@@ -67,7 +67,7 @@ export async function GET() {
   // 4. Merge
   const result: Array<{
     id: string | null; customer_name: string; session_date: string
-    status: string; notes: string
+    status: string; notes: string; box_type: string | null
     box_count: number; closed_count: number; total_weight: number; total_cuts: number
     animals: string[]
   }> = []
@@ -76,14 +76,14 @@ export async function GET() {
   for (const s of sessions) {
     const key   = `${s.customer_name}|${s.session_date}`
     const stats = boxGroups.get(key) ?? { box_count: 0, closed_count: 0, total_weight: 0, total_cuts: 0 }
-    result.push({ id: s.id, customer_name: s.customer_name, session_date: s.session_date, status: s.status, notes: s.notes, ...stats, animals: animalGroups.get(key) ?? [] })
+    result.push({ id: s.id, customer_name: s.customer_name, session_date: s.session_date, status: s.status, notes: s.notes, box_type: s.box_type ?? null, ...stats, animals: animalGroups.get(key) ?? [] })
     seen.add(key)
   }
   // Box groups with no session record yet â†’ derive status
   for (const [key, stats] of boxGroups) {
     if (!seen.has(key)) {
       const { customer_name, session_date, ...rest } = stats
-      result.push({ id: null, customer_name, session_date, status: 'scanning', notes: '', ...rest, animals: animalGroups.get(key) ?? [] })
+      result.push({ id: null, customer_name, session_date, status: 'scanning', notes: '', box_type: null, ...rest, animals: animalGroups.get(key) ?? [] })
     }
   }
 
@@ -98,10 +98,15 @@ export async function POST(req: NextRequest) {
   // Trim: a stray trailing space would upsert a phantom twin session
   const customer_name = typeof body.customer_name === 'string' ? body.customer_name.trim() : body.customer_name
 
+  // Only carry box_type into the upsert when it's actually supplied. Reopening a
+  // session upserts to refresh status and must NOT null out a type set earlier.
+  const row: Record<string, unknown> = { customer_name, session_date, status, notes, updated_at: new Date().toISOString() }
+  if (body.box_type != null) row.box_type = body.box_type
+
   const { data, error } = await supabase
     .from('processing_sessions')
     .upsert(
-      [{ customer_name, session_date, status, notes, updated_at: new Date().toISOString() }],
+      [row],
       { onConflict: 'customer_name,session_date' }
     )
     .select()

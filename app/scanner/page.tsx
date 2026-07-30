@@ -66,6 +66,7 @@ interface SessionWithStats {
   session_date:   string
   status:         SessionStatus
   notes:          string
+  box_type?:      BoxType | null
   box_count:      number
   closed_count:   number
   total_weight:   number
@@ -117,6 +118,17 @@ interface SharedYield {
 
 interface LabelFlags { usda_bug: boolean; retail_exempt: boolean; not_for_sale: boolean }
 const DEFAULT_FLAGS: LabelFlags = { usda_bug: true, retail_exempt: false, not_for_sale: false }
+
+// A session's compliance/ownership type, picked once up front and sticky for
+// every box in it. USDA + CMC print the USDA bug (both inspected, for sale);
+// Custom (custom-exempt) prints NOT FOR SALE. Drives the label mark server-side.
+type BoxType = 'USDA' | 'Custom' | 'CMC'
+const BOX_TYPES: BoxType[] = ['USDA', 'Custom', 'CMC']
+// Map a box type onto the two compliance-mark flags, leaving retail_exempt (an
+// independent add-on badge) untouched.
+function flagsForType(t: BoxType, prev: LabelFlags): LabelFlags {
+  return { ...prev, usda_bug: t !== 'Custom', not_for_sale: t === 'Custom' }
+}
 
 const LBL: React.CSSProperties = {
   display: 'block', fontSize: '0.68rem', color: C.lightBrown,
@@ -384,6 +396,8 @@ export default function ScannerPage() {
   const [lastKind,    setLastKind]    = useState<'ok' | 'warn' | 'bad'>('ok')   // icon/color for lastItem after the flash fades
   const [processing,  setProcessing]  = useState(false)
   const [labelFlags,  setLabelFlags]  = useState<LabelFlags>(DEFAULT_FLAGS)
+  // Session box type — declared up front, sticky for every box in the session.
+  const [boxType,     setBoxType]     = useState<BoxType>('USDA')
 
   // ── Inputs ───────────────────────────────────────────────────────────────────
   const [inputs,       setInputs]       = useState<ProcessingInput[]>([])
@@ -610,15 +624,29 @@ export default function ScannerPage() {
   }, [scanValue, pumpScanQueue])
 
   // ── Session record helpers ───────────────────────────────────────────────────
-  async function upsertSession(custName: string, sessDate: string, status = 'scanning'): Promise<string | null> {
+  async function upsertSession(custName: string, sessDate: string, status = 'scanning', bt?: BoxType): Promise<string | null> {
     try {
       const res  = await fetch('/api/processing/sessions', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customer_name: custName, session_date: sessDate, status }),
+        // Only send box_type when starting fresh — reopens omit it so a type set
+        // earlier is preserved (the API drops null/undefined on upsert).
+        body: JSON.stringify({ customer_name: custName, session_date: sessDate, status, ...(bt ? { box_type: bt } : {}) }),
       })
       const data = await res.json()
       return data.id ?? null
     } catch { return null }
+  }
+
+  // Change the open session's box type: sticky on the record + reflected in the
+  // print flags so the on-screen chips match what will print.
+  async function applyBoxType(t: BoxType) {
+    setBoxType(t)
+    setLabelFlags(f => flagsForType(t, f))
+    if (!customer) return
+    await fetch('/api/processing/sessions', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customer_name: customer, session_date: date, box_type: t }),
+    })
   }
 
   async function updateSessionStatus(status: SessionStatus) {
@@ -704,7 +732,8 @@ export default function ScannerPage() {
     setActiveBox(box)
     setScans([])
     setCurrentStatus('scanning')
-    const sid = await upsertSession(cust, date, 'scanning')
+    setLabelFlags(flagsForType(boxType, DEFAULT_FLAGS))
+    const sid = await upsertSession(cust, date, 'scanning', boxType)
     setCurrentSessionId(sid)
     setSharedYield(null)
     fetch(`/api/processing/inputs?customer_name=${encodeURIComponent(cust)}&session_date=${date}`)
@@ -719,10 +748,13 @@ export default function ScannerPage() {
     if (!pluLoaded) return
     const existing = sessions.find(s => s.customer_name === cust && s.session_date === dt)
     const existingStatus = existing?.status ?? 'scanning'
+    const existingType   = (existing?.box_type as BoxType) ?? 'USDA'
     setCustomer(cust)
     setDate(dt)
     setStarted(true)
     setCurrentStatus(existingStatus)
+    setBoxType(existingType)
+    setLabelFlags(flagsForType(existingType, DEFAULT_FLAGS))
     const sid = await upsertSession(cust, dt, existingStatus)
     setCurrentSessionId(sid)
     const res = await fetch(`/api/boxes?customer_name=${encodeURIComponent(cust)}&date=${dt}`)
@@ -792,11 +824,17 @@ export default function ScannerPage() {
     if (!pluLoaded) return
     const cust = order.customer_name
     const dt   = isoDate()   // pack date = today
+    const storedType = sessions.find(s => s.customer_name === cust && s.session_date === dt)?.box_type as BoxType | null | undefined
+    const uiType = storedType ?? 'USDA'
     setCustomer(cust)
     setDate(dt)
     setStarted(true)
     setCurrentStatus('scanning')
-    const sid = await upsertSession(cust, dt, 'scanning')
+    setBoxType(uiType)
+    setLabelFlags(flagsForType(uiType, DEFAULT_FLAGS))
+    // Pass through only a stored type — never force USDA onto a session that may
+    // already be tagged Custom/CMC in a list we haven't refreshed.
+    const sid = await upsertSession(cust, dt, 'scanning', storedType ?? undefined)
     setCurrentSessionId(sid)
 
     // Reuse an existing session's boxes for this customer+date if any, else make Box 1.
@@ -1432,7 +1470,7 @@ export default function ScannerPage() {
               {pluLoaded ? `✓ ${Object.keys(pluMap).length} PLUs` : '⟳ Loading…'}
             </span>
           </div>
-          <button onClick={() => setShowNewForm(true)} style={{ background: C.tan, color: C.dark, border: 'none', borderRadius: 4, padding: '0.5rem 1.1rem', fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer', letterSpacing: '0.04em' }}>
+          <button onClick={() => { setCustomer(''); setBoxType('USDA'); setShowNewForm(true) }} style={{ background: C.tan, color: C.dark, border: 'none', borderRadius: 4, padding: '0.5rem 1.1rem', fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer', letterSpacing: '0.04em' }}>
             + New Session
           </button>
         </div>
@@ -1538,7 +1576,7 @@ export default function ScannerPage() {
             <div style={{ textAlign: 'center', color: C.lightBrown, padding: '4rem 2rem' }}>
               <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🔍</div>
               <div style={{ fontSize: '0.95rem', marginBottom: '1.25rem' }}>No sessions yet</div>
-              <button onClick={() => setShowNewForm(true)} style={{ background: C.tan, color: C.dark, border: 'none', borderRadius: 4, padding: '0.65rem 1.5rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer' }}>
+              <button onClick={() => { setCustomer(''); setBoxType('USDA'); setShowNewForm(true) }} style={{ background: C.tan, color: C.dark, border: 'none', borderRadius: 4, padding: '0.65rem 1.5rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer' }}>
                 Start First Session
               </button>
             </div>
@@ -1580,6 +1618,28 @@ export default function ScannerPage() {
                 <input autoFocus style={INPUT} value={customer} onChange={e => setCustomer(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter' && customer.trim() && pluLoaded) { setShowNewForm(false); startSession() } }}
                   placeholder="Customer name" />
+              </div>
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={LBL}>Box Type</label>
+                <div style={{ display: 'flex', gap: '0.4rem' }}>
+                  {BOX_TYPES.map(t => (
+                    <button key={t} type="button" onClick={() => setBoxType(t)}
+                      style={{
+                        flex: 1, padding: '0.6rem 0.4rem', borderRadius: 4, cursor: 'pointer',
+                        background: boxType === t ? C.tan : 'rgba(255,255,255,0.05)',
+                        border: `1px solid ${boxType === t ? C.tan : 'rgba(166,120,90,0.35)'}`,
+                        color: boxType === t ? C.dark : C.lightBrown,
+                        fontSize: '0.85rem', fontWeight: boxType === t ? 700 : 500,
+                      }}>
+                      {t}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ fontSize: '0.66rem', color: C.lightBrown, marginTop: '0.4rem', lineHeight: 1.35 }}>
+                  {boxType === 'Custom'
+                    ? 'Custom-exempt — labels print NOT FOR SALE.'
+                    : `${boxType} — labels print the USDA mark of inspection.`}
+                </div>
               </div>
               <div style={{ marginBottom: '1.5rem' }}>
                 <label style={LBL}>Pack Date</label>
@@ -1913,28 +1973,39 @@ export default function ScannerPage() {
                 </div>
               </div>
             )}
-            {/* Label flags row */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <span style={{ fontSize: '0.65rem', color: 'rgba(166,120,90,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em', marginRight: '0.2rem' }}>Label:</span>
-              {([
-                { k: 'usda_bug'      as keyof LabelFlags, label: 'USDA Bug'      },
-                { k: 'retail_exempt' as keyof LabelFlags, label: 'Retail Exempt' },
-                { k: 'not_for_sale'  as keyof LabelFlags, label: 'Not For Sale'  },
-              ] as { k: keyof LabelFlags; label: string }[]).map(({ k, label }) => (
+            {/* Box type + label flags row */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '0.65rem', color: 'rgba(166,120,90,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em', marginRight: '0.2rem' }}>Type:</span>
+              {/* Box type — sticky per session, drives the compliance mark on every box */}
+              {BOX_TYPES.map(t => (
                 <button
-                  key={k}
-                  onClick={() => setLabelFlags(f => ({ ...f, [k]: !f[k] }))}
+                  key={t}
+                  onClick={() => applyBoxType(t)}
+                  title={t === 'Custom' ? 'Custom-exempt — prints NOT FOR SALE' : `${t} — prints the USDA mark`}
                   style={{
-                    background: labelFlags[k] ? 'rgba(201,168,130,0.2)' : 'rgba(255,255,255,0.03)',
-                    border: `1px solid ${labelFlags[k] ? 'rgba(201,168,130,0.45)' : 'rgba(166,120,90,0.2)'}`,
-                    borderRadius: 3, padding: '0.2rem 0.6rem',
-                    color: labelFlags[k] ? C.cream : C.lightBrown,
-                    fontSize: '0.72rem', cursor: 'pointer', fontWeight: labelFlags[k] ? 700 : 400,
+                    background: boxType === t ? 'rgba(201,168,130,0.28)' : 'rgba(255,255,255,0.03)',
+                    border: `1px solid ${boxType === t ? 'rgba(201,168,130,0.6)' : 'rgba(166,120,90,0.2)'}`,
+                    borderRadius: 3, padding: '0.2rem 0.7rem',
+                    color: boxType === t ? C.cream : C.lightBrown,
+                    fontSize: '0.72rem', cursor: 'pointer', fontWeight: boxType === t ? 700 : 400,
                   }}
                 >
-                  {labelFlags[k] ? '✓ ' : ''}{label}
+                  {boxType === t ? '✓ ' : ''}{t}
                 </button>
               ))}
+              {/* Retail Exempt — independent add-on badge, orthogonal to box type */}
+              <button
+                onClick={() => setLabelFlags(f => ({ ...f, retail_exempt: !f.retail_exempt }))}
+                style={{
+                  background: labelFlags.retail_exempt ? 'rgba(201,168,130,0.2)' : 'rgba(255,255,255,0.03)',
+                  border: `1px solid ${labelFlags.retail_exempt ? 'rgba(201,168,130,0.45)' : 'rgba(166,120,90,0.2)'}`,
+                  borderRadius: 3, padding: '0.2rem 0.6rem', marginLeft: '0.5rem',
+                  color: labelFlags.retail_exempt ? C.cream : C.lightBrown,
+                  fontSize: '0.72rem', cursor: 'pointer', fontWeight: labelFlags.retail_exempt ? 700 : 400,
+                }}
+              >
+                {labelFlags.retail_exempt ? '✓ ' : ''}Retail Exempt
+              </button>
             </div>
           </div>
         )}
