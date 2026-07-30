@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
 
   const events: CalEvent[] = []
 
-  const [animals, boxes, appts, sessions, vaJobs, retail] = await Promise.all([
+  const [animals, boxes, appts, sessions, cooks, retail] = await Promise.all([
     supabase.from('animal_receiving_log')
       .select('id, received_at, ear_tag, sex, breed, status, appointment_id')
       .gte('received_at', `${from}T00:00:00`).lte('received_at', `${to}T23:59:59`),
@@ -58,9 +58,11 @@ export async function GET(req: NextRequest) {
     supabase.from('processing_sessions')
       .select('id, session_date, customer_name, status')
       .gte('session_date', from).lte('session_date', to),
-    supabase.from('value_add_jobs')
-      .select('id, requested_date, completed_date, customer_name, batch_count, status')
-      .or(`and(requested_date.gte.${from},requested_date.lte.${to}),and(completed_date.gte.${from},completed_date.lte.${to})`),
+    // Smokehouse — actual cook cycles (the real log). Scheduling/planned cooks
+    // will layer in later once that workflow exists (Charlie, 2026-07-30).
+    supabase.from('smokehouse_cook')
+      .select('id, started_at, ended_at, batch, operator')
+      .gte('started_at', `${from}T00:00:00`).lte('started_at', `${to}T23:59:59`),
     supabase.from('retail_orders')
       .select('id, due_date, customer_name, fulfillment_type, status')
       .gte('due_date', from).lte('due_date', to),
@@ -123,16 +125,19 @@ export async function GET(req: NextRequest) {
     })
   }
 
-  for (const r of vaJobs.data ?? []) {
-    const reqIn  = day(r.requested_date as string)
-    const compIn = day(r.completed_date as string)
-    const d = (reqIn >= from && reqIn <= to) ? reqIn : compIn
-    if (!d || d < from || d > to) continue
+  for (const r of cooks.data ?? []) {
+    const d = day(r.started_at as string)
+    if (!d) continue
+    // Duration off the log; a cook with no end time is still running.
+    const start = r.started_at ? new Date(r.started_at as string).getTime() : 0
+    const end   = r.ended_at   ? new Date(r.ended_at   as string).getTime() : 0
+    const hours = start && end && end > start ? Math.round((end - start) / 360000) / 10 : 0
+    const sub = [r.operator, hours ? `${hours}h` : ''].filter(Boolean).join(' · ')
     events.push({
-      id: `va-${r.id}`, lane: 'smokehouse', date: d,
-      title: `🔥 ${r.customer_name || 'Smokehouse'}`,
-      subtitle: r.batch_count ? `${r.batch_count} batch` : undefined,
-      status: (r.status as string) ?? undefined, href: LANE_HREF.smokehouse,
+      id: `cook-${r.id}`, lane: 'smokehouse', date: d,
+      title: r.batch ? `🔥 ${r.batch}` : '🔥 Cook',
+      subtitle: sub || undefined,
+      status: r.ended_at ? 'complete' : 'active', href: LANE_HREF.smokehouse,
     })
   }
 
