@@ -11,10 +11,11 @@ const C = {
   cream:      '#F2E8D9',
 }
 
-type Lane = 'receiving' | 'harvest' | 'processing' | 'smokehouse'
+type Lane = 'receiving' | 'harvest' | 'processing' | 'smokehouse' | 'retail'
+type View = 'week' | 'month' | 'quarter'
 
 interface CalEvent {
-  id: string; lane: Lane; date: string; title: string; subtitle?: string; status?: string
+  id: string; lane: Lane; date: string; title: string; subtitle?: string; status?: string; href?: string
 }
 
 const LANES: { key: Lane; label: string; emoji: string; color: string }[] = [
@@ -22,34 +23,52 @@ const LANES: { key: Lane; label: string; emoji: string; color: string }[] = [
   { key: 'harvest',    label: 'Harvest',    emoji: '🐄', color: '#F87171' },
   { key: 'processing', label: 'Processing', emoji: '🔪', color: '#FBBF24' },
   { key: 'smokehouse', label: 'Smokehouse', emoji: '🔥', color: '#FB923C' },
+  { key: 'retail',     label: 'Retail',     emoji: '🛒', color: '#34D399' },
 ]
 const LANE_COLOR: Record<Lane, string> = Object.fromEntries(LANES.map(l => [l.key, l.color])) as Record<Lane, string>
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 
-// Local-timezone ISO (no UTC shift — the calendar is a wall-clock grid)
 const toISO = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+const shortDay = (d: Date) => `${MONTHS[d.getMonth()].slice(0, 3)} ${d.getDate()}`
 
-// The 42-cell (6-week) grid covering a month, starting on the Sunday on/before the 1st.
+// 42-cell (6-week) grid covering a month, starting on the Sunday on/before the 1st.
 function monthGrid(year: number, month: number): Date[] {
   const first = new Date(year, month, 1)
   const start = new Date(year, month, 1 - first.getDay())
   return Array.from({ length: 42 }, (_, i) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + i))
 }
+function weekDays(anchor: Date): Date[] {
+  const start = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() - anchor.getDay())
+  return Array.from({ length: 7 }, (_, i) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + i))
+}
+// The three months of the calendar quarter containing `anchor`.
+function quarterMonths(anchor: Date): { y: number; m: number }[] {
+  const q0 = Math.floor(anchor.getMonth() / 3) * 3
+  return [0, 1, 2].map(i => { const d = new Date(anchor.getFullYear(), q0 + i, 1); return { y: d.getFullYear(), m: d.getMonth() } })
+}
 
 export default function MasterCalendar() {
   const todayISO = toISO(new Date())
-  const [year,  setYear]  = useState(() => new Date().getFullYear())
-  const [month, setMonth] = useState(() => new Date().getMonth())
+  const [view, setView] = useState<View>('month')
+  const [anchor, setAnchor] = useState<Date>(() => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()) })
   const [active, setActive] = useState<Set<Lane>>(() => new Set(LANES.map(l => l.key)))
   const [events, setEvents] = useState<CalEvent[]>([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
 
-  const grid = useMemo(() => monthGrid(year, month), [year, month])
-  const rangeFrom = toISO(grid[0])
-  const rangeTo   = toISO(grid[41])
+  // The date range to fetch + render, per view.
+  const { rangeFrom, rangeTo } = useMemo(() => {
+    if (view === 'week') { const w = weekDays(anchor); return { rangeFrom: toISO(w[0]), rangeTo: toISO(w[6]) } }
+    if (view === 'quarter') {
+      const qm = quarterMonths(anchor)
+      const g0 = monthGrid(qm[0].y, qm[0].m); const g2 = monthGrid(qm[2].y, qm[2].m)
+      return { rangeFrom: toISO(g0[0]), rangeTo: toISO(g2[41]) }
+    }
+    const g = monthGrid(anchor.getFullYear(), anchor.getMonth())
+    return { rangeFrom: toISO(g[0]), rangeTo: toISO(g[41]) }
+  }, [view, anchor])
 
   useEffect(() => {
     let cancelled = false
@@ -62,7 +81,6 @@ export default function MasterCalendar() {
     return () => { cancelled = true }
   }, [rangeFrom, rangeTo])
 
-  // date → events, filtered to the active lanes
   const byDay = useMemo(() => {
     const m = new Map<string, CalEvent[]>()
     for (const e of events) {
@@ -73,53 +91,60 @@ export default function MasterCalendar() {
     return m
   }, [events, active])
 
-  // per-lane counts for this month (drives the filter chips)
+  // per-lane counts over the whole loaded range (drives the filter chips)
   const laneCounts = useMemo(() => {
     const c: Record<string, number> = {}
-    for (const e of events) if (e.date.slice(0, 7) === `${year}-${String(month + 1).padStart(2, '0')}`) c[e.lane] = (c[e.lane] ?? 0) + 1
+    for (const e of events) c[e.lane] = (c[e.lane] ?? 0) + 1
     return c
-  }, [events, year, month])
+  }, [events])
+
+  const navLabel = useMemo(() => {
+    if (view === 'week') { const w = weekDays(anchor); return `${shortDay(w[0])} – ${shortDay(w[6])}, ${w[6].getFullYear()}` }
+    if (view === 'quarter') { const qm = quarterMonths(anchor); return `Q${Math.floor(anchor.getMonth() / 3) + 1} ${anchor.getFullYear()} · ${MONTHS[qm[0].m].slice(0, 3)}–${MONTHS[qm[2].m].slice(0, 3)}` }
+    return `${MONTHS[anchor.getMonth()]} ${anchor.getFullYear()}`
+  }, [view, anchor])
 
   function shift(delta: number) {
-    const d = new Date(year, month + delta, 1)
-    setYear(d.getFullYear()); setMonth(d.getMonth())
-  }
-  function goToday() { const d = new Date(); setYear(d.getFullYear()); setMonth(d.getMonth()) }
-  function toggleLane(k: Lane) {
-    setActive(prev => {
-      const next = new Set(prev)
-      if (next.has(k)) next.delete(k); else next.add(k)
-      return next
+    setAnchor(a => {
+      if (view === 'week')    return new Date(a.getFullYear(), a.getMonth(), a.getDate() + 7 * delta)
+      if (view === 'quarter') return new Date(a.getFullYear(), a.getMonth() + 3 * delta, 1)
+      return new Date(a.getFullYear(), a.getMonth() + delta, 1)
     })
+  }
+  function goToday() { const n = new Date(); setAnchor(new Date(n.getFullYear(), n.getMonth(), n.getDate())) }
+  function toggleLane(k: Lane) {
+    setActive(prev => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n })
   }
 
   return (
     <div style={{ minHeight: '100vh', background: C.darkBrown }}>
-      <header style={{
-        background: C.dark, borderBottom: '1px solid rgba(166,120,90,0.3)',
-        padding: '0 2rem', height: 72, display: 'flex', alignItems: 'center', gap: '1rem',
-      }}>
+      <header style={{ background: C.dark, borderBottom: '1px solid rgba(166,120,90,0.3)', padding: '0 2rem', height: 72, display: 'flex', alignItems: 'center', gap: '1rem' }}>
         <Link href="/schedule" style={{ color: C.lightBrown, textDecoration: 'none', fontSize: '0.82rem' }}>← Schedule</Link>
         <span style={{ color: 'rgba(166,120,90,0.3)' }}>|</span>
         <div>
-          <h1 style={{ fontFamily: 'Georgia, serif', fontSize: '1.1rem', fontWeight: 700, color: C.cream, textTransform: 'uppercase', letterSpacing: '0.08em', margin: 0 }}>
-            Master Calendar
-          </h1>
-          <p style={{ fontSize: '0.68rem', color: C.lightBrown, letterSpacing: '0.12em', textTransform: 'uppercase', margin: 0 }}>
-            Every lane on one calendar · Phase 1 (preview)
-          </p>
+          <h1 style={{ fontFamily: 'Georgia, serif', fontSize: '1.1rem', fontWeight: 700, color: C.cream, textTransform: 'uppercase', letterSpacing: '0.08em', margin: 0 }}>Master Calendar</h1>
+          <p style={{ fontSize: '0.68rem', color: C.lightBrown, letterSpacing: '0.12em', textTransform: 'uppercase', margin: 0 }}>Every lane on one calendar · Phase 1 (preview)</p>
         </div>
       </header>
 
-      <main style={{ padding: '1.5rem 2rem', maxWidth: 1280, margin: '0 auto', boxSizing: 'border-box' }}>
-
-        {/* Controls: month nav + asset-class filter */}
+      <main style={{ padding: '1.5rem 2rem', maxWidth: 1360, margin: '0 auto', boxSizing: 'border-box' }}>
+        {/* Controls */}
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '1rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
             <button onClick={() => shift(-1)} style={navBtn}>‹</button>
-            <div style={{ minWidth: 190, textAlign: 'center', color: C.cream, fontWeight: 700, fontSize: '1rem' }}>{MONTHS[month]} {year}</div>
+            <div style={{ minWidth: 210, textAlign: 'center', color: C.cream, fontWeight: 700, fontSize: '1rem' }}>{navLabel}</div>
             <button onClick={() => shift(1)} style={navBtn}>›</button>
             <button onClick={goToday} style={{ ...navBtn, width: 'auto', padding: '0 0.8rem', fontSize: '0.78rem' }}>Today</button>
+          </div>
+          {/* View switcher */}
+          <div style={{ display: 'flex', gap: 2, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 5, padding: 2 }}>
+            {(['week', 'month', 'quarter'] as View[]).map(v => (
+              <button key={v} onClick={() => setView(v)} style={{
+                padding: '0.3rem 0.85rem', borderRadius: 3, border: 'none', cursor: 'pointer',
+                background: view === v ? C.tan : 'transparent', color: view === v ? C.dark : C.lightBrown,
+                fontSize: '0.78rem', fontWeight: view === v ? 700 : 500, textTransform: 'capitalize',
+              }}>{v}</button>
+            ))}
           </div>
           <div style={{ flex: 1 }} />
           <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
@@ -144,57 +169,135 @@ export default function MasterCalendar() {
 
         {err && <div style={{ padding: '0.75rem', color: '#E8883A', fontSize: '0.85rem' }}>{err}</div>}
 
-        {/* Weekday header */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1, marginBottom: 1 }}>
-          {WEEKDAYS.map(w => (
-            <div key={w} style={{ textAlign: 'center', color: C.tan, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700, padding: '0.4rem 0' }}>{w}</div>
-          ))}
-        </div>
-
-        {/* Month grid */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1, background: 'rgba(166,120,90,0.15)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: 4, overflow: 'hidden', opacity: loading ? 0.5 : 1, transition: 'opacity 0.15s' }}>
-          {grid.map(d => {
-            const iso = toISO(d)
-            const inMonth = d.getMonth() === month
-            const isToday = iso === todayISO
-            const dayEvents = byDay.get(iso) ?? []
-            const shown = dayEvents.slice(0, 4)
-            const extra = dayEvents.length - shown.length
-            return (
-              <div key={iso} style={{
-                background: inMonth ? C.dark : '#140803',
-                minHeight: 108, padding: '0.35rem 0.4rem',
-                display: 'flex', flexDirection: 'column', gap: 3,
-              }}>
-                <div style={{
-                  fontSize: '0.72rem', fontWeight: isToday ? 800 : 500, alignSelf: 'flex-end',
-                  color: isToday ? C.dark : inMonth ? C.cream : 'rgba(166,120,90,0.45)',
-                  background: isToday ? C.tan : 'transparent', borderRadius: 10,
-                  minWidth: 18, height: 18, lineHeight: '18px', textAlign: 'center', padding: isToday ? '0 5px' : 0,
-                }}>{d.getDate()}</div>
-                {shown.map(e => (
-                  <div key={e.id} title={`${e.title}${e.subtitle ? ` — ${e.subtitle}` : ''}${e.status ? ` (${e.status})` : ''}`} style={{
-                    borderLeft: `3px solid ${LANE_COLOR[e.lane]}`,
-                    background: `${LANE_COLOR[e.lane]}18`, borderRadius: 3,
-                    padding: '1px 4px', fontSize: '0.68rem', color: C.cream,
-                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                  }}>{e.title}{e.subtitle ? <span style={{ color: C.lightBrown }}> · {e.subtitle}</span> : null}</div>
-                ))}
-                {extra > 0 && <div style={{ fontSize: '0.64rem', color: C.lightBrown, paddingLeft: 4 }}>+{extra} more</div>}
-              </div>
-            )
-          })}
+        <div style={{ opacity: loading ? 0.5 : 1, transition: 'opacity 0.15s' }}>
+          {view === 'week'    && <WeekView    days={weekDays(anchor)} byDay={byDay} todayISO={todayISO} />}
+          {view === 'month'   && <MonthView   year={anchor.getFullYear()} month={anchor.getMonth()} byDay={byDay} todayISO={todayISO} />}
+          {view === 'quarter' && <QuarterView months={quarterMonths(anchor)} byDay={byDay} todayISO={todayISO} />}
         </div>
 
         <p style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.75rem', lineHeight: 1.6 }}>
-          <strong style={{ color: C.tan }}>Phase 1</strong> — every operational lane on one calendar, off the dates each already
-          carries: <strong style={{ color: C.tan }}>Receiving</strong> (animals &amp; box product in),
-          <strong style={{ color: C.tan }}> Harvest</strong> (booked kill days),
-          <strong style={{ color: C.tan }}> Processing</strong> (packing sessions), and
-          <strong style={{ color: C.tan }}> Smokehouse</strong> (value-add jobs). Use the chips to filter by asset class.
-          Planned-vs-actual metrics come next in Phase 2.
+          <strong style={{ color: C.tan }}>Phase 1</strong> — every operational lane on one calendar, off the dates each already carries.
+          <strong style={{ color: C.tan }}> Week</strong> for the leads, <strong style={{ color: C.tan }}>Quarter</strong> for the 90-day view.
+          Click any event to jump to where its detail lives. Planned-vs-actual metrics come next in Phase 2.
         </p>
       </main>
+    </div>
+  )
+}
+
+// ── One event pill (clickable → its detail page) ───────────────────────────────
+function EventPill({ e, showSub }: { e: CalEvent; showSub: boolean }) {
+  const tip = `${e.title}${e.subtitle ? ` — ${e.subtitle}` : ''}${e.status ? ` (${e.status})` : ''}`
+  const style: React.CSSProperties = {
+    display: 'block', borderLeft: `3px solid ${LANE_COLOR[e.lane]}`, background: `${LANE_COLOR[e.lane]}18`,
+    borderRadius: 3, padding: '1px 4px', fontSize: '0.68rem', color: C.cream, textDecoration: 'none',
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+  }
+  const inner = <>{e.title}{showSub && e.subtitle ? <span style={{ color: C.lightBrown }}> · {e.subtitle}</span> : null}</>
+  return e.href
+    ? <a href={e.href} title={tip} style={style}>{inner}</a>
+    : <div title={tip} style={style}>{inner}</div>
+}
+
+function DayNumber({ n, today, dim }: { n: number; today: boolean; dim: boolean }) {
+  return (
+    <div style={{
+      fontSize: '0.72rem', fontWeight: today ? 800 : 500, alignSelf: 'flex-end',
+      color: today ? C.dark : dim ? 'rgba(166,120,90,0.45)' : C.cream,
+      background: today ? C.tan : 'transparent', borderRadius: 10,
+      minWidth: 18, height: 18, lineHeight: '18px', textAlign: 'center', padding: today ? '0 5px' : 0,
+    }}>{n}</div>
+  )
+}
+
+// ── Month: 6-week grid, up to 4 events + "N more" ──────────────────────────────
+function MonthView({ year, month, byDay, todayISO }: { year: number; month: number; byDay: Map<string, CalEvent[]>; todayISO: string }) {
+  const grid = monthGrid(year, month)
+  return (
+    <>
+      <WeekdayHeader />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1, background: 'rgba(166,120,90,0.15)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: 4, overflow: 'hidden' }}>
+        {grid.map(d => {
+          const iso = toISO(d); const inMonth = d.getMonth() === month
+          const evs = byDay.get(iso) ?? []; const shown = evs.slice(0, 4); const extra = evs.length - shown.length
+          return (
+            <div key={iso} style={{ background: inMonth ? C.dark : '#140803', minHeight: 108, padding: '0.35rem 0.4rem', display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <DayNumber n={d.getDate()} today={iso === todayISO} dim={!inMonth} />
+              {shown.map(e => <EventPill key={e.id} e={e} showSub />)}
+              {extra > 0 && <div style={{ fontSize: '0.64rem', color: C.lightBrown, paddingLeft: 4 }}>+{extra} more</div>}
+            </div>
+          )
+        })}
+      </div>
+    </>
+  )
+}
+
+// ── Week: 7 tall columns, every event listed (for the leads) ───────────────────
+function WeekView({ days, byDay, todayISO }: { days: Date[]; byDay: Map<string, CalEvent[]>; todayISO: string }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1, background: 'rgba(166,120,90,0.15)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: 4, overflow: 'hidden' }}>
+      {days.map(d => {
+        const iso = toISO(d); const evs = byDay.get(iso) ?? []; const today = iso === todayISO
+        return (
+          <div key={iso} style={{ background: C.dark, minHeight: 420, padding: '0.4rem 0.45rem', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(166,120,90,0.2)', paddingBottom: 3, marginBottom: 2 }}>
+              <span style={{ fontSize: '0.66rem', color: C.tan, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{WEEKDAYS[d.getDay()]}</span>
+              <DayNumber n={d.getDate()} today={today} dim={false} />
+            </div>
+            {evs.length === 0 && <span style={{ fontSize: '0.66rem', color: 'rgba(166,120,90,0.3)' }}>—</span>}
+            {evs.map(e => <EventPill key={e.id} e={e} showSub />)}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ── Quarter: three compact month grids side by side (for the 90-day view) ──────
+function QuarterView({ months, byDay, todayISO }: { months: { y: number; m: number }[]; byDay: Map<string, CalEvent[]>; todayISO: string }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1rem' }}>
+      {months.map(({ y, m }) => {
+        const grid = monthGrid(y, m)
+        return (
+          <div key={`${y}-${m}`}>
+            <div style={{ color: C.cream, fontWeight: 700, fontSize: '0.85rem', marginBottom: 6, textAlign: 'center' }}>{MONTHS[m]} {y}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1 }}>
+              {WEEKDAYS.map(w => <div key={w} style={{ textAlign: 'center', color: C.lightBrown, fontSize: '0.56rem', fontWeight: 700 }}>{w[0]}</div>)}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1, background: 'rgba(166,120,90,0.12)', border: '1px solid rgba(166,120,90,0.12)', borderRadius: 3, overflow: 'hidden' }}>
+              {grid.map(d => {
+                const iso = toISO(d); const inMonth = d.getMonth() === m; const today = iso === todayISO
+                const evs = byDay.get(iso) ?? []; const dots = evs.slice(0, 6); const extra = evs.length - dots.length
+                return (
+                  <div key={iso} style={{ background: inMonth ? C.dark : '#140803', minHeight: 46, padding: '2px 3px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <span style={{ fontSize: '0.58rem', fontWeight: today ? 800 : 400, color: today ? C.tan : inMonth ? C.cream : 'rgba(166,120,90,0.4)', textAlign: 'right', lineHeight: 1 }}>{d.getDate()}</span>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignContent: 'flex-start' }}>
+                      {dots.map(e => (
+                        e.href
+                          ? <a key={e.id} href={e.href} title={`${e.title}${e.subtitle ? ` — ${e.subtitle}` : ''}`} style={{ width: 7, height: 7, borderRadius: 2, background: LANE_COLOR[e.lane], display: 'block' }} />
+                          : <span key={e.id} title={e.title} style={{ width: 7, height: 7, borderRadius: 2, background: LANE_COLOR[e.lane], display: 'block' }} />
+                      ))}
+                      {extra > 0 && <span style={{ fontSize: '0.5rem', color: C.lightBrown, lineHeight: '7px' }}>+{extra}</span>}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function WeekdayHeader() {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1, marginBottom: 1 }}>
+      {WEEKDAYS.map(w => (
+        <div key={w} style={{ textAlign: 'center', color: C.tan, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700, padding: '0.4rem 0' }}>{w}</div>
+      ))}
     </div>
   )
 }

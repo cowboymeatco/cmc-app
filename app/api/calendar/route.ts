@@ -6,13 +6,13 @@ export const dynamic = 'force-dynamic'
 
 // ── Master ERP calendar feed ───────────────────────────────────────────────────
 // One flat list of dated events across every operational lane — receiving,
-// harvest, processing, smokehouse — so the /calendar page can pivot them into a
-// month grid and filter by asset class. Read-only aggregation over tables that
-// already carry their own dates; nothing is written here.
+// harvest, processing, smokehouse, retail — so the /calendar page can pivot them
+// into week/month/quarter views and filter by asset class. Read-only aggregation
+// over tables that already carry their own dates; nothing is written here.
 //
 // GET /api/calendar?from=YYYY-MM-DD&to=YYYY-MM-DD
 
-type Lane = 'receiving' | 'harvest' | 'processing' | 'smokehouse'
+type Lane = 'receiving' | 'harvest' | 'processing' | 'smokehouse' | 'retail'
 
 interface CalEvent {
   id:        string
@@ -21,6 +21,18 @@ interface CalEvent {
   title:     string
   subtitle?: string
   status?:   string
+  href?:     string          // where the most relevant info for this item lives
+}
+
+// Where clicking an event takes you — the page that holds the most relevant
+// info for that lane (Charlie: "clicking should take us to where the most
+// relevant information for that order is").
+const LANE_HREF: Record<Lane, string> = {
+  receiving:  '/receiving',
+  harvest:    '/schedule',
+  processing: '/scanner',
+  smokehouse: '/value-add',
+  retail:     '/orders',
 }
 
 const day = (v: string | null | undefined): string => (v ? String(v).slice(0, 10) : '')
@@ -33,37 +45,46 @@ export async function GET(req: NextRequest) {
 
   const events: CalEvent[] = []
 
-  const [animals, boxes, appts, sessions, vaJobs] = await Promise.all([
-    // Receiving — animals in
+  const [animals, boxes, appts, sessions, vaJobs, retail] = await Promise.all([
     supabase.from('animal_receiving_log')
-      .select('id, received_at, ear_tag, sex, breed, status')
+      .select('id, received_at, ear_tag, sex, breed, status, appointment_id')
       .gte('received_at', `${from}T00:00:00`).lte('received_at', `${to}T23:59:59`),
-    // Receiving — box product in
     supabase.from('box_receiving_log')
       .select('id, received_at, vendor, product, quantity, status')
       .gte('received_at', from).lte('received_at', to),
-    // Harvest — booked kill days
     supabase.from('harvest_appointments')
-      .select('id, harvest_date, species, head_count, status')
+      .select('id, harvest_date, source, species, head_count, status')
       .gte('harvest_date', from).lte('harvest_date', to),
-    // Processing — packing sessions
     supabase.from('processing_sessions')
       .select('id, session_date, customer_name, status')
       .gte('session_date', from).lte('session_date', to),
-    // Smokehouse — value-add jobs (scheduled by requested date; fall back to completed)
     supabase.from('value_add_jobs')
       .select('id, requested_date, completed_date, customer_name, batch_count, status')
       .or(`and(requested_date.gte.${from},requested_date.lte.${to}),and(completed_date.gte.${from},completed_date.lte.${to})`),
+    supabase.from('retail_orders')
+      .select('id, due_date, customer_name, fulfillment_type, status')
+      .gte('due_date', from).lte('due_date', to),
   ])
+
+  // A received animal carries no producer of its own — resolve it through the
+  // harvest appointment it came in on (Charlie: show the producer name, not
+  // "Animal in", which is implied).
+  const apptIds = [...new Set((animals.data ?? []).map(r => r.appointment_id).filter(Boolean) as string[])]
+  const producerByAppt = new Map<string, string>()
+  if (apptIds.length) {
+    const { data } = await supabase.from('harvest_appointments').select('id, source').in('id', apptIds)
+    for (const a of data ?? []) if (a.source) producerByAppt.set(String(a.id), a.source as string)
+  }
 
   for (const r of animals.data ?? []) {
     const d = day(r.received_at as string)
     if (!d) continue
-    const who = [r.sex, r.breed].filter(Boolean).join(' ')
+    const producer = (r.appointment_id && producerByAppt.get(String(r.appointment_id))) || ''
+    const detail = [r.sex, r.breed, r.ear_tag].filter(Boolean).join(' ')
     events.push({
       id: `animal-${r.id}`, lane: 'receiving', date: d,
-      title: `🐄 Animal in${r.ear_tag ? ` · ${r.ear_tag}` : ''}`,
-      subtitle: who || undefined, status: (r.status as string) ?? undefined,
+      title: producer ? `🐄 ${producer}` : `🐄 ${r.ear_tag || 'Animal in'}`,
+      subtitle: detail || undefined, status: (r.status as string) ?? undefined, href: LANE_HREF.receiving,
     })
   }
 
@@ -74,18 +95,21 @@ export async function GET(req: NextRequest) {
       id: `box-${r.id}`, lane: 'receiving', date: d,
       title: `📦 ${r.vendor || 'Box product'}`,
       subtitle: [r.product, r.quantity ? `×${r.quantity}` : ''].filter(Boolean).join(' ') || undefined,
-      status: (r.status as string) ?? undefined,
+      status: (r.status as string) ?? undefined, href: LANE_HREF.receiving,
     })
   }
 
   for (const r of appts.data ?? []) {
     const d = day(r.harvest_date as string)
     if (!d) continue
+    // Title is the producer / appointment name; species + head count ride along
+    // as the subtitle (Charlie: "the appointment name for the producer").
     const head = r.head_count ? `${r.head_count} ` : ''
     events.push({
       id: `appt-${r.id}`, lane: 'harvest', date: d,
-      title: `${head}${r.species || 'Harvest'}`.trim(),
-      status: (r.status as string) ?? undefined,
+      title: (r.source as string) || (r.species as string) || 'Harvest',
+      subtitle: `${head}${r.species || ''}`.trim() || undefined,
+      status: (r.status as string) ?? undefined, href: LANE_HREF.harvest,
     })
   }
 
@@ -95,13 +119,11 @@ export async function GET(req: NextRequest) {
     events.push({
       id: `sess-${r.id}`, lane: 'processing', date: d,
       title: (r.customer_name as string) || 'Processing',
-      status: (r.status as string) ?? undefined,
+      status: (r.status as string) ?? undefined, href: LANE_HREF.processing,
     })
   }
 
   for (const r of vaJobs.data ?? []) {
-    // Prefer the scheduled (requested) date; a completed-only job lands on its
-    // completed date so nothing scheduled goes missing from the calendar.
     const reqIn  = day(r.requested_date as string)
     const compIn = day(r.completed_date as string)
     const d = (reqIn >= from && reqIn <= to) ? reqIn : compIn
@@ -110,7 +132,18 @@ export async function GET(req: NextRequest) {
       id: `va-${r.id}`, lane: 'smokehouse', date: d,
       title: `🔥 ${r.customer_name || 'Smokehouse'}`,
       subtitle: r.batch_count ? `${r.batch_count} batch` : undefined,
-      status: (r.status as string) ?? undefined,
+      status: (r.status as string) ?? undefined, href: LANE_HREF.smokehouse,
+    })
+  }
+
+  for (const r of retail.data ?? []) {
+    const d = day(r.due_date as string)
+    if (!d) continue
+    events.push({
+      id: `retail-${r.id}`, lane: 'retail', date: d,
+      title: `🛒 ${r.customer_name || 'Retail order'}`,
+      subtitle: (r.fulfillment_type as string) ?? undefined,
+      status: (r.status as string) ?? undefined, href: LANE_HREF.retail,
     })
   }
 
