@@ -1003,7 +1003,7 @@ function renderV2Detail(ci: RawInstruction) {
 
       {d.specialty?.interest && (
         <V2Section title="Specialty Items">
-          <V2Field label="Interested" value={d.specialty.interest === 'yes' ? 'Yes — crew will call' : 'No thanks'} />
+          <V2Field label="Interested" value={d.specialty.interest === 'yes' ? 'Yes' : 'No thanks'} />
           <V2Field label="Notes" value={d.specialty.notes} />
         </V2Section>
       )}
@@ -1241,7 +1241,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
   // earns space, and any notes ride along with it.
   if (d.specialty?.interest === 'yes') {
     cutSections += sec('Specialty Items', [
-      row('Interested', 'Yes — crew will call'),
+      row('Interested', 'Yes'),
       d.specialty.notes ? row('Notes', d.specialty.notes) : '',
     ].join(''))
   }
