@@ -19,6 +19,7 @@ type Json = Record<string, unknown>
 const asObj = (v: unknown): Json => (v && typeof v === 'object' ? v as Json : {})
 const asArr = (v: unknown): Json[] => (Array.isArray(v) ? v as Json[] : [])
 const str   = (v: unknown): string => (typeof v === 'string' ? v : '')
+const arrOfStr = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : [])
 
 // "jalapeno-cheddar" → "Jalapeno Cheddar"
 function humanize(slug: string): string {
@@ -37,12 +38,18 @@ function hamCutLabel(cut: string): string | undefined {
   return humanize(cut)
 }
 
-// Ground-trim flavor → a sausage product name. Plain grind is NOT value-add.
+// Ground-trim flavor + format → a sausage product name. Plain grind is NOT
+// value-add. The format (loose-pack / links / patties) becomes part of the
+// product so links are counted and shown separately from loose sausage
+// (Charlie, 2026-07-30). loose-pack is the default and carries no suffix.
 const PLAIN_GRIND = new Set(['ground-pork', 'ground', 'ground-beef', 'grind', ''])
-function sausageLabel(flavor: string): string | null {
+function sausageLabel(flavor: string, format: string): string | null {
   if (PLAIN_GRIND.has(flavor)) return null
-  const h = humanize(flavor)
-  return /sausage/i.test(h) ? h : `${h} Sausage`
+  const h    = humanize(flavor)
+  const base = /sausage/i.test(h) ? h : `${h} Sausage`
+  if (format === 'links')   return `${base} Links`
+  if (format === 'patties') return `${base} Patties`
+  return base
 }
 
 // One entry per flavor in a smokehouse array ({flavor, lbs, cheese}).
@@ -62,8 +69,8 @@ function smokeItems(raw: unknown, product: string): ValueAddItem[] {
 function sharedValueAdd(d: Json): ValueAddItem[] {
   const out: ValueAddItem[] = []
   const trim = asObj(d.trim)
-  for (const f of [str(trim.flavor1), str(trim.flavor2)]) {
-    const label = sausageLabel(f)
+  for (const [f, fmt] of [[trim.flavor1, trim.format1], [trim.flavor2, trim.format2]] as [unknown, unknown][]) {
+    const label = sausageLabel(str(f), str(fmt))
     if (label) out.push({ product: label, category: 'Sausage' })
   }
   const sh = asObj(d.smokehouse)
@@ -96,11 +103,22 @@ function porkValueAdd(d: Json): ValueAddItem[] {
   } else if (str(belly.cut) === 'bacon') {
     out.push({ product: 'Bacon', category: 'Bacon', qty: perAnimal })
   }
-  // shoulder.addons is an array of plain strings ('shoulder-bacon', 'pulled-pork').
-  // These are single per-shoulder flags, not paired counts — one each.
-  const shoulderAddons = (Array.isArray(asObj(d.shoulder).addons) ? asObj(d.shoulder).addons as unknown[] : []).map(String)
-  if (shoulderAddons.includes('shoulder-bacon')) out.push({ product: 'Shoulder Bacon', category: 'Bacon' })
-  if (shoulderAddons.includes('pulled-pork'))    out.push({ product: 'Pulled Pork', category: 'Smoked' })
+  // The shoulder is a paired primal too (two per whole hog), split-aware via
+  // shoulder2. Shoulder bacon and pulled pork are per-shoulder add-ons, so a
+  // whole hog with both shoulders bacon'd counts 2 — same rule as belly/ham
+  // (Charlie, 2026-07-30: "Shoulder Bacon should be a 1 or 2").
+  const shoulder = asObj(d.shoulder)
+  const addons1  = arrOfStr(shoulder.addons)
+  const shoulder2 = asObj(shoulder.shoulder2)
+  const shoulderSplit = Object.keys(shoulder2).length > 0
+  const addons2  = arrOfStr(shoulder2.addons)
+  const shoulderQty = (addon: string) => shoulderSplit
+    ? (addons1.includes(addon) ? 1 : 0) + (addons2.includes(addon) ? 1 : 0)
+    : (addons1.includes(addon) ? perAnimal : 0)
+  const sbQty = shoulderQty('shoulder-bacon')
+  const ppQty = shoulderQty('pulled-pork')
+  if (sbQty) out.push({ product: 'Shoulder Bacon', category: 'Bacon',  qty: sbQty })
+  if (ppQty) out.push({ product: 'Pulled Pork',    category: 'Smoked', qty: ppQty })
 
   const ham = asObj(d.ham)
   // Pair each ham's style with its own cut (a split order can steak the fresh

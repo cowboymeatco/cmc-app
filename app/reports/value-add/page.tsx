@@ -35,7 +35,9 @@ interface Sheet {
 const COL_ORDER = [
   'Bacon', 'Shoulder Bacon', 'Cured & Smoked Ham', 'Cured & Smoked Hocks',
   'Smoked Chops', 'Pulled Pork',
-  'Pork Sausage', 'Italian Sausage', 'Jumpstart Spicy Sausage',
+  'Pork Sausage', 'Pork Sausage Links', 'Pork Sausage Patties',
+  'Italian Sausage', 'Italian Sausage Links', 'Italian Sausage Patties',
+  'Jumpstart Spicy Sausage', 'Jumpstart Spicy Sausage Links', 'Jumpstart Spicy Sausage Patties',
   'Brats', 'Snack Sticks', 'Summer Sausage', 'Jerky', 'Hot Dogs',
 ]
 const colRank = (p: string) => { const i = COL_ORDER.indexOf(p); return i === -1 ? 999 : i }
@@ -128,9 +130,14 @@ export default function ValueAddReport() {
   const rowQty   = (s: Sheet) => s.products.reduce((n, p) => n + qtyOf(p), 0)
   // Cell text: a bare quantity for plain products ("2"), qty×detail for the ones
   // that carry a spec ("2× Cut in Half", "German · 25 lb"), joined when a product
-  // has more than one variant on the sheet.
+  // has more than one variant on the sheet. Ham always carries its count — even a
+  // single one reads "1×" — so the expected quantity is explicit (Charlie).
   const cellText = (items: VAItem[]) =>
-    items.map(it => it.detail ? (qtyOf(it) > 1 ? `${qtyOf(it)}× ${it.detail}` : it.detail) : String(qtyOf(it))).join('  /  ')
+    items.map(it => {
+      if (!it.detail) return String(qtyOf(it))
+      const showQty = qtyOf(it) > 1 || it.product === 'Cured & Smoked Ham'
+      return showQty ? `${qtyOf(it)}× ${it.detail}` : it.detail
+    }).join('  /  ')
   const colTotals = useMemo(
     () => cols.map(c => rows.reduce((n, s) => n + itemsFor(s, c).reduce((m, it) => m + qtyOf(it), 0), 0)),
     [cols, rows],
