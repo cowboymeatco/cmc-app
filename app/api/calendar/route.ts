@@ -31,7 +31,7 @@ const LANE_HREF: Record<Lane, string> = {
   receiving:  '/receiving',
   harvest:    '/schedule',
   processing: '/scanner',
-  smokehouse: '/value-add',
+  smokehouse: '/cooks',
   retail:     '/orders',
 }
 
@@ -61,15 +61,20 @@ export async function GET(req: NextRequest) {
     supabase.from('processing_sessions')
       .select('id, session_date, customer_name, status')
       .gte('session_date', from).lte('session_date', to),
-    // Smokehouse — actual cook cycles (the real log). Scheduling/planned cooks
-    // will layer in later once that workflow exists (Charlie, 2026-07-30).
+    // Smokehouse — actual cook cycles (the real log), tagged with their recipe
+    // on /cooks. Scheduling/planned cooks layer in next (Charlie, 2026-07-30).
     supabase.from('smokehouse_cook')
-      .select('id, started_at, ended_at, batch, operator')
+      .select('id, started_at, ended_at, batch, operator, profile_key')
       .gte('started_at', `${from}T00:00:00`).lte('started_at', `${to}T23:59:59`),
     supabase.from('retail_orders')
       .select('id, due_date, customer_name, fulfillment_type, status')
       .gte('due_date', from).lte('due_date', to),
   ])
+
+  // Recipe names for tagged cooks (small table — one fetch, mapped by key).
+  const { data: cookProfiles } = await supabase.from('cook_profile').select('profile_key, display_name')
+  const recipeByKey = new Map<string, string>()
+  for (const p of cookProfiles ?? []) recipeByKey.set(String(p.profile_key), p.display_name as string)
 
   for (const r of recvAppts.data ?? []) {
     const d = day(r.receive_date as string)
@@ -126,9 +131,11 @@ export async function GET(req: NextRequest) {
     const end   = r.ended_at   ? new Date(r.ended_at   as string).getTime() : 0
     const hours = start && end && end > start ? Math.round((end - start) / 360000) / 10 : 0
     const sub = [r.operator, hours ? `${hours}h` : ''].filter(Boolean).join(' · ')
+    // Show the tagged recipe when the crew has set one; else the batch name; else generic.
+    const recipe = r.profile_key ? recipeByKey.get(String(r.profile_key)) : ''
     events.push({
       id: `cook-${r.id}`, lane: 'smokehouse', date: d,
-      title: r.batch ? `🔥 ${r.batch}` : '🔥 Cook',
+      title: `🔥 ${recipe || r.batch || 'Cook'}`,
       subtitle: sub || undefined,
       status: r.ended_at ? 'complete' : 'active', href: LANE_HREF.smokehouse,
     })
