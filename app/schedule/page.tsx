@@ -147,7 +147,15 @@ function blankCustomer() {
   return { id: crypto.randomUUID(), customer_name: '', portion: 'Whole', payment_responsibility: 'producer' as const, contact_preference: 'Email', contact_value: '', linked_cutting_instruction_id: '', reminder_last_sent_at: null, reminder_count: 0 }
 }
 function blankAppt(date?: string): Partial<HarvestAppointment> {
-  return { harvest_date: date ?? isoDate(), species: 'Beef', head_count: 1, source: '', notes: '', status: 'Booked', linked_carcass_id: '', customers: [blankCustomer()] }
+  return { harvest_date: date ?? isoDate(), receive_date: '', species: 'Beef', head_count: 1, source: '', notes: '', status: 'Booked', linked_carcass_id: '', customers: [blankCustomer()] }
+}
+
+// The receiving default — day before harvest. Some producers bring in the day
+// of slaughter, so this is only the starting value; the field is editable.
+function dayBefore(iso: string): string {
+  if (!iso) return ''
+  const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() - 1)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 interface BlockedDate { date: string; reason: string }
@@ -959,6 +967,9 @@ function Modal({ editing, saving, onChange, onSave, onClose }: {
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'1rem', marginBottom:'1rem' }}>
           <Field label="Harvest Date">
             <input type="date" value={editing.harvest_date??''} onChange={e=>onChange({...editing,harvest_date:e.target.value})} style={inputStyle()} />
+          </Field>
+          <Field label="Receive Date">
+            <input type="date" value={editing.receive_date || dayBefore(editing.harvest_date ?? '')} onChange={e=>onChange({...editing,receive_date:e.target.value})} style={inputStyle()} />
           </Field>
           <Field label="Species">
             <select value={editing.species??'Beef'} onChange={e=>onChange({...editing,species:e.target.value as any})} style={{ ...inputStyle(), color: speciesColor(editing.species??'') }}>
