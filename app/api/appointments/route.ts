@@ -177,6 +177,8 @@ export async function POST(req: NextRequest) {
     .from('harvest_appointments')
     .insert([{
       harvest_date:      body.harvest_date,
+      // Null lets the DB trigger default it to the day before harvest.
+      receive_date:      body.receive_date || null,
       species:           body.species,
       head_count:        body.head_count ?? 1,
       source:            body.source ?? '',
@@ -197,6 +199,10 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
   const { id, ...updates } = body
+
+  // An empty receive_date means "use the default" — coerce to null so the
+  // trigger fills the day before harvest instead of erroring on ''.
+  if ('receive_date' in updates && !updates.receive_date) updates.receive_date = null
 
   // Only touch `customers` when the edit actually carries it. Backfill any
   // just-linked-but-unnamed slot from its cut sheet FIRST, so linkCustomers

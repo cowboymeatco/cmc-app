@@ -49,6 +49,7 @@ export interface HarvestAppointment {
   id:               string
   created_at:       string
   harvest_date:     string          // ISO date string
+  receive_date?:    string          // scheduled arrival; defaults to the day before harvest, editable
   species:          Species
   head_count:       number
   source:           string
