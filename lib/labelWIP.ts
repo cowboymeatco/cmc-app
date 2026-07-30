@@ -161,15 +161,15 @@ export function generateWIPLabel(data: WIPTagData, flags: LabelFlags = DEFAULT_F
 
   const exemptHTML = flags.retail_exempt ? `<div class="exempt">RETAIL EXEMPT</div>` : ''
 
-  // Only worth ink when there's more than one order — a single order is already
-  // the intent line. The assigned one gets the arrow so the list reads as
-  // "here's everything, this box starts here".
-  const orderRows = (data.orders?.length ?? 0) > 1
-    ? `<div class="orders-k">CUSTOMER'S SMOKEHOUSE ORDERS</div>
-       <div class="orders">${(data.orders ?? []).map(o =>
-         `<div class="order${o.current ? ' cur' : ''}"><span>${o.current ? '&#9656; ' : ''}${esc(o.label)}</span><span>${o.lbs != null ? `${o.lbs} lb` : ''}</span></div>`
-       ).join('')}</div>`
-    : ''
+  // Multiple orders share the big bordered INTENT box, each as its own bold
+  // line — same weight as a single intent, not a fine-print list (Charlie,
+  // 2026-07-30). The arrow marks the order this box starts.
+  const multiOrders = (data.orders?.length ?? 0) > 1
+  const intentHTML = multiOrders
+    ? `<div class="intent multi">${(data.orders ?? []).map(o =>
+        `<div class="iline">${o.current ? '&#9656; ' : ''}${esc(o.label).toUpperCase()}${o.lbs != null ? ` &middot; ${o.lbs} LB` : ''}</div>`
+      ).join('')}</div>`
+    : `<div class="intent">${esc(data.intent).toUpperCase()}</div>`
 
   const itemRows = data.items.length > 0
     ? `<hr><div class="items">${data.items.map(i =>
@@ -214,11 +214,11 @@ export function generateWIPLabel(data: WIPTagData, flags: LabelFlags = DEFAULT_F
              font-family: 'Arial Narrow', Arial, sans-serif; font-size: 10.5pt; padding: 0.5px 0; }
   .srcnote { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 7.5pt; text-align: center;
              font-style: italic; margin: -1px 0 3px; }
-  .orders-k{ font-size: 8pt; font-weight: bold; letter-spacing: 0.1em; text-align: center; margin-top: 2px; }
-  .orders  { border: 1.5px solid #000; border-radius: 3px; padding: 2px 4px; margin-bottom: 3px; }
-  .order   { display: flex; justify-content: space-between; align-items: baseline;
-             font-family: 'Arial Narrow', Arial, sans-serif; font-size: 10.5pt; padding: 0.5px 0; }
-  .order.cur { font-weight: bold; font-family: Arial, sans-serif; }
+  /* Two-plus orders: same bordered box, one bold line each. Slightly smaller
+     than a lone intent so two full flavor names still land on a 3.7in tag. */
+  .intent.multi { font-size: 14pt; }
+  .intent .iline { padding: 1px 0; }
+  .intent .iline + .iline { border-top: 1px solid #000; }
   .batch   { text-align: center; font-size: 10pt; margin-top: 3px; }
   .batch b { font-family: monospace; letter-spacing: 0.1em; font-size: 12pt; }
   .barcode { text-align: center; margin: 3px 0 1px; }
@@ -238,13 +238,12 @@ export function generateWIPLabel(data: WIPTagData, flags: LabelFlags = DEFAULT_F
   ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
 
   <div class="intent-k">INTENT</div>
-  <div class="intent">${esc(data.intent).toUpperCase()}</div>
+  ${intentHTML}
   ${data.intentSource === 'name'
     ? `<div class="srcnote">from cut card matched by name — check it's the right customer</div>`
     : data.intentSource
       ? `<div class="srcnote">from ${esc(data.intentSource)}-linked cut card</div>`
       : ''}
-  ${orderRows}
 
   ${inspection}
 
