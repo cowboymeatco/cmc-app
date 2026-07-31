@@ -313,6 +313,44 @@ export interface CarcassAssignment {
   linked_cutting_instruction_id: string | null
 }
 
+// ── Cure Tags ─────────────────────────────────────────────────────────────────
+// Numbered tamper seals zip-tied to hams/bacons on the cut floor. The number
+// carries the customer through the cure cooler to the smokehouse.
+
+export interface CureTagRoll {
+  id:           string
+  created_at:   string
+  start_number: number
+  end_number:   number
+  digits:       number   // printed length incl. leading zeros ("0036013" = 7)
+  note:         string | null
+}
+
+export interface CureTag {
+  id:            string
+  created_at:    string
+  tag_number:    string   // as printed/scanned, incl. leading zeros
+  product:       string   // Ham | Bacon | Shoulder Bacon | Hocks | Jowl | Other
+  customer_name: string
+  session_date:  string | null
+  weight_lbs:    number | null
+  status:        'curing' | 'done'
+  completed_at:  string | null
+  notes:         string | null
+  // Set by GET /api/cure-tags?instructions=1 — what this customer's cut sheet
+  // says to do with this product once it's out of cure ("Cut in Quarters").
+  instruction?:  string | null
+}
+
+// A scanned code is a cure tag when its digits fall inside a registered roll
+// and it's printed at that roll's length. Length must match exactly so a
+// mistyped 4-digit PLU can never land inside a seal range.
+export function matchCureTag(code: string, rolls: CureTagRoll[]): boolean {
+  if (!/^\d{5,12}$/.test(code)) return false
+  const n = parseInt(code, 10)
+  return rolls.some(r => code.length === r.digits && n >= r.start_number && n <= r.end_number)
+}
+
 // ── Delivery Scans ────────────────────────────────────────────────────────────
 
 export interface DeliveryScan {
