@@ -47,6 +47,30 @@ export function sectionValues(report: QboReport, group: string): number[] {
   return cols.slice(1).map(c => num(c.value))
 }
 
+export interface AccountLine {
+  name: string
+  total: number    // the report's Total column (or the only money column)
+}
+
+/**
+ * Leaf account rows under a section, with their period totals. Data rows put
+ * the account name in ColData[0] and the Total in the last money column.
+ */
+export function leafAccounts(report: QboReport, group: string): AccountLine[] {
+  const out: AccountLine[] = []
+  const walk = (rows: ReportRow[] | undefined) => {
+    for (const r of rows ?? []) {
+      const cols = r.ColData
+      if (cols && cols.length >= 2 && cols[0].value) {
+        out.push({ name: cols[0].value, total: num(cols[cols.length - 1].value) })
+      }
+      walk(r.Rows?.Row)
+    }
+  }
+  walk(findSection(report, group)?.Rows?.Row)
+  return out
+}
+
 /** The YYYY-MM of each month column, in report order (Total column excluded). */
 export function monthColumns(report: QboReport): string[] {
   const out: string[] = []

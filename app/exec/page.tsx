@@ -47,13 +47,53 @@ const monthLabel = (ym: string) => `${MONTH_NAMES[Number(ym.slice(5, 7)) - 1]} $
 
 // ── Data shapes (mirror the /api/exec routes) ─────────────────────────────────
 interface PnlMonth { month: string; income: number; cogs: number; expenses: number; net: number }
+interface CostAccount {
+  name: string
+  section: 'cogs' | 'expenses'
+  bucket: 'fixed' | 'variable'
+  overridden: boolean
+  total: number
+}
 interface PnlData {
+  start: string
+  end: string
   months: PnlMonth[]
+  monthCount: number
   totals: { income: number; cogs: number; expenses: number; net: number }
+  accounts: CostAccount[]
   variableRate: number
   fixedMonthly: number
   breakEvenMonthly: number | null
   avgMonthlyIncome: number
+}
+
+// ── Period presets for the financial section ──────────────────────────────────
+// All date math in local time — this app is used in one timezone.
+function isoDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+const PERIODS = [
+  { key: 'ttm', label: 'Trailing 12 months' },
+  { key: 'ytd', label: 'Year to date' },
+  { key: 'qtr', label: 'This quarter' },
+  { key: 'lastqtr', label: 'Last quarter' },
+  { key: 'mo', label: 'This month' },
+  { key: 'lastmo', label: 'Last month' },
+] as const
+type PeriodKey = (typeof PERIODS)[number]['key']
+
+function periodRange(key: PeriodKey): { start: string; end: string } {
+  const now = new Date()
+  const y = now.getFullYear(), m = now.getMonth()
+  const q = Math.floor(m / 3)
+  switch (key) {
+    case 'ytd':     return { start: isoDate(new Date(y, 0, 1)), end: isoDate(now) }
+    case 'qtr':     return { start: isoDate(new Date(y, q * 3, 1)), end: isoDate(now) }
+    case 'lastqtr': return { start: isoDate(new Date(y, (q - 1) * 3, 1)), end: isoDate(new Date(y, q * 3, 0)) }
+    case 'mo':      return { start: isoDate(new Date(y, m, 1)), end: isoDate(now) }
+    case 'lastmo':  return { start: isoDate(new Date(y, m - 1, 1)), end: isoDate(new Date(y, m, 0)) }
+    default:        return { start: isoDate(new Date(y, m - 11, 1)), end: isoDate(now) }
+  }
 }
 interface OverviewData {
   asOf: string
@@ -200,8 +240,87 @@ function BreakEvenChart({ pnl }: { pnl: PnlData }) {
         )}
       </svg>
       <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.25rem' }}>
-        Dots are the last 12 actual months (cream = profitable, orange = loss). Hover a dot for the month&apos;s numbers.
+        Dots are the {pnl.months.length} actual month{pnl.months.length === 1 ? '' : 's'} in the period (cream = profitable, orange = loss). Hover a dot for the month&apos;s numbers.
       </div>
+    </div>
+  )
+}
+
+// ── Cost bucket board: drag an account between overheads and variable ────────
+function BucketBoard({ accounts, monthCount, onMove }: {
+  accounts: CostAccount[]
+  monthCount: number
+  onMove: (account: string, bucket: 'fixed' | 'variable' | null) => void
+}) {
+  const [dragging, setDragging] = useState<string | null>(null)
+  const [overCol, setOverCol] = useState<'fixed' | 'variable' | null>(null)
+
+  const col = (bucket: 'fixed' | 'variable', title: string, sub: string) => {
+    const rows = accounts.filter(a => a.bucket === bucket)
+    const colTotal = rows.reduce((s, a) => s + a.total, 0)
+    return (
+      <div
+        onDragOver={e => { e.preventDefault(); setOverCol(bucket) }}
+        onDragLeave={() => setOverCol(c => (c === bucket ? null : c))}
+        onDrop={e => {
+          e.preventDefault()
+          const name = e.dataTransfer.getData('text/plain')
+          setOverCol(null); setDragging(null)
+          if (name) onMove(name, bucket)
+        }}
+        style={{
+          flex: '1 1 320px', minWidth: 300, background: C.dark, borderRadius: 4,
+          border: overCol === bucket ? `1px dashed ${C.tan}` : '1px solid rgba(166,120,90,0.18)',
+          padding: '0.9rem 1rem',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.2rem' }}>
+          <span style={{ fontSize: '0.72rem', color: C.cream, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{title}</span>
+          <span style={{ fontSize: '0.8rem', color: C.tan, fontWeight: 600 }}>{usd(colTotal / Math.max(monthCount, 1))}/mo</span>
+        </div>
+        <div style={{ fontSize: '0.66rem', color: C.lightBrown, marginBottom: '0.6rem' }}>{sub}</div>
+        {rows.map(a => (
+          <div
+            key={a.name}
+            draggable
+            onDragStart={e => { e.dataTransfer.setData('text/plain', a.name); setDragging(a.name) }}
+            onDragEnd={() => { setDragging(null); setOverCol(null) }}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8, padding: '0.32rem 0.5rem',
+              borderTop: '1px solid rgba(166,120,90,0.12)', cursor: 'grab',
+              opacity: dragging === a.name ? 0.4 : 1, fontSize: '0.8rem',
+            }}
+          >
+            <span style={{ color: C.lightBrown }}>⋮⋮</span>
+            <span style={{ flex: 1, color: C.tan, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={a.name}>
+              {a.name}
+              {a.overridden && (
+                <button onClick={() => onMove(a.name, null)}
+                  title="Back to its QuickBooks default"
+                  style={{ background: 'transparent', border: 'none', color: WARN_COLOR, fontSize: '0.65rem', cursor: 'pointer', marginLeft: 6, padding: 0 }}>
+                  moved · reset
+                </button>
+              )}
+            </span>
+            <span style={{ color: C.cream, fontWeight: 600, whiteSpace: 'nowrap' }}>{usd(a.total / Math.max(monthCount, 1))}<span style={{ color: C.lightBrown, fontWeight: 400 }}>/mo</span></span>
+            <button
+              onClick={() => onMove(a.name, bucket === 'fixed' ? 'variable' : 'fixed')}
+              title={bucket === 'fixed' ? 'Move to variable' : 'Move to overheads'}
+              style={{ background: 'transparent', border: '1px solid rgba(166,120,90,0.35)', borderRadius: 4, color: C.lightBrown, fontSize: '0.7rem', cursor: 'pointer', padding: '0.1rem 0.4rem' }}
+            >
+              {bucket === 'fixed' ? '→' : '←'}
+            </button>
+          </div>
+        ))}
+        {rows.length === 0 && <div style={{ fontSize: '0.75rem', color: C.lightBrown, padding: '0.5rem' }}>Drop accounts here</div>}
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+      {col('fixed', 'Overheads (fixed)', 'The flat line — paid whether or not product moves. Drag or use the arrows to re-file.')}
+      {col('variable', 'Variable (scales with revenue)', 'The slope on the opex line — costs that rise with volume.')}
     </div>
   )
 }
@@ -239,16 +358,41 @@ export default function ExecPage() {
   const [labor, setLabor] = useState<LaborWeek[] | null>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
 
+  const [period, setPeriod] = useState<PeriodKey>('ttm')
+
+  const grab = <T,>(url: string, set: (v: T) => void, key: string) =>
+    fetch(url).then(r => r.json()).then(d => {
+      if (d.error) setErrors(e => ({ ...e, [key]: String(d.message ?? d.error) }))
+      else {
+        setErrors(e => { const next = { ...e }; delete next[key]; return next })
+        set(d as T)
+      }
+    }).catch(() => setErrors(e => ({ ...e, [key]: 'Request failed' })))
+
+  const loadPnl = (p: PeriodKey) => {
+    const { start, end } = periodRange(p)
+    return grab<PnlData>(`/api/exec/pnl?start=${start}&end=${end}`, setPnl, 'pnl')
+  }
+
   const loadAll = () => {
-    const grab = <T,>(url: string, set: (v: T) => void, key: string) =>
-      fetch(url).then(r => r.json()).then(d => {
-        if (d.error) setErrors(e => ({ ...e, [key]: String(d.message ?? d.error) }))
-        else set(d as T)
-      }).catch(() => setErrors(e => ({ ...e, [key]: 'Request failed' })))
-    grab<PnlData>('/api/exec/pnl', setPnl, 'pnl')
+    loadPnl(period)
     grab<OverviewData>('/api/exec/overview', setOverview, 'overview')
     grab<WarData>('/api/exec/war', setWar, 'war')
     grab<{ weeks: LaborWeek[] }>('/api/exec/labor', d => setLabor(d.weeks), 'labor')
+  }
+
+  const changePeriod = (p: PeriodKey) => {
+    setPeriod(p)
+    setPnl(null)
+    loadPnl(p)
+  }
+
+  const moveBucket = async (account: string, bucket: 'fixed' | 'variable' | null) => {
+    await fetch('/api/exec/buckets', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account, bucket }),
+    })
+    loadPnl(period)
   }
 
   useEffect(() => {
@@ -373,7 +517,19 @@ export default function ExecPage() {
             </div>
           )}
 
-          <SectionLabel>Break-even — trailing 12 months</SectionLabel>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <SectionLabel>Break-even — {PERIODS.find(p => p.key === period)?.label.toLowerCase()}</SectionLabel>
+            <select
+              value={period}
+              onChange={e => changePeriod(e.target.value as PeriodKey)}
+              style={{
+                background: C.dark, color: C.cream, border: '1px solid rgba(166,120,90,0.4)',
+                borderRadius: 4, fontSize: '0.8rem', padding: '0.35rem 0.6rem',
+              }}
+            >
+              {PERIODS.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+            </select>
+          </div>
           {errors.pnl ? <ErrorBox msg={errors.pnl} /> : !pnl ? (
             <div style={{ color: C.lightBrown, fontSize: '0.85rem' }}>Loading QuickBooks P&amp;L…</div>
           ) : (
@@ -384,11 +540,18 @@ export default function ExecPage() {
                 <StatTile label="Avg revenue" value={usd(pnl.avgMonthlyIncome)} unit="/mo"
                   accent={pnl.breakEvenMonthly && pnl.avgMonthlyIncome >= pnl.breakEvenMonthly ? INCOME_COLOR : COST_COLOR} />
                 <StatTile label="Overheads" value={usd(pnl.fixedMonthly)} unit="/mo" sub="fixed operating expenses" />
-                <StatTile label="Variable cost rate" value={`${(pnl.variableRate * 100).toFixed(1)}%`} sub="COGS per revenue dollar" />
-                <StatTile label="Net, 12 months" value={`${pnl.totals.net < 0 ? '−' : '+'}${usd(Math.abs(pnl.totals.net))}`}
+                <StatTile label="Variable cost rate" value={`${(pnl.variableRate * 100).toFixed(1)}%`} sub="per revenue dollar" />
+                <StatTile label={`Net, ${pnl.monthCount} mo`} value={`${pnl.totals.net < 0 ? '−' : '+'}${usd(Math.abs(pnl.totals.net))}`}
                   accent={pnl.totals.net >= 0 ? INCOME_COLOR : COST_COLOR} />
               </div>
               <BreakEvenChart pnl={pnl} />
+
+              <SectionLabel>Cost buckets — what&apos;s behind the lines</SectionLabel>
+              <div style={{ fontSize: '0.78rem', color: C.lightBrown, margin: '0 0 0.75rem' }}>
+                Every cost account in the period, biggest first. Overheads set the flat line; variable sets the slope.
+                Disagree with a filing? Drag it (or tap the arrow) — the break-even math re-runs and your call sticks.
+              </div>
+              <BucketBoard accounts={pnl.accounts} monthCount={pnl.monthCount} onMove={moveBucket} />
             </>
           )}
 
