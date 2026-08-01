@@ -54,10 +54,18 @@ export async function POST(req: NextRequest) {
 // card still belongs to the same person.
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
-  const { ids, status, customer_id } = body as { ids: string[]; status: string; customer_id?: string }
+  const { ids, status, customer_id } = body as { ids: string[]; status: string; customer_id?: string | null }
 
-  const updates: { status: string; customer_id?: string } = { status }
-  if (customer_id) updates.customer_id = customer_id
+  // Omitting the field leaves the existing link alone, so archive/restore never
+  // disturbs it. Sending it explicitly — which only the link-to-appointment
+  // flow does — is authoritative: the card follows the slot it was just linked
+  // to, and null clears. Treating null as "not sent" is how a card kept
+  // pointing at the customer from a PREVIOUS link: Sarah Sleaford's cut sheet
+  // stayed filed under First State Bank of Forsyth after being re-linked to her
+  // own slot, because that slot had no resolved customer at the moment of
+  // linking and the stale id silently survived.
+  const updates: { status: string; customer_id?: string | null } = { status }
+  if (customer_id !== undefined) updates.customer_id = customer_id || null
 
   const { error } = await supabase
     .from('cutting_instructions')

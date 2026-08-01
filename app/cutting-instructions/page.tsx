@@ -2104,7 +2104,10 @@ export default function CuttingInstructionsPage() {
     await fetch('/api/cutting-instructions', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids: [selected.id], status: 'linked', ...(customerId ? { customer_id: customerId } : {}) }),
+      // Always send it, even as null: the slot this card was just linked to is
+      // the answer, and omitting the key would leave a stale customer from an
+      // earlier link in place.
+      body: JSON.stringify({ ids: [selected.id], status: 'linked', customer_id: customerId }),
     })
     setSelected(prev => prev ? { ...prev, status: 'linked' } : null)
     setLinking(false)
