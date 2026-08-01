@@ -435,6 +435,13 @@ export default function ScannerPage() {
   const [reassignBusy,     setReassignBusy]     = useState(false)
   const [reassignNewName,  setReassignNewName]  = useState('')
 
+  // ── Repack (move cuts between boxes) ─────────────────────────────────────────
+  const [repackBox,        setRepackBox]        = useState<BoxRecord | null>(null)
+  const [repackScans,      setRepackScans]      = useState<ScanLine[]>([])
+  const [repackPicked,     setRepackPicked]     = useState<Set<string>>(new Set())
+  const [repackTarget,     setRepackTarget]     = useState<string>('new')   // box id, or 'new'
+  const [repackBusy,       setRepackBusy]       = useState(false)
+
   const scanRef       = useRef<HTMLInputElement>(null)
   // Stable refs so event listeners don't go stale
   const activeBoxRef  = useRef<BoxRecord | null>(null)
@@ -1072,6 +1079,88 @@ export default function ScannerPage() {
       setReassignBusy(false)
       setReassignBox(null)
       setReassignNewName('')
+      scanRef.current?.focus()
+    }
+  }
+
+  // ── Repack: move cuts out of a box ───────────────────────────────────────────
+  // The fix for "this got scanned into the wrong box". The cuts are MOVED, not
+  // re-scanned, so the weight is never counted twice — see /api/boxes/repack.
+  async function openRepack(box: BoxRecord) {
+    setRepackBox(box)
+    setRepackPicked(new Set())
+    setRepackTarget('new')
+    setRepackScans([])
+    const res  = await fetch(`/api/boxes/scans?box_id=${box.id}`)
+    const data = await res.json().catch(() => [])
+    setRepackScans(Array.isArray(data) ? ([...data] as ScanLine[]).reverse() : [])
+  }
+
+  async function doRepack() {
+    const box = repackBox
+    if (!box || repackPicked.size === 0) return
+    setRepackBusy(true)
+    try {
+      const res = await fetch('/api/boxes/repack', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scan_ids: Array.from(repackPicked),
+          target: repackTarget === 'new' ? { new_box: true } : { box_id: repackTarget },
+        }),
+      })
+      const data = await res.json().catch(() => ({} as { error?: string }))
+      if (!res.ok) {
+        window.alert(`Repack failed: ${(data as { error?: string }).error ?? res.statusText}`)
+        return
+      }
+      const result = data as {
+        moved: number; moved_lbs: number; target_box_id: string
+        boxes: BoxRecord[]; relabel: string[]; emptied: string[]
+      }
+
+      // Fold the recomputed boxes back in, and pick up a newly created one.
+      const byId = new Map(result.boxes.map(b => [b.id, b]))
+      setBoxes(prev => {
+        const merged = prev.map(b => byId.get(b.id) ?? b)
+        const known  = new Set(merged.map(b => b.id))
+        const added  = result.boxes.filter(b => !known.has(b.id))
+        return [...merged, ...added].sort((a, b) => a.box_number - b.box_number)
+      })
+      const stillActive = byId.get(activeBoxRef.current?.id ?? '')
+      if (stillActive) setActiveBox(stillActive)
+      // Refresh the visible scan list if it was one of the boxes touched.
+      const openId = activeBoxRef.current?.id
+      if (openId && byId.has(openId)) {
+        const r = await fetch(`/api/boxes/scans?box_id=${openId}`)
+        const d = await r.json().catch(() => [])
+        setScans(Array.isArray(d) ? ([...d] as ScanLine[]).reverse() : [])
+      }
+
+      const target = result.boxes.find(b => b.id === result.target_box_id)
+      setLastKind('ok')
+      setLastItem(`Moved ${result.moved} cut${result.moved !== 1 ? 's' : ''} · ${result.moved_lbs.toFixed(2)} lb → Box ${target?.box_number ?? '?'}`)
+      setFlash('ok')
+      setTimeout(() => setFlash(null), 3000)
+
+      // A closed box's printed label states a weight and a cut count. Repacking
+      // just changed those, so the old label is wrong and has to be replaced.
+      for (const id of result.relabel) {
+        const b = result.boxes.find(x => x.id === id)
+        if (b) openPrintWindow(b, [], labelFlags)
+      }
+      if (result.emptied.length > 0) {
+        const nums = result.emptied
+          .map(id => result.boxes.find(b => b.id === id)?.box_number)
+          .filter(Boolean).join(', ')
+        window.alert(`Box ${nums} is now empty. Select it and use 🗑 Delete if it isn't going to be used.`)
+      }
+      loadSessions()
+    } catch {
+      window.alert('Repack failed — network error')
+    } finally {
+      setRepackBusy(false)
+      setRepackBox(null)
+      setRepackPicked(new Set())
       scanRef.current?.focus()
     }
   }
@@ -1808,7 +1897,7 @@ export default function ScannerPage() {
             key={box.id}
             onClick={() => switchBox(box)}
             onContextMenu={e => { e.preventDefault(); setBoxMenu({ box, x: e.clientX, y: e.clientY }) }}
-            title="Right-click to reassign to another session"
+            title="Right-click to repack or reassign this box"
             style={{
               padding: '0.35rem 0.9rem', borderRadius: 3, cursor: 'pointer',
               fontSize: '0.85rem', fontWeight: 700, whiteSpace: 'nowrap',
@@ -2282,6 +2371,12 @@ export default function ScannerPage() {
           onContextMenu={e => { e.preventDefault(); setBoxMenu(null) }}>
           <div style={{ position: 'fixed', top: Math.min(boxMenu.y, window.innerHeight - 60), left: Math.min(boxMenu.x, window.innerWidth - 240), background: C.darkBrown, border: '1px solid rgba(166,120,90,0.45)', borderRadius: 6, boxShadow: '0 6px 24px rgba(0,0,0,0.6)', overflow: 'hidden' }}>
             <button
+              onClick={e => { e.stopPropagation(); const b = boxMenu.box; setBoxMenu(null); openRepack(b) }}
+              style={{ display: 'block', width: '100%', textAlign: 'left', background: 'transparent', border: 'none', color: C.cream, padding: '0.7rem 1.1rem', fontSize: '0.88rem', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+              ⇱ Repack Box {boxMenu.box.box_number} — move cuts to another box…
+            </button>
+            <div style={{ height: 1, background: 'rgba(166,120,90,0.25)' }} />
+            <button
               onClick={e => { e.stopPropagation(); const b = boxMenu.box; setBoxMenu(null); setReassignBox(b); setReassignNewName(''); loadSessions() }}
               style={{ display: 'block', width: '100%', textAlign: 'left', background: 'transparent', border: 'none', color: C.cream, padding: '0.7rem 1.1rem', fontSize: '0.88rem', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
               ⇄ Reassign Box {boxMenu.box.box_number} to another session…
@@ -2444,6 +2539,124 @@ export default function ScannerPage() {
       )}
 
       {/* ── Split / chub modal ── */}
+      {/* ── Repack modal — move cuts out of a box without re-scanning them ── */}
+      {repackBox && (() => {
+        const pickedLbs = repackScans
+          .filter(s => repackPicked.has(s.id))
+          .reduce((sum, s) => sum + (Number(s.weight_lbs) || 0), 0)
+        const allPicked = repackScans.length > 0 && repackPicked.size === repackScans.length
+        const others    = boxes.filter(b => b.id !== repackBox.id)
+        const tgtBox    = repackTarget === 'new' ? null : others.find(b => b.id === repackTarget)
+        // Reprinting is the honest consequence: a closed box's label states a
+        // weight and cut count that this move is about to change.
+        const willReprint = [repackBox, ...(tgtBox ? [tgtBox] : [])].filter(b => b.is_closed)
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: '1rem' }}
+            onClick={() => { if (!repackBusy) setRepackBox(null) }}>
+            <div onClick={e => e.stopPropagation()} style={{ background: C.darkBrown, border: '1px solid rgba(166,120,90,0.4)', borderRadius: 8, padding: '1.5rem', width: '100%', maxWidth: 560, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.3rem' }}>
+                <div style={{ fontFamily: 'Georgia, serif', color: C.cream, fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                  Repack Box {repackBox.box_number}
+                </div>
+                <button onClick={() => setRepackBox(null)} disabled={repackBusy}
+                  style={{ background: 'none', border: 'none', color: C.lightBrown, fontSize: '1.4rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
+              </div>
+              <div style={{ color: C.lightBrown, fontSize: '0.78rem', marginBottom: '1rem', lineHeight: 1.45 }}>
+                Pick the cuts that belong somewhere else. They are <strong style={{ color: C.tan }}>moved</strong>, not re-scanned,
+                so the weight is never counted twice.
+              </div>
+
+              {/* Select cuts */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.45rem' }}>
+                <div style={{ fontSize: '0.7rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                  Cuts to move
+                </div>
+                <button
+                  onClick={() => setRepackPicked(allPicked ? new Set() : new Set(repackScans.map(s => s.id)))}
+                  style={{ background: 'none', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, color: C.lightBrown, fontSize: '0.72rem', padding: '0.2rem 0.55rem', cursor: 'pointer' }}>
+                  {allPicked ? 'Clear all' : 'Select all'}
+                </button>
+              </div>
+              <div style={{ flex: 1, overflowY: 'auto', minHeight: 100, maxHeight: 260, background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: 4, marginBottom: '1rem' }}>
+                {repackScans.length === 0 ? (
+                  <div style={{ padding: '1.5rem', textAlign: 'center', color: C.lightBrown, fontSize: '0.85rem', fontStyle: 'italic' }}>
+                    This box has no cuts in it.
+                  </div>
+                ) : repackScans.map(s => {
+                  const on = repackPicked.has(s.id)
+                  return (
+                    <label key={s.id}
+                      style={{ display: 'flex', alignItems: 'center', gap: '0.7rem', padding: '0.5rem 0.85rem', borderBottom: '1px solid rgba(166,120,90,0.08)', cursor: 'pointer', background: on ? 'rgba(201,168,130,0.10)' : 'transparent' }}>
+                      <input
+                        type="checkbox" checked={on}
+                        onChange={() => setRepackPicked(prev => {
+                          const next = new Set(prev)
+                          if (next.has(s.id)) next.delete(s.id); else next.add(s.id)
+                          return next
+                        })}
+                        style={{ width: 17, height: 17, accentColor: C.tan, cursor: 'pointer', flexShrink: 0 }}
+                      />
+                      <span style={{ color: C.cream, fontSize: '0.88rem', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {s.item_name || `PLU ${s.plu_number}`}
+                      </span>
+                      <span style={{ color: C.lightBrown, fontSize: '0.7rem', fontFamily: 'monospace', flexShrink: 0 }}>PLU {s.plu_number}</span>
+                      <span style={{ color: C.tan, fontSize: '0.85rem', fontFamily: 'monospace', fontWeight: 700, flexShrink: 0, minWidth: 64, textAlign: 'right' }}>
+                        {Number(s.weight_lbs).toFixed(2)} lb
+                      </span>
+                    </label>
+                  )
+                })}
+              </div>
+
+              {/* Destination */}
+              <div style={{ fontSize: '0.7rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.45rem' }}>
+                Move them into
+              </div>
+              <select
+                value={repackTarget}
+                onChange={e => setRepackTarget(e.target.value)}
+                style={{ width: '100%', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(166,120,90,0.4)', borderRadius: 4, padding: '0.6rem', color: C.cream, fontSize: '0.9rem', outline: 'none', marginBottom: '0.85rem' }}
+              >
+                <option value="new">+ A new box in this session</option>
+                {others.map(b => (
+                  <option key={b.id} value={b.id}>
+                    Box {b.box_number}{b.is_final ? ' ★' : ''}{b.box_label ? ` · ${b.box_label}` : ''}{b.is_closed ? ' (closed)' : ''}
+                  </option>
+                ))}
+              </select>
+
+              {/* What is about to happen */}
+              <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 4, padding: '0.65rem 0.9rem', marginBottom: '1rem', fontFamily: 'monospace', fontSize: '0.88rem', fontWeight: 700, color: repackPicked.size > 0 ? C.tan : C.lightBrown }}>
+                → {repackPicked.size} cut{repackPicked.size !== 1 ? 's' : ''} · {pickedLbs.toFixed(2)} lb
+                {' '}into {repackTarget === 'new' ? 'a new box' : `Box ${tgtBox?.box_number}`}
+              </div>
+              {willReprint.length > 0 && repackPicked.size > 0 && (
+                <div style={{ color: C.yellow, fontSize: '0.75rem', marginBottom: '1rem', lineHeight: 1.4 }}>
+                  ⚠ Box {willReprint.map(b => b.box_number).join(' and ')} {willReprint.length > 1 ? 'are' : 'is'} closed —
+                  a corrected label will print. Replace the one on the box.
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: '0.6rem' }}>
+                <button
+                  onClick={() => setRepackBox(null)} disabled={repackBusy}
+                  style={{ flex: 1, background: 'transparent', border: '1px solid rgba(166,120,90,0.3)', color: C.lightBrown, borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', cursor: 'pointer' }}>
+                  Cancel
+                </button>
+                <button
+                  onClick={doRepack}
+                  disabled={repackBusy || repackPicked.size === 0}
+                  style={{ flex: 2, background: repackPicked.size === 0 ? C.medBrown : C.tan, color: C.dark, border: 'none', borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', fontWeight: 700, cursor: repackPicked.size === 0 ? 'not-allowed' : 'pointer', opacity: repackBusy ? 0.7 : 1 }}>
+                  {repackBusy ? '⟳ Moving…' : '⇱ Move cuts'}
+                </button>
+              </div>
+
+            </div>
+          </div>
+        )
+      })()}
+
       {splitModal && (() => {
         const { scan } = splitModal
         const each     = splitCount > 0 ? Math.round((scan.weight_lbs / splitCount) * 100) / 100 : 0
