@@ -4,7 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { generateLabel, LabelFlags, LabelAnimal, BoxRecord, BoxScan } from '@/lib/label'
 import { generateCMBLabel } from '@/lib/labelCMB'
 import { generateWIPLabel, wipDataFromBox, isWIPBoxLabel } from '@/lib/labelWIP'
-import { parseSmokehouseOrders, roundJerkyLabel, classifyBoxProduct, allocateIntent } from '@/lib/wipIntent'
+import { parseSmokehouseOrders, roundJerkyLabel, classifyBoxProduct, allocateIntent, primalValueAdd } from '@/lib/wipIntent'
 
 // Central Montana Beef cases get their US Foods label (4x6, GTIN barcode)
 // instead of the standard CMC box label. Sessions are named "CMB", "CMB 26181",
@@ -154,7 +154,7 @@ type WIPIntentHit = {
 
 // Decide what this box is for and remember it. Assignment is sticky: once a box
 // has started filling an order, reprinting its tag must not move it.
-async function resolveWIPIntent(box: BoxRecord, items: { name: string }[], boxLbs: number): Promise<WIPIntentHit | null> {
+async function resolveWIPIntent(box: BoxRecord, items: { name: string; weight?: number }[], boxLbs: number): Promise<WIPIntentHit | null> {
   const product = classifyBoxProduct(items)
 
   // Already assigned on an earlier print — reuse it verbatim. No source note:
@@ -209,6 +209,12 @@ async function resolveWIPIntent(box: BoxRecord, items: { name: string }[], boxLb
       assignment = allocateIntent(orders, assigned, boxLbs)
     }
   }
+
+  // A box of a primal — shoulder roasts, chops, ham, belly — carries whatever
+  // value-add the customer ordered ON that cut. This is a separate pool from the
+  // trim orders: pulled pork is made from the shoulder that's in the box, so it
+  // never competes for the brat pounds and never needs allocating.
+  if (!assignment) assignment = primalValueAdd(data, product)
 
   if (!assignment) return null
 

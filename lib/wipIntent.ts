@@ -88,13 +88,99 @@ export function roundJerkyLabel(data: Record<string, unknown> | null | undefined
 }
 
 // What's actually in the box decides which pool it draws from.
-export type BoxProduct = 'round' | 'trim' | 'other'
+export type BoxProduct = 'round' | 'trim' | 'shoulder' | 'loin' | 'ham' | 'belly' | 'other'
 
-export function classifyBoxProduct(items: { name: string }[]): BoxProduct {
+// A primal box is raw cut headed for value add. Names that are already the
+// finished thing — PORK SHOULDER BACON, PORK CHOPS SMOKED, PORK PULLED — are
+// output, not input, and must never be read as "a shoulder to make into
+// something": they're what comes back.
+const FINISHED_RE = /\b(cured|smoked|bacon|pulled|jerky|sausage|snack|summer|hot ?dogs?)\b/
+
+// Raw cut → the primal it came off. Hocks and ribs are deliberately absent:
+// nothing on the cut card turns them into a value-add product.
+const PRIMAL_RE: [BoxProduct, RegExp][] = [
+  ['shoulder', /\b(shoulder|butt)\b/],
+  ['loin',     /\b(chops?|loin)\b/],
+  ['ham',      /\bham\b/],
+  ['belly',    /\b(belly|side)\b/],
+]
+
+export function classifyBoxProduct(items: { name: string; weight?: number }[]): BoxProduct {
   const names = items.map(i => (i.name || '').toLowerCase())
-  if (names.some(n => /\bround\b/.test(n)))                    return 'round'
+  if (names.some(n => /\bround\b/.test(n)))                      return 'round'
   if (names.some(n => /\b(trim|grind|ground|burger)\b/.test(n))) return 'trim'
-  return 'other'
+
+  // Primals are weighed, not first-matched: a box holding 7 lb of shoulder and
+  // 2 lb of spare ribs is a shoulder box, and mixed boxes are normal on the
+  // floor. Only raw cuts vote.
+  const byPrimal: Partial<Record<BoxProduct, number>> = {}
+  let total = 0
+  for (const item of items) {
+    const w = Number(item.weight) || 1
+    total += w
+    const n = (item.name || '').toLowerCase()
+    if (FINISHED_RE.test(n)) continue
+    const hit = PRIMAL_RE.find(([, re]) => re.test(n))
+    if (hit) byPrimal[hit[0]] = (byPrimal[hit[0]] ?? 0) + w
+  }
+  const ranked = Object.entries(byPrimal).sort((a, b) => b[1] - a[1])
+
+  // The winner has to be most of the box, not merely the only thing that voted.
+  // Ribs and hocks map to no value-add product, so without this a tub of ribs
+  // carrying one stray roast would print PULLED PORK. Claiming nothing is the
+  // safer miss: the crew still reads the item list.
+  if (!ranked.length || ranked[0][1] * 2 < total) return 'other'
+  return ranked[0][0] as BoxProduct
+}
+
+// The value-add work a cut card declares ON A PRIMAL, as opposed to the
+// smokehouse orders that trim feeds. Only cut-CONSUMING work counts: the wizard
+// tells the customer pulled pork "takes the place of your roasts" and smoked
+// chops are "your bone-in chops" cured, so a box of those cuts IS that order.
+// Shoulder bacon is deliberately absent — the card promises it "doesn't affect
+// your roast", so it never speaks for a box of roasts — and side pork is fresh,
+// not value add.
+//
+// Labels match the words the customer read on the cut card, not invented ones.
+const asRec = (v: unknown) => (v && typeof v === 'object' ? v as Record<string, unknown> : null)
+const addonsOf = (v: unknown): string[] => {
+  const a = asRec(v)?.addons
+  return Array.isArray(a) ? a.map(String) : []
+}
+
+export function primalValueAdd(
+  data: Record<string, unknown> | null | undefined,
+  primal: BoxProduct,
+): Assignment | null {
+  if (!data) return null
+
+  // Split primals hold the second half nested (shoulder.shoulder2) or as a
+  // sibling field (ham.style2) — check both halves, since a box of roasts sent
+  // to value add is going to the one destination roasts have.
+  switch (primal) {
+    case 'shoulder': {
+      const s = asRec(data.shoulder)
+      const all = [...addonsOf(s), ...addonsOf(s?.shoulder2)]
+      return all.includes('pulled-pork') ? { key: 'shoulder#pulled-pork', label: 'Pulled Pork' } : null
+    }
+    case 'loin': {
+      const l = asRec(data.loin)
+      const all = [...addonsOf(l), ...addonsOf(l?.loin2)]
+      return all.includes('smoked-chops') ? { key: 'loin#smoked-chops', label: 'Smoked Chops' } : null
+    }
+    case 'ham': {
+      const h = asRec(data.ham)
+      const styles = [h?.style, h?.style2].map(String)
+      return styles.includes('cured-smoked') ? { key: 'ham#cured-smoked', label: 'Ham — Cured & Smoked' } : null
+    }
+    case 'belly': {
+      const b = asRec(data.belly)
+      const cuts = [b?.cut, b?.cut2].map(String)
+      return cuts.includes('bacon') ? { key: 'belly#bacon', label: 'Bacon' } : null
+    }
+    default:
+      return null
+  }
 }
 
 export interface Assignment { key: string; label: string }
