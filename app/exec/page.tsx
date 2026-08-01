@@ -101,6 +101,28 @@ interface OverviewData {
   accountsReceivable: number
   openInvoices: { count: number; balance: number; top: { docNumber: string; customerName: string; balance: number; txnDate: string }[] }
 }
+interface RiskInvoice {
+  docNumber: string
+  customerName: string
+  balance: number
+  txnDate: string
+  dueDate: string | null
+  ageDays: number
+  risk: 'held' | 'released' | 'unknown'
+  inferred: boolean
+  atBakerStorage: boolean
+  lastSession: string | null
+}
+interface ReceivablesData {
+  asOf: string
+  coverageStart: string | null
+  total: { count: number; balance: number }
+  held: { count: number; balance: number }
+  released: { count: number; balance: number }
+  unknown: { count: number; balance: number }
+  atRisk: RiskInvoice[]
+  unknownTop: RiskInvoice[]
+}
 interface WarData {
   today: string; week_since: string
   recv_in_d: number; recv_in_w: number; harv_out_d: number; harv_out_w: number
@@ -246,6 +268,44 @@ function BreakEvenChart({ pnl }: { pnl: PnlData }) {
   )
 }
 
+// ── Receivables risk: is the meat still behind the money? ────────────────────
+function RiskTable({ rows, caption }: { rows: RiskInvoice[]; caption: string }) {
+  if (rows.length === 0) return null
+  return (
+    <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '0.75rem 1.25rem', marginTop: '1rem', overflowX: 'auto' }}>
+      <div style={{ fontSize: '0.68rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '0.5rem' }}>
+        {caption}
+      </div>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', color: C.tan }}>
+        <thead>
+          <tr style={{ color: C.lightBrown, textTransform: 'uppercase', fontSize: '0.65rem', letterSpacing: '0.08em' }}>
+            <th style={{ textAlign: 'left', padding: '0.35rem 0.5rem' }}>Customer</th>
+            <th style={{ textAlign: 'left', padding: '0.35rem 0.5rem' }}>Invoice</th>
+            <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Age</th>
+            <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Balance</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => (
+            <tr key={r.docNumber} style={{ borderTop: '1px solid rgba(166,120,90,0.12)' }}>
+              <td style={{ padding: '0.35rem 0.5rem' }}>
+                {r.customerName}
+                {r.atBakerStorage && <span style={{ color: WARN_COLOR, fontSize: '0.68rem', marginLeft: 6 }}>at Baker storage</span>}
+                {r.inferred && <span style={{ color: C.lightBrown, fontSize: '0.68rem', marginLeft: 6 }}>pre-scanner</span>}
+              </td>
+              <td style={{ padding: '0.35rem 0.5rem', color: C.lightBrown }}>#{r.docNumber} · {r.txnDate}</td>
+              <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', color: r.ageDays > 60 ? COST_COLOR : C.tan, fontWeight: r.ageDays > 60 ? 600 : 400 }}>
+                {r.ageDays}d
+              </td>
+              <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', color: C.cream, fontWeight: 600 }}>{usd(r.balance)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 // ── Cost bucket board: drag an account between overheads and variable ────────
 function BucketBoard({ accounts, monthCount, onMove }: {
   accounts: CostAccount[]
@@ -354,6 +414,7 @@ export default function ExecPage() {
 
   const [pnl, setPnl] = useState<PnlData | null>(null)
   const [overview, setOverview] = useState<OverviewData | null>(null)
+  const [receivables, setReceivables] = useState<ReceivablesData | null>(null)
   const [war, setWar] = useState<WarData | null>(null)
   const [labor, setLabor] = useState<LaborWeek[] | null>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -377,6 +438,7 @@ export default function ExecPage() {
   const loadAll = () => {
     loadPnl(period)
     grab<OverviewData>('/api/exec/overview', setOverview, 'overview')
+    grab<ReceivablesData>('/api/exec/receivables', setReceivables, 'receivables')
     grab<WarData>('/api/exec/war', setWar, 'war')
     grab<{ weeks: LaborWeek[] }>('/api/exec/labor', d => setLabor(d.weeks), 'labor')
   }
@@ -503,18 +565,32 @@ export default function ExecPage() {
                 sub={overview ? `${overview.openInvoices.count} unpaid` : undefined} />
             </div>
           )}
-          {overview && overview.openInvoices.top.length > 0 && (
-            <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '0.75rem 1.25rem', marginTop: '1rem' }}>
-              <div style={{ fontSize: '0.68rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '0.5rem' }}>
-                Biggest open balances
+          <SectionLabel>Receivables risk — is the meat still behind the money?</SectionLabel>
+          {errors.receivables ? <ErrorBox msg={errors.receivables} /> : !receivables ? (
+            <div style={{ color: C.lightBrown, fontSize: '0.85rem' }}>Matching invoices to product on hand…</div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                <StatTile hero label="Released &amp; unpaid" value={usd(receivables.released.balance)}
+                  accent={receivables.released.balance > 0 ? COST_COLOR : INCOME_COLOR}
+                  sub={`${receivables.released.count} invoice${receivables.released.count === 1 ? '' : 's'} · product gone, unsecured`} />
+                <StatTile label="Held (product on site)" value={usd(receivables.held.balance)} accent={INCOME_COLOR}
+                  sub={`${receivables.held.count} invoice${receivables.held.count === 1 ? '' : 's'} · we still hold the collateral`} />
+                <StatTile label="Unmatched" value={usd(receivables.unknown.balance)}
+                  sub={`${receivables.unknown.count} invoice${receivables.unknown.count === 1 ? '' : 's'} · no session found by name`} />
               </div>
-              {overview.openInvoices.top.map(inv => (
-                <div key={inv.docNumber} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem', color: C.tan, padding: '0.2rem 0' }}>
-                  <span>{inv.customerName} <span style={{ color: C.lightBrown }}>#{inv.docNumber} · {inv.txnDate}</span></span>
-                  <span style={{ color: C.cream, fontWeight: 600 }}>{usd(inv.balance)}</span>
-                </div>
-              ))}
-            </div>
+              <div style={{ fontSize: '0.75rem', color: C.lightBrown, marginTop: '0.6rem' }}>
+                Invoices written before the scanner started keeping sessions{receivables.coverageStart ? ` (${receivables.coverageStart})` : ''} can&apos;t
+                be matched, so they&apos;re counted as released and tagged <span style={{ color: C.tan }}>pre-scanner</span> — that product is long gone.
+              </div>
+              <div style={{ fontSize: '0.75rem', color: C.lightBrown, marginTop: '0.6rem' }}>
+                While a customer&apos;s meat sits in the cooler, a processor&apos;s lien secures the invoice. Once the boxes leave, the same
+                dollars ride on goodwill alone — that&apos;s the released number, and it&apos;s where bad debt comes from.
+                Matching is by customer name against processing sessions; unmatched invoices are never guessed into a bucket.
+              </div>
+              <RiskTable rows={receivables.atRisk} caption="At risk — released, still unpaid (biggest first)" />
+              <RiskTable rows={receivables.unknownTop} caption="Unmatched — no processing session found for this name" />
+            </>
           )}
 
           <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
