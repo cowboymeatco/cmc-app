@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { generateLabel, LabelFlags, LabelAnimal, BoxRecord, BoxScan } from '@/lib/label'
 import { generateCMBLabel } from '@/lib/labelCMB'
 import { generateWIPLabel, wipDataFromBox, isWIPBoxLabel } from '@/lib/labelWIP'
+import { generatePretag } from '@/lib/labelPretag'
 import { parseSmokehouseOrders, roundJerkyLabel, classifyBoxProduct, allocateIntent, primalValueAdd, isSameParty, CICard } from '@/lib/wipIntent'
 
 // Central Montana Beef cases get their US Foods label (4x6, GTIN barcode)
@@ -288,6 +289,15 @@ export async function GET(req: NextRequest) {
 
   const box   = boxRes.data   as BoxRecord
   const scans = scansRes.data as BoxScan[]
+
+  // The packing tag is pure wayfinding — a number for the inside of the lid,
+  // printed before the box holds anything. It needs no scans, no carcass and no
+  // compliance mark, so it short-circuits ahead of all that resolution.
+  if (searchParams.get('format') === 'pretag') {
+    return new NextResponse(generatePretag(box), {
+      headers: { 'Content-Type': 'text/html;charset=utf-8', 'Cache-Control': 'no-store' },
+    })
+  }
 
   // Resolve the animal behind this box from the carcass scans of its packing
   // session (customer + pack date): processing_inputs.linked_harvest_id points

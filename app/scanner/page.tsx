@@ -1023,7 +1023,7 @@ export default function ScannerPage() {
   // ── Print label ───────────────────────────────────────────────────────────────
   // `format` forces a layout; left off, the label route decides — a box headed
   // to value add prints the WIP tag instead of the finished box label.
-  function openPrintWindow(box: BoxRecord, _labelScans: ScanLine[], flags: LabelFlags = labelFlags, format?: 'std' | 'wip') {
+  function openPrintWindow(box: BoxRecord, _labelScans: ScanLine[], flags: LabelFlags = labelFlags, format?: 'std' | 'wip' | 'pretag') {
     const p = new URLSearchParams({ box_id: box.id })
     if (!flags.usda_bug)     p.set('usda',   '0')
     if (flags.retail_exempt) p.set('exempt', '1')
@@ -2143,6 +2143,17 @@ export default function ScannerPage() {
                 >
                   🗑 Delete
                 </button>
+                {/* Printed BEFORE the box is filled and stuck inside the lid, so
+                    several open boxes on the bench aren't anonymous. */}
+                {!activeBox.is_closed && (
+                  <button
+                    onClick={() => openPrintWindow(activeBox, scans, labelFlags, 'pretag')}
+                    title="Print a box-number sticker for the inside of the lid"
+                    style={{ background: 'transparent', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, padding: '0.4rem 0.75rem', color: C.lightBrown, fontSize: '0.78rem', cursor: 'pointer' }}
+                  >
+                    🔖 Box Tag
+                  </button>
+                )}
                 <button
                   onClick={() => openPrintWindow(activeBox, scans)}
                   title={boxPrintsWIP(activeBox)
