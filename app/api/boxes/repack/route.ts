@@ -1,7 +1,7 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
-import { isoDate } from '@/lib/dates'
+import { createBox } from '@/lib/boxes'
 
 export const dynamic = 'force-dynamic'
 
@@ -96,25 +96,17 @@ export async function POST(req: NextRequest) {
       .eq('pack_date', session.pack_date)
     if (nErr) return NextResponse.json({ error: nErr.message }, { status: 500 })
     const nextNum = (sessionBoxes ?? []).reduce((m, b) => Math.max(m, Number(b.box_number) || 0), 0) + 1
-    const dateStr = isoDate().slice(2).replace(/-/g, '')
-    const rand = Math.random().toString(36).substring(2, 6).toUpperCase()
 
-    const { data: made, error: cErr } = await supabase
-      .from('boxes')
-      .insert([{
-        customer_name: session.customer_name,
-        pack_date:     session.pack_date,
-        box_number:    nextNum,
-        is_closed:     false,
-        is_final:      target.is_final ?? false,
-        box_label:     target.box_label?.trim() || null,
-        serial_number: `CMC${dateStr}${rand}`,
-      }])
-      .select()
-      .single()
-    if (cErr) return NextResponse.json({ error: cErr.message }, { status: 500 })
-    targetBoxId = made.id
-    createdBox = made
+    const made = await createBox({
+      customer_name: session.customer_name,
+      pack_date:     session.pack_date,
+      box_number:    nextNum,
+      is_final:      target.is_final ?? false,
+      box_label:     target.box_label?.trim() || null,
+    })
+    if (!made.box) return NextResponse.json({ error: made.error }, { status: made.status })
+    targetBoxId = made.box.id as string
+    createdBox = made.box
   }
 
   // ── The move itself ────────────────────────────────────────────────────────

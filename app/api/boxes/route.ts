@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { isoDate } from '@/lib/dates'
+import { createBox } from '@/lib/boxes'
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -25,25 +26,16 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await req.json()
-  const dateStr = isoDate().slice(2).replace(/-/g, '')
-  const rand = Math.random().toString(36).substring(2, 6).toUpperCase()
-  const serial_number = `CMC${dateStr}${rand}`
-  const { data, error } = await supabase
-    .from('boxes')
-    .insert([{
-      // Trim: a stray trailing space would key this box to a phantom session
-      customer_name: (body.customer_name ?? '').trim(),
-      pack_date:     body.pack_date ?? isoDate(),
-      box_number:    body.box_number ?? 1,
-      is_closed:     false,
-      is_final:      body.is_final ?? false,
-      serial_number: body.serial_number ?? serial_number,
-    }])
-    .select()
-    .single()
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json(data)
+  const res = await createBox({
+    // Trim: a stray trailing space would key this box to a phantom session
+    customer_name: (body.customer_name ?? '').trim(),
+    pack_date:     body.pack_date ?? isoDate(),
+    box_number:    body.box_number ?? 1,
+    is_final:      body.is_final ?? false,
+    serial_number: body.serial_number ?? null,
+  })
+  if (!res.box) return NextResponse.json({ error: res.error }, { status: res.status })
+  return NextResponse.json(res.box)
 }
 
 export async function PATCH(req: NextRequest) {
