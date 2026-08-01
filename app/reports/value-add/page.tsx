@@ -2,7 +2,6 @@
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { isoDate } from '@/lib/dates'
-import { CureTag, CureTagRoll } from '@/lib/types'
 
 const C = {
   dark:       '#1A0A04',
@@ -72,232 +71,6 @@ function download(content: string, filename: string) {
   document.body.removeChild(a); URL.revokeObjectURL(url)
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// CURE TAGS — numbered seals riding on hams/bacons through the cure cooler.
-// One row per tagged piece: whose it is, what it is, and what their cut sheet
-// says to do with it when it comes out (tag 0036013 → ham → cut in quarters).
-// ══════════════════════════════════════════════════════════════════════════════
-
-const dayDiff = (fromIso: string, toIso?: string | null) =>
-  Math.max(0, Math.round((new Date(toIso ?? Date.now()).getTime() - new Date(fromIso).getTime()) / 86400000))
-
-function CureTagsView() {
-  const [tags,    setTags]    = useState<CureTag[]>([])
-  const [rolls,   setRolls]   = useState<CureTagRoll[]>([])
-  const [loading, setLoading] = useState(true)
-  const [err,     setErr]     = useState('')
-
-  const [statusFilter, setStatusFilter] = useState<'curing' | 'done' | 'all'>('curing')
-  const [search,       setSearch]       = useState('')
-  const [busyId,       setBusyId]       = useState<string | null>(null)
-
-  // Roll registration
-  const [showRolls, setShowRolls] = useState(false)
-  const [rollStart, setRollStart] = useState('')
-  const [rollEnd,   setRollEnd]   = useState('')
-  const [rollNote,  setRollNote]  = useState('')
-  const [rollErr,   setRollErr]   = useState('')
-  const [rollBusy,  setRollBusy]  = useState(false)
-
-  const load = useCallback(async () => {
-    setLoading(true); setErr('')
-    try {
-      const [tagRes, rollRes] = await Promise.all([
-        fetch('/api/cure-tags?instructions=1'),
-        fetch('/api/cure-tags/rolls'),
-      ])
-      const tagData  = await tagRes.json()
-      const rollData = await rollRes.json()
-      setTags(Array.isArray(tagData) ? tagData : [])
-      setRolls(Array.isArray(rollData) ? rollData : [])
-    } catch { setErr('Could not load cure tags.') }
-    finally { setLoading(false) }
-  }, [])
-  useEffect(() => { load() }, [load])
-
-  const rows = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    return tags.filter(t => {
-      if (statusFilter !== 'all' && t.status !== statusFilter) return false
-      if (q && !t.customer_name.toLowerCase().includes(q) && !t.tag_number.includes(q)) return false
-      return true
-    })
-  }, [tags, statusFilter, search])
-
-  const inCure = tags.filter(t => t.status === 'curing').length
-
-  async function setStatus(tag: CureTag, status: 'curing' | 'done') {
-    setBusyId(tag.id)
-    try {
-      const res = await fetch('/api/cure-tags', {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: tag.id, status }),
-      })
-      const row: CureTag = await res.json()
-      if (res.ok) setTags(prev => prev.map(t => t.id === tag.id ? { ...t, ...row } : t))
-    } finally { setBusyId(null) }
-  }
-
-  async function removeTag(tag: CureTag) {
-    if (!confirm(`Delete tag ${tag.tag_number} (${tag.product} · ${tag.customer_name})? Only for mis-scans — finished pieces should be marked done.`)) return
-    setBusyId(tag.id)
-    try {
-      const res = await fetch(`/api/cure-tags?id=${tag.id}`, { method: 'DELETE' })
-      if (res.ok) setTags(prev => prev.filter(t => t.id !== tag.id))
-    } finally { setBusyId(null) }
-  }
-
-  async function registerRoll() {
-    setRollErr(''); setRollBusy(true)
-    try {
-      const res = await fetch('/api/cure-tags/rolls', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ start: rollStart.trim(), end: rollEnd.trim(), note: rollNote.trim() }),
-      })
-      const data = await res.json()
-      if (!res.ok) { setRollErr(data.error ?? 'Could not register the roll.'); return }
-      setRolls(prev => [data, ...prev])
-      setRollStart(''); setRollEnd(''); setRollNote('')
-    } catch { setRollErr('Could not register the roll.') }
-    finally { setRollBusy(false) }
-  }
-
-  const pad = (n: number, digits: number) => String(n).padStart(digits, '0')
-
-  const th: React.CSSProperties = { textAlign: 'left', padding: '0.6rem 0.7rem', color: C.tan, fontWeight: 700, whiteSpace: 'nowrap', fontSize: '0.76rem', textTransform: 'uppercase', letterSpacing: '0.06em' }
-  const td: React.CSSProperties = { padding: '0.5rem 0.7rem', color: C.cream, whiteSpace: 'nowrap' }
-
-  return (
-    <>
-      {/* Controls */}
-      <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '1rem' }}>
-        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as 'curing' | 'done' | 'all')} style={{ ...INPUT, width: 160 }}>
-          <option value="curing">🧂 In cure ({inCure})</option>
-          <option value="done">✓ Done</option>
-          <option value="all">All tags</option>
-        </select>
-        <input
-          placeholder="Search customer or tag #…"
-          value={search} onChange={e => setSearch(e.target.value)}
-          style={{ ...INPUT, flex: 1, minWidth: 180 }}
-        />
-        <button onClick={() => setShowRolls(v => !v)} style={{
-          background: 'transparent', color: C.tan, border: `1px solid ${C.tan}`, borderRadius: 3,
-          padding: '0.5rem 1.1rem', fontSize: '0.82rem', fontWeight: 700, cursor: 'pointer',
-        }}>
-          {showRolls ? 'Hide seal rolls' : `Seal rolls (${rolls.length})`}
-        </button>
-      </div>
-
-      {/* Seal rolls — register the printed range when a new roll arrives */}
-      {showRolls && (
-        <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '1rem 1.25rem', marginBottom: '1rem' }}>
-          <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.75rem' }}>
-            Registered seal rolls — the scanner only reads numbers in these ranges as cure tags
-          </div>
-          {rolls.map(r => (
-            <div key={r.id} style={{ color: C.cream, fontSize: '0.85rem', fontFamily: 'monospace', marginBottom: '0.35rem' }}>
-              {pad(r.start_number, r.digits)} – {pad(r.end_number, r.digits)}
-              <span style={{ color: C.lightBrown }}>  ·  {r.end_number - r.start_number + 1} seals{r.note ? `  ·  ${r.note}` : ''}</span>
-            </div>
-          ))}
-          {!rolls.length && <div style={{ color: C.lightBrown, fontSize: '0.85rem', marginBottom: '0.5rem' }}>No rolls yet — register the first one when the seals arrive.</div>}
-          <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', alignItems: 'center', marginTop: '0.75rem' }}>
-            <input placeholder="First seal # (e.g. 0036001)" value={rollStart} onChange={e => setRollStart(e.target.value)} style={{ ...INPUT, width: 190, fontFamily: 'monospace' }} />
-            <input placeholder="Last seal # (e.g. 0036500)" value={rollEnd} onChange={e => setRollEnd(e.target.value)} style={{ ...INPUT, width: 190, fontFamily: 'monospace' }} />
-            <input placeholder="Note (optional)" value={rollNote} onChange={e => setRollNote(e.target.value)} style={{ ...INPUT, flex: 1, minWidth: 140 }} />
-            <button onClick={registerRoll} disabled={rollBusy || !rollStart.trim() || !rollEnd.trim()} style={{
-              background: C.tan, color: C.dark, border: 'none', borderRadius: 3,
-              padding: '0.5rem 1.1rem', fontSize: '0.82rem', fontWeight: 700, cursor: 'pointer', opacity: rollBusy ? 0.6 : 1,
-            }}>+ Register roll</button>
-          </div>
-          {rollErr && <div style={{ color: C.amber, fontSize: '0.8rem', marginTop: '0.5rem' }}>{rollErr}</div>}
-        </div>
-      )}
-
-      {/* Tag list */}
-      <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, overflow: 'hidden' }}>
-        <div style={{ overflowX: 'auto' }}>
-          {loading ? (
-            <div style={{ padding: '2rem', textAlign: 'center', color: C.lightBrown }}>Loading…</div>
-          ) : err ? (
-            <div style={{ padding: '2rem', textAlign: 'center', color: C.amber }}>{err}</div>
-          ) : !rows.length ? (
-            <div style={{ padding: '2rem', textAlign: 'center', color: C.lightBrown }}>
-              {statusFilter === 'curing' ? 'Nothing in cure. Tags scanned on the cut floor land here.' : 'No tags for these filters.'}
-            </div>
-          ) : (
-            <table style={{ borderCollapse: 'collapse', fontSize: '0.85rem', minWidth: '100%' }}>
-              <thead>
-                <tr style={{ background: 'rgba(166,120,90,0.14)' }}>
-                  <th style={th}>Tag</th>
-                  <th style={th}>Customer</th>
-                  <th style={th}>Product</th>
-                  <th style={th}>Cut sheet says</th>
-                  <th style={{ ...th, textAlign: 'right' }}>Weight</th>
-                  <th style={th}>Tagged</th>
-                  <th style={{ ...th, textAlign: 'center' }}>Days in cure</th>
-                  <th style={th}>Status</th>
-                  <th style={th} />
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map(t => (
-                  <tr key={t.id} style={{ borderTop: '1px solid rgba(166,120,90,0.1)', opacity: busyId === t.id ? 0.5 : 1 }}>
-                    <td style={{ ...td, fontFamily: 'monospace', color: C.tan, fontWeight: 700 }}>🏷 {t.tag_number}</td>
-                    <td style={{ ...td, fontWeight: 600 }}>{t.customer_name}</td>
-                    <td style={td}>{t.product}</td>
-                    <td style={{ ...td, color: t.instruction ? C.green : C.lightBrown, fontWeight: t.instruction ? 700 : 400 }}>
-                      {t.instruction ?? 'no cut sheet found'}
-                    </td>
-                    <td style={{ ...td, textAlign: 'right', fontFamily: 'monospace' }}>{t.weight_lbs != null ? `${Number(t.weight_lbs).toFixed(2)} lb` : '—'}</td>
-                    <td style={{ ...td, color: C.lightBrown, fontFamily: 'monospace' }}>{fmtDay(t.session_date ?? t.created_at.slice(0, 10))}</td>
-                    <td style={{ ...td, textAlign: 'center', fontWeight: 700, color: C.blue }}>{dayDiff(t.created_at, t.completed_at)}</td>
-                    <td style={td}>
-                      <span style={{
-                        background: t.status === 'done' ? `${C.green}22` : `${C.amber}22`,
-                        border: `1px solid ${t.status === 'done' ? C.green : C.amber}55`,
-                        color: t.status === 'done' ? C.green : C.amber,
-                        fontSize: '0.7rem', fontWeight: 700, borderRadius: 99, padding: '2px 10px',
-                        textTransform: 'uppercase', letterSpacing: '0.08em',
-                      }}>
-                        {t.status === 'done' ? 'Done' : 'In cure'}
-                      </span>
-                    </td>
-                    <td style={{ ...td, textAlign: 'right' }}>
-                      {t.status === 'curing' ? (
-                        <button onClick={() => setStatus(t, 'done')} disabled={busyId === t.id} style={{
-                          background: C.green, color: C.dark, border: 'none', borderRadius: 3,
-                          padding: '0.35rem 0.8rem', fontSize: '0.78rem', fontWeight: 700, cursor: 'pointer', marginRight: '0.4rem',
-                        }}>✓ Done</button>
-                      ) : (
-                        <button onClick={() => setStatus(t, 'curing')} disabled={busyId === t.id} style={{
-                          background: 'transparent', color: C.lightBrown, border: '1px solid rgba(166,120,90,0.35)', borderRadius: 3,
-                          padding: '0.35rem 0.8rem', fontSize: '0.78rem', cursor: 'pointer', marginRight: '0.4rem',
-                        }}>↩ Back to cure</button>
-                      )}
-                      <button onClick={() => removeTag(t)} disabled={busyId === t.id} title="Delete (mis-scan only)" style={{
-                        background: 'transparent', color: C.lightBrown, border: 'none', cursor: 'pointer', fontSize: '0.9rem',
-                      }}>✕</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </div>
-
-      <p style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.75rem', lineHeight: 1.6 }}>
-        One row per <strong style={{ color: C.tan }}>numbered seal</strong> scanned on the cut floor — the tag rides the
-        piece through the cure cooler, so the smokehouse can scan or read any tag and see whose it is.
-        <strong style={{ color: C.tan }}> Cut sheet says</strong> is pulled live from that customer&apos;s cutting
-        instructions — how they want the piece finished once it&apos;s out of cure. Mark a tag
-        <strong style={{ color: C.tan }}> Done</strong> when the piece is processed and packed; delete is only for mis-scans.
-      </p>
-    </>
-  )
-}
 
 export default function ValueAddReport() {
   const today = isoDate()
@@ -313,9 +86,6 @@ export default function ValueAddReport() {
   const [search,  setSearch]  = useState('')
   const [sortKey, setSortKey] = useState<'date' | 'customer'>('date')
 
-  // 'sheets' = the ordered-value-add matrix off the cut sheets;
-  // 'tags' = the cure-tag queue — physical pieces in the cure cooler right now.
-  const [view, setView] = useState<'sheets' | 'tags'>('sheets')
 
   useEffect(() => {
     let cancelled = false
@@ -467,20 +237,6 @@ export default function ValueAddReport() {
 
       <main style={{ padding: '1.5rem 2rem', maxWidth: 1280, margin: '0 auto', boxSizing: 'border-box' }}>
 
-        {/* View toggle: what was ORDERED (cut sheets) vs what's IN CURE (tags) */}
-        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-          {([['sheets', '📋 Cut Sheets'], ['tags', '🏷 Cure Tags']] as const).map(([v, label]) => (
-            <button key={v} onClick={() => setView(v)} style={{
-              background: view === v ? C.tan : 'transparent',
-              color: view === v ? C.dark : C.lightBrown,
-              border: `1px solid ${view === v ? C.tan : 'rgba(166,120,90,0.35)'}`,
-              borderRadius: 3, padding: '0.5rem 1.2rem', fontSize: '0.85rem', fontWeight: 700,
-              cursor: 'pointer', letterSpacing: '0.04em',
-            }}>{label}</button>
-          ))}
-        </div>
-
-        {view === 'tags' ? <CureTagsView /> : <>
 
         {/* Controls */}
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '1rem' }}>
@@ -577,7 +333,6 @@ export default function ValueAddReport() {
           show the shared smokehouse and ground-sausage items only.
         </p>
 
-        </>}
       </main>
     </div>
   )
