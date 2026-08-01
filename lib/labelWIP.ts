@@ -241,9 +241,11 @@ export function generateWIPLabel(data: WIPTagData, flags: LabelFlags = DEFAULT_F
   ${intentHTML}
   ${data.intentSource === 'name'
     ? `<div class="srcnote">from cut card matched by name — check it's the right customer</div>`
-    : data.intentSource
-      ? `<div class="srcnote">from ${esc(data.intentSource)}-linked cut card</div>`
-      : ''}
+    : data.intentSource === 'name-multi'
+      ? `<div class="srcnote">this customer has more than one cut card — every order from all of them is listed; check which animal this is</div>`
+      : data.intentSource
+        ? `<div class="srcnote">from ${esc(data.intentSource)}-linked cut card</div>`
+        : ''}
 
   ${inspection}
 

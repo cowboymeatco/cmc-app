@@ -71,6 +71,32 @@ export function parseSmokehouseOrders(data: Record<string, unknown> | null | und
   return orders
 }
 
+export interface CICard { data: Record<string, unknown>; customerId: string | null }
+
+const cardEmail = (c: CICard) => String(c.data.customerEmail ?? '').trim().toLowerCase()
+
+/**
+ * Are these cut cards all the same customer? One person can have two animals in
+ * the same week — a whole hog and a half, each with its own card — and the floor
+ * writes one name on both. That is a different thing from two strangers sharing
+ * a name, and only the second is dangerous: merging strangers means cooking
+ * somebody else's order.
+ *
+ * Email is the test that actually holds. Daina Green's two cards were written to
+ * two different customer rows but carry one address, so customer_id alone would
+ * have called her two people — she is the only collision in the data where the
+ * two tests disagree. Cards with no email fall back to the id, and anything
+ * unproven stays unproven.
+ */
+export function isSameParty(cards: CICard[]): boolean {
+  if (cards.length < 2) return true
+  const emails = cards.map(cardEmail)
+  if (emails.every(Boolean)) return new Set(emails).size === 1
+  const ids = cards.map(c => c.customerId)
+  if (ids.every(Boolean)) return new Set(ids).size === 1
+  return false
+}
+
 // Rounds are their own decision — the customer picks jerky per round on the cut
 // card, so a box of rounds never competes for the trim orders.
 export function roundJerkyLabel(data: Record<string, unknown> | null | undefined): string | null {

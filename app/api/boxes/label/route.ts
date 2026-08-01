@@ -4,7 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { generateLabel, LabelFlags, LabelAnimal, BoxRecord, BoxScan } from '@/lib/label'
 import { generateCMBLabel } from '@/lib/labelCMB'
 import { generateWIPLabel, wipDataFromBox, isWIPBoxLabel } from '@/lib/labelWIP'
-import { parseSmokehouseOrders, roundJerkyLabel, classifyBoxProduct, allocateIntent, primalValueAdd } from '@/lib/wipIntent'
+import { parseSmokehouseOrders, roundJerkyLabel, classifyBoxProduct, allocateIntent, primalValueAdd, isSameParty, CICard } from '@/lib/wipIntent'
 
 // Central Montana Beef cases get their US Foods label (4x6, GTIN barcode)
 // instead of the standard CMC box label. Sessions are named "CMB", "CMB 26181",
@@ -85,7 +85,7 @@ const normName = (n: string) =>
     .replace(/\s+/g, ' ')
     .trim()
 
-interface CIMatch { data: Record<string, unknown>; via: string; name: string }
+interface CIMatch { cards: CICard[]; via: string; name: string }
 
 // Find the customer's cut card. Tries the databased links first, but in
 // practice most sessions have neither — carcass_assignments has a handful of
@@ -93,8 +93,10 @@ interface CIMatch { data: Record<string, unknown>; via: string; name: string }
 // is what actually connects a box to its orders today. How it matched gets
 // printed on the tag, because a name match deserves to be visible.
 async function resolveCuttingInstruction(box: BoxRecord): Promise<CIMatch | null> {
-  const pick = (row: { data?: unknown; customer_name?: string } | null, via: string): CIMatch | null =>
-    row?.data ? { data: row.data as Record<string, unknown>, via, name: row.customer_name ?? '' } : null
+  const pick = (row: { data?: unknown; customer_name?: string; customer_id?: string | null } | null, via: string): CIMatch | null =>
+    row?.data
+      ? { cards: [{ data: row.data as Record<string, unknown>, customerId: row.customer_id ?? null }], via, name: row.customer_name ?? '' }
+      : null
 
   // 1. Carcass scanned into this session → the assignment made at check-in.
   const inputs = await supabase
@@ -134,14 +136,48 @@ async function resolveCuttingInstruction(box: BoxRecord): Promise<CIMatch | null
     }
   }
 
-  // 3. Name. Only when exactly one card matches — two customers sharing a name
-  // means we cook somebody else's order, so leave it to the crew.
+  // 3. Name. Two strangers sharing a name means we'd cook somebody else's
+  // order, so that case still goes back to the crew. But one customer with two
+  // animals is not that case: her orders are all hers, and refusing outright is
+  // how a 50 lb tub of Daina Green's trim printed no intent while her 50 lb
+  // german brat order sat on the whole-hog card (Charlie, 2026-08-01).
   const target = normName(box.customer_name)
   if (!target) return null
-  const all = await supabase.from('cutting_instructions').select('data, customer_name, species')
+  const all = await supabase.from('cutting_instructions').select('data, customer_name, customer_id')
   const matches = (all.data ?? []).filter(r => normName(r.customer_name ?? '') === target)
-  if (matches.length !== 1) return null
-  return pick(matches[0], 'name')
+  if (!matches.length) return null
+
+  const cards: CICard[] = matches
+    .filter(r => r.data)
+    .map(r => ({ data: r.data as Record<string, unknown>, customerId: r.customer_id ?? null }))
+  if (!cards.length) return null
+  if (cards.length > 1 && !isSameParty(cards)) return null
+
+  return { cards, via: cards.length > 1 ? 'name-multi' : 'name', name: matches[0].customer_name ?? '' }
+}
+
+// Every smokehouse order this customer has open, across all her cards. Keys get
+// namespaced per card when there's more than one, so a whole hog's brats#0 and a
+// half's brats#0 can't be mistaken for the same order when pounds are tallied.
+function ordersAcross(cards: CICard[]) {
+  return cards.flatMap((c, i) =>
+    parseSmokehouseOrders(c.data).map(o => ({ ...o, key: cards.length > 1 ? `${i}:${o.key}` : o.key })))
+}
+
+/**
+ * One answer from several cards, or none. A card that asks for nothing doesn't
+ * vote — a customer whose whole hog is pulled pork and whose half is plain
+ * roasts has exactly one place for a shoulder that's been sent to value add.
+ * Two cards asking for *different* things is a real fork, and that goes back to
+ * the crew rather than getting guessed.
+ */
+function agreedAssignment(
+  cards: CICard[],
+  fn: (data: Record<string, unknown>) => { key: string; label: string } | null,
+): { key: string; label: string } | null {
+  const hits = cards.map(c => fn(c.data)).filter(Boolean) as { key: string; label: string }[]
+  const distinct = new Map(hits.map(h => [h.label, h]))
+  return distinct.size === 1 ? [...distinct.values()][0] : null
 }
 
 type WIPIntentHit = {
@@ -166,7 +202,7 @@ async function resolveWIPIntent(box: BoxRecord, items: { name: string; weight?: 
     if (product === 'trim') {
       const match = await resolveCuttingInstruction(box)
       if (match) {
-        orders = parseSmokehouseOrders(match.data)
+        orders = ordersAcross(match.cards)
           .map(o => ({ label: o.label, lbs: o.lbs, current: o.key === box.wip_intent_key }))
       }
     }
@@ -175,21 +211,23 @@ async function resolveWIPIntent(box: BoxRecord, items: { name: string; weight?: 
 
   const match = await resolveCuttingInstruction(box)
   if (!match) return null
-  const data = match.data
+  const cards = match.cards
 
   let assignment: { key: string; label: string } | null = null
-  let allOrders: ReturnType<typeof parseSmokehouseOrders> = []
+  let allOrders: ReturnType<typeof ordersAcross> = []
 
   if (product === 'round') {
-    const jerky = roundJerkyLabel(data)
-    if (jerky) assignment = { key: 'round#jerky', label: jerky }
+    assignment = agreedAssignment(cards, d => {
+      const jerky = roundJerkyLabel(d)
+      return jerky ? { key: 'round#jerky', label: jerky } : null
+    })
   }
 
   // Only trim feeds the smokehouse orders. A box of chops or roasts tagged WIP
   // — which happens whenever a whole session is moved to the Value Add queue —
   // must not consume the customer's brat order.
   if (!assignment && product === 'trim') {
-    const orders = parseSmokehouseOrders(data)
+    const orders = ordersAcross(cards)
     allOrders = orders
     if (orders.length) {
       // What the customer's other boxes have already committed to each order.
@@ -214,7 +252,7 @@ async function resolveWIPIntent(box: BoxRecord, items: { name: string; weight?: 
   // value-add the customer ordered ON that cut. This is a separate pool from the
   // trim orders: pulled pork is made from the shoulder that's in the box, so it
   // never competes for the brat pounds and never needs allocating.
-  if (!assignment) assignment = primalValueAdd(data, product)
+  if (!assignment) assignment = agreedAssignment(cards, d => primalValueAdd(d, product))
 
   if (!assignment) return null
 
