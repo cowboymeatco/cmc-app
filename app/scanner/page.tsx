@@ -56,6 +56,11 @@ function decodePluFromBarcode(barcode: string): string | null {
   return plu > 0 ? String(plu) : null
 }
 
+// A produced box's own serial, off a label we printed: CMC + YYMMDD + 4 chars.
+// No dashes, which is what separates it from the inbound receiving identifier
+// CMC-YYYYMMDD-NNN. Scanning one can only mean the box is being taken apart.
+const BOX_SERIAL_RE = /^CMC\d{6}[A-Z0-9]{4}$/i
+
 // baker_storage = hauled to the Baker storage locker — out of our freezer but not
 // yet in the customer's hands, and accruing a monthly storage fee.
 type SessionStatus = 'scanning' | 'value_add' | 'complete' | 'baker_storage' | 'picked_up'
@@ -442,15 +447,26 @@ export default function ScannerPage() {
   const [repackTarget,     setRepackTarget]     = useState<string>('new')   // box id, or 'new'
   const [repackBusy,       setRepackBusy]       = useState(false)
 
+  // ── Starting a session from a box serial (New Session ▾ → Repack boxes) ──────
+  const [newMenu,          setNewMenu]          = useState(false)
+  const [showRepackStart,  setShowRepackStart]  = useState(false)
+  const [repackSerial,     setRepackSerial]     = useState('')
+  const [repackPeek,       setRepackPeek]       = useState<BoxRecord | null>(null)
+  const [repackStartErr,   setRepackStartErr]   = useState('')
+  const [repackStartBusy,  setRepackStartBusy]  = useState(false)
+
   const scanRef       = useRef<HTMLInputElement>(null)
   // Stable refs so event listeners don't go stale
   const activeBoxRef  = useRef<BoxRecord | null>(null)
   const pluMapRef     = useRef<Record<string, string>>({})
   const retiredPluRef = useRef<Record<string, string>>({})
   const processingRef = useRef(false)
+  const unpackingRef  = useRef(false)
   const scansRef      = useRef<ScanLine[]>([])
   const startedRef    = useRef(false)
   const inputsRef     = useRef<ProcessingInput[]>([])
+  const boxesRef      = useRef<BoxRecord[]>([])
+  const unpackBoxRef  = useRef<((serial: string) => void) | null>(null)
 
   activeBoxRef.current  = activeBox
   pluMapRef.current     = pluMap
@@ -459,6 +475,8 @@ export default function ScannerPage() {
   scansRef.current      = scans
   startedRef.current    = started
   inputsRef.current     = inputs
+  boxesRef.current      = boxes
+  unpackBoxRef.current  = unpackBox
 
   // ── Load sessions list ───────────────────────────────────────────────────���───
   const loadSessions = useCallback(async () => {
@@ -630,6 +648,16 @@ export default function ScannerPage() {
     scanQueueRef.current.push(code)
     pumpScanQueue()
   }, [scanValue, pumpScanQueue])
+
+  // A produced box serial in the scan bar means "take this box apart". Caught
+  // here rather than in onChange so it works however the characters arrived —
+  // the gun can also feed the bar through the global key redirect above.
+  useEffect(() => {
+    if (!BOX_SERIAL_RE.test(scanValue)) return
+    const code = scanValue.toUpperCase()
+    setScanValue('')
+    unpackBoxRef.current?.(code)
+  }, [scanValue])
 
   // ── Session record helpers ───────────────────────────────────────────────────
   async function upsertSession(custName: string, sessDate: string, status = 'scanning', bt?: BoxType): Promise<string | null> {
@@ -900,11 +928,18 @@ export default function ScannerPage() {
   // ── Add new box ───────────────────────────────────────────────────────────────
   async function addBox(isFinal: boolean) {
     if (!customer) return
-    const nextNum = boxes.length > 0 ? Math.max(...boxes.map(b => b.box_number)) + 1 : 1
+    await addBoxTo(customer, date, boxes, isFinal)
+  }
+
+  // Session and sibling boxes passed in, so a repack can open a box in the same
+  // tick it sets the customer — before that state has flushed.
+  async function addBoxTo(cust: string, dt: string, siblings: BoxRecord[], isFinal = false) {
+    if (!cust) return
+    const nextNum = siblings.length > 0 ? Math.max(...siblings.map(b => b.box_number)) + 1 : 1
     const res = await fetch('/api/boxes', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ customer_name: customer, pack_date: date, box_number: nextNum, is_final: isFinal }),
+      body:    JSON.stringify({ customer_name: cust, pack_date: dt, box_number: nextNum, is_final: isFinal }),
     })
     const box: BoxRecord = await res.json()
     setBoxes(prev => [...prev, box])
@@ -1079,6 +1114,112 @@ export default function ScannerPage() {
       setReassignBusy(false)
       setReassignBox(null)
       setReassignNewName('')
+      scanRef.current?.focus()
+    }
+  }
+
+  // ── Look up a box by serial so a repack can open on the right customer ──────
+  async function peekRepackBox(serial: string) {
+    setRepackStartErr(''); setRepackPeek(null)
+    if (!BOX_SERIAL_RE.test(serial)) return
+    try {
+      const res  = await fetch(`/api/boxes/unpack?serial=${encodeURIComponent(serial)}`)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) { setRepackStartErr((data as { error?: string }).error ?? 'Box not found'); return }
+      setRepackPeek(data as BoxRecord)
+    } catch { setRepackStartErr('Could not look that box up') }
+  }
+
+  // Open the box's own session and immediately take the box apart into it, so
+  // the repack lands back on the customer the meat already belongs to.
+  async function startRepackSession() {
+    const box = repackPeek
+    if (!box || !pluLoaded) return
+    setRepackStartBusy(true)
+    try {
+      const cust = box.customer_name
+      const dt   = box.pack_date
+      setShowRepackStart(false)
+      await startSessionFromExisting(cust, dt)
+      await unpackBoxInto(cust, dt, (box.serial_number ?? repackSerial).toUpperCase())
+    } finally {
+      setRepackStartBusy(false)
+      setRepackSerial('')
+      setRepackPeek(null)
+    }
+  }
+
+  // ── Unpack a produced box for repack ─────────────────────────────────────────
+  // Scanning the serial off a box we packed is the repack. The box's weight
+  // moves to the input side of the ledger and the box itself goes away, so the
+  // meat is counted once — then it gets scanned into new boxes like any other
+  // product, and the yield reads ~100% if nothing went missing.
+  async function unpackBox(serial: string) {
+    return unpackBoxInto(customer, date, serial)
+  }
+
+  // Session passed in rather than read off state: starting a repack sets the
+  // customer and unpacks the first box in the same tick, before state flushes.
+  async function unpackBoxInto(cust: string, dt: string, serial: string) {
+    if (unpackingRef.current) return
+    unpackingRef.current = true
+    setProcessing(true)
+    try {
+      const res = await fetch('/api/boxes/unpack', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serial, session: { customer_name: cust, session_date: dt } }),
+      })
+      const data = await res.json().catch(() => ({} as { error?: string }))
+      if (!res.ok) {
+        setLastKind('bad')
+        setLastItem((data as { error?: string }).error ?? 'Could not unpack that box')
+        setFlash('bad')
+        setTimeout(() => setFlash(null), 4000)
+        return
+      }
+      const { input, consumed } = data as {
+        input: ProcessingInput
+        consumed: { box_id: string; box_number: number; customer_name: string; weight_lbs: number; cuts: number; from_other_session: boolean }
+      }
+      setInputs(prev => [...prev, input])
+      // If the box we just took apart was in this session, its tab has to go.
+      setBoxes(prev => {
+        const remaining = prev.filter(b => b.id !== consumed.box_id)
+        if (remaining.length !== prev.length && activeBoxRef.current?.id === consumed.box_id) {
+          const next = remaining[remaining.length - 1] ?? null
+          setActiveBox(next)
+          setScans([])
+          if (next) {
+            fetch(`/api/boxes/scans?box_id=${next.id}`)
+              .then(r => r.json())
+              .then((d: unknown) => { if (Array.isArray(d)) setScans(([...d] as ScanLine[]).reverse()) })
+              .catch(() => {})
+          }
+        }
+        return remaining
+      })
+      setLastKind('ok')
+      setLastItem(
+        `Unpacked Box ${consumed.box_number}${consumed.from_other_session ? ` (${consumed.customer_name})` : ''} — ` +
+        `${consumed.cuts} cut${consumed.cuts !== 1 ? 's' : ''} · ${consumed.weight_lbs.toFixed(2)} lb now in · scan them into new boxes`
+      )
+      setFlash('ok')
+      setTimeout(() => setFlash(null), 4000)
+      // Unpacking can take away the last box in the session — including the one
+      // just consumed. Put an open box up straight away so the next thing
+      // scanned has somewhere to land instead of hitting a disabled scan bar.
+      const left = boxesRef.current.filter(b => b.id !== consumed.box_id)
+      if (!left.some(b => !b.is_closed)) await addBoxTo(cust, dt, left)
+      loadSharedYield(cust, dt)
+      loadSessions()
+    } catch {
+      setLastKind('bad')
+      setLastItem('Unpack failed — network error')
+      setFlash('bad')
+      setTimeout(() => setFlash(null), 4000)
+    } finally {
+      setProcessing(false)
+      unpackingRef.current = false
       scanRef.current?.focus()
     }
   }
@@ -1583,9 +1724,34 @@ export default function ScannerPage() {
               {pluLoaded ? `✓ ${Object.keys(pluMap).length} PLUs` : '⟳ Loading…'}
             </span>
           </div>
-          <button onClick={() => { setCustomer(''); setBoxType('USDA'); setShowNewForm(true) }} style={{ background: C.tan, color: C.dark, border: 'none', borderRadius: 4, padding: '0.5rem 1.1rem', fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer', letterSpacing: '0.04em' }}>
-            + New Session
-          </button>
+          {/* New Session — split button, because a repack starts from a box
+              serial instead of a typed customer name. */}
+          <div style={{ position: 'relative', display: 'flex' }}>
+            <button onClick={() => { setCustomer(''); setBoxType('USDA'); setShowNewForm(true) }} style={{ background: C.tan, color: C.dark, border: 'none', borderRadius: '4px 0 0 4px', padding: '0.5rem 1.1rem', fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer', letterSpacing: '0.04em' }}>
+              + New Session
+            </button>
+            <button
+              onClick={() => setNewMenu(v => !v)}
+              title="More ways to start"
+              style={{ background: C.tan, color: C.dark, border: 'none', borderLeft: '1px solid rgba(26,10,4,0.25)', borderRadius: '0 4px 4px 0', padding: '0.5rem 0.6rem', fontSize: '0.7rem', fontWeight: 700, cursor: 'pointer' }}>
+              ▾
+            </button>
+            {newMenu && (
+              <>
+                <div style={{ position: 'fixed', inset: 0, zIndex: 120 }} onClick={() => setNewMenu(false)} />
+                <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, zIndex: 121, background: C.darkBrown, border: '1px solid rgba(166,120,90,0.45)', borderRadius: 6, boxShadow: '0 6px 24px rgba(0,0,0,0.6)', overflow: 'hidden', minWidth: 260 }}>
+                  <button
+                    onClick={() => { setNewMenu(false); setRepackSerial(''); setRepackPeek(null); setRepackStartErr(''); setShowRepackStart(true) }}
+                    style={{ display: 'block', width: '100%', textAlign: 'left', background: 'transparent', border: 'none', color: C.cream, padding: '0.75rem 1.1rem', fontSize: '0.88rem', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    ♻ Repack boxes…
+                  </button>
+                  <div style={{ padding: '0 1.1rem 0.75rem', fontSize: '0.7rem', color: C.lightBrown, lineHeight: 1.4, maxWidth: 250 }}>
+                    Scan a packed box&apos;s serial to take it apart and pack it again.
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
         {/* Sessions */}
@@ -1720,6 +1886,51 @@ export default function ScannerPage() {
             </div>
           </div>
         </div>
+
+        {/* Start a repack — the box serial picks the session, not a typed name */}
+        {showRepackStart && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '1rem' }}
+            onClick={() => { if (!repackStartBusy) setShowRepackStart(false) }}>
+            <div onClick={e => e.stopPropagation()} style={{ background: C.darkBrown, border: '1px solid rgba(166,120,90,0.35)', borderRadius: 8, padding: '2rem', width: '100%', maxWidth: 420 }}>
+              <h2 style={{ fontFamily: 'Georgia, serif', color: C.cream, fontSize: '1.1rem', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 0.4rem' }}>Repack Boxes</h2>
+              <p style={{ color: C.lightBrown, fontSize: '0.78rem', lineHeight: 1.5, margin: '0 0 1.25rem' }}>
+                Scan the serial off the box you&apos;re taking apart. Its weight moves back to
+                the inputs and the box goes away, so nothing gets counted twice — then
+                scan the packages into new boxes and print fresh labels.
+              </p>
+              <label style={LBL}>Box serial</label>
+              <input
+                autoFocus
+                style={{ ...INPUT, fontFamily: 'monospace', letterSpacing: '0.12em', textTransform: 'uppercase' }}
+                value={repackSerial}
+                placeholder="CMC260801A1B2"
+                onChange={e => { const v = e.target.value.toUpperCase(); setRepackSerial(v); peekRepackBox(v) }}
+                onKeyDown={e => { if (e.key === 'Enter' && repackPeek) startRepackSession() }}
+              />
+              {repackStartErr && (
+                <div style={{ color: C.red, fontSize: '0.8rem', marginTop: '0.6rem' }}>{repackStartErr}</div>
+              )}
+              {repackPeek && (
+                <div style={{ background: 'rgba(255,255,255,0.05)', borderRadius: 4, padding: '0.75rem 0.9rem', marginTop: '0.85rem', fontSize: '0.85rem', color: C.cream, lineHeight: 1.6 }}>
+                  <strong style={{ color: C.tan }}>Box {repackPeek.box_number}</strong> · {repackPeek.customer_name}<br />
+                  <span style={{ color: C.lightBrown, fontFamily: 'monospace', fontSize: '0.8rem' }}>
+                    {repackPeek.pack_date} · {Number(repackPeek.total_weight_lbs ?? 0).toFixed(2)} lb · {repackPeek.total_cuts ?? 0} cuts
+                  </span>
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: '0.6rem', marginTop: '1.5rem' }}>
+                <button onClick={() => setShowRepackStart(false)} disabled={repackStartBusy}
+                  style={{ flex: 1, background: 'transparent', border: '1px solid rgba(166,120,90,0.3)', color: C.lightBrown, borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', cursor: 'pointer' }}>
+                  Cancel
+                </button>
+                <button onClick={startRepackSession} disabled={!repackPeek || repackStartBusy || !pluLoaded}
+                  style={{ flex: 2, background: repackPeek ? C.tan : C.medBrown, color: C.dark, border: 'none', borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', fontWeight: 700, cursor: repackPeek ? 'pointer' : 'not-allowed', opacity: repackStartBusy ? 0.7 : 1 }}>
+                  {repackStartBusy ? '⟳ Opening…' : '♻ Unpack & start'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* New Session modal */}
         {showNewForm && (
