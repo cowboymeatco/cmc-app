@@ -50,6 +50,14 @@ function isOutOfSpec(key: UnitKey, val: number | null): boolean {
   return !unit.isFreezer && val > 45
 }
 
+// A blank column is ambiguous — dead probe, or reading never taken? The auto
+// sync writes the reason into notes when it knows one, so surface it on the
+// cell instead of showing the same neutral dash either way.
+function blankReason(key: UnitKey, log: ColdStorageLog): string | null {
+  if (!log.notes?.includes(key)) return null
+  return log.notes
+}
+
 // ── HACCP Report Generator ────────────────────────────────────────────────────
 function printColdStorageReport(logs: ColdStorageLog[], start: string, end: string) {
   const fmtDate = (d: string) =>
@@ -364,10 +372,13 @@ export default function ColdStoragePage() {
                   {log.recorded_time ? log.recorded_time.slice(0, 5) : '—'}
                 </span>
                 {UNITS.map(u => {
-                  const val = log[u.key] as number | null
+                  const val    = log[u.key] as number | null
+                  const reason = val == null ? blankReason(u.key, log) : null
                   return (
-                    <span key={u.key} style={{ fontSize: '0.85rem', fontWeight: 600, color: tempColor(u.key, val), textAlign: 'center' }}>
-                      {val != null ? `${val}°` : <span style={{ color: 'rgba(166,120,90,0.25)' }}>—</span>}
+                    <span key={u.key} title={reason ?? undefined} style={{ fontSize: '0.85rem', fontWeight: 600, color: tempColor(u.key, val), textAlign: 'center' }}>
+                      {val != null ? `${val}°`
+                        : reason ? <span style={{ color: C.amber, cursor: 'help' }}>⚠</span>
+                        : <span style={{ color: 'rgba(166,120,90,0.25)' }}>—</span>}
                     </span>
                   )
                 })}
