@@ -176,12 +176,15 @@ function ErrorBox({ msg }: { msg: string }) {
 
 // ── Break-even chart ──────────────────────────────────────────────────────────
 // x = monthly revenue, y = dollars. Income line (y = x), cost line
-// (y = overheads + variable rate · x), flat overheads line, one dot per
-// actual month at (its revenue, its actual total cost). Dots under the
-// income line are profitable months.
-function BreakEvenChart({ pnl }: { pnl: PnlData }) {
+// (y = overheads + variable rate · x), flat overheads line, the break-even
+// diamond, and one dot for where the selected period actually sits (its
+// average month). The individual month dots crowd the picture, so they stay
+// behind the "Show each month" toggle; shown, a dot under the income line is
+// a profitable month.
+function BreakEvenChart({ pnl, periodLabel }: { pnl: PnlData; periodLabel: string }) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(900)
+  const [showMonths, setShowMonths] = useState(false)
 
   useEffect(() => {
     const el = wrapRef.current
@@ -198,28 +201,37 @@ function BreakEvenChart({ pnl }: { pnl: PnlData }) {
 
   const g = useMemo(() => {
     const be = pnl.breakEvenMonthly ?? 0
-    const maxRev = Math.max(...pnl.months.map(m => m.income), be)
+    // Where the selected period sits: its average month, revenue vs actual cost.
+    const n = Math.max(pnl.monthCount, 1)
+    const here = { income: pnl.totals.income / n, cost: (pnl.totals.cogs + pnl.totals.expenses) / n }
+    const monthIncomes = showMonths ? pnl.months.map(m => m.income) : []
+    const monthCosts = showMonths ? pnl.months.map(m => m.cogs + m.expenses) : []
+    const maxRev = Math.max(be, here.income, ...monthIncomes)
     const xMax = niceCeil(maxRev * 1.15)
     const cost = (x: number) => pnl.fixedMonthly + pnl.variableRate * x
-    const maxY = Math.max(xMax, cost(xMax), ...pnl.months.map(m => m.cogs + m.expenses))
+    const maxY = Math.max(xMax, cost(xMax), here.cost, ...monthCosts)
     const yTicks = niceTicks(maxY)
     const yMax = yTicks[yTicks.length - 1]
     const xTicks = niceTicks(xMax)
     const X = (v: number) => M.left + (v / xMax) * plotW
     const Y = (v: number) => M.top + plotH - (v / yMax) * plotH
-    return { be, xMax, yMax, xTicks: xTicks.filter(t => t <= xMax), yTicks, X, Y, cost }
-  }, [pnl, plotW, plotH])
+    return { be, here, xMax, yMax, xTicks: xTicks.filter(t => t <= xMax), yTicks, X, Y, cost }
+  }, [pnl, plotW, plotH, showMonths])
 
   return (
     <div ref={wrapRef} style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '1rem' }}>
-      <div style={{ display: 'flex', gap: '1.25rem', flexWrap: 'wrap', fontSize: '0.72rem', color: C.tan, marginBottom: '0.5rem' }}>
+      <div style={{ display: 'flex', gap: '1.25rem', flexWrap: 'wrap', alignItems: 'center', fontSize: '0.72rem', color: C.tan, marginBottom: '0.5rem' }}>
+        <span><span style={{ display: 'inline-block', width: 9, height: 9, background: WARN_COLOR, transform: 'rotate(45deg)', verticalAlign: 'middle', marginRight: 6 }} />Break-even</span>
+        <span><span style={{ display: 'inline-block', width: 11, height: 11, borderRadius: 11, background: C.cream, verticalAlign: 'middle', marginRight: 6 }} />{periodLabel}</span>
         <span><span style={{ display: 'inline-block', width: 18, height: 3, background: INCOME_COLOR, verticalAlign: 'middle', marginRight: 6 }} />Income</span>
         <span><span style={{ display: 'inline-block', width: 18, height: 3, background: COST_COLOR, verticalAlign: 'middle', marginRight: 6 }} />Opex (overheads + variable)</span>
         <span><span style={{ display: 'inline-block', width: 18, height: 0, borderTop: `2px dashed ${C.lightBrown}`, verticalAlign: 'middle', marginRight: 6 }} />Overheads</span>
-        <span><span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 9, background: C.cream, verticalAlign: 'middle', marginRight: 6 }} />Actual months</span>
-        <span><span style={{ display: 'inline-block', width: 9, height: 9, background: WARN_COLOR, transform: 'rotate(45deg)', verticalAlign: 'middle', marginRight: 6 }} />Break-even</span>
+        <label style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, color: C.lightBrown, cursor: 'pointer' }}>
+          <input type="checkbox" checked={showMonths} onChange={e => setShowMonths(e.target.checked)} />
+          Show each month
+        </label>
       </div>
-      <svg width={width - 34} height={H} role="img" aria-label="Break-even chart: income and cost lines by monthly revenue with actual months plotted">
+      <svg width={width - 34} height={H} role="img" aria-label="Break-even chart: income and cost lines by monthly revenue, with the break-even point and the selected period's average month plotted">
         {g.yTicks.map(t => (
           <g key={`y${t}`}>
             <line x1={M.left} x2={M.left + plotW} y1={g.Y(t)} y2={g.Y(t)} stroke={GRID} />
@@ -243,15 +255,21 @@ function BreakEvenChart({ pnl }: { pnl: PnlData }) {
         <line x1={g.X(0)} y1={g.Y(pnl.fixedMonthly)} x2={g.X(g.xMax)} y2={g.Y(pnl.fixedMonthly)} stroke={C.lightBrown} strokeWidth={1.5} strokeDasharray="5 4" />
         <line x1={g.X(0)} y1={g.Y(0)} x2={g.X(Math.min(g.xMax, g.yMax))} y2={g.Y(Math.min(g.xMax, g.yMax))} stroke={INCOME_COLOR} strokeWidth={2} />
 
-        {pnl.months.map(m => {
+        {showMonths && pnl.months.map(m => {
           const costY = m.cogs + m.expenses
           return (
-            <circle key={m.month} cx={g.X(m.income)} cy={g.Y(costY)} r={4.5}
-              fill={m.net >= 0 ? C.cream : COST_COLOR} stroke={C.dark} strokeWidth={1.5}>
+            <circle key={m.month} cx={g.X(m.income)} cy={g.Y(costY)} r={4}
+              fill={m.net >= 0 ? 'rgba(242,232,217,0.55)' : 'rgba(206,106,32,0.55)'} stroke={C.dark} strokeWidth={1.5}>
               <title>{`${monthLabel(m.month)} — revenue ${usd(m.income)}, cost ${usd(costY)}, net ${m.net >= 0 ? '+' : '−'}${usd(Math.abs(m.net))}`}</title>
             </circle>
           )
         })}
+
+        {/* where the selected period sits — its average month */}
+        <circle cx={g.X(g.here.income)} cy={g.Y(g.here.cost)} r={7}
+          fill={g.here.income >= g.here.cost ? C.cream : COST_COLOR} stroke={C.dark} strokeWidth={2}>
+          <title>{`${periodLabel} — average month: revenue ${usd(g.here.income)}, cost ${usd(g.here.cost)}, net ${g.here.income >= g.here.cost ? '+' : '−'}${usd(Math.abs(g.here.income - g.here.cost))}`}</title>
+        </circle>
 
         {g.be > 0 && g.be <= g.xMax && (
           <g transform={`translate(${g.X(g.be)},${g.Y(g.be)})`}>
@@ -262,7 +280,10 @@ function BreakEvenChart({ pnl }: { pnl: PnlData }) {
         )}
       </svg>
       <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.25rem' }}>
-        Dots are the {pnl.months.length} actual month{pnl.months.length === 1 ? '' : 's'} in the period (cream = profitable, orange = loss). Hover a dot for the month&apos;s numbers.
+        The big dot is the average month of the selected period — left of the diamond is a loss, right of it is a profit.
+        {showMonths
+          ? ` Faded dots are the ${pnl.months.length} individual month${pnl.months.length === 1 ? '' : 's'} (cream = profitable, orange = loss). Hover any dot for its numbers.`
+          : ' Tick “Show each month” to plot the individual months behind it.'}
       </div>
     </div>
   )
@@ -620,7 +641,7 @@ export default function ExecPage() {
                 <StatTile label={`Net, ${pnl.monthCount} mo`} value={`${pnl.totals.net < 0 ? '−' : '+'}${usd(Math.abs(pnl.totals.net))}`}
                   accent={pnl.totals.net >= 0 ? INCOME_COLOR : COST_COLOR} />
               </div>
-              <BreakEvenChart pnl={pnl} />
+              <BreakEvenChart pnl={pnl} periodLabel={PERIODS.find(p => p.key === period)?.label ?? 'Selected period'} />
 
               <SectionLabel>Cost buckets — what&apos;s behind the lines</SectionLabel>
               <div style={{ fontSize: '0.78rem', color: C.lightBrown, margin: '0 0 0.75rem' }}>
