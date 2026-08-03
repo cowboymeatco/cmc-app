@@ -17,6 +17,7 @@ any machine that stays awake and online.
 | Windows user | `Cowboy Meat Co` (**not** `charl`) |
 | Folder | `C:\Users\Cowboy Meat Co\Desktop\Thermoworks\thermoworks-usb\thermoworks\` |
 | Scheduled task | `CMC ThermoWorks Sync`, every 30 minutes, pointed at that folder |
+| Interpreter | `pythonw.exe` (windowless) from `C:\Users\Cowboy Meat Co\AppData\Local\Programs\Python\Python314\` — so a scheduled run flashes no console at the packing table |
 | Logging | 7 cold-storage probes → `cold_storage_log`, plus the cook logger (`D24380282`, 2 sensors) → `cook_reading` |
 
 The laptop's copy of the task was **disabled on 2026-08-02**. Only the kiosk syncs now —
@@ -24,7 +25,10 @@ if the laptop task is ever re-enabled you get duplicate rows in Supabase every 3
 
 A column in `cold_storage_log` coming back empty is normal and not a broken install: a
 probe that hasn't reported in 3 hours is skipped rather than logged stale (the New
-Carcass Cooler probe drops wifi and does this regularly).
+Carcass Cooler probe drops wifi and does this regularly). That only holds once the
+kiosk is on the current `sync.py` — check with the `STALE_AFTER_MINUTES` command below.
+On an older copy an empty column means the read itself errored, which is worth a look
+at `sync.log`.
 
 ---
 
@@ -48,8 +52,12 @@ Copy-Item "$env:USERPROFILE\Downloads\sync.py" "$env:USERPROFILE\Desktop\Thermow
 
 ```powershell
 cd "$env:USERPROFILE\Desktop\Thermoworks\thermoworks-usb\thermoworks"
-python sync.py
+& "$env:LOCALAPPDATA\Programs\Python\Python314\python.exe" sync.py
 ```
+
+Use `python.exe` by hand, not the `pythonw.exe` the task uses — `pythonw` swallows
+the output you're trying to read. Call it by full path: bare `python` depends on
+whether PATH was set up for the `Cowboy Meat Co` user, and it may not be.
 
 > ⚠️ **Copy the file — do not retype or paste it into a new file.** Writing the contents
 > out with PowerShell (`Out-File`, `Set-Content`, `>`) stamps a UTF-8 BOM on the front,
@@ -66,12 +74,14 @@ own folder, so nothing else needs touching.
 
 | What | Command |
 | --- | --- |
-| Run a sync right now | `python sync.py` |
+| Run a sync right now | `& "$env:LOCALAPPDATA\Programs\Python\Python314\python.exe" sync.py` |
 | Last 30 lines of the log | `Get-Content sync.log -Tail 30` |
 | Status without changing anything | `powershell -ExecutionPolicy Bypass -File .\setup-thermoworks.ps1 -CheckOnly` |
 | Is the task actually enabled? | `Get-ScheduledTask -TaskName 'CMC ThermoWorks Sync' \| Select-Object State` |
+| Where does the task point? | `(Get-ScheduledTask -TaskName 'CMC ThermoWorks Sync').Actions \| Select-Object Execute, Arguments, WorkingDirectory` |
+| Is the kiosk on the current sync.py? | `(Select-String -Path sync.py -Pattern 'STALE_AFTER_MINUTES').Count` — `0` means it's behind the repo |
 | Change the interval to 15 min | `powershell -ExecutionPolicy Bypass -File .\setup-thermoworks.ps1 -IntervalMinutes 15` |
-| List every device/channel on the account | `python discover.py` |
+| List every device/channel on the account | `& "$env:LOCALAPPDATA\Programs\Python\Python314\python.exe" discover.py` |
 
 Re-running `setup-thermoworks.ps1` with anything other than `-CheckOnly` needs an
 **elevated** PowerShell once the task exists — a task registered by an elevated process
