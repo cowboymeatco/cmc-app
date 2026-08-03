@@ -659,7 +659,7 @@ export default function ExecPage() {
             <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
               <WarTile label="Carcasses in" day={war.recv_in_d} week={war.recv_in_w} unit="hd" />
               <WarTile label="Carcasses out" day={war.harv_out_d} week={war.harv_out_w} unit="hd" />
-              <WarTile label="Live lbs in" day={war.livelb_d} week={war.livelb_w} unit="lb" />
+              <WarTile label="Live weight" day={war.livelb_d} week={war.livelb_w} unit="lb" />
               <WarTile label="Hot carcass" day={war.hot_d} week={war.hot_w} unit="lb" />
               <WarTile label="Processing in" day={war.pin_d} week={war.pin_w} unit="lb" />
               <WarTile label="Processing out" day={war.pout_d} week={war.pout_w} unit="lb" />
