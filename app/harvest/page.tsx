@@ -465,7 +465,8 @@ function PartATab({ date, appt }: { date: string; appt: HarvestAppointment | nul
     const label = a.animal.ear_tag ? `ET ${a.animal.ear_tag}` : `${a.animal.sex || 'animal'} #${a.harvestOrder || i + 1}`
     if (!window.confirm(
       `Remove ${label} from this ${appt.species} appointment?\n\n` +
-      `This permanently deletes its check-in record${a.logId ? ' and its harvest record' : ''}. ` +
+      `It comes off the worksheet${a.logId ? ' and its harvest record is deleted' : ''}, but keeps its ` +
+      `carcass number — the animals behind it do NOT move up, so tags already printed stay right. ` +
       `Use this only for an animal that wasn't actually harvested (e.g. a mis-count). This cannot be undone.`
     )) return
 
@@ -1377,16 +1378,18 @@ function WorksheetTab({ date }: { date: string }) {
 
     const built: { group: WSGroup; producer: string; firstIn: number }[] = []
     for (const a of active) {
-      const animals: AnimalReceivingLog[] = await fetch(`/api/receiving?type=animal&appointment_id=${a.id}`).then(r => r.json()).catch(() => [])
+      // include_removed=1: an animal taken off the day is still holding a
+      // number, and this is the one view that has to know that.
+      const animals: AnimalReceivingLog[] = await fetch(`/api/receiving?type=animal&appointment_id=${a.id}&include_removed=1`).then(r => r.json()).catch(() => [])
       const all  = Array.isArray(animals) ? animals : []
       const live = all
-        .filter(an => an.status !== 'no_show')
+        .filter(an => an.status !== 'no_show' && an.status !== 'removed')
         .sort((x, y) => (x.animal_index ?? 0) - (y.animal_index ?? 0))
       if (live.length === 0) continue
 
-      // Numbers this check-in reserves. A no-show still holds its row, so it's
-      // counted; an animal deleted in Part A leaves a hole in animal_index, which
-      // the max covers; head_count backstops a deletion off the END of the list.
+      // Numbers this check-in reserves. A no-show and a removed animal both keep
+      // their row, so they're counted here and their numbers stay reserved;
+      // head_count backstops a check-in that never happened at all.
       const slots = Math.max(
         all.length,
         ...all.map(an => an.animal_index ?? 0),

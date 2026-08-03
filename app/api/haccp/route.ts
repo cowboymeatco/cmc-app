@@ -38,6 +38,9 @@ export async function GET(req: NextRequest) {
       .from('animal_receiving_log')
       .select('*')
       .in('appointment_id', apptIds)
+      // Animals taken off the day keep their row to hold a carcass number; they
+      // were never harvested, so they are not HACCP records.
+      .neq('status', 'removed')
       .order('animal_index', { ascending: true })
     animalLogs = data ?? []
   }

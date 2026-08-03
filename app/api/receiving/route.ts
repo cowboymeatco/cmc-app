@@ -10,11 +10,17 @@ export async function GET(req: NextRequest) {
 
   if (type === 'animal') {
     const apptId = searchParams.get('appointment_id')
+    // An animal taken off the day is kept as a 'removed' row so it holds its
+    // animal_index (see DELETE below). Callers that only care about live
+    // animals get them filtered out; the worksheet asks for them with
+    // include_removed=1 because it needs the reserved slot.
+    const includeRemoved = searchParams.get('include_removed') === '1'
     let query = supabase
       .from('animal_receiving_log')
       .select('*')
       .order('animal_index', { ascending: true })
     if (apptId) query = query.eq('appointment_id', apptId)
+    if (!includeRemoved) query = query.neq('status', 'removed')
     const { data, error } = await query
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     return NextResponse.json(data)
@@ -124,14 +130,28 @@ export async function PATCH(req: NextRequest) {
 }
 
 // DELETE /api/receiving?type=animal|box&id=xxx — remove a single record
+//
+// An ANIMAL is never really deleted: the row is marked 'removed' so it keeps
+// its animal_index, and the carcass number it was holding stays reserved. A
+// hard delete let the animals behind it slide up onto numbers that were
+// already printed and hanging on the rail (Jill, 2026-08-03 — Cindy Wright's
+// second lamb). Boxes carry no such numbering, so those still delete.
 export async function DELETE(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const id   = searchParams.get('id')
   const type = searchParams.get('type') ?? 'animal'
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
 
-  const table = type === 'animal' ? 'animal_receiving_log' : 'box_receiving_log'
-  const { error } = await supabase.from(table).delete().eq('id', id)
+  if (type === 'animal') {
+    const { error } = await supabase
+      .from('animal_receiving_log')
+      .update({ status: 'removed' })
+      .eq('id', id)
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ ok: true })
+  }
+
+  const { error } = await supabase.from('box_receiving_log').delete().eq('id', id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ ok: true })
 }

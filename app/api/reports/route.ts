@@ -54,6 +54,8 @@ export async function GET(req: NextRequest) {
     let aq = supabase
       .from('animal_receiving_log')
       .select('received_at,ear_tag,sex,breed,live_weight_lbs,received_by,health_cert_no,brand_insp_no,notes')
+      // Removed rows only exist to hold a carcass number — never received stock.
+      .neq('status', 'removed')
       .order('received_at', { ascending: false })
     if (from) aq = aq.gte('received_at', `${from}T00:00:00`)
     if (to)   aq = aq.lte('received_at', `${to}T23:59:59`)
