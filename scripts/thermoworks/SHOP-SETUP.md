@@ -1,101 +1,141 @@
-# ThermoWorks sync — moving it to the shop computer
+# ThermoWorks sync — where it runs and how to update it
 
 This folder is self-contained. It talks to two cloud services over the internet
 (ThermoWorks Cloud → Supabase) and touches no local hardware, so it runs fine from
 any machine that stays awake and online.
 
 > This is a **stopgap**. The real fix is moving this into a Supabase edge function on a
-> cron so no computer is involved at all. Do this now to stop losing readings; the
-> server-side version replaces it later.
+> cron so no computer is involved at all. The server-side version replaces this later.
 
 ---
 
-## 1. (Laptop) Get the folder to the shop computer
+## Where it runs today
 
-The zip is already built at `C:\Users\charl\Downloads\thermoworks-sync.zip`.
+| | |
+| --- | --- |
+| Machine | The **Packaging Kiosk** — `desktop-dti17ih`, reached over Chrome Remote Desktop |
+| Windows user | `Cowboy Meat Co` (**not** `charl`) |
+| Folder | `C:\Users\Cowboy Meat Co\Desktop\Thermoworks\thermoworks-usb\thermoworks\` |
+| Scheduled task | `CMC ThermoWorks Sync`, every 30 minutes, pointed at that folder |
+| Logging | 7 cold-storage probes → `cold_storage_log`, plus the cook logger (`D24380282`, 2 sensors) → `cook_reading` |
 
-Remote into the shop computer, then use **Chrome Remote Desktop's side panel → File
-transfer → Upload file** and pick that zip. It lands in the shop computer's `Downloads`.
+The laptop's copy of the task was **disabled on 2026-08-02**. Only the kiosk syncs now —
+if the laptop task is ever re-enabled you get duplicate rows in Supabase every 30 minutes.
 
-> ⚠️ The zip contains `.env`, which holds your **ThermoWorks password** and your
-> **Supabase service key** in plain text. Delete the zip from both machines once this
-> is working.
+A column in `cold_storage_log` coming back empty is normal and not a broken install: a
+probe that hasn't reported in 3 hours is skipped rather than logged stale (the New
+Carcass Cooler probe drops wifi and does this regularly).
 
-## 2. (Shop) Install Python
+---
 
-<https://www.python.org/downloads/> — on the first installer screen, **tick "Add
-python.exe to PATH"**. Skip this step if Python is already there.
+## Updating the kiosk after a repo change
 
-## 3. (Shop) Unzip and run the installer
+**This is the step that matters day to day.** The kiosk copy is a *copy* — editing
+`scripts/thermoworks/sync.py` in the repo changes nothing at the shop until you push
+the file over.
+
+1. Remote into the kiosk with Chrome Remote Desktop.
+2. Open the **side panel → File transfer → Upload file** and pick the changed file from
+   the laptop (`C:\Users\charl\Claude\cmc-app\scripts\thermoworks\sync.py`). It lands in
+   the kiosk's `C:\Users\Cowboy Meat Co\Downloads\`.
+3. On the kiosk, copy it over the running one:
 
 ```powershell
-Expand-Archive -Path $env:USERPROFILE\Downloads\thermoworks-sync.zip -DestinationPath $env:USERPROFILE\Claude -Force
+Copy-Item "$env:USERPROFILE\Downloads\sync.py" "$env:USERPROFILE\Desktop\Thermoworks\thermoworks-usb\thermoworks\sync.py" -Force
+```
+
+4. Prove it still runs before walking away:
+
+```powershell
+cd "$env:USERPROFILE\Desktop\Thermoworks\thermoworks-usb\thermoworks"
+python sync.py
+```
+
+> ⚠️ **Copy the file — do not retype or paste it into a new file.** Writing the contents
+> out with PowerShell (`Out-File`, `Set-Content`, `>`) stamps a UTF-8 BOM on the front,
+> and Python chokes on the BOM before it reads a single line. `Copy-Item` moves the bytes
+> as-is and sidesteps the whole problem.
+
+The same procedure applies to `config.json` — that's exactly how the 7-probe cold-storage
+config got to the kiosk on 2026-08-02. `sync.py` reads `.env` and `config.json` from its
+own folder, so nothing else needs touching.
+
+---
+
+## Handy commands (run on the kiosk, from the folder above)
+
+| What | Command |
+| --- | --- |
+| Run a sync right now | `python sync.py` |
+| Last 30 lines of the log | `Get-Content sync.log -Tail 30` |
+| Status without changing anything | `powershell -ExecutionPolicy Bypass -File .\setup-thermoworks.ps1 -CheckOnly` |
+| Is the task actually enabled? | `Get-ScheduledTask -TaskName 'CMC ThermoWorks Sync' \| Select-Object State` |
+| Change the interval to 15 min | `powershell -ExecutionPolicy Bypass -File .\setup-thermoworks.ps1 -IntervalMinutes 15` |
+| List every device/channel on the account | `python discover.py` |
+
+Re-running `setup-thermoworks.ps1` with anything other than `-CheckOnly` needs an
+**elevated** PowerShell once the task exists — a task registered by an elevated process
+can only be replaced by one.
+
+---
+
+## Appendix: installing from scratch on a new machine
+
+Only needed if the kiosk is replaced or reimaged.
+
+**1. Get the folder onto the machine.** Zip this folder on the laptop, then Chrome Remote
+Desktop **side panel → File transfer → Upload file**. It lands in that user's `Downloads`.
+
+> ⚠️ The folder contains `.env`, which holds the **ThermoWorks password** and the
+> **Supabase service key** in plain text. Delete the zip from both machines afterward.
+
+**2. Install Python.** <https://www.python.org/downloads/> — on the first installer
+screen, tick **"Add python.exe to PATH"**.
+
+**3. Unzip and run the installer.**
+
+```powershell
+Expand-Archive -Path "$env:USERPROFILE\Downloads\thermoworks-sync.zip" -DestinationPath "$env:USERPROFILE\Desktop\Thermoworks" -Force
 ```
 
 ```powershell
-cd $env:USERPROFILE\Claude\thermoworks
+cd "$env:USERPROFILE\Desktop\Thermoworks\thermoworks-usb\thermoworks"
 powershell -ExecutionPolicy Bypass -File .\setup-thermoworks.ps1
 ```
 
-Green `[ok]` lines are good. Fix any red `[FAIL]` and run it again — it's safe to
-re-run as many times as you like.
+Green `[ok]` lines are good. Fix any red `[FAIL]` and run it again — it's safe to re-run
+as many times as you like.
 
-## 4. (Shop) Test it by hand
+**4. Test it by hand.**
 
 ```powershell
 python sync.py
 ```
 
-You want to see `Authenticated as ...`, a couple of `SENSOR n: xx.x°F` lines, and
+You want `Authenticated as ...`, the cold-storage probes each printing a temperature,
+`Cold storage row inserted`, a couple of `SENSOR n: xx.x°F` lines, and
 `--- sync complete ---`. That proves the whole chain: ThermoWorks login → reading the
 probes → writing to Supabase.
 
-## 5. (Laptop) Turn off the old task
-
-**This one needs an elevated PowerShell.** The laptop's task is owned by
-`BUILTIN\Administrators`, so a normal window gets "Access is denied."
-
-Right-click Start → **Terminal (Admin)** → then:
+**5. Disable the task everywhere else**, or both machines insert readings every 30
+minutes and Supabase gets duplicate rows. Needs an elevated PowerShell (the task is owned
+by `BUILTIN\Administrators`, so a normal window gets "Access is denied"): right-click
+Start → **Terminal (Admin)** →
 
 ```powershell
 Disable-ScheduledTask -TaskName 'CMC ThermoWorks Sync'
 ```
 
-If you skip this, both machines insert readings every 30 minutes and you get duplicate
-rows in Supabase.
-
 ---
 
-## Known gap: no cooler or freezer temperatures
+## What the task settings buy you
 
-`config.json` has `"cold_storage": []` — empty. This sync has **never** logged a single
-cold-storage reading; it only reads the cook logger (device `D24380282`, 2 sensors).
-
-To turn cold storage on:
-
-```powershell
-python discover.py
-```
-
-That lists every device and channel on your ThermoWorks account. Add the ones you want
-to the `cold_storage` array in `config.json`, matching the shape of the `cook_logger`
-entry, then run `python sync.py` again to confirm rows land in `cold_storage_log`.
-
-## Handy commands
-
-| What | Command |
-| --- | --- |
-| Status without changing anything | `powershell -ExecutionPolicy Bypass -File .\setup-thermoworks.ps1 -CheckOnly` |
-| Run a sync right now | `python sync.py` |
-| Last 30 lines of the log | `Get-Content sync.log -Tail 30` |
-| Change the interval to 15 min | `powershell -ExecutionPolicy Bypass -File .\setup-thermoworks.ps1 -IntervalMinutes 15` |
-
-## What changed vs. the laptop task
-
-- **Battery restrictions removed.** The old task was set to refuse to start on battery
-  and to stop if it went onto battery — a real cause of missed runs.
-- **Catch-up enabled** (`StartWhenAvailable`). A missed run now fires when the machine
-  comes back, instead of being skipped silently.
+- **Battery restrictions removed.** The original laptop task refused to start on battery
+  and stopped if it went onto battery — a real cause of missed runs.
+- **Catch-up enabled** (`StartWhenAvailable`) plus `WakeToRun`. A missed run fires when
+  the machine comes back instead of being skipped silently.
+- **Auto-restart** (3 tries, 5 minutes apart) so a transient network blip doesn't cost a
+  whole 30-minute slot.
 - **10-minute time limit.** The script self-aborts at 5 minutes; the old task had no
   ceiling, so a hung run could sit there for days blocking the next one.
 - **No hard-coded paths.** Works from any folder, any Windows username.

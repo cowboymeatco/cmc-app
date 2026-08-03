@@ -37,6 +37,23 @@ Write-Host "  ThermoWorks sync - setup" -ForegroundColor Cyan
 Write-Host "  Folder: $root" -ForegroundColor DarkGray
 Write-Host "==================================================" -ForegroundColor Cyan
 
+# ---------------------------------------------------------------- 0. elevation
+# A task registered by an elevated process can only be replaced by one. Without
+# this check the script does five minutes of work and then dies on Unregister.
+if (-not $CheckOnly) {
+    $me = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+        if ($existing) {
+            Write-Host ""
+            Write-Host "  [FAIL] '$TaskName' already exists and this window is not elevated." -ForegroundColor Red
+            Write-Host "         Re-run from an Administrator PowerShell, or use -CheckOnly to look without changing." -ForegroundColor DarkGray
+            Write-Host ""
+            exit 1
+        }
+    }
+}
+
 # ---------------------------------------------------------------- 1. files
 Head "1. Project files"
 foreach ($f in 'sync.py','discover.py','requirements.txt','config.json') {
@@ -120,12 +137,18 @@ if ($CheckOnly) {
     $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date.AddMinutes(1) `
                                         -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes) `
                                         -RepetitionDuration (New-TimeSpan -Days 3650)
+    # WakeToRun + StartWhenAvailable are what keep a HACCP record unbroken on a
+    # machine that sleeps: wake for the run, and if the wake was refused, catch
+    # up on the missed one as soon as the machine is back.
     $settings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries `
         -StartWhenAvailable `
+        -WakeToRun `
         -MultipleInstances IgnoreNew `
-        -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+        -ExecutionTimeLimit (New-TimeSpan -Minutes 10) `
+        -RestartInterval (New-TimeSpan -Minutes 5) `
+        -RestartCount 3
     $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive
 
     if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
