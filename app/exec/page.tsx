@@ -128,7 +128,7 @@ interface WarData {
   recv_in_d: number; recv_in_w: number; harv_out_d: number; harv_out_w: number
   livelb_d: number; livelb_w: number; hot_d: number; hot_w: number
   pin_d: number; pin_w: number; pout_d: number; pout_w: number
-  rate_d: number | null; va_in_w: number; va_out_w: number
+  rate_d: number | null; cooks_d: number; cooks_w: number
 }
 interface LaborWeek {
   week_start: string; week_end: string
@@ -676,8 +676,7 @@ export default function ExecPage() {
                 </div>
                 <div style={{ fontSize: '0.65rem', color: C.lightBrown }}>today, scan to scan</div>
               </div>
-              <WarTile label="Value add in" day={null} week={war.va_in_w} unit="lb" />
-              <WarTile label="Value add out" day={null} week={war.va_out_w} unit="lb" />
+              <WarTile label="Smokehouse cooks" day={war.cooks_d} week={war.cooks_w} unit="loads" />
             </div>
           )}
 
