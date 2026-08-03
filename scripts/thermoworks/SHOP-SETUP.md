@@ -32,6 +32,15 @@ at `sync.log`.
 
 ---
 
+## ⚠️ Don't use `$env:USERPROFILE` on the kiosk
+
+The kiosk has **two** profiles. The sync lives under `Cowboy Meat Co`, but an elevated
+PowerShell there comes up as **`charl`** — so `$env:USERPROFILE` silently resolves to
+`C:\Users\charl` and every path built from it misses. Same for `$env:LOCALAPPDATA`.
+
+Type the literal `C:\Users\Cowboy Meat Co\...` paths below. They're long and they contain
+spaces, so they need the quotes.
+
 ## Updating the kiosk after a repo change
 
 **This is the step that matters day to day.** The kiosk copy is a *copy* — editing
@@ -40,19 +49,24 @@ the file over.
 
 1. Remote into the kiosk with Chrome Remote Desktop.
 2. Open the **side panel → File transfer → Upload file** and pick the changed file from
-   the laptop (`C:\Users\charl\Claude\cmc-app\scripts\thermoworks\sync.py`). It lands in
-   the kiosk's `C:\Users\Cowboy Meat Co\Downloads\`.
-3. On the kiosk, copy it over the running one:
+   the laptop (`C:\Users\charl\Claude\cmc-app\scripts\thermoworks\sync.py`).
+3. Find where it actually landed — the upload goes to the `Downloads` of whichever
+   profile owns the desktop session, which is not necessarily the shell you're typing in:
 
 ```powershell
-Copy-Item "$env:USERPROFILE\Downloads\sync.py" "$env:USERPROFILE\Desktop\Thermoworks\thermoworks-usb\thermoworks\sync.py" -Force
+Get-ChildItem "C:\Users\*\Downloads\sync.py" -Force | Select-Object FullName, LastWriteTime
 ```
 
-4. Prove it still runs before walking away:
+4. Copy it over the running one, using the path step 3 printed as the source:
 
 ```powershell
-cd "$env:USERPROFILE\Desktop\Thermoworks\thermoworks-usb\thermoworks"
-& "$env:LOCALAPPDATA\Programs\Python\Python314\python.exe" sync.py
+Copy-Item "C:\Users\Cowboy Meat Co\Downloads\sync.py" "C:\Users\Cowboy Meat Co\Desktop\Thermoworks\thermoworks-usb\thermoworks\sync.py" -Force
+```
+
+5. Prove it still runs before walking away:
+
+```powershell
+cd "C:\Users\Cowboy Meat Co\Desktop\Thermoworks\thermoworks-usb\thermoworks"; & "C:\Users\Cowboy Meat Co\AppData\Local\Programs\Python\Python314\python.exe" sync.py
 ```
 
 Use `python.exe` by hand, not the `pythonw.exe` the task uses — `pythonw` swallows
@@ -74,14 +88,14 @@ own folder, so nothing else needs touching.
 
 | What | Command |
 | --- | --- |
-| Run a sync right now | `& "$env:LOCALAPPDATA\Programs\Python\Python314\python.exe" sync.py` |
+| Run a sync right now | `& "C:\Users\Cowboy Meat Co\AppData\Local\Programs\Python\Python314\python.exe" sync.py` |
 | Last 30 lines of the log | `Get-Content sync.log -Tail 30` |
 | Status without changing anything | `powershell -ExecutionPolicy Bypass -File .\setup-thermoworks.ps1 -CheckOnly` |
 | Is the task actually enabled? | `Get-ScheduledTask -TaskName 'CMC ThermoWorks Sync' \| Select-Object State` |
 | Where does the task point? | `(Get-ScheduledTask -TaskName 'CMC ThermoWorks Sync').Actions \| Select-Object Execute, Arguments, WorkingDirectory` |
 | Is the kiosk on the current sync.py? | `(Select-String -Path sync.py -Pattern 'STALE_AFTER_MINUTES').Count` — `0` means it's behind the repo |
 | Change the interval to 15 min | `powershell -ExecutionPolicy Bypass -File .\setup-thermoworks.ps1 -IntervalMinutes 15` |
-| List every device/channel on the account | `& "$env:LOCALAPPDATA\Programs\Python\Python314\python.exe" discover.py` |
+| List every device/channel on the account | `& "C:\Users\Cowboy Meat Co\AppData\Local\Programs\Python\Python314\python.exe" discover.py` |
 
 Re-running `setup-thermoworks.ps1` with anything other than `-CheckOnly` needs an
 **elevated** PowerShell once the task exists — a task registered by an elevated process
@@ -102,7 +116,9 @@ Desktop **side panel → File transfer → Upload file**. It lands in that user'
 **2. Install Python.** <https://www.python.org/downloads/> — on the first installer
 screen, tick **"Add python.exe to PATH"**.
 
-**3. Unzip and run the installer.**
+**3. Unzip and run the installer.** These use `$env:USERPROFILE`, which is only safe here
+because you're running as the user the sync will live under — see the warning above
+before reusing them later.
 
 ```powershell
 Expand-Archive -Path "$env:USERPROFILE\Downloads\thermoworks-sync.zip" -DestinationPath "$env:USERPROFILE\Desktop\Thermoworks" -Force
