@@ -50,17 +50,23 @@ the file over.
 1. Remote into the kiosk with Chrome Remote Desktop.
 2. Open the **side panel → File transfer → Upload file** and pick the changed file from
    the laptop (`C:\Users\charl\Claude\cmc-app\scripts\thermoworks\sync.py`).
-3. Find where it actually landed — the upload goes to the `Downloads` of whichever
-   profile owns the desktop session, which is not necessarily the shell you're typing in:
+3. Find where it actually landed. It goes wherever Chrome's download folder points for
+   the profile that owns the desktop session — on this kiosk that's the **Desktop**
+   (`C:\Users\Cowboy Meat Co\Desktop\sync.py`), not `Downloads`, and not necessarily the
+   profile your shell is running as:
 
 ```powershell
-Get-ChildItem "C:\Users\*\Downloads\sync.py" -Force | Select-Object FullName, LastWriteTime
+Get-ChildItem "C:\Users\*\Desktop\sync.py","C:\Users\*\OneDrive\Desktop\sync.py","C:\Users\*\Downloads\sync.py" -Force -ErrorAction SilentlyContinue | Select-Object FullName, Length, LastWriteTime
 ```
+
+   Check `Length` against the byte count of the file on the laptop (`(Get-Item
+   sync.py).Length`). Equal means you're about to copy the right thing rather than a
+   leftover from an earlier attempt.
 
 4. Copy it over the running one, using the path step 3 printed as the source:
 
 ```powershell
-Copy-Item "C:\Users\Cowboy Meat Co\Downloads\sync.py" "C:\Users\Cowboy Meat Co\Desktop\Thermoworks\thermoworks-usb\thermoworks\sync.py" -Force
+Copy-Item "C:\Users\Cowboy Meat Co\Desktop\sync.py" "C:\Users\Cowboy Meat Co\Desktop\Thermoworks\thermoworks-usb\thermoworks\sync.py" -Force
 ```
 
 5. Prove it still runs before walking away:
