@@ -1301,7 +1301,21 @@ interface WSRow {
 // rows.length: an animal taken off the day (no-show, or removed as a mis-count)
 // keeps its number so the animals behind it don't slide up onto tags that are
 // already printed and hanging (Jill, 2026-07-29).
-interface WSGroup { producer: string; species: string; rows: WSRow[]; slots: number }
+// `movedTo` is set when the animals didn't get killed and the appointment was
+// pushed to another day. The block stays on this day's sheet holding the
+// numbers it spent — tags are printed with this day's Julian code, so those
+// numbers can't be handed back — and shows where the animals went.
+interface WSGroup { producer: string; species: string; rows: WSRow[]; slots: number; movedTo?: string }
+
+// One row of harvest_rolls: an appointment moved off this day after check-in.
+interface WSRoll {
+  id: string; appointment_id: string; from_date: string; to_date: string
+  producer: string; species: string; slots: number; first_in: string | null
+}
+
+// "Tue Aug 4" — short enough to sit inside a worksheet row.
+const shortDate = (iso: string) =>
+  new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
 
 // Brother QL-810W, 2.4in (62mm DK-2205) continuous roll: one tag per label.
 // Each .tag fills the printable page height so the printer feeds & cuts a
@@ -1354,12 +1368,14 @@ function WorksheetTab({ date }: { date: string }) {
 
   const load = useCallback(async () => {
     setLoad(true)
-    const [apptsRaw, logsRaw] = await Promise.all([
+    const [apptsRaw, logsRaw, rollsRaw] = await Promise.all([
       fetch(`/api/appointments?date=${d}`).then(r => r.json()).catch(() => []),
       fetch(`/api/harvest?type=log&date=${d}`).then(r => r.json()).catch(() => []),
+      fetch(`/api/rolls?date=${d}`).then(r => r.json()).catch(() => []),
     ])
     const appts: HarvestAppointment[] = Array.isArray(apptsRaw) ? apptsRaw : []
     const allLogs: HarvestLog[]       = Array.isArray(logsRaw)  ? logsRaw  : []
+    const rolls: WSRoll[]             = Array.isArray(rollsRaw) ? rollsRaw : []
 
     // Expected head for the day (for the default tag count): everything booked
     // through in-progress, excluding cancelled/finished/no-show.
@@ -1445,6 +1461,24 @@ function WorksheetTab({ date }: { date: string }) {
       })
     }
 
+    // Blocks moved off this day, holding the numbers they spent. They sit in the
+    // sequence by their original check-in time, so the numbers behind them are
+    // exactly the ones that were printed.
+    for (const r of rolls) {
+      const t = Date.parse(r.first_in ?? '')
+      built.push({
+        producer: r.producer,
+        firstIn:  isNaN(t) ? Infinity : t,
+        group: {
+          producer: r.producer,
+          species:  r.species,
+          slots:    r.slots,
+          rows:     [],
+          movedTo:  r.to_date,
+        },
+      })
+    }
+
     // Worksheet order = check-in order, so carcass ID numbering is append-only:
     // a late trailer never re-shuffles numbers already written on printed tags.
     // Appointments checked in before the cutover keep the old
@@ -1517,12 +1551,17 @@ function WorksheetTab({ date }: { date: string }) {
     // starting at the same "Start at #" as the pre-printed tags, so each
     // worksheet row's ID matches its physical tag number.
     const rowsHtml = groups.map((g, gi) => {
-      const head = `<tr class="grp"><td colspan="9">${esc(g.producer)} — ${esc(g.species)} · ${g.rows.length} head</td></tr>`
+      const headCount = g.movedTo ? g.slots : g.rows.length
+      const moved = g.movedTo ? ` &nbsp;—&nbsp; MOVED TO ${esc(shortDate(g.movedTo)).toUpperCase()}` : ''
+      const head = `<tr class="grp"><td colspan="9">${esc(g.producer)} — ${esc(g.species)} · ${headCount} head${moved}</td></tr>`
       // Reserved numbers with nobody on them print as a struck-out line, so the
       // gap reads as "this one came off the day" instead of a numbering mistake.
+      const voidLabel = g.movedTo
+        ? `— moved to ${esc(shortDate(g.movedTo))} —`
+        : '— taken off the day —'
       const gaps = Array.from({ length: g.slots }, (_, i) => i + 1)
         .filter(slot => !g.rows.some(r => r.slot === slot))
-        .map(slot => `<tr class="void"><td class="cid">${String(groupStart[gi] + slot - 1).padStart(2, '0')}</td><td colspan="8">— taken off the day —</td></tr>`)
+        .map(slot => `<tr class="void"><td class="cid">${String(groupStart[gi] + slot - 1).padStart(2, '0')}</td><td colspan="8">${voidLabel}</td></tr>`)
         .join('')
       const body = g.rows.map(r => {
         const cidStr = String(groupStart[gi] + r.slot - 1).padStart(2, '0')
@@ -1779,7 +1818,7 @@ function WorksheetTab({ date }: { date: string }) {
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           {d !== todayStr && <button onClick={() => setD(todayStr)} style={{ ...BTN('rgba(166,120,90,0.12)', C.tan), border: '1px solid rgba(166,120,90,0.3)' }}>Today</button>}
           <button onClick={printKillSheet} disabled={totalHead === 0} style={{ ...BTN('rgba(166,120,90,0.12)', C.tan), border: '1px solid rgba(166,120,90,0.3)', opacity: totalHead === 0 ? 0.5 : 1, cursor: totalHead === 0 ? 'not-allowed' : 'pointer' }} title="Flat run-list ordered by tag #, brand owner per row — carry to the floor before the kill">🖨 Kill Sheet</button>
-          <button onClick={printSheet} disabled={totalHead === 0} style={{ ...BTN(C.tan, C.dark), opacity: totalHead === 0 ? 0.5 : 1, cursor: totalHead === 0 ? 'not-allowed' : 'pointer' }}>🖨 Print Worksheet</button>
+          <button onClick={printSheet} disabled={groups.length === 0} style={{ ...BTN(C.tan, C.dark), opacity: groups.length === 0 ? 0.5 : 1, cursor: groups.length === 0 ? 'not-allowed' : 'pointer' }}>🖨 Print Worksheet</button>
         </div>
       </div>
 
@@ -1849,13 +1888,15 @@ function WorksheetTab({ date }: { date: string }) {
 
       {loading && <div style={{ color: C.lightBrown, textAlign: 'center', padding: '2rem' }}>Loading…</div>}
 
-      {!loading && totalHead === 0 && (
+      {!loading && groups.length === 0 && (
         <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '2rem', textAlign: 'center', color: C.lightBrown }}>
           No animals checked in for this date. Check animals in via Receiving first.
         </div>
       )}
 
-      {!loading && totalHead > 0 && (
+      {/* Groups, not head: a day whose animals all moved to another date still
+          has to show the numbers it spent. */}
+      {!loading && groups.length > 0 && (
         <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.84rem' }}>
             <thead>
@@ -1901,8 +1942,11 @@ function FragmentGroup({ gi, group, startId, skipped, onToggle }: {
   return (
     <>
       <tr style={{ background: 'rgba(166,120,90,0.14)' }}>
-        <td colSpan={10} style={{ padding: '0.45rem 0.75rem', color: C.cream, fontWeight: 700, fontSize: '0.82rem', letterSpacing: '0.02em' }}>
-          {group.producer} <span style={{ color: C.tan, fontWeight: 400 }}>· {group.species} · {group.rows.length} head</span>
+        <td colSpan={10} style={{ padding: '0.45rem 0.75rem', color: group.movedTo ? C.lightBrown : C.cream, fontWeight: 700, fontSize: '0.82rem', letterSpacing: '0.02em' }}>
+          {group.producer} <span style={{ color: C.tan, fontWeight: 400 }}>· {group.species} · {group.movedTo ? `${group.slots} head` : `${group.rows.length} head`}</span>
+          {group.movedTo && (
+            <span style={{ color: C.yellow, fontWeight: 700, marginLeft: '0.6rem' }}>→ moved to {shortDate(group.movedTo)}</span>
+          )}
         </td>
       </tr>
       {group.rows.map((r, i) => {
@@ -1950,7 +1994,9 @@ function FragmentGroup({ gi, group, startId, skipped, onToggle }: {
               {String(startId + slot - 1).padStart(2, '0')}
             </td>
             <td colSpan={8} style={{ padding: '0.5rem 0.75rem', color: 'rgba(166,120,90,0.55)', fontSize: '0.78rem', fontStyle: 'italic' }}>
-              taken off the day — number held so the tags behind it still match
+              {group.movedTo
+                ? `moved to ${shortDate(group.movedTo)} — number stays spent on this day's tags`
+                : 'taken off the day — number held so the tags behind it still match'}
             </td>
           </tr>
         ))}

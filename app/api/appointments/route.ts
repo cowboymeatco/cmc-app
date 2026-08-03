@@ -196,10 +196,74 @@ export async function POST(req: NextRequest) {
   return NextResponse.json(data)
 }
 
+// Moving an appointment to another day, once its animals are already checked in,
+// spends carcass numbers on the old day that can't be handed back: tags for that
+// day are printed with its Julian code and the numbers are physically on the
+// rail. Record the move so the old day's worksheet keeps showing those numbers
+// as "moved to <date>" instead of letting everyone behind slide up onto them
+// (Charlie, 2026-08-03). Best-effort — a failure here never blocks the move.
+async function recordRoll(id: string, fromDate: string, toDate: string) {
+  try {
+    const { data: appt } = await supabase
+      .from('harvest_appointments')
+      .select('source, species, head_count, customers')
+      .eq('id', id)
+      .single()
+    if (!appt) return
+
+    const { data: animals } = await supabase
+      .from('animal_receiving_log')
+      .select('animal_index, status, received_at')
+      .eq('appointment_id', id)
+    const all = animals ?? []
+    // Nothing was ever checked in on the old day, so it spent no numbers —
+    // this is an ordinary reschedule, not a roll.
+    if (all.length === 0) return
+
+    const live = all.filter(a => a.status !== 'no_show' && a.status !== 'removed')
+    if (live.length === 0) return
+
+    const slots = Math.max(
+      all.length,
+      ...all.map(a => (a.animal_index as number) ?? 0),
+      (appt.head_count as number) ?? 0,
+    )
+    const firstIn = live
+      .map(a => a.received_at as string)
+      .filter(Boolean)
+      .sort()[0] ?? null
+
+    const slot0 = (appt.customers as { customer_name?: string }[] | null)?.[0]
+    await supabase.from('harvest_rolls').insert([{
+      appointment_id: id,
+      from_date: fromDate,
+      to_date:   toDate,
+      producer:  (appt.source as string) || slot0?.customer_name || 'Unknown',
+      species:   (appt.species as string) ?? '',
+      slots,
+      first_in:  firstIn,
+    }])
+  } catch {
+    // The move itself matters more than the paper trail.
+  }
+}
+
 // PATCH /api/appointments â€” update an appointment
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
   const { id, ...updates } = body
+
+  // Capture the day being left before the update lands.
+  let rollFrom: string | null = null
+  if ('harvest_date' in updates && updates.harvest_date) {
+    const { data: before } = await supabase
+      .from('harvest_appointments')
+      .select('harvest_date')
+      .eq('id', id)
+      .single()
+    const prev = before?.harvest_date as string | undefined
+    if (prev && prev !== updates.harvest_date) rollFrom = prev
+  }
 
   // An empty receive_date means "use the default" — coerce to null so the
   // trigger fills the day before harvest instead of erroring on ''.
@@ -228,6 +292,7 @@ export async function PATCH(req: NextRequest) {
     .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (rollFrom) await recordRoll(id, rollFrom, updates.harvest_date)
   return NextResponse.json(data)
 }
 
