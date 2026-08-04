@@ -221,6 +221,23 @@ export default function Dashboard() {
             </div>
           </Link>
 
+          <Link href="/portal-users" style={{ textDecoration: 'none' }}>
+            <div style={{
+              background: 'var(--dark)', border: '1px solid rgba(166,120,90,0.18)',
+              borderLeft: '3px solid #A78BFA',
+              borderRadius: 4, padding: '0.75rem 1.25rem',
+              display: 'flex', alignItems: 'center', gap: '0.75rem',
+              cursor: 'pointer',
+            }}>
+              <span style={{ fontSize: '1.1rem' }}>🔑</span>
+              <div>
+                <span style={{ color: C.cream, fontWeight: 600, fontSize: '0.88rem' }}>Portal Users</span>
+                <span style={{ color: C.lightBrown, fontSize: '0.78rem', marginLeft: '0.75rem' }}>Who signed up · who came back · where they drop off</span>
+              </div>
+              <span style={{ marginLeft: 'auto', color: C.lightBrown, fontSize: '0.8rem' }}>Open ›</span>
+            </div>
+          </Link>
+
           <Link href="/performance" style={{ textDecoration: 'none' }}>
             <div style={{
               background: 'var(--dark)', border: '1px solid rgba(166,120,90,0.18)',
