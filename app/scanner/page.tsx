@@ -1570,8 +1570,16 @@ export default function ScannerPage() {
                 🚚 Baker Storage
               </button>
             )}
-            {s.status === 'complete' && (
+            {/* Reopen is offered from picked_up and baker_storage too, not just
+                complete. An order marked picked up with smokehouse work still
+                to come had no way back to scanning — the crew could see "Back
+                to Freezer" but that only reaches complete, and there is no
+                Open button on a finished session, so bacon coming out of the
+                cure had nowhere to go (AE, 2026-08-04: "says bob is picked up
+                and cannot scan he has bacon"). */}
+            {(s.status === 'complete' || s.status === 'picked_up' || s.status === 'baker_storage') && (
               <button onClick={() => quickStatus(s, 'scanning')}
+                title={s.status === 'complete' ? 'Back to scanning' : 'Back to scanning — for product still to come, like bacon out of the cure'}
                 style={{ ...btnBase, background: 'transparent', border: '1px solid rgba(166,120,90,0.3)', color: C.lightBrown }}>
                 ↩ Reopen
               </button>
