@@ -518,6 +518,16 @@ const LIST_GRID_COLS = '26px minmax(0,1fr) 54px 70px 70px 76px'
 // Spell it out so the card says "Boneless" right in the cut name.
 // Split-share portions carry an A|B suffix the title-caser mangles ("Whole Ab"),
 // so name them the way the wizard shows them.
+// Shares a card can be copied onto, mirroring the wizard's portion step. Beef
+// splits every way; a hog only goes whole or by the side.
+const BEEF_PORTION_OPTIONS = ['whole', 'whole-ab', 'whole-abcd', 'three-quarter', 'three-quarter-abc', 'half', 'half-ab', 'quarter']
+const PORK_PORTION_OPTIONS = ['whole', 'whole-ab', 'half']
+const PORTION_LABELS: Record<string, string> = {
+  'whole': 'Whole', 'whole-ab': 'Whole A|B', 'whole-abcd': 'Whole A|B|C|D',
+  'three-quarter': '¾ Beef', 'three-quarter-abc': '¾ A|B|C',
+  'half': 'Half', 'half-ab': 'Half A|B', 'quarter': 'Quarter',
+}
+
 const FMT_OVERRIDES: Record<string, string> = {
   'loose-pack': '1 lb Packs',
   'loin-roast': 'Boneless Loin Roast',
@@ -1891,6 +1901,11 @@ export default function CuttingInstructionsPage() {
   const [filterSlaughter, setFilterSlaughter] = useState<string>('')
   const [showLinkPicker, setShowLinkPicker] = useState(false)
   const [linking, setLinking]           = useState(false)
+  // Copy-this-card-onto-another-share flow: which portion the copy is for, and
+  // whether one is being made right now.
+  const [showCopyPicker, setShowCopyPicker] = useState(false)
+  const [copyPortion, setCopyPortion]   = useState('half')
+  const [copying, setCopying]           = useState(false)
   // Which carcass each linked card sits on, keyed by instruction id. Loaded in
   // bulk after the list so an unassigned card can be flagged before it prints.
   const [carcassStates, setCarcassStates] = useState<Record<string, CarcassInfo[]>>({})
@@ -2076,8 +2091,11 @@ export default function CuttingInstructionsPage() {
     load()
   }
 
-  async function linkToCustomer(apptId: string, customerIdx: number) {
+  // cardId defaults to the open card; the copy-for-another-share flow passes
+  // the id of the copy it just made instead.
+  async function linkToCustomer(apptId: string, customerIdx: number, cardId?: string) {
     if (!selected) return
+    const linkId = cardId ?? selected.id
     const appt = appointments.find(a => a.id === apptId)
     if (!appt) return
     // The picker only offers matching animals, but this is the gate that has to
@@ -2089,7 +2107,7 @@ export default function CuttingInstructionsPage() {
     }
     setLinking(true)
     const customers = appt.customers.map((c, i) =>
-      i === customerIdx ? { ...c, linked_cutting_instruction_id: selected.id } : c
+      i === customerIdx ? { ...c, linked_cutting_instruction_id: linkId } : c
     )
     const res = await fetch('/api/appointments', {
       method: 'PATCH',
@@ -2107,12 +2125,45 @@ export default function CuttingInstructionsPage() {
       // Always send it, even as null: the slot this card was just linked to is
       // the answer, and omitting the key would leave a stale customer from an
       // earlier link in place.
-      body: JSON.stringify({ ids: [selected.id], status: 'linked', customer_id: customerId }),
+      body: JSON.stringify({ ids: [linkId], status: 'linked', customer_id: customerId }),
     })
-    setSelected(prev => prev ? { ...prev, status: 'linked' } : null)
+    // Only the open card's badge changes; a copy isn't what's on screen.
+    if (linkId === selected.id) setSelected(prev => prev ? { ...prev, status: 'linked' } : null)
     setLinking(false)
     setShowLinkPicker(false)
     load()
+  }
+
+  // Copy this card onto another share the same customer is taking — same cuts,
+  // its own row and its own portion. Linking one card to two slots instead
+  // prints the wrong portion on the second animal and makes a later edit rewrite
+  // both (Charlie, 2026-08-04: Rian Pinkerton's whole + half).
+  async function copyToShare(apptId: string, customerIdx: number) {
+    if (!selected) return
+    setCopying(true)
+    try {
+      const res = await fetch('/api/cutting-instructions/copy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_id: selected.id, portion: copyPortion }),
+      })
+      const copy = await res.json().catch(() => null)
+      if (!res.ok || !copy?.id) {
+        alert(`Could not copy this card: ${copy?.error ?? 'unknown error'}`)
+        return
+      }
+      if (copy.size_class_changed && !window.confirm(
+        `This copy changes the share size, not just the label — the answers were given for a ${PORTION_LABELS[selected.data?.portion ?? ''] ?? 'different'} share.\n\n` +
+        `The cuts carry over as-is; anything that doesn't suit a ${PORTION_LABELS[copyPortion] ?? copyPortion} needs checking with the customer. Create it anyway?`
+      )) {
+        await fetch(`/api/cutting-instructions?id=${copy.id}`, { method: 'DELETE' })
+        return
+      }
+      await linkToCustomer(apptId, customerIdx, copy.id)
+      setShowCopyPicker(false)
+    } finally {
+      setCopying(false)
+    }
   }
 
   const selectedSpecies = selected ? speciesOf(selected) : 'Beef'
@@ -2346,6 +2397,17 @@ export default function CuttingInstructionsPage() {
                 {selected.status === 'pending' && (
                   <button onClick={() => markStatus([selected.id], 'imported')} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>✓ Mark Imported</button>
                 )}
+                <button
+                  onClick={() => {
+                    // Default the copy to the same portion — the common case is
+                    // a second share of the same size.
+                    setCopyPortion(selected.data?.portion || 'half')
+                    setShowCopyPicker(true)
+                  }}
+                  style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}
+                  title="Same cuts on another share this customer is taking — makes its own card so the portion prints right and a later edit doesn't change both">
+                  ⧉ Copy for another share
+                </button>
                 {isV2 && (
                   <a href={`https://cuttinginstructions.cowboymeats.com/edit/${selected.id}`} target="_blank" rel="noreferrer"
                     style={{ ...btnStyle('rgba(166,120,90,0.2)', 'var(--tan)'), textDecoration: 'none', display: 'inline-block' }}
@@ -2525,6 +2587,55 @@ export default function CuttingInstructionsPage() {
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
               <button onClick={() => setShowLinkPicker(false)} style={btnStyle('transparent', 'var(--tan)')}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Copy this card onto another share the same customer is taking */}
+      {showCopyPicker && selected && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: '1rem' }} onClick={() => !copying && setShowCopyPicker(false)}>
+          <div style={{ background: 'var(--dark)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: '6px', padding: '1.75rem', width: '100%', maxWidth: '560px', maxHeight: '80vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+            <h2 style={{ margin: '0 0 0.5rem', color: 'var(--cream)', fontSize: '1.05rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Copy for another share</h2>
+            <p style={{ margin: '0 0 1rem', fontSize: '0.82rem', color: 'var(--tan)', lineHeight: 1.5 }}>
+              Makes a second card with <strong style={{ color: 'var(--cream)' }}>{selected.data?.customerName}</strong>&apos;s exact cuts and puts it on
+              another animal. Its own card, so the portion prints right on that carcass and editing one share never changes the other.
+            </p>
+
+            <label style={{ display: 'block', fontSize: '0.7rem', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--light-brown)', marginBottom: '0.35rem' }}>
+              Portion for the copy
+            </label>
+            <select
+              value={copyPortion}
+              onChange={e => setCopyPortion(e.target.value)}
+              style={{ width: '100%', background: 'rgba(0,0,0,0.3)', color: 'var(--cream)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, padding: '0.5rem 0.6rem', fontSize: '0.9rem', marginBottom: '1.25rem' }}
+            >
+              {(selectedSpecies === 'Pork' ? PORK_PORTION_OPTIONS : BEEF_PORTION_OPTIONS).map(p => (
+                <option key={p} value={p}>{PORTION_LABELS[p] ?? p}{p === selected.data?.portion ? ' (same as this card)' : ''}</option>
+              ))}
+            </select>
+
+            {linkableAppts.length === 0 ? (
+              <p style={{ color: 'var(--tan)', textAlign: 'center', padding: '2rem' }}>No {selectedSpecies.toLowerCase()} animal has a share waiting for instructions.</p>
+            ) : (
+              linkableAppts.map(a => (
+                <div key={a.id} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: '4px', padding: '0.85rem 1rem', marginBottom: '0.75rem' }}>
+                  <div style={{ fontWeight: 700, color: 'var(--cream)', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+                    {speciesEmblem(a.species)} {a.species} · {new Date(a.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
+                    {a.source && <span style={{ color: 'var(--tan)', fontWeight: 400, marginLeft: '0.5rem' }}>· {a.source}</span>}
+                  </div>
+                  {a.customers?.filter(c => !c.linked_cutting_instruction_id).map(c => (
+                    <button key={c.id} onClick={() => copyToShare(a.id, a.customers.indexOf(c))} disabled={copying || linking}
+                      style={{ display: 'block', width: '100%', textAlign: 'left', background: 'rgba(117,71,27,0.25)', border: '1px solid rgba(166,120,90,0.2)', borderRadius: '3px', padding: '0.5rem 0.75rem', marginBottom: '0.35rem', color: 'var(--cream)', cursor: copying ? 'wait' : 'pointer', fontSize: '0.85rem', opacity: copying ? 0.6 : 1 }}>
+                      {copying ? 'Copying…' : `→ ${c.customer_name || 'Unnamed customer'} (${c.portion})`}
+                    </button>
+                  ))}
+                </div>
+              ))
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
+              <button onClick={() => setShowCopyPicker(false)} disabled={copying} style={btnStyle('transparent', 'var(--tan)')}>Cancel</button>
             </div>
           </div>
         </div>
