@@ -50,7 +50,15 @@ const baggedTrimPackRows   = (t: any): Array<[string, string]> => [['Bagged Trim
 // (cut card), packaging style & size is the packaging side's (packaging sheet)
 function beefTrimCutterRows(t: any): Array<[string, string]> {
   if (trimIsBagged(t)) return baggedTrimCutterRows()
-  return t?.fatPct ? [['Grind Blend', t.fatPct]] : []
+  const rows: Array<[string, string]> = []
+  if (t?.fatPct) rows.push(['Grind Blend', t.fatPct])
+  // Whether the loin's fat cap is saved for the grind is decided at the loin,
+  // long before the grinder runs — so it has to be on the cutters' page
+  // (Jill, 2026-08-04). Cards submitted before the question existed carry no
+  // answer and print no line.
+  if (t?.loinFat === 'grind') rows.push(['Loin Fat', 'SAVE — grind into the beef'])
+  else if (t?.loinFat === 'out') rows.push(['Loin Fat', 'Trim off'])
+  return rows
 }
 
 function beefTrimPackRows(t: any): Array<[string, string]> {
