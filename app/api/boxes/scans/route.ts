@@ -27,6 +27,9 @@ export async function POST(req: NextRequest) {
       item_name:  body.item_name ?? '',
       weight_lbs: body.weight_lbs ?? null,
       quantity:   body.quantity ?? 1,
+      // Kept so a weight that looks wrong can be traced back to what the scale
+      // actually printed. Null for hand-keyed weights.
+      barcode:    body.barcode ?? null,
     }])
     .select()
     .single()

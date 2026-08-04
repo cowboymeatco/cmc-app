@@ -581,7 +581,9 @@ export default function ScannerPage() {
       const res  = await fetch('/api/boxes/scans', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ box_id: box.id, plu_number: plu, item_name: itemName, weight_lbs: weightLbs, quantity: 1 }),
+        // raw goes along so a weight that looks wrong later can be checked
+        // against what the scale actually printed.
+        body:    JSON.stringify({ box_id: box.id, plu_number: plu, item_name: itemName, weight_lbs: weightLbs, quantity: 1, barcode: raw }),
       })
       if (!res.ok) throw new Error(await res.text())
       const scan: ScanLine = await res.json()
