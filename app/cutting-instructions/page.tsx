@@ -52,12 +52,11 @@ function beefTrimCutterRows(t: any): Array<[string, string]> {
   if (trimIsBagged(t)) return baggedTrimCutterRows()
   const rows: Array<[string, string]> = []
   if (t?.fatPct) rows.push(['Grind Blend', t.fatPct])
-  // Whether the loin's fat cap is saved for the grind is decided at the loin,
-  // long before the grinder runs — so it has to be on the cutters' page
-  // (Jill, 2026-08-04). Cards submitted before the question existed carry no
-  // answer and print no line.
-  if (t?.loinFat === 'grind') rows.push(['Loin Fat', 'SAVE — grind into the beef'])
-  else if (t?.loinFat === 'out') rows.push(['Loin Fat', 'Trim off'])
+  // Excess fat is thrown away unless the customer asked for it, and that call
+  // gets made at the table while the animal is being broken — long before
+  // anything reaches packing. Silent when they didn't ask, so the cutters only
+  // read a line that means "don't bin this" (Jill/Charlie, 2026-08-04).
+  if (t?.keepFat) rows.push(['Excess Fat', 'SAVE — customer wants it back'])
   return rows
 }
 
@@ -81,6 +80,9 @@ function beefTrimPackRows(t: any): Array<[string, string]> {
     ].filter(Boolean)
     rows.push(['Patties', parts.join(' · ')])
   }
+  // Saved fat leaves as its own bagged item, so packing has to see it too —
+  // same treatment bagged trim gets.
+  if (t.keepFat) rows.push(['Excess Fat', 'Bag back — customer renders it'])
   return rows
 }
 
