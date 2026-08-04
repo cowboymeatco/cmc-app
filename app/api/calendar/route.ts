@@ -47,7 +47,7 @@ export async function GET(req: NextRequest) {
 
   const events: CalEvent[] = []
 
-  const [recvAppts, boxes, appts, sessions, cooks, retail, planned, pickups] = await Promise.all([
+  const [recvAppts, boxes, appts, sessions, cooks, retail, planned, pickups, cutPlan] = await Promise.all([
     // Receiving — animals scheduled to arrive, off the receiving calendar
     // (appointment.receive_date, default the day before harvest). Charlie:
     // "Receiving should come off of the receiving calendar."
@@ -80,6 +80,16 @@ export async function GET(req: NextRequest) {
     supabase.from('processing_sessions')
       .select('id, customer_name, pickup_date, status')
       .gte('pickup_date', from).lte('pickup_date', to),
+    // Planned cuts — the cut schedule built on /processing. Not date-filtered
+    // here: the plan is ONE ordered list saved under a single schedule_date and
+    // split across days by its break rows, so which day a carcass falls on can
+    // only be worked out by walking the list (see below). A plan is a few dozen
+    // rows; 500 always covers the newest one.
+    supabase.from('cut_schedule_items')
+      .select('*')
+      .order('schedule_date', { ascending: false })
+      .order('manual_rank', { ascending: true })
+      .limit(500),
   ])
 
   // Recipe names for tagged cooks (small table — one fetch, mapped by key).
@@ -189,6 +199,80 @@ export async function GET(req: NextRequest) {
       subtitle: collected ? 'collected ✓' : 'pickup',
       status: (r.status as string) ?? undefined, href: LANE_HREF.pickup,
     })
+  }
+
+  // ── Planned cuts, off the cut schedule ──────────────────────────────────────
+  // The processing lane used to show only processing_sessions — work already
+  // scanned. Charlie (2026-08-03): "pull this information from the processing
+  // planner also." So the plan layers in the same way planned cooks do.
+  //
+  // The plan is one ordered list saved under a single schedule_date, with
+  // 'break' rows marking where a day of cutting ends: everything before the
+  // first break is cut on schedule_date, everything after a break is cut on
+  // that break's break_date. Walking the list in manual_rank order is the only
+  // way to know a carcass's day.
+  const allPlan = cutPlan.data ?? []
+  const planDate = allPlan[0]?.schedule_date as string | undefined
+  const plan = planDate ? allPlan.filter(r => r.schedule_date === planDate) : []
+
+  if (plan.length > 0) {
+    // Same rule the planner and crew view use (lib/cutSchedule planIsLive): a
+    // plan is live through the last day it describes. Past that it's a stale
+    // sequence, not a schedule, and must not be drawn on the calendar.
+    let lastDay = planDate ?? ''
+    for (const r of plan) {
+      const bd = day(r.break_date as string)
+      if (r.kind === 'break' && bd > lastDay) lastDay = bd
+    }
+    const todayISO = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Denver' })
+
+    if (lastDay >= todayISO) {
+      // Carcass rows key on harvest_log_id (the column is named appointment_id
+      // for back-compat — see lib/cutSchedule ScheduleEntry).
+      const logIds = Array.from(new Set(
+        plan.filter(r => r.kind !== 'break' && r.appointment_id).map(r => r.appointment_id as string)
+      ))
+      const { data: planLogs } = logIds.length
+        ? await supabase.from('harvest_log')
+            .select('id, producer, species, carcass_tag, appointment_id')
+            .in('id', logIds)
+        : { data: [] }
+      const logById = new Map((planLogs ?? []).map(l => [l.id as string, l]))
+
+      // Buyer names live on the appointment's customers JSON, keyed by the
+      // customer slot id the plan row carries.
+      const planApptIds = Array.from(new Set(
+        (planLogs ?? []).map(l => l.appointment_id as string).filter(Boolean)
+      ))
+      const { data: planAppts } = planApptIds.length
+        ? await supabase.from('harvest_appointments').select('id, customers').in('id', planApptIds)
+        : { data: [] }
+      const custName = new Map<string, string>()
+      for (const a of planAppts ?? []) {
+        for (const c of (a.customers as { id?: string; customer_name?: string }[] | null) ?? []) {
+          if (c?.id) custName.set(c.id, (c.customer_name ?? '').trim())
+        }
+      }
+
+      let cutDay = planDate ?? ''
+      for (const r of plan) {
+        if (r.kind === 'break') {
+          const bd = day(r.break_date as string)
+          if (bd) cutDay = bd
+          continue
+        }
+        if (!cutDay || cutDay < from || cutDay > to) continue
+        const log  = logById.get(r.appointment_id as string)
+        const name = custName.get(r.appointment_customer_id as string) || (log?.producer as string) || ''
+        events.push({
+          id: `cut-${r.id}`, lane: 'processing', date: cutDay, planned: true,
+          title: `📋 ${name || 'Planned cut'}`,
+          subtitle: [log?.species, log?.carcass_tag ? `#${log.carcass_tag}` : '', 'planned']
+            .filter(Boolean).join(' · '),
+          href: '/processing',
+        })
+      }
+    }
   }
 
   events.sort((a, b) => a.date.localeCompare(b.date) || a.lane.localeCompare(b.lane))
