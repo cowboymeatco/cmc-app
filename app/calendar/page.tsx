@@ -29,6 +29,13 @@ const LANES: { key: Lane; label: string; emoji: string; color: string }[] = [
 const LANE_COLOR: Record<Lane, string> = Object.fromEntries(LANES.map(l => [l.key, l.color])) as Record<Lane, string>
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+// Seven EQUAL columns. `repeat(7, 1fr)` is not equal: a 1fr track still floors
+// at its content's min width, so a day holding "Granite Peak Plumbing & Heating"
+// stretched its column and squeezed the rest — the day cells drifted out from
+// under the Sun/Mon/Tue headings above them (Charlie, 2026-08-04). minmax(0,1fr)
+// removes that floor and lets the event chips ellipsis inside their cell.
+const DAY_COLS = 'repeat(7, minmax(0, 1fr))'
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 
 const toISO = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -223,7 +230,7 @@ function MonthView({ year, month, byDay, todayISO }: { year: number; month: numb
   return (
     <>
       <WeekdayHeader />
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1, background: 'rgba(166,120,90,0.15)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: 4, overflow: 'hidden' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: DAY_COLS, gap: 1, background: 'rgba(166,120,90,0.15)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: 4, overflow: 'hidden' }}>
         {grid.map(d => {
           const iso = toISO(d); const inMonth = d.getMonth() === month
           const evs = byDay.get(iso) ?? []; const shown = evs.slice(0, 4); const extra = evs.length - shown.length
@@ -243,7 +250,7 @@ function MonthView({ year, month, byDay, todayISO }: { year: number; month: numb
 // ── Week: 7 tall columns, every event listed (for the leads) ───────────────────
 function WeekView({ days, byDay, todayISO }: { days: Date[]; byDay: Map<string, CalEvent[]>; todayISO: string }) {
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1, background: 'rgba(166,120,90,0.15)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: 4, overflow: 'hidden' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: DAY_COLS, gap: 1, background: 'rgba(166,120,90,0.15)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: 4, overflow: 'hidden' }}>
       {days.map(d => {
         const iso = toISO(d); const evs = byDay.get(iso) ?? []; const today = iso === todayISO
         return (
@@ -270,10 +277,10 @@ function QuarterView({ months, byDay, todayISO }: { months: { y: number; m: numb
         return (
           <div key={`${y}-${m}`}>
             <div style={{ color: C.cream, fontWeight: 700, fontSize: '0.85rem', marginBottom: 6, textAlign: 'center' }}>{MONTHS[m]} {y}</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: DAY_COLS, gap: 1, border: '1px solid transparent' }}>
               {WEEKDAYS.map(w => <div key={w} style={{ textAlign: 'center', color: C.lightBrown, fontSize: '0.56rem', fontWeight: 700 }}>{w[0]}</div>)}
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1, background: 'rgba(166,120,90,0.12)', border: '1px solid rgba(166,120,90,0.12)', borderRadius: 3, overflow: 'hidden' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: DAY_COLS, gap: 1, background: 'rgba(166,120,90,0.12)', border: '1px solid rgba(166,120,90,0.12)', borderRadius: 3, overflow: 'hidden' }}>
               {grid.map(d => {
                 const iso = toISO(d); const inMonth = d.getMonth() === m; const today = iso === todayISO
                 const evs = byDay.get(iso) ?? []; const dots = evs.slice(0, 6); const extra = evs.length - dots.length
@@ -301,7 +308,9 @@ function QuarterView({ months, byDay, todayISO }: { months: { y: number; m: numb
 
 function WeekdayHeader() {
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1, marginBottom: 1 }}>
+    // Same column track AND the same 1px border box as the day grid below it,
+    // or the labels sit a pixel off their columns.
+    <div style={{ display: 'grid', gridTemplateColumns: DAY_COLS, gap: 1, marginBottom: 1, border: '1px solid transparent' }}>
       {WEEKDAYS.map(w => (
         <div key={w} style={{ textAlign: 'center', color: C.tan, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700, padding: '0.4rem 0' }}>{w}</div>
       ))}

@@ -802,7 +802,7 @@ function renderV2Detail(ci: RawInstruction) {
         <V2Field label="Name" value={d.customerName} />
         <V2Field label="Phone" value={d.customerPhone} />
         <V2Field label="Email" value={d.customerEmail} />
-        <V2Field label="Kill Date" value={d.killDate} />
+        <V2Field label="Harvest Date" value={d.killDate} />
         <V2Field label="Portion" value={v2fmt(d.portion)} />
         {/* Grinding it all replaces every primal answer, so it reads up here
             with the portion rather than as a missing section below. */}
@@ -1655,7 +1655,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
        <div style="padding:6px 11px;border-right:1px solid #C9A882">
          <div style="font-size:12px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Animal</div>
          <div style="font-size:24px;font-weight:bold">${species}${d.portion ? ' · ' + fmt(d.portion) : ''}</div>
-         <div style="font-size:16px;color:#555;margin-top:1px">Kill Date: ${d.killDate ?? '—'}</div>
+         <div style="font-size:16px;color:#555;margin-top:1px">Harvest Date: ${d.killDate ?? '—'}</div>
          ${/* One answer for the whole order, so it rides in the header where it
               governs every steak below rather than repeating on each row. */
            d.steakPack ? `<div style="font-size:18px;margin-top:3px">Steaks: <span style="font-weight:bold">${esc(String(d.steakPack))} per pack</span></div>` : ''}
@@ -1714,7 +1714,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
   ${unassignedBand(carcass)}
   ${grindBand}
   <div style="font-size:16px;color:#555;margin-bottom:8px">
-    <strong>${d.customerName ?? '—'}</strong>${d.portion ? ' · ' + fmt(d.portion) : ''} · Kill Date: ${d.killDate ?? '—'}
+    <strong>${d.customerName ?? '—'}</strong>${d.portion ? ' · ' + fmt(d.portion) : ''} · Harvest Date: ${d.killDate ?? '—'}
     <span style="margin-left:14px">Producer: <span style="font-weight:bold">${carcass.producer || wline(110)}</span></span>
     <span style="margin-left:14px">Lot # <span style="font-weight:bold">${carcass.lot || wline(46)}</span> · Tag # <span style="font-weight:bold">${carcass.tag || wline(38)}</span></span>
     <span style="margin-left:14px">Hanging Wt: <span style="font-weight:bold">${carcass.hcw != null ? `${carcass.hcw} lbs` : wline(58)}</span></span>
@@ -2221,11 +2221,12 @@ export default function CuttingInstructionsPage() {
                 <button key={s} onClick={() => setFilterSpecies(s)} style={tabBtn(filterSpecies === s)}>{s}</button>
               ))}
             </div>
-            {/* Slaughter (kill) date — Jill links a kill day at a time. */}
+            {/* Harvest date — Jill links a harvest day at a time. "Kill" is not
+                a word we put in front of anyone (Charlie, 2026-08-04). */}
             <select
               value={filterSlaughter}
               onChange={e => setFilterSlaughter(e.target.value)}
-              title="Filter by scheduled slaughter date"
+              title="Filter by scheduled harvest date"
               style={{
                 background: filterSlaughter ? 'var(--med-brown)' : 'rgba(0,0,0,0.25)',
                 color: filterSlaughter ? 'var(--cream)' : 'var(--tan)',
@@ -2233,13 +2234,13 @@ export default function CuttingInstructionsPage() {
                 padding: '0.3rem 0.5rem', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer', outline: 'none',
               }}
             >
-              <option value="">🔪 All kill dates</option>
+              <option value="">🔪 All harvest dates</option>
               {slaughterDates.map(d => (
                 <option key={d} value={d}>
                   {new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
                 </option>
               ))}
-              {anyNoSlaughter && <option value="__none__">— no kill date —</option>}
+              {anyNoSlaughter && <option value="__none__">— no harvest date —</option>}
             </select>
             <button onClick={load} style={{ ...btnStyle('transparent', 'var(--tan)'), border: '1px solid rgba(166,120,90,0.3)', marginLeft: 'auto' }}>↺</button>
           </div>
@@ -2398,7 +2399,7 @@ export default function CuttingInstructionsPage() {
 
                         {state?.state === 'unharvested' && (
                           <div style={{ color: 'var(--tan)', fontSize: '0.76rem', marginTop: '0.15rem' }}>
-                            Not harvested yet — the carcass gets picked here once the animals are killed and tagged.
+                            Not harvested yet — the carcass gets picked here once the animals are harvested and tagged.
                           </div>
                         )}
 
