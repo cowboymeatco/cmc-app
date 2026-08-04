@@ -111,6 +111,7 @@ export default function PortalUsersPage() {
                 ['Made an account', t.accounts, C.tan],
                 ['Signed in at least once', t.accounts - t.never, C.tan],
                 ['Finished a profile', t.accounts - t.never - t.setup, GREEN],
+                ['Filed a cut sheet through it', t.cut_cards, t.cut_cards ? GREEN : COST],
                 ['Booked an animal through it', t.animals, t.animals ? GREEN : COST],
               ] as [string, number, string][]).map(([label, n, color]) => (
                 <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.4rem' }}>
@@ -171,9 +172,10 @@ export default function PortalUsersPage() {
             </div>
 
             <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.6rem', lineHeight: 1.6 }}>
-              Animals counts harvest appointments booked under that person as producer; cut cards counts cutting instructions filed
-              against them. Both are keyed to the customer record, so anyone still stuck at setup reads as blank — which is the
-              honest answer for an account that never finished.
+              Animals counts harvest appointments booked under that person as producer. Cut cards counts cutting instructions filed
+              <strong> through the portal</strong> — cards they filled in on the public form don&apos;t count here, and nothing submitted
+              before 4 Aug 2026 does either, because until then the two doors were indistinguishable. Both columns key to the
+              customer record, so anyone still stuck at setup reads as blank — the honest answer for an account that never finished.
             </div>
           </>
         )}

@@ -48,8 +48,11 @@ export async function GET() {
       custIds.length
         ? supabaseAdmin.from('harvest_appointments').select('producer_id').in('producer_id', custIds)
         : Promise.resolve({ data: [] as { producer_id: string }[] }),
+      // Cards filed THROUGH the portal, not merely attributed to a portal
+      // customer — submitted_by records the front door as of 2026-08-04.
       custIds.length
-        ? supabaseAdmin.from('cutting_instructions').select('customer_id').in('customer_id', custIds)
+        ? supabaseAdmin.from('cutting_instructions').select('customer_id')
+            .in('customer_id', custIds).eq('submitted_by', 'portal')
         : Promise.resolve({ data: [] as { customer_id: string }[] }),
     ])
     const apptCount = new Map<string, number>()
