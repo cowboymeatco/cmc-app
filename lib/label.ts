@@ -103,7 +103,13 @@ export function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlag
   const items = Object.entries(grouped).sort((a, b) => b[1].weight - a[1].weight)
   const totalWeight = items.reduce((s, [, v]) => s + v.weight, 0)
   const totalCuts   = items.reduce((s, [, v]) => s + v.count, 0)
-  const boxLabel    = `Box ${box.box_number}${box.is_final ? ' ★' : ''}`
+  // The NUMBER carries at a glance, not the word. A packer reading a label from
+  // arm's length was misled by a customer whose name ends in a digit ("Prince
+  // Inc. 3") — printed at 21pt, that trailing 3 was the biggest numeral on the
+  // label while the box number sat smaller underneath, so box 9 read as box 3
+  // (AE, 2026-08-05). The digits now outrank anything in the name.
+  const boxLabelText = `Box ${box.box_number}${box.is_final ? ' ★' : ''}`
+  const boxLabelHTML = `Box <span class="bn">${box.box_number}</span>${box.is_final ? ' ★' : ''}`
   const dateStr     = new Date(box.pack_date + 'T12:00:00').toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })
   const julian      = julianYYDDD(box.pack_date)
 
@@ -132,7 +138,7 @@ export function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlag
 <html>
 <head>
 <meta charset="utf-8">
-<title>Box Label — ${escLabel(box.customer_name)} ${boxLabel}</title>
+<title>Box Label — ${escLabel(box.customer_name)} ${boxLabelText}</title>
 <style>
   @page { size: 4in auto; margin: 0.15in; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -145,6 +151,10 @@ export function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlag
   /* Box # and date stack tight; the mark floats over the open right space. */
   .boxrow   { position: relative; text-align: center; }
   .box-num  { font-size: 15pt; font-weight: bold; text-align: center; line-height: 1.15; }
+  /* Larger than .customer (21pt) so the box number is the biggest numeral on
+     the label, whatever the customer is called. Page height is auto, so the
+     extra few points push the rows below down rather than clipping. */
+  .bn       { font-size: 26pt; line-height: 1; }
   .date     { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 10pt; text-align: center; line-height: 1.2; }
   .mark     { position: absolute; right: 0; top: 50%; transform: translateY(-50%); width: 0.6in; z-index: 2; display: flex; align-items: center; }
   .mark.up  { top: 12%; }
@@ -169,7 +179,7 @@ export function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlag
   ${weightHTML}
   ${box.box_label ? `<div class="box-for">FOR: ${escLabel(box.box_label).toUpperCase()}</div>` : ''}
   <div class="boxrow">
-    <div class="box-num">${boxLabel}</div>
+    <div class="box-num">${boxLabelHTML}</div>
     <div class="date">${dateStr} &nbsp;&middot;&nbsp; <b style="font-family:monospace;letter-spacing:0.1em">${julian}</b></div>
     ${markHTML}
   </div>
