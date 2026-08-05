@@ -49,7 +49,7 @@ function carcassLbs(h: HarvestRow): number {
 }
 
 export async function GET() {
-  const [harvestRes, scheduleRes] = await Promise.all([
+  const [harvestRes, scheduleRes, planRes] = await Promise.all([
     supabase
       .from('harvest_log')
       .select('id,harvest_date,status,species,hot_carcass_weight_lbs,half_1_weight_lbs,half_2_weight_lbs')
@@ -58,12 +58,48 @@ export async function GET() {
       .from('cut_schedule_items')
       .select('appointment_id,schedule_date')
       .not('appointment_id', 'is', null),
+    // The CURRENT plan in full — breaks included, in rank order — so we can read
+    // the day each carcass is actually laid out for. schedule_date above is only
+    // the day a plan was SAVED; the cutting day lives on the day break above the
+    // row (see plannedDay below).
+    supabase
+      .from('cut_schedule_items')
+      .select('appointment_id,kind,manual_rank,break_date,schedule_date')
+      .order('schedule_date', { ascending: false })
+      .order('manual_rank',   { ascending: true }),
   ])
   if (harvestRes.error)  return NextResponse.json({ error: harvestRes.error.message },  { status: 500 })
   if (scheduleRes.error) return NextResponse.json({ error: scheduleRes.error.message }, { status: 500 })
+  if (planRes.error)     return NextResponse.json({ error: planRes.error.message },     { status: 500 })
 
   const carcasses = (harvestRes.data ?? []) as HarvestRow[]
   const today     = isoDate()
+
+  // ── The day each carcass is actually laid out to be cut ─────────────────────
+  // A day break heads the rows beneath it, so a carcass's cutting day is the
+  // break_date of the nearest break ABOVE it in the current plan — the same rule
+  // the planner and crew view use. Rows above the first dated break have no day
+  // picked yet and are left out.
+  //
+  // This is deliberately NOT min(schedule_date): that's the day a plan was
+  // saved, uniform across every row in it, so a carcass that showed up in a plan
+  // three weeks ago and has been re-planned twice since still read as due back
+  // then. It made the "still marked chilling" banner cry wolf over 27 head that
+  // were, in the live plan, scheduled for later this week (Charlie, 2026-08-05).
+  const planRows  = (planRes.data ?? []) as {
+    appointment_id: string | null; kind: string | null; manual_rank: number
+    break_date: string | null; schedule_date: string
+  }[]
+  const planDate  = planRows[0]?.schedule_date ?? null
+  const plannedDay = new Map<string, string>()
+  {
+    let day = ''
+    for (const r of planRows) {
+      if (r.schedule_date !== planDate) break
+      if (r.kind === 'break') day = r.break_date ?? ''
+      else if (day && r.appointment_id) plannedDay.set(r.appointment_id, day)
+    }
+  }
 
   // Earliest scheduled cut date per carcass.
   const cutDateByLog = new Map<string, string>()
@@ -134,18 +170,49 @@ export async function GET() {
   // silently corrected — the schedule is a plan, and a slipped cut looks the
   // same as an unrecorded one. The crew marks them cut on /processing.
   const staleRows = carcasses.filter(h =>
-    h.status === 'chilling' && (cutDateByLog.get(h.id) ?? today) < today
+    h.status === 'chilling' && (plannedDay.get(h.id) ?? today) < today
   )
   const stale = {
     head:      staleRows.length,
     lbs:       Math.round(staleRows.reduce((sum, h) => sum + carcassLbs(h), 0)),
     oldestDue: staleRows.length
-      ? staleRows.map(h => cutDateByLog.get(h.id)!).sort()[0]
+      ? staleRows.map(h => plannedDay.get(h.id)!).sort()[0]
       : null,
   }
 
+  // ── Projected draw-down ─────────────────────────────────────────────────────
+  // What the cooler looks like on each day ahead if the plan is cut as laid out:
+  // a carcass leaves on its planned day, so day d holds everything still
+  // chilling whose day is later than d. Carcasses with no day picked never come
+  // off — they're the flat floor the line settles onto, and that gap is the
+  // point: it shows what's left unaccounted for at the end of the plan.
+  const chilling = carcasses.filter(h => h.status === 'chilling' && h.harvest_date)
+  const lastDay  = Array.from(plannedDay.values()).sort().pop() ?? null
+  const projection: { d: string; head: number; lbs: number; cut: number; cutLbs: number }[] = []
+  if (lastDay && lastDay >= today) {
+    for (let d = today; d <= lastDay; d = addDaysISO(d, 1)) {
+      let head = 0, lbs = 0, cut = 0, cutLbs = 0
+      for (const h of chilling) {
+        const day = plannedDay.get(h.id)
+        if (!day || day > d) { head++; lbs += carcassLbs(h) }
+        else                 { cut++;  cutLbs += carcassLbs(h) }
+      }
+      projection.push({ d, head, lbs: Math.round(lbs), cut, cutLbs: Math.round(cutLbs) })
+    }
+  }
+  const unplanned = chilling.filter(h => !plannedDay.has(h.id))
+  const drawdown = {
+    days:      projection,
+    planDate,
+    lastDay,
+    unplanned: {
+      head: unplanned.length,
+      lbs:  Math.round(unplanned.reduce((s, h) => s + carcassLbs(h), 0)),
+    },
+  }
+
   if (!intervals.length) {
-    return NextResponse.json({ series: [], asOf: today, trackingStart, medianHangDays, estimatedExits, hanging, ytd, stale })
+    return NextResponse.json({ series: [], asOf: today, trackingStart, medianHangDays, estimatedExits, hanging, ytd, stale, drawdown })
   }
 
   // Daily series: a carcass counts on days [in, out) — it hangs the day it
@@ -165,5 +232,5 @@ export async function GET() {
     series.push({ d, head, lbs: Math.round(lbs), sp })
   }
 
-  return NextResponse.json({ series, asOf: today, trackingStart, medianHangDays, estimatedExits, hanging, ytd, stale })
+  return NextResponse.json({ series, asOf: today, trackingStart, medianHangDays, estimatedExits, hanging, ytd, stale, drawdown })
 }

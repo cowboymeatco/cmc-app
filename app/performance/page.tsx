@@ -43,6 +43,12 @@ interface CoolerData {
   hanging:        { avgDays: number; maxDays: number }
   ytd:            { head: number; lbs: number; yearStart: string }
   stale:          { head: number; lbs: number; oldestDue: string | null }
+  drawdown:       {
+    days:      { d: string; head: number; lbs: number; cut: number; cutLbs: number }[]
+    planDate:  string | null
+    lastDay:   string | null
+    unplanned: { head: number; lbs: number }
+  }
 }
 
 const RANGES = [
@@ -461,6 +467,85 @@ export default function PerformancePage() {
             </p>
           )}
         </div>
+
+        {/* Projected draw-down — the cooler emptying as the current plan is cut.
+            Everything above this point is history; this is the only forward
+            look, so it's labelled a plan rather than a measurement. */}
+        {data && data.drawdown.days.length > 1 && (() => {
+          const days   = data.drawdown.days
+          const maxLbs = Math.max(...days.map(p => p.lbs), 1)
+          const start  = days[0]
+          return (
+            <div style={{ marginTop: '1rem', background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '1.25rem' }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.9rem' }}>
+                <div>
+                  <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.15em' }}>
+                    Projected draw-down
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: C.tan, marginTop: '0.25rem' }}>
+                    If the cut schedule runs as laid out
+                    {data.drawdown.planDate && <> · plan saved {dateLabel(data.drawdown.planDate, { month: 'short', day: 'numeric' })}</>}
+                  </div>
+                </div>
+                {/* End-of-day, not right-now — today's cutting is already taken
+                    off, so this is deliberately lower than the "In the cooler"
+                    tile above and says so. */}
+                <div style={{ fontSize: '0.78rem', color: C.lightBrown }}>
+                  after today: <strong style={{ color: C.cream }}>{fmt(start.head)} head</strong> / {fmt(start.lbs)} lbs
+                  {data.drawdown.lastDay && <> → empty {dateLabel(data.drawdown.lastDay, { weekday: 'short', month: 'short', day: 'numeric' })}</>}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'flex-end', height: 130 }}>
+                {days.map((p, i) => {
+                  const prev  = i > 0 ? days[i - 1] : null
+                  // A day nothing comes off — a weekend, or a break nobody dated.
+                  const idle  = !!prev && prev.lbs === p.lbs
+                  return (
+                    <div key={p.d} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: '100%' }}>
+                      <div style={{ fontSize: '0.62rem', color: C.cream, textAlign: 'center', marginBottom: 3, fontVariantNumeric: 'tabular-nums' }}>
+                        {p.head}
+                      </div>
+                      <div
+                        title={`${dateLabel(p.d, { weekday: 'long', month: 'short', day: 'numeric' })} — ${fmt(p.head)} head / ${fmt(p.lbs)} lbs still hanging${idle ? ' (nothing scheduled to come off)' : ''}`}
+                        style={{
+                          height: `${Math.max((p.lbs / maxLbs) * 100, p.lbs > 0 ? 2 : 0)}%`,
+                          background: idle ? 'rgba(206,106,32,0.35)' : LBS_COLOR,
+                          borderRadius: '2px 2px 0 0', minHeight: p.lbs > 0 ? 2 : 0,
+                        }}
+                      />
+                    </div>
+                  )
+                })}
+              </div>
+
+              <div style={{ display: 'flex', gap: '0.35rem', marginTop: '0.35rem' }}>
+                {days.map(p => (
+                  <div key={p.d} style={{ flex: 1, minWidth: 0, textAlign: 'center', fontSize: '0.6rem', color: C.lightBrown, whiteSpace: 'nowrap', overflow: 'hidden' }}>
+                    {dateLabel(p.d, { weekday: 'short' })}
+                  </div>
+                ))}
+              </div>
+
+              <p style={{ fontSize: '0.72rem', color: C.lightBrown, margin: '0.85rem 0 0', lineHeight: 1.5 }}>
+                Bar = pounds still hanging at the end of that day, number above = head.
+                Faded bars are days the plan takes nothing off.
+                {data.drawdown.unplanned.head > 0 ? (
+                  <>
+                    {' '}<strong style={{ color: WARN_COLOR }}>
+                      {fmt(data.drawdown.unplanned.head)} head ({fmt(data.drawdown.unplanned.lbs)} lbs) have no cut day
+                    </strong>{' '}
+                    and never come off this projection —{' '}
+                    <Link href="/processing" style={{ color: C.tan, textDecoration: 'underline' }}>give them a day</Link>{' '}
+                    and the line reaches the floor.
+                  </>
+                ) : (
+                  <> Every carcass in the cooler has a day, so the plan clears it out.</>
+                )}
+              </p>
+            </div>
+          )
+        })()}
 
         {/* Table view — same numbers without hovering */}
         {view && view.series.length > 0 && (
