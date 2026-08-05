@@ -94,10 +94,16 @@ export default function CutScheduleTab() {
       const rescored = prev.map(e =>
         e.type === 'carcass' ? { ...e, priority_score: calcScore(e, weights) } : e
       )
-      // Day breaks and locked carcasses are anchors: they keep their slot.
-      const anchors = rescored.filter(e => e.type === 'break' || e.locked)
+      // Day breaks, locked carcasses AND anything still waiting on a date are
+      // anchors: they keep their slot. Without that last group, recalculating
+      // shuffled the undated pile into the schedule — and since fresh carcasses
+      // score low, it dealt them straight to the bottom, back under the last
+      // day break. Nothing leaves the rail except by hand.
+      const dates   = cutDateByKey(prev)
+      const waiting = (e: ListItem) => e.type === 'carcass' && !dates.get(e.key)
+      const anchors = rescored.filter(e => e.type === 'break' || e.locked || waiting(e))
       const movable = rescored.filter(
-        (e): e is ScheduleEntry => e.type === 'carcass' && !e.locked
+        (e): e is ScheduleEntry => e.type === 'carcass' && !e.locked && !waiting(e)
       )
       movable.sort((a, b) => b.priority_score - a.priority_score)
       const result: (ListItem | null)[] = new Array(rescored.length).fill(null)
@@ -129,6 +135,22 @@ export default function CutScheduleTab() {
     })
     setDragging(null); setDragOver(null)
   }
+  // Dropped onto the waiting rail: send the carcass to the very front of the
+  // list, above every day break, which is what "no cut day" means. Breaks
+  // themselves have no business in the rail.
+  const handleDropToRail = () => {
+    if (!dragging) { setDragOver(null); return }
+    setEntries(prev => {
+      const list    = [...prev]
+      const fromIdx = list.findIndex(e => e.key === dragging)
+      if (fromIdx === -1 || list[fromIdx].type === 'break') return prev
+      const [moved] = list.splice(fromIdx, 1)
+      list.unshift(moved)
+      return list.map((e, i) => ({ ...e, rank: i + 1 }))
+    })
+    setDragging(null); setDragOver(null)
+  }
+
   const handleDragEnd = () => { setDragging(null); setDragOver(null) }
 
   const handleToggleLock = (key: string) =>
@@ -264,16 +286,9 @@ export default function CutScheduleTab() {
   // nobody has decided when they get cut. Everything else is under a dated day
   // break and has one. This is the tally Charlie works off to push the next
   // day's list to the crew (2026-08-05).
-  const noDay      = carcasses.filter(e => !cutDates.get(e.key))
-  const onSchedule = carcasses.filter(e =>  cutDates.get(e.key))
+  const noDay       = carcasses.filter(e => !cutDates.get(e.key))
+  const noDayKeys   = new Set(noDay.map(e => e.key))
   const noDayTotals = carcassTotals(noDay)
-  const schedTotals = carcassTotals(onSchedule)
-  // Species mix of what's waiting, biggest pile first — the shape of the day
-  // he's about to lay out.
-  const noDaySpecies = Object.entries(
-    uniqueOf(noDay).reduce<Record<string, number>>((m, e) => ({ ...m, [e.species]: (m[e.species] ?? 0) + 1 }), {})
-  ).sort((a, b) => b[1] - a[1])
-  const scheduledDays = Array.from(new Set(onSchedule.map(e => cutDates.get(e.key)!))).sort()
 
   // Dates carrying more than one break. handleBreakDate stops new ones, but
   // plans saved before that rule went in can still hold a pair (the live plan
@@ -287,7 +302,8 @@ export default function CutScheduleTab() {
   )
 
   return (
-    <div style={{ maxWidth: 900 }}>
+    <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start', maxWidth: 1200 }}>
+    <div style={{ flex: '1 1 auto', minWidth: 0, maxWidth: 900 }}>
 
       {loadError && (
         <div style={{
@@ -387,66 +403,6 @@ export default function CutScheduleTab() {
           fontSize: '0.8rem', color: C.green,
         }}>
           ✓ Order saved at {savedAt}
-        </div>
-      )}
-
-      {/* Cut-day tally — what still needs a day (left) vs what's placed (right).
-          Carcasses cross from left to right as they're dragged under a dated
-          day break, so the left box is always the pile still to be decided. */}
-      {!loading && carcasses.length > 0 && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1.25rem' }}>
-          {[
-            {
-              done:  false,
-              title: noDayTotals.head > 0 ? '⚠ No cut day' : '✓ No cut day',
-              color: noDayTotals.head > 0 ? C.red : C.green,
-              totals: noDayTotals,
-              foot: noDayTotals.head > 0
-                ? <>
-                    {noDaySpecies.map(([sp, n]) => (
-                      <span key={sp} style={{ color: speciesColor(sp), marginRight: '0.6rem', whiteSpace: 'nowrap' }}>
-                        {speciesIcon(sp)} {sp} {n}
-                      </span>
-                    ))}
-                    <div style={{ color: C.lightBrown, marginTop: '0.3rem' }}>Drag these under a day break to give them a day</div>
-                  </>
-                : <span style={{ color: C.lightBrown }}>Every carcass in the cooler has a cut day</span>,
-            },
-            {
-              done:  true,
-              title: '📅 On the schedule',
-              color: C.green,
-              totals: schedTotals,
-              foot: scheduledDays.length > 0
-                ? <span style={{ color: C.lightBrown }}>
-                    across {scheduledDays.length} {scheduledDays.length === 1 ? 'day' : 'days'} ·
-                    {' '}first {dateLabel(scheduledDays[0], { weekday: 'short', month: 'short', day: 'numeric' })} ·
-                    {' '}last {dateLabel(scheduledDays[scheduledDays.length - 1], { weekday: 'short', month: 'short', day: 'numeric' })}
-                  </span>
-                : <span style={{ color: C.lightBrown }}>No day breaks dated yet</span>,
-            },
-          ].map(col => (
-            <div key={col.title} style={{
-              background: C.dark, border: `1px solid ${col.color}55`, borderLeft: `4px solid ${col.color}`,
-              borderRadius: 4, padding: '0.7rem 0.9rem',
-            }}>
-              <div style={{
-                fontSize: '0.66rem', fontWeight: 700, color: col.color,
-                textTransform: 'uppercase', letterSpacing: '0.09em', marginBottom: '0.35rem',
-              }}>
-                {col.title}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem' }}>
-                <span style={{ fontSize: '1.6rem', fontWeight: 700, color: col.color, lineHeight: 1 }}>{col.totals.head}</span>
-                <span style={{ fontSize: '0.7rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.07em' }}>head</span>
-                <span style={{ fontSize: '0.9rem', fontWeight: 700, color: C.cream, marginLeft: '0.3rem' }}>
-                  {Math.round(col.totals.lbs).toLocaleString()}
-                </span>
-                <span style={{ fontSize: '0.7rem', color: C.lightBrown }}>lb</span>
-              </div>
-              <div style={{ fontSize: '0.7rem', marginTop: '0.45rem', lineHeight: 1.45 }}>{col.foot}</div>
-            </div>
-          ))}
         </div>
       )}
 
@@ -569,7 +525,9 @@ export default function CutScheduleTab() {
               }
             }
             let carcassNo = 0
-            return entries.map(entry => {
+            // Carcasses still waiting on a date live in the rail, not here — the
+            // schedule shows only what's actually been given a day.
+            return entries.filter(e => e.type === 'break' || !noDayKeys.has(e.key)).map(entry => {
               const isDragging = dragging === entry.key
               const isOver     = dragOver  === entry.key
 
@@ -837,21 +795,12 @@ export default function CutScheduleTab() {
                     <span style={{ fontSize: '0.9rem', fontWeight: 700, color: hangColor(entry.days_hanging) }}>
                       {entry.days_hanging}d
                     </span>
-                    {cutDate ? (
-                      atCut > entry.days_hanging && (
-                        <div
-                          title={`Will have hung ${atCut} days by ${dateLabel(cutDate, { weekday: 'long', month: 'short', day: 'numeric' })}, the day break it sits under`}
-                          style={{ fontSize: '0.72rem', fontWeight: 700, color: hangColor(atCut), lineHeight: 1.2 }}
-                        >
-                          → {atCut}d
-                        </div>
-                      )
-                    ) : (
+                    {cutDate && atCut > entry.days_hanging && (
                       <div
-                        title="No day break above this row — nobody has picked a day to cut it"
-                        style={{ fontSize: '0.65rem', fontWeight: 700, color: C.red, lineHeight: 1.2 }}
+                        title={`Will have hung ${atCut} days by ${dateLabel(cutDate, { weekday: 'long', month: 'short', day: 'numeric' })}, the day break it sits under`}
+                        style={{ fontSize: '0.72rem', fontWeight: 700, color: hangColor(atCut), lineHeight: 1.2 }}
                       >
-                        no day
+                        → {atCut}d
                       </div>
                     )}
                     <div style={{ fontSize: '0.63rem', color: C.lightBrown }}>
@@ -943,6 +892,108 @@ export default function CutScheduleTab() {
           onSaved={() => { setAssignModal(null); loadAll() }}
         />
       )}
+    </div>
+
+    {/* ── Waiting on a date ────────────────────────────────────────────────────
+        Carcasses nobody has picked a cut day for. They sit out here rather than
+        filling in at the bottom of the schedule, where they silently inherited
+        whatever the last day break happened to be (Charlie, 2026-08-05). Drag
+        one onto a row to slot it into that day; drag a scheduled row back here
+        to take its day away again. */}
+    {!loading && carcasses.length > 0 && (
+      <aside
+        onDragOver={e => { e.preventDefault(); setDragOver('__rail__') }}
+        onDrop={handleDropToRail}
+        onDragLeave={() => setDragOver(prev => (prev === '__rail__' ? null : prev))}
+        style={{
+          flex: '0 0 236px', position: 'sticky', top: '0.5rem',
+          background: C.dark, borderRadius: 6,
+          border: `1px solid ${dragOver === '__rail__' ? C.amber : noDayTotals.head > 0 ? 'rgba(239,68,68,0.45)' : 'rgba(76,175,80,0.3)'}`,
+          boxShadow: dragOver === '__rail__' ? `0 0 0 2px ${C.amber}44` : 'none',
+          padding: '0.75rem 0.8rem', maxHeight: 'calc(100dvh - 120px)', overflowY: 'auto',
+          transition: 'border-color 0.1s',
+        }}
+      >
+        <div style={{
+          fontSize: '0.66rem', fontWeight: 700, letterSpacing: '0.09em', textTransform: 'uppercase',
+          color: noDayTotals.head > 0 ? C.red : C.green, marginBottom: '0.5rem',
+        }}>
+          {noDayTotals.head > 0 ? '⚠ No cut day' : '✓ No cut day'}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', marginBottom: '0.6rem' }}>
+          <span style={{ fontSize: '1.5rem', fontWeight: 700, lineHeight: 1, color: noDayTotals.head > 0 ? C.red : C.green }}>
+            {noDayTotals.head}
+          </span>
+          <span style={{ fontSize: '0.66rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.07em' }}>head</span>
+          <span style={{ fontSize: '0.85rem', fontWeight: 700, color: C.cream, marginLeft: '0.25rem' }}>
+            {Math.round(noDayTotals.lbs).toLocaleString()}
+          </span>
+          <span style={{ fontSize: '0.66rem', color: C.lightBrown }}>lb</span>
+        </div>
+
+        {noDay.length === 0 ? (
+          <p style={{ fontSize: '0.72rem', color: C.lightBrown, lineHeight: 1.5, margin: 0 }}>
+            Every carcass in the cooler has a cut day. Anything harvested from here on lands in this box until you give it one.
+          </p>
+        ) : (
+          <>
+            <p style={{ fontSize: '0.68rem', color: C.lightBrown, lineHeight: 1.45, margin: '0 0 0.6rem' }}>
+              Drag onto the day you want it cut. The crew&apos;s list doesn&apos;t show these.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+              {noDay.map(entry => (
+                <div
+                  key={entry.key}
+                  draggable
+                  onDragStart={() => handleDragStart(entry.key)}
+                  onDragEnd={handleDragEnd}
+                  style={{
+                    background: 'rgba(239,68,68,0.06)',
+                    border: '1px solid rgba(239,68,68,0.3)',
+                    borderLeft: `4px solid ${speciesColor(entry.species)}`,
+                    borderRadius: 4, padding: '0.45rem 0.55rem',
+                    cursor: 'grab', opacity: dragging === entry.key ? 0.4 : 1,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', minWidth: 0 }}>
+                    <span style={{ color: C.medBrown, fontSize: '0.8rem', userSelect: 'none' }}>⠿</span>
+                    <span style={{
+                      fontWeight: 600, fontSize: '0.78rem', color: C.cream, minWidth: 0,
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                    }}>
+                      {entry.customer_name}
+                    </span>
+                    {entry.carcass_tag && (
+                      <span style={{
+                        fontSize: '0.62rem', color: C.medBrown, fontFamily: 'monospace',
+                        background: 'rgba(0,0,0,0.3)', borderRadius: 2, padding: '0 3px', flexShrink: 0,
+                      }}>
+                        {entry.carcass_tag}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem', marginTop: 3, fontSize: '0.66rem', flexWrap: 'wrap' }}>
+                    <span style={{ color: speciesColor(entry.species), fontWeight: 700 }}>
+                      {speciesIcon(entry.species)} {entry.species}
+                    </span>
+                    {entry.hot_carcass_weight_lbs != null && (
+                      <span style={{ color: C.lightBrown }}>{entry.hot_carcass_weight_lbs}lb</span>
+                    )}
+                    <span style={{ color: hangColor(entry.days_hanging), fontWeight: 700 }}>
+                      {entry.days_hanging}d
+                    </span>
+                    {!entry.has_instructions && (
+                      <span style={{ color: C.red, fontWeight: 700 }}>⚠ no sheet</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </aside>
+    )}
     </div>
   )
 }
