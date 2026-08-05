@@ -866,6 +866,7 @@ export default function CutScheduleTab() {
             fontSize: '0.71rem', color: C.lightBrown,
           }}>
             <span>⠿ Drag to reorder</span>
+            <span style={{ color: C.red }}>→ Drag a row onto the No Cut Day box to take its day off</span>
             <span style={{ color: C.amber }}>➕ Day Break = start of a cutting day; totals the carcasses below it (drag to move) · one per date</span>
             <span>→ = days hung by the day it&apos;s scheduled to be cut</span>
             <span>🔒 Lock = pin when recalculating</span>
@@ -934,12 +935,14 @@ export default function CutScheduleTab() {
 
         {noDay.length === 0 ? (
           <p style={{ fontSize: '0.72rem', color: C.lightBrown, lineHeight: 1.5, margin: 0 }}>
-            Every carcass in the cooler has a cut day. Anything harvested from here on lands in this box until you give it one.
+            Every carcass in the cooler has a cut day. Anything harvested from here on lands in this box until you give it one —
+            and you can drag a row out of the schedule onto this box to take its day back off.
           </p>
         ) : (
           <>
             <p style={{ fontSize: '0.68rem', color: C.lightBrown, lineHeight: 1.45, margin: '0 0 0.6rem' }}>
-              Drag onto the day you want it cut. The crew&apos;s list doesn&apos;t show these.
+              Drag onto the day you want it cut. Drag a scheduled row back here to take its day off again.
+              The crew&apos;s list doesn&apos;t show these.
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
               {noDay.map(entry => (
