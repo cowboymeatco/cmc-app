@@ -96,6 +96,38 @@ export function calcDaysHanging(harvestDate: string): number {
   return Math.max(0, daysBetweenISO(harvestDate, isoDate()))
 }
 
+// ── Hang projection ───────────────────────────────────────────────────────────
+// `days_hanging` is what an animal has hung SO FAR. The planner lays days out
+// ahead of today, so a carcass parked under Thursday's break will have hung
+// longer by the time anyone picks up a knife — that's the number that decides
+// whether it's still fit to cut (Charlie, 2026-08-05).
+
+/** Cut day per carcass row: the date on the nearest day break ABOVE it (a break
+ * heads the day below it). Rows above the first dated break aren't scheduled to
+ * a day and are left out. */
+export function cutDateByKey(list: ListItem[]): Map<string, string> {
+  const byKey = new Map<string, string>()
+  let day = ''
+  for (const item of list) {
+    if (item.type === 'break') day = item.break_date || ''
+    else if (day) byKey.set(item.key, day)
+  }
+  return byKey
+}
+
+/** Days hung by the scheduled cut day. Never below what it has hung already —
+ * a break dated in the past doesn't un-hang an animal. */
+export function hangAtCut(harvestDate: string, cutDate: string | undefined, daysHanging: number): number {
+  if (!cutDate) return daysHanging
+  return Math.max(daysHanging, daysBetweenISO(harvestDate, cutDate))
+}
+
+/** Green under a week, amber to nine days, red at ten. One definition, so the
+ * planner and the crew view can't disagree on when a carcass is hanging long. */
+export function hangColor(days: number): string {
+  return days >= 10 ? '#EF4444' : days >= 6 ? '#F59E0B' : '#4CAF50'
+}
+
 export function calcScore(
   entry: Pick<ScheduleEntry, 'days_hanging' | 'has_instructions' | 'portion'>,
   w: PriorityWeights

@@ -6,7 +6,7 @@ import AssignCarcassesModal from './AssignCarcassesModal'
 import {
   type PriorityWeights, type ScheduleEntry, type BreakItem, type ListItem,
   DEFAULT_WEIGHTS, WEIGHT_LABELS, buildEntries, loadScheduleData, uniqueCarcasses as uniqueOf,
-  calcScore, speciesColor, speciesIcon, portionBadge,
+  calcScore, speciesColor, speciesIcon, portionBadge, cutDateByKey, hangAtCut, hangColor,
 } from '@/lib/cutSchedule'
 import { isoDate, dateLabel } from '@/lib/dates'
 
@@ -33,6 +33,7 @@ export default function CutScheduleTab() {
   const [dragging,    setDragging]    = useState<string | null>(null)
   const [dragOver,    setDragOver]    = useState<string | null>(null)
   const [cutting,     setCutting]     = useState<Set<string>>(new Set())
+  const [breakError,  setBreakError]  = useState<{ key: string; msg: string } | null>(null)
 
   // Cached source data, so the assign modal can read carcasses/customers and we
   // can rebuild the list after an assignment changes without a full reload.
@@ -146,12 +147,30 @@ export default function CutScheduleTab() {
       return [newBreak, ...prev].map((e, i) => ({ ...e, rank: i + 1 }))
     })
 
-  const handleRemoveBreak = (key: string) =>
+  const handleRemoveBreak = (key: string) => {
+    setBreakError(prev => (prev?.key === key ? null : prev))
     setEntries(prev => prev.filter(e => e.key !== key).map((e, i) => ({ ...e, rank: i + 1 })))
+  }
 
-  const handleBreakDate = (key: string, break_date: string) =>
+  // One break per day. Two breaks on the same date split a day's cutting into
+  // two headings that both claim to be that day, and the crew view then renders
+  // the date twice (Charlie, 2026-08-05). The date is refused rather than
+  // merged, so the planner sees which break he already has and moves that one.
+  const handleBreakDate = (key: string, break_date: string) => {
+    const clash = break_date && entries.some(
+      e => e.type === 'break' && e.key !== key && e.break_date === break_date
+    )
+    if (clash) {
+      setBreakError({
+        key,
+        msg: `${dateLabel(break_date, { weekday: 'long', month: 'short', day: 'numeric' })} already has a day break`,
+      })
+      return
+    }
+    setBreakError(prev => (prev?.key === key ? null : prev))
     setEntries(prev => prev.map(e =>
       e.type === 'break' && e.key === key ? { ...e, break_date } : e))
+  }
 
   // Called here and will also be called by the processing scanner
   const handleMarkCut = async (entry: ScheduleEntry) => {
@@ -226,6 +245,31 @@ export default function CutScheduleTab() {
   const carcasses = entries.filter((e): e is ScheduleEntry => e.type === 'carcass')
   const uniqueCarcasses = uniqueOf(carcasses)
 
+  // How long each carcass will have hung by the day it's laid out to be cut.
+  // Split rows share a carcass, so the averages run off the deduped list.
+  const cutDates  = cutDateByKey(entries)
+  const atCutByKey = new Map(
+    carcasses.map(e => [e.key, hangAtCut(e.harvest_date, cutDates.get(e.key), e.days_hanging)])
+  )
+  const avgHang  = uniqueCarcasses.length
+    ? uniqueCarcasses.reduce((s, e) => s + e.days_hanging, 0) / uniqueCarcasses.length : 0
+  const avgAtCut = uniqueCarcasses.length
+    ? uniqueCarcasses.reduce((s, e) => s + (atCutByKey.get(e.key) ?? e.days_hanging), 0) / uniqueCarcasses.length : 0
+  // Only worth its own chip once the plan actually reaches past today —
+  // otherwise it just repeats Avg Hang.
+  const scheduledAhead = uniqueCarcasses.some(e => (atCutByKey.get(e.key) ?? 0) > e.days_hanging)
+
+  // Dates carrying more than one break. handleBreakDate stops new ones, but
+  // plans saved before that rule went in can still hold a pair (the live plan
+  // did, on 2026-08-10) — flag those so they get fixed instead of sitting there
+  // silently splitting a day in two.
+  const dupDates = new Set(
+    entries
+      .filter((e): e is BreakItem => e.type === 'break' && !!e.break_date)
+      .map(e => e.break_date)
+      .filter((d, i, all) => all.indexOf(d) !== i)
+  )
+
   return (
     <div style={{ maxWidth: 900 }}>
 
@@ -253,12 +297,18 @@ export default function CutScheduleTab() {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
           {!loading && carcasses.length > 0 && [
-            { label: 'In Cooler',      value: uniqueCarcasses.length,                                 color: C.tan },
-            { label: 'Missing Sheet',  value: carcasses.filter(e => !e.has_instructions).length,      color: C.red },
-            { label: 'Locked',         value: carcasses.filter(e => e.locked).length,                 color: C.amber },
-            { label: 'Avg Hang',       value: uniqueCarcasses.length ? (uniqueCarcasses.reduce((s, e) => s + e.days_hanging, 0) / uniqueCarcasses.length).toFixed(1) + 'd' : '—', color: C.lightBrown },
+            { label: 'In Cooler',      value: uniqueCarcasses.length,                                 color: C.tan,   title: 'Carcasses chilling right now' },
+            { label: 'Missing Sheet',  value: carcasses.filter(e => !e.has_instructions).length,      color: C.red,   title: 'Cut jobs with no cut sheet on file' },
+            { label: 'Locked',         value: carcasses.filter(e => e.locked).length,                 color: C.amber, title: 'Rows pinned in place when you recalculate' },
+            { label: 'Avg Hang',       value: uniqueCarcasses.length ? avgHang.toFixed(1) + 'd' : '—', color: C.lightBrown, title: 'Average days hung as of today' },
+            ...(scheduledAhead ? [{
+              label: 'Avg At Cut',
+              value: avgAtCut.toFixed(1) + 'd',
+              color: hangColor(avgAtCut),
+              title: 'Average days each carcass will have hung by the day break it sits under',
+            }] : []),
           ].map(stat => (
-            <div key={stat.label} style={{
+            <div key={stat.label} title={stat.title} style={{
               background: C.dark, border: '1px solid rgba(166,120,90,0.2)', borderRadius: 4,
               padding: '0.35rem 0.85rem', display: 'flex', alignItems: 'baseline', gap: '0.4rem',
             }}>
@@ -405,7 +455,7 @@ export default function CutScheduleTab() {
           {/* Column headers */}
           <div style={{
             display: 'grid',
-            gridTemplateColumns: '24px 30px 1fr 80px 56px 64px 72px 52px 44px 30px 58px',
+            gridTemplateColumns: '24px 30px 1fr 80px 56px 64px 84px 52px 44px 30px 58px',
             gap: '0.5rem', padding: '0 0.75rem', marginBottom: '0.4rem',
           }}>
             {['', '#', 'Customer', 'Species', 'Cut', 'Hang Wt', 'Hanging', 'Sheet', 'Score', '', ''].map((h, i) => (
@@ -493,7 +543,23 @@ export default function CutScheduleTab() {
                         {dateLabel(entry.break_date, { weekday: 'long' })}
                       </span>
                     )}
-                    <span style={{ flex: 1, height: 1, background: 'rgba(245,158,11,0.25)' }} />
+                    {(() => {
+                      const warn = breakError?.key === entry.key
+                        ? `${breakError.msg} — one break per day`
+                        : entry.break_date && dupDates.has(entry.break_date)
+                          ? 'Another break is on this day too — give one of them a different date'
+                          : null
+                      return warn ? (
+                        <span style={{
+                          flex: 1, minWidth: 0, color: C.red, fontSize: '0.7rem', fontWeight: 700,
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>
+                          ⚠ {warn}
+                        </span>
+                      ) : (
+                        <span style={{ flex: 1, height: 1, background: 'rgba(245,158,11,0.25)' }} />
+                      )
+                    })()}
                     <span style={{ display: 'flex', alignItems: 'baseline', gap: 4, whiteSpace: 'nowrap' }}>
                       <span style={{ color: C.amber, fontSize: '0.82rem', fontWeight: 700 }}>
                         {Math.round(day.lbs).toLocaleString()} lb
@@ -520,9 +586,10 @@ export default function CutScheduleTab() {
 
               // ── Carcass row ────────────────────────────────────────────────────
               carcassNo++
-              const seqNo     = carcassNo
-              const pb        = portionBadge(entry.portion)
-              const hangColor = entry.days_hanging >= 10 ? C.red : entry.days_hanging >= 6 ? C.amber : C.green
+              const seqNo   = carcassNo
+              const pb      = portionBadge(entry.portion)
+              const cutDate = cutDates.get(entry.key)
+              const atCut   = atCutByKey.get(entry.key) ?? entry.days_hanging
 
               return (
                 <div
@@ -534,7 +601,7 @@ export default function CutScheduleTab() {
                   onDragEnd={handleDragEnd}
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: '24px 30px 1fr 80px 56px 64px 72px 52px 44px 30px 58px',
+                    gridTemplateColumns: '24px 30px 1fr 80px 56px 64px 84px 52px 44px 30px 58px',
                     gap: '0.5rem', alignItems: 'center',
                     background: C.dark,
                     borderTop:    `1px solid ${isOver ? C.amber : entry.locked ? 'rgba(239,68,68,0.35)' : 'rgba(166,120,90,0.18)'}`,
@@ -689,11 +756,19 @@ export default function CutScheduleTab() {
                     )}
                   </div>
 
-                  {/* Days hanging */}
+                  {/* Days hanging — today, then what it'll be on its cut day */}
                   <div style={{ textAlign: 'center' }}>
-                    <span style={{ fontSize: '0.9rem', fontWeight: 700, color: hangColor }}>
+                    <span style={{ fontSize: '0.9rem', fontWeight: 700, color: hangColor(entry.days_hanging) }}>
                       {entry.days_hanging}d
                     </span>
+                    {atCut > entry.days_hanging && cutDate && (
+                      <div
+                        title={`Will have hung ${atCut} days by ${dateLabel(cutDate, { weekday: 'long', month: 'short', day: 'numeric' })}, the day break it sits under`}
+                        style={{ fontSize: '0.72rem', fontWeight: 700, color: hangColor(atCut), lineHeight: 1.2 }}
+                      >
+                        → {atCut}d
+                      </div>
+                    )}
                     <div style={{ fontSize: '0.63rem', color: C.lightBrown }}>
                       {dateLabel(entry.harvest_date, { month: 'short', day: 'numeric' })}
                     </div>
@@ -757,7 +832,8 @@ export default function CutScheduleTab() {
             fontSize: '0.71rem', color: C.lightBrown,
           }}>
             <span>⠿ Drag to reorder</span>
-            <span style={{ color: C.amber }}>➕ Day Break = start of a cutting day; totals the carcasses below it (drag to move)</span>
+            <span style={{ color: C.amber }}>➕ Day Break = start of a cutting day; totals the carcasses below it (drag to move) · one per date</span>
+            <span>→ = days hung by the day it&apos;s scheduled to be cut</span>
             <span>🔒 Lock = pin when recalculating</span>
             <span style={{ color: C.red }}>⚠ Missing = no cut sheet linked</span>
             <span>

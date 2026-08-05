@@ -9,7 +9,7 @@ import Link from 'next/link'
 import {
   type ScheduleEntry,
   DEFAULT_WEIGHTS, buildEntries, loadScheduleData, carcassTotals,
-  speciesColor, speciesIcon, portionBadge,
+  speciesColor, speciesIcon, portionBadge, hangAtCut, hangColor,
 } from '@/lib/cutSchedule'
 import { isoDate, dateLabel } from '@/lib/dates'
 
@@ -237,10 +237,12 @@ export default function CrewCutSchedulePage() {
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
                 {sec.entries.map(entry => {
-                  const no        = orderNo.get(entry.key) ?? 0
-                  const pb        = portionBadge(entry.portion)
-                  const spColor   = speciesColor(entry.species)
-                  const hangColor = entry.days_hanging >= 10 ? C.red : entry.days_hanging >= 6 ? C.amber : C.green
+                  const no      = orderNo.get(entry.key) ?? 0
+                  const pb      = portionBadge(entry.portion)
+                  const spColor = speciesColor(entry.species)
+                  // What it'll have hung by the day this section is headed for —
+                  // that's the number that decides whether it's still fit to cut.
+                  const atCut   = hangAtCut(entry.harvest_date, sec.date ?? undefined, entry.days_hanging)
                   return (
                     <div key={entry.key} style={{
                       display: 'flex', gap: '0.7rem', alignItems: 'stretch',
@@ -302,9 +304,14 @@ export default function CrewCutSchedulePage() {
                             ? <><span style={{ fontSize: '1.2rem', fontWeight: 700, color: C.cream }}>{entry.hot_carcass_weight_lbs}</span><span style={{ fontSize: '0.68rem', color: C.lightBrown }}> lb</span></>
                             : <span style={{ color: C.medBrown }}>—</span>}
                         </div>
-                        <div style={{ fontSize: '0.8rem', fontWeight: 700, color: hangColor, marginTop: 2 }}>
+                        <div style={{ fontSize: '0.8rem', fontWeight: 700, color: hangColor(entry.days_hanging), marginTop: 2 }}>
                           {entry.days_hanging}d hanging
                         </div>
+                        {atCut > entry.days_hanging && (
+                          <div style={{ fontSize: '0.72rem', fontWeight: 700, color: hangColor(atCut), marginTop: 1 }}>
+                            → {atCut}d at cut
+                          </div>
+                        )}
                       </div>
                     </div>
                   )
