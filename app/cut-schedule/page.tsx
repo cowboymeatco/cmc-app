@@ -63,11 +63,21 @@ export default function CrewCutSchedulePage() {
       }
       rawSecs.push(current)
 
+      // Carcasses with no dated day break above them have no cut day yet —
+      // that's the planner's pile to sort out, and the crew must not see it as
+      // work (Charlie, 2026-08-05). They're dropped here rather than in
+      // buildEntries so the planner still gets them.
+      // The one exception is a plan with no dated break anywhere: then nothing
+      // is scheduled, this page falls back to plain priority order the way it
+      // always has, and hiding would leave the crew staring at an empty cooler.
+      const anyDated = rawSecs.some(s => s.date !== null)
+
       // Fold days already behind us into the leading section — anything still
       // hanging from a past day is overdue and cuts first.
       const lead: Section = { key: 'first', date: null, entries: [] }
       const rest: Section[] = []
       for (const sec of rawSecs) {
+        if (anyDated && sec.date === null) continue
         if (sec.key === 'first' || (sec.date && sec.date < today)) lead.entries.push(...sec.entries)
         else rest.push(sec)
       }
@@ -208,9 +218,12 @@ export default function CrewCutSchedulePage() {
             background: C.dark, border: '1px solid rgba(166,120,90,0.2)',
             borderRadius: 8, padding: '3rem 1.5rem', textAlign: 'center',
           }}>
+            {/* Says nothing about WHY the list is clear — the cooler may still
+                hold carcasses nobody has picked a cut day for, and those are
+                the planner's to place, not the crew's to go looking for. */}
             <div style={{ fontSize: '2.2rem', marginBottom: '0.75rem' }}>🧊</div>
-            <p style={{ color: C.tan, fontSize: '1.05rem', margin: '0 0 0.5rem' }}>Cooler is empty</p>
-            <p style={{ color: C.lightBrown, fontSize: '0.85rem', margin: 0 }}>Nothing on the cut list right now.</p>
+            <p style={{ color: C.tan, fontSize: '1.05rem', margin: '0 0 0.5rem' }}>Nothing to cut</p>
+            <p style={{ color: C.lightBrown, fontSize: '0.85rem', margin: 0 }}>Nothing is scheduled on the cut list right now.</p>
           </div>
         )}
 
