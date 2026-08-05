@@ -165,48 +165,21 @@ export default function AssignCarcassesModal({
           {multiAppt && <> Every one of {producer}&apos;s animals from this kill day is listed, so a buyer can be moved from one to another — tap their old carcass to clear it, then tap the right one.</>}
         </p>
 
-        {/* Carcass tally — still to do on the left, done on the right. A tag
-            crosses over the moment its portions add up to a whole animal, so
-            the left column is always the pile that's left (Charlie, 2026-08-05). */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem', marginBottom: '1rem' }}>
-          {[
-            { title: 'Unassigned', done: false, color: C.amber },
-            { title: 'Assigned',   done: true,  color: C.green },
-          ].map(col => {
-            const list = carcasses.filter(log => ((fill.get(log.id) ?? 0) >= 0.999) === col.done)
+        {/* Carcass fill summary */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}>
+          {carcasses.map(log => {
+            const f = fill.get(log.id) ?? 0
+            const full = f >= 0.999
+            const color = full ? C.green : f > 0 ? C.amber : C.lightBrown
             return (
-              <div key={col.title} style={{
-                border: `1px solid ${col.color}33`, background: `${col.color}0D`,
-                borderRadius: 4, padding: '0.45rem 0.55rem',
+              <div key={log.id} style={{
+                border: `1px solid ${color}66`, background: `${color}14`, borderRadius: 4,
+                padding: '0.3rem 0.6rem', fontSize: '0.74rem', color,
+                display: 'flex', alignItems: 'center', gap: '0.4rem',
               }}>
-                <div style={{
-                  fontSize: '0.63rem', fontWeight: 700, color: col.color,
-                  textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '0.4rem',
-                }}>
-                  {col.title} · {list.length}
-                </div>
-                {list.length === 0 ? (
-                  <div style={{ fontSize: '0.72rem', color: C.medBrown }}>
-                    {col.done ? 'none yet' : 'all assigned ✓'}
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
-                    {list.map(log => {
-                      const f = fill.get(log.id) ?? 0
-                      return (
-                        <div key={log.id} style={{
-                          border: `1px solid ${col.color}66`, background: `${col.color}14`, borderRadius: 4,
-                          padding: '0.25rem 0.5rem', fontSize: '0.74rem', color: col.color,
-                          display: 'flex', alignItems: 'center', gap: '0.4rem',
-                        }}>
-                          <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>{log.carcass_tag || '—'}</span>
-                          {log.hot_carcass_weight_lbs != null && <span style={{ color: C.lightBrown }}>{log.hot_carcass_weight_lbs}lb</span>}
-                          {!col.done && f > 0 && <span style={{ fontWeight: 700 }}>{fracLabel(f)} full</span>}
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
+                <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>{log.carcass_tag || '—'}</span>
+                {log.hot_carcass_weight_lbs != null && <span style={{ color: C.lightBrown }}>{log.hot_carcass_weight_lbs}lb</span>}
+                <span style={{ fontWeight: 700 }}>{full ? 'full' : f === 0 ? 'open' : `${fracLabel(f)} full`}</span>
               </div>
             )
           })}

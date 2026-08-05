@@ -7,6 +7,7 @@ import {
   type PriorityWeights, type ScheduleEntry, type BreakItem, type ListItem,
   DEFAULT_WEIGHTS, WEIGHT_LABELS, buildEntries, loadScheduleData, uniqueCarcasses as uniqueOf,
   calcScore, speciesColor, speciesIcon, portionBadge, cutDateByKey, hangAtCut, hangColor,
+  carcassTotals,
 } from '@/lib/cutSchedule'
 import { isoDate, dateLabel } from '@/lib/dates'
 
@@ -259,6 +260,21 @@ export default function CutScheduleTab() {
   // otherwise it just repeats Avg Hang.
   const scheduledAhead = uniqueCarcasses.some(e => (atCutByKey.get(e.key) ?? 0) > e.days_hanging)
 
+  // Which carcasses still have no cut day: nothing dated sits above them, so
+  // nobody has decided when they get cut. Everything else is under a dated day
+  // break and has one. This is the tally Charlie works off to push the next
+  // day's list to the crew (2026-08-05).
+  const noDay      = carcasses.filter(e => !cutDates.get(e.key))
+  const onSchedule = carcasses.filter(e =>  cutDates.get(e.key))
+  const noDayTotals = carcassTotals(noDay)
+  const schedTotals = carcassTotals(onSchedule)
+  // Species mix of what's waiting, biggest pile first — the shape of the day
+  // he's about to lay out.
+  const noDaySpecies = Object.entries(
+    uniqueOf(noDay).reduce<Record<string, number>>((m, e) => ({ ...m, [e.species]: (m[e.species] ?? 0) + 1 }), {})
+  ).sort((a, b) => b[1] - a[1])
+  const scheduledDays = Array.from(new Set(onSchedule.map(e => cutDates.get(e.key)!))).sort()
+
   // Dates carrying more than one break. handleBreakDate stops new ones, but
   // plans saved before that rule went in can still hold a pair (the live plan
   // did, on 2026-08-10) — flag those so they get fixed instead of sitting there
@@ -371,6 +387,66 @@ export default function CutScheduleTab() {
           fontSize: '0.8rem', color: C.green,
         }}>
           ✓ Order saved at {savedAt}
+        </div>
+      )}
+
+      {/* Cut-day tally — what still needs a day (left) vs what's placed (right).
+          Carcasses cross from left to right as they're dragged under a dated
+          day break, so the left box is always the pile still to be decided. */}
+      {!loading && carcasses.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1.25rem' }}>
+          {[
+            {
+              done:  false,
+              title: noDayTotals.head > 0 ? '⚠ No cut day' : '✓ No cut day',
+              color: noDayTotals.head > 0 ? C.red : C.green,
+              totals: noDayTotals,
+              foot: noDayTotals.head > 0
+                ? <>
+                    {noDaySpecies.map(([sp, n]) => (
+                      <span key={sp} style={{ color: speciesColor(sp), marginRight: '0.6rem', whiteSpace: 'nowrap' }}>
+                        {speciesIcon(sp)} {sp} {n}
+                      </span>
+                    ))}
+                    <div style={{ color: C.lightBrown, marginTop: '0.3rem' }}>Drag these under a day break to give them a day</div>
+                  </>
+                : <span style={{ color: C.lightBrown }}>Every carcass in the cooler has a cut day</span>,
+            },
+            {
+              done:  true,
+              title: '📅 On the schedule',
+              color: C.green,
+              totals: schedTotals,
+              foot: scheduledDays.length > 0
+                ? <span style={{ color: C.lightBrown }}>
+                    across {scheduledDays.length} {scheduledDays.length === 1 ? 'day' : 'days'} ·
+                    {' '}first {dateLabel(scheduledDays[0], { weekday: 'short', month: 'short', day: 'numeric' })} ·
+                    {' '}last {dateLabel(scheduledDays[scheduledDays.length - 1], { weekday: 'short', month: 'short', day: 'numeric' })}
+                  </span>
+                : <span style={{ color: C.lightBrown }}>No day breaks dated yet</span>,
+            },
+          ].map(col => (
+            <div key={col.title} style={{
+              background: C.dark, border: `1px solid ${col.color}55`, borderLeft: `4px solid ${col.color}`,
+              borderRadius: 4, padding: '0.7rem 0.9rem',
+            }}>
+              <div style={{
+                fontSize: '0.66rem', fontWeight: 700, color: col.color,
+                textTransform: 'uppercase', letterSpacing: '0.09em', marginBottom: '0.35rem',
+              }}>
+                {col.title}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem' }}>
+                <span style={{ fontSize: '1.6rem', fontWeight: 700, color: col.color, lineHeight: 1 }}>{col.totals.head}</span>
+                <span style={{ fontSize: '0.7rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.07em' }}>head</span>
+                <span style={{ fontSize: '0.9rem', fontWeight: 700, color: C.cream, marginLeft: '0.3rem' }}>
+                  {Math.round(col.totals.lbs).toLocaleString()}
+                </span>
+                <span style={{ fontSize: '0.7rem', color: C.lightBrown }}>lb</span>
+              </div>
+              <div style={{ fontSize: '0.7rem', marginTop: '0.45rem', lineHeight: 1.45 }}>{col.foot}</div>
+            </div>
+          ))}
         </div>
       )}
 
@@ -761,12 +837,21 @@ export default function CutScheduleTab() {
                     <span style={{ fontSize: '0.9rem', fontWeight: 700, color: hangColor(entry.days_hanging) }}>
                       {entry.days_hanging}d
                     </span>
-                    {atCut > entry.days_hanging && cutDate && (
+                    {cutDate ? (
+                      atCut > entry.days_hanging && (
+                        <div
+                          title={`Will have hung ${atCut} days by ${dateLabel(cutDate, { weekday: 'long', month: 'short', day: 'numeric' })}, the day break it sits under`}
+                          style={{ fontSize: '0.72rem', fontWeight: 700, color: hangColor(atCut), lineHeight: 1.2 }}
+                        >
+                          → {atCut}d
+                        </div>
+                      )
+                    ) : (
                       <div
-                        title={`Will have hung ${atCut} days by ${dateLabel(cutDate, { weekday: 'long', month: 'short', day: 'numeric' })}, the day break it sits under`}
-                        style={{ fontSize: '0.72rem', fontWeight: 700, color: hangColor(atCut), lineHeight: 1.2 }}
+                        title="No day break above this row — nobody has picked a day to cut it"
+                        style={{ fontSize: '0.65rem', fontWeight: 700, color: C.red, lineHeight: 1.2 }}
                       >
-                        → {atCut}d
+                        no day
                       </div>
                     )}
                     <div style={{ fontSize: '0.63rem', color: C.lightBrown }}>

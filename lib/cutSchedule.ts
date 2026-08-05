@@ -396,10 +396,17 @@ export function buildEntries(
   const combined = [...carcassWraps, ...breakWraps]
   const useSaved = savedItems.length > 0
 
+  // A carcass the saved plan has never seen — hung since the last save — sorts
+  // ABOVE the first day break, not below the last one. Sorting it to the bottom
+  // parked it under the final break, where it read as scheduled for that day
+  // when in truth nobody had picked a day for it (Charlie, 2026-08-05). Above
+  // every break it has no day, which is the honest answer and the one the
+  // planner's No Cut Day tally counts. Unplaced carcasses order by score
+  // among themselves.
   combined.sort((a, b) => {
     if (useSaved) {
-      const ra = a.saved ?? 9999
-      const rb = b.saved ?? 9999
+      const ra = a.saved ?? -1
+      const rb = b.saved ?? -1
       if (ra !== rb) return ra - rb
     }
     return b.score - a.score
