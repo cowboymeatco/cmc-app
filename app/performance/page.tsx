@@ -360,50 +360,54 @@ export default function PerformancePage() {
 
   const now = data?.series[data.series.length - 1]
 
-  // Average hanging weight, now vs the start of the selected range. Reported
-  // cooler-wide AND per species, because the cooler-wide number is dominated by
-  // the mix: a week that clears the hogs sends it up without a single animal
-  // being heavier. The per-species rows are the ones that answer "are the
-  // animals coming in bigger?" (Charlie, 2026-08-05).
-  const avgWeight = useMemo(() => {
-    const s = view?.series ?? []
-    if (s.length === 0 || !now) return null
-    const mean = (lbs: number, head: number) => (head > 0 ? lbs / head : null)
+  // Averages ACROSS the selected period, each against the equivalent period
+  // before it. A point-in-time number can't answer "are we falling behind or
+  // getting faster" — but average pounds carried in the cooler can: if the
+  // cooler is holding more on average than it did last month, work is backing
+  // up faster than it's going out (Charlie, 2026-08-05).
+  const periodAvg = useMemo(() => {
+    if (!data) return null
+    const days = RANGES.find(r => r.key === range)?.days ?? Infinity
+    const all  = data.series
+    const cur  = days === Infinity ? all : all.slice(-days)
+    if (cur.length === 0) return null
+    // The equivalent stretch immediately before. "All" has nothing before it,
+    // and a partial prior window is a weak comparison — below half the current
+    // length we show the average without a direction rather than imply one.
+    const prevRaw = days === Infinity ? [] : all.slice(-(days * 2), -days)
+    const prev    = prevRaw.length >= cur.length / 2 ? prevRaw : []
 
-    // Baseline is a WINDOW, not a single day, and it starts at the first day in
-    // the range the cooler actually held something. Two reasons: hogs move
-    // through in a couple of days so any single date may hold none of a species,
-    // and this cooler empties completely between kill cycles — a 30-day range
-    // landed its baseline on seven consecutive empty days, which wiped out the
-    // comparison for every species at once. Pooling lbs and head across occupied
-    // days gives a weighted mean that survives both.
-    const occupied = s.filter(p => p.head > 0)
-    const win = occupied.slice(0, Math.min(7, Math.max(1, Math.floor(occupied.length / 2))))
-    if (win.length === 0) return null
-    const pool = (days: DayPoint[], pick: (p: DayPoint) => [number, number]) =>
-      days.reduce((a, p) => { const [l, h] = pick(p); return [a[0] + l, a[1] + h] as [number, number] }, [0, 0] as [number, number])
-
-    const rows = SPECIES.map(sp => {
-      const headNow = now.sp?.[sp] ?? 0
-      if (headNow === 0) return null
-      const nowAvg = mean(now.spLbs?.[sp] ?? 0, headNow)
-      if (nowAvg == null) return null
-      const [bLbs, bHead] = pool(win, p => [p.spLbs?.[sp] ?? 0, p.sp?.[sp] ?? 0])
-      const thenAvg = mean(bLbs, bHead)
-      return { sp, head: headNow, avg: nowAvg, delta: thenAvg == null ? null : nowAvg - thenAvg }
-    }).filter(Boolean) as { sp: Species; head: number; avg: number; delta: number | null }[]
-
-    const overall = mean(now.lbs, now.head)
-    const [oLbs, oHead] = pool(win, p => [p.lbs, p.head])
-    const thenOverall   = mean(oLbs, oHead)
-    return {
-      overall,
-      delta: overall != null && thenOverall != null ? overall - thenOverall : null,
-      since: win[0].d,
-      windowDays: win.length,
-      rows,
+    // Empty days count toward the cooler load — a day with nothing hanging is a
+    // real zero and part of how well they're keeping up. Per-head is pooled
+    // instead (sum lbs / sum head), so empty days simply don't weigh in.
+    const meanOf = (arr: DayPoint[], pick: (p: DayPoint) => number) =>
+      arr.length ? arr.reduce((a, p) => a + pick(p), 0) / arr.length : null
+    const pooled = (arr: DayPoint[], l: (p: DayPoint) => number, h: (p: DayPoint) => number) => {
+      const lbs  = arr.reduce((a, p) => a + l(p), 0)
+      const head = arr.reduce((a, p) => a + h(p), 0)
+      return head > 0 ? lbs / head : null
     }
-  }, [view, now])
+    const stat = (n: number | null, p: number | null) => ({
+      now: n, prev: p,
+      pct: n != null && p != null && p !== 0 ? ((n - p) / p) * 100 : null,
+    })
+
+    return {
+      from:      cur[0].d,
+      to:        cur[cur.length - 1].d,
+      dayCount:  cur.length,
+      prevDays:  prev.length,
+      lbs:       stat(meanOf(cur, p => p.lbs),  meanOf(prev, p => p.lbs)),
+      head:      stat(meanOf(cur, p => p.head), meanOf(prev, p => p.head)),
+      perHead:   stat(pooled(cur, p => p.lbs, p => p.head), pooled(prev, p => p.lbs, p => p.head)),
+      species:   SPECIES.map(sp => {
+        const n = pooled(cur,  p => p.spLbs?.[sp] ?? 0, p => p.sp?.[sp] ?? 0)
+        if (n == null) return null
+        const p = pooled(prev, p => p.spLbs?.[sp] ?? 0, p => p.sp?.[sp] ?? 0)
+        return { sp, ...stat(n, p) }
+      }).filter(Boolean) as { sp: Species; now: number | null; prev: number | null; pct: number | null }[],
+    }
+  }, [data, range])
 
   // Same fixed order the chart stacks in, narrowed to what's in the range.
   const tableSpecies = useMemo(
@@ -450,71 +454,124 @@ export default function PerformancePage() {
           <StatTile hero label="In the cooler" value={now ? fmt(now.lbs) : '—'} unit="lbs"
             sub={data ? `as of ${dateLabel(data.asOf, { weekday: 'long', month: 'short', day: 'numeric' })}` : undefined} />
           <StatTile label="Head hanging" value={now ? fmt(now.head) : '—'} unit="head" />
-          <StatTile label="Avg hanging weight" value={avgWeight?.overall != null ? fmt(Math.round(avgWeight.overall)) : '—'} unit="lbs"
-            sub={avgWeight?.overall != null ? 'per head — mostly a read on the mix, see below' : undefined} />
+          <StatTile label="Avg hanging weight" value={now && now.head > 0 ? fmt(Math.round(now.lbs / now.head)) : '—'} unit="lbs"
+            sub="per head, right now" />
           <StatTile label="Average hang time" value={data ? String(data.hanging.avgDays) : '—'} unit="days"
             sub={data && data.hanging.maxDays > 0 ? `oldest: ${data.hanging.maxDays} days` : undefined} />
           <StatTile label="Typical hang to cut" value={data ? String(data.medianHangDays) : '—'} unit="days"
             sub="median, from the cut schedule" />
         </div>
 
-        {/* Average hanging weight by species — the trend question answered
-            without the mix distorting it. One row per species actually hanging;
-            the arrow compares against the first day of the selected range. */}
-        {avgWeight && avgWeight.rows.length > 0 && (
-          <div style={{
-            background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4,
-            padding: '0.9rem 1.15rem', marginBottom: '1.5rem',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.7rem' }}>
-              <span style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.15em' }}>
-                Avg hanging weight by species
+        {/* Averages across the selected period, each against the equivalent
+            stretch before it. This is the "keeping up?" panel: a rising average
+            cooler load means work is arriving faster than it leaves. */}
+        {periodAvg && (() => {
+          const rangeLabel = RANGES.find(r => r.key === range)?.label.toLowerCase() ?? ''
+          const periodLabel = range === 'all' ? `all ${periodAvg.dayCount} days` : `the last ${rangeLabel}`
+          // Name the prior window by the days it ACTUALLY holds. A 60-day range
+          // only has 52 days of history behind it, and calling that "prior 60
+          // days" would overstate what the percentage is measured against.
+          const priorLabel = periodAvg.prevDays > 0 ? `prior ${periodAvg.prevDays} days` : null
+          // Under 2% either way is noise — one animal in or out moves a cooler
+          // this size more than that. Only call a direction past it.
+          const dirOf = (pct: number | null) => (pct == null ? 0 : pct > 2 ? 1 : pct < -2 ? -1 : 0)
+          // Rising cooler load = falling behind, so up is the WARNING colour
+          // here. On average weight, up is just bigger animals — neither good
+          // nor bad — so those read neutral.
+          const Trend = ({ pct, invert }: { pct: number | null; invert?: boolean }) => {
+            const dir = dirOf(pct)
+            if (pct == null || !priorLabel) {
+              return <span style={{ fontSize: '0.7rem', color: C.lightBrown }}>no earlier stretch to compare</span>
+            }
+            const good = invert ? dir < 0 : dir > 0
+            const col  = dir === 0 ? C.lightBrown : good ? '#3E9D63' : '#CE6A20'
+            return (
+              <span style={{ fontSize: '0.7rem', color: col }}>
+                {dir === 0 ? 'flat' : <>{dir > 0 ? '▲' : '▼'} {Math.abs(pct).toFixed(0)}%</>}
+                <span style={{ color: C.lightBrown }}> vs {priorLabel}</span>
               </span>
-              <span style={{ fontSize: '0.72rem', color: C.lightBrown }}>
-                vs the {avgWeight.windowDays === 1 ? 'day' : `${avgWeight.windowDays} days`} from{' '}
-                {dateLabel(avgWeight.since, { month: 'short', day: 'numeric' })} ({RANGES.find(r => r.key === range)?.label.toLowerCase()})
-              </span>
-            </div>
-            <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
-              {avgWeight.rows.map(r => {
-                // Under ~2% either way is noise on a cooler this size — one
-                // animal in or out moves it. Only call a direction when it's
-                // bigger than that, so the arrow means something.
-                const pct  = r.delta != null && r.avg > 0 ? (r.delta / (r.avg - r.delta)) * 100 : null
-                const dir  = pct == null ? 0 : pct > 2 ? 1 : pct < -2 ? -1 : 0
-                const dirC = dir > 0 ? '#3E9D63' : dir < 0 ? '#CE6A20' : C.lightBrown
-                return (
-                  <div key={r.sp} style={{
-                    flex: '1 1 130px', minWidth: 120,
+            )
+          }
+          return (
+            <div style={{
+              background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4,
+              padding: '0.95rem 1.15rem', marginBottom: '1.5rem',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.8rem' }}>
+                <span style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.15em' }}>
+                  Averaged over {periodLabel}
+                </span>
+                <span style={{ fontSize: '0.72rem', color: C.lightBrown }}>
+                  {dateLabel(periodAvg.from, { month: 'short', day: 'numeric' })} – {dateLabel(periodAvg.to, { month: 'short', day: 'numeric' })}
+                  {' · '}{periodAvg.dayCount} days
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '0.8rem' }}>
+                {[
+                  { label: 'Pounds in the cooler', v: periodAvg.lbs,     unit: 'lbs',  invert: true,  accent: LBS_COLOR },
+                  { label: 'Head in the cooler',   v: periodAvg.head,    unit: 'head', invert: true,  accent: HEAD_COLOR },
+                  { label: 'Per head',             v: periodAvg.perHead, unit: 'lbs',  invert: false, accent: C.medBrown },
+                ].map(t => (
+                  <div key={t.label} style={{
+                    flex: '1 1 170px', minWidth: 160,
                     background: 'rgba(255,255,255,0.03)', borderRadius: 4,
-                    borderLeft: `3px solid ${SPECIES_COLOR[r.sp]}`, padding: '0.5rem 0.7rem',
+                    borderLeft: `3px solid ${t.accent}`, padding: '0.6rem 0.8rem',
                   }}>
-                    <div style={{ fontSize: '0.72rem', color: SPECIES_COLOR[r.sp], fontWeight: 700 }}>
-                      {r.sp} <span style={{ color: C.lightBrown, fontWeight: 400 }}>· {r.head} head</span>
+                    <div style={{ fontSize: '0.68rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+                      {t.label}
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem', marginTop: 2 }}>
-                      <span style={{ fontSize: '1.25rem', fontWeight: 600, color: C.cream, fontVariantNumeric: 'tabular-nums' }}>
-                        {fmt(Math.round(r.avg))}
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', margin: '0.15rem 0 0.2rem' }}>
+                      <span style={{ fontSize: '1.5rem', fontWeight: 600, color: C.cream, fontVariantNumeric: 'tabular-nums' }}>
+                        {t.v.now != null ? fmt(Math.round(t.v.now)) : '—'}
                       </span>
-                      <span style={{ fontSize: '0.7rem', color: C.tan }}>lbs</span>
+                      <span style={{ fontSize: '0.72rem', color: C.tan }}>{t.unit}</span>
                     </div>
-                    <div style={{ fontSize: '0.7rem', color: dirC, marginTop: 2 }}>
-                      {r.delta == null
-                        ? <span style={{ color: C.lightBrown }}>none hanging then</span>
-                        : dir === 0
-                          ? <>flat ({r.delta >= 0 ? '+' : '−'}{fmt(Math.abs(Math.round(r.delta)))} lbs)</>
-                          : <>{dir > 0 ? '▲' : '▼'} {fmt(Math.abs(Math.round(r.delta)))} lbs ({pct! >= 0 ? '+' : '−'}{Math.abs(pct!).toFixed(0)}%)</>}
-                    </div>
+                    <Trend pct={t.v.pct} invert={t.invert} />
                   </div>
-                )
-              })}
+                ))}
+              </div>
+
+              {periodAvg.species.length > 0 && (
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  {periodAvg.species.map(r => {
+                    const dir = dirOf(r.pct)
+                    return (
+                      <div key={r.sp} style={{
+                        flex: '1 1 120px', minWidth: 112,
+                        background: 'rgba(255,255,255,0.02)', borderRadius: 4,
+                        borderLeft: `3px solid ${SPECIES_COLOR[r.sp]}`, padding: '0.45rem 0.65rem',
+                      }}>
+                        <div style={{ fontSize: '0.7rem', color: SPECIES_COLOR[r.sp], fontWeight: 700 }}>{r.sp}</div>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.3rem' }}>
+                          <span style={{ fontSize: '1.05rem', fontWeight: 600, color: C.cream, fontVariantNumeric: 'tabular-nums' }}>
+                            {r.now != null ? fmt(Math.round(r.now)) : '—'}
+                          </span>
+                          <span style={{ fontSize: '0.66rem', color: C.tan }}>lbs/head</span>
+                        </div>
+                        {priorLabel && (
+                          <div style={{ fontSize: '0.66rem', color: dir === 0 ? C.lightBrown : '#C9A882', marginTop: 1 }}>
+                            {r.pct == null
+                              ? <span style={{ color: C.lightBrown }}>none hanging then</span>
+                              : dir === 0 ? 'flat' : <>{dir > 0 ? '▲' : '▼'} {Math.abs(r.pct).toFixed(0)}%</>}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              <p style={{ fontSize: '0.72rem', color: C.lightBrown, margin: '0.8rem 0 0', lineHeight: 1.5 }}>
+                Average of every day in the range, empty days included
+                {priorLabel ? <>, against the {periodAvg.prevDays} days immediately before</> : <> (no earlier stretch on record to compare against)</>}.
+                {' '}A <strong style={{ color: '#CE6A20' }}>rising</strong> cooler load means carcasses are arriving faster than they&apos;re being cut;
+                <strong style={{ color: '#3E9D63' }}> falling</strong> means you&apos;re gaining on it. Per-head weight is neither — it just says
+                whether the animals are bigger, and the species rows say it without the mix getting in the way.
+              </p>
             </div>
-            <p style={{ fontSize: '0.72rem', color: C.lightBrown, margin: '0.75rem 0 0', lineHeight: 1.5 }}>
-              Compares what&apos;s hanging now against what was hanging at the start of the range — it moves as animals
-              come and go, so read it as the trend of the carcasses in front of you, not a kill-to-kill average.
-            </p>
-          </div>
-        )}
+          )
+        })()}
 
         {/* Year to date — the scoreboard */}
         <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '0.5rem' }}>
