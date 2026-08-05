@@ -33,7 +33,11 @@ const SPECIES_COLOR: Record<Species, string> = {
   Other: '#898781',
 }
 
-interface DayPoint { d: string; head: number; lbs: number; sp: Partial<Record<Species, number>> }
+interface DayPoint {
+  d: string; head: number; lbs: number
+  sp:    Partial<Record<Species, number>>
+  spLbs: Partial<Record<Species, number>>
+}
 interface CoolerData {
   series:         DayPoint[]
   asOf:           string
@@ -356,6 +360,51 @@ export default function PerformancePage() {
 
   const now = data?.series[data.series.length - 1]
 
+  // Average hanging weight, now vs the start of the selected range. Reported
+  // cooler-wide AND per species, because the cooler-wide number is dominated by
+  // the mix: a week that clears the hogs sends it up without a single animal
+  // being heavier. The per-species rows are the ones that answer "are the
+  // animals coming in bigger?" (Charlie, 2026-08-05).
+  const avgWeight = useMemo(() => {
+    const s = view?.series ?? []
+    if (s.length === 0 || !now) return null
+    const mean = (lbs: number, head: number) => (head > 0 ? lbs / head : null)
+
+    // Baseline is a WINDOW, not a single day, and it starts at the first day in
+    // the range the cooler actually held something. Two reasons: hogs move
+    // through in a couple of days so any single date may hold none of a species,
+    // and this cooler empties completely between kill cycles — a 30-day range
+    // landed its baseline on seven consecutive empty days, which wiped out the
+    // comparison for every species at once. Pooling lbs and head across occupied
+    // days gives a weighted mean that survives both.
+    const occupied = s.filter(p => p.head > 0)
+    const win = occupied.slice(0, Math.min(7, Math.max(1, Math.floor(occupied.length / 2))))
+    if (win.length === 0) return null
+    const pool = (days: DayPoint[], pick: (p: DayPoint) => [number, number]) =>
+      days.reduce((a, p) => { const [l, h] = pick(p); return [a[0] + l, a[1] + h] as [number, number] }, [0, 0] as [number, number])
+
+    const rows = SPECIES.map(sp => {
+      const headNow = now.sp?.[sp] ?? 0
+      if (headNow === 0) return null
+      const nowAvg = mean(now.spLbs?.[sp] ?? 0, headNow)
+      if (nowAvg == null) return null
+      const [bLbs, bHead] = pool(win, p => [p.spLbs?.[sp] ?? 0, p.sp?.[sp] ?? 0])
+      const thenAvg = mean(bLbs, bHead)
+      return { sp, head: headNow, avg: nowAvg, delta: thenAvg == null ? null : nowAvg - thenAvg }
+    }).filter(Boolean) as { sp: Species; head: number; avg: number; delta: number | null }[]
+
+    const overall = mean(now.lbs, now.head)
+    const [oLbs, oHead] = pool(win, p => [p.lbs, p.head])
+    const thenOverall   = mean(oLbs, oHead)
+    return {
+      overall,
+      delta: overall != null && thenOverall != null ? overall - thenOverall : null,
+      since: win[0].d,
+      windowDays: win.length,
+      rows,
+    }
+  }, [view, now])
+
   // Same fixed order the chart stacks in, narrowed to what's in the range.
   const tableSpecies = useMemo(
     () => SPECIES.filter(sp => (view?.series ?? []).some(p => (p.sp?.[sp] ?? 0) > 0)),
@@ -401,11 +450,71 @@ export default function PerformancePage() {
           <StatTile hero label="In the cooler" value={now ? fmt(now.lbs) : '—'} unit="lbs"
             sub={data ? `as of ${dateLabel(data.asOf, { weekday: 'long', month: 'short', day: 'numeric' })}` : undefined} />
           <StatTile label="Head hanging" value={now ? fmt(now.head) : '—'} unit="head" />
+          <StatTile label="Avg hanging weight" value={avgWeight?.overall != null ? fmt(Math.round(avgWeight.overall)) : '—'} unit="lbs"
+            sub={avgWeight?.overall != null ? 'per head — mostly a read on the mix, see below' : undefined} />
           <StatTile label="Average hang time" value={data ? String(data.hanging.avgDays) : '—'} unit="days"
             sub={data && data.hanging.maxDays > 0 ? `oldest: ${data.hanging.maxDays} days` : undefined} />
           <StatTile label="Typical hang to cut" value={data ? String(data.medianHangDays) : '—'} unit="days"
             sub="median, from the cut schedule" />
         </div>
+
+        {/* Average hanging weight by species — the trend question answered
+            without the mix distorting it. One row per species actually hanging;
+            the arrow compares against the first day of the selected range. */}
+        {avgWeight && avgWeight.rows.length > 0 && (
+          <div style={{
+            background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4,
+            padding: '0.9rem 1.15rem', marginBottom: '1.5rem',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.7rem' }}>
+              <span style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.15em' }}>
+                Avg hanging weight by species
+              </span>
+              <span style={{ fontSize: '0.72rem', color: C.lightBrown }}>
+                vs the {avgWeight.windowDays === 1 ? 'day' : `${avgWeight.windowDays} days`} from{' '}
+                {dateLabel(avgWeight.since, { month: 'short', day: 'numeric' })} ({RANGES.find(r => r.key === range)?.label.toLowerCase()})
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+              {avgWeight.rows.map(r => {
+                // Under ~2% either way is noise on a cooler this size — one
+                // animal in or out moves it. Only call a direction when it's
+                // bigger than that, so the arrow means something.
+                const pct  = r.delta != null && r.avg > 0 ? (r.delta / (r.avg - r.delta)) * 100 : null
+                const dir  = pct == null ? 0 : pct > 2 ? 1 : pct < -2 ? -1 : 0
+                const dirC = dir > 0 ? '#3E9D63' : dir < 0 ? '#CE6A20' : C.lightBrown
+                return (
+                  <div key={r.sp} style={{
+                    flex: '1 1 130px', minWidth: 120,
+                    background: 'rgba(255,255,255,0.03)', borderRadius: 4,
+                    borderLeft: `3px solid ${SPECIES_COLOR[r.sp]}`, padding: '0.5rem 0.7rem',
+                  }}>
+                    <div style={{ fontSize: '0.72rem', color: SPECIES_COLOR[r.sp], fontWeight: 700 }}>
+                      {r.sp} <span style={{ color: C.lightBrown, fontWeight: 400 }}>· {r.head} head</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem', marginTop: 2 }}>
+                      <span style={{ fontSize: '1.25rem', fontWeight: 600, color: C.cream, fontVariantNumeric: 'tabular-nums' }}>
+                        {fmt(Math.round(r.avg))}
+                      </span>
+                      <span style={{ fontSize: '0.7rem', color: C.tan }}>lbs</span>
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: dirC, marginTop: 2 }}>
+                      {r.delta == null
+                        ? <span style={{ color: C.lightBrown }}>none hanging then</span>
+                        : dir === 0
+                          ? <>flat ({r.delta >= 0 ? '+' : '−'}{fmt(Math.abs(Math.round(r.delta)))} lbs)</>
+                          : <>{dir > 0 ? '▲' : '▼'} {fmt(Math.abs(Math.round(r.delta)))} lbs ({pct! >= 0 ? '+' : '−'}{Math.abs(pct!).toFixed(0)}%)</>}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+            <p style={{ fontSize: '0.72rem', color: C.lightBrown, margin: '0.75rem 0 0', lineHeight: 1.5 }}>
+              Compares what&apos;s hanging now against what was hanging at the start of the range — it moves as animals
+              come and go, so read it as the trend of the carcasses in front of you, not a kill-to-kill average.
+            </p>
+          </div>
+        )}
 
         {/* Year to date — the scoreboard */}
         <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '0.5rem' }}>

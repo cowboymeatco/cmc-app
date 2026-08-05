@@ -218,18 +218,25 @@ export async function GET() {
   // Daily series: a carcass counts on days [in, out) — it hangs the day it
   // arrives and is gone the day it's cut.
   const firstDay = intervals.reduce((min, c) => (c.in < min ? c.in : min), intervals[0].in)
-  const series: { d: string; head: number; lbs: number; sp: Record<string, number> }[] = []
+  // spLbs rides alongside sp so average weight can be read PER SPECIES. The
+  // cooler-wide lbs/head is mostly a mix reading — cut the hogs and it leaps
+  // without a single animal being heavier — so "are we trending heavier?" can
+  // only be answered a species at a time (Charlie, 2026-08-05).
+  const series: { d: string; head: number; lbs: number; sp: Record<string, number>; spLbs: Record<string, number> }[] = []
   for (let d = firstDay; d <= today; d = addDaysISO(d, 1)) {
     let head = 0, lbs = 0
     const sp: Record<string, number> = {}
+    const spLbs: Record<string, number> = {}
     for (const c of intervals) {
       if (c.in <= d && (c.out === null || c.out > d)) {
         head++
         lbs += c.lbs
-        sp[c.species] = (sp[c.species] ?? 0) + 1
+        sp[c.species]    = (sp[c.species] ?? 0) + 1
+        spLbs[c.species] = (spLbs[c.species] ?? 0) + c.lbs
       }
     }
-    series.push({ d, head, lbs: Math.round(lbs), sp })
+    for (const k of Object.keys(spLbs)) spLbs[k] = Math.round(spLbs[k])
+    series.push({ d, head, lbs: Math.round(lbs), sp, spLbs })
   }
 
   return NextResponse.json({ series, asOf: today, trackingStart, medianHangDays, estimatedExits, hanging, ytd, stale, drawdown })
