@@ -47,6 +47,13 @@ interface CoolerData {
   hanging:        { avgDays: number; maxDays: number }
   ytd:            { head: number; lbs: number; yearStart: string }
   stale:          { head: number; lbs: number; oldestDue: string | null }
+  hangToCut:      {
+    overall:  number | null
+    species:  { sp: Species; days: number; n: number; min: number; max: number }[]
+    fromScan: number
+    known:    number
+    total:    number
+  }
   drawdown:       {
     days:      { d: string; head: number; lbs: number; cut: number; cutLbs: number }[]
     planDate:  string | null
@@ -462,9 +469,57 @@ export default function PerformancePage() {
             sub="per head, right now" />
           <StatTile label="Average hang time" value={data ? String(data.hanging.avgDays) : '—'} unit="days"
             sub={data && data.hanging.maxDays > 0 ? `oldest: ${data.hanging.maxDays} days` : undefined} />
-          <StatTile label="Typical hang to cut" value={data ? String(data.medianHangDays) : '—'} unit="days"
-            sub="median, from the cut schedule" />
         </div>
+
+        {/* Hang to cut, per species. This replaced a single "typical hang to
+            cut" tile that blended every species into one median and read
+            3 days — true of hogs, and twelve days wrong for beef. There is no
+            one number here, so the tile became a row. */}
+        {data && data.hangToCut.species.length > 0 && (
+          <div style={{
+            background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4,
+            padding: '0.9rem 1.15rem', marginBottom: '1.5rem',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.7rem' }}>
+              <span style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.15em' }}>
+                Typical hang to cut
+              </span>
+              <span style={{ fontSize: '0.72rem', color: C.lightBrown }}>
+                median · {data.hangToCut.known} of {data.hangToCut.total} cut carcasses have a cut date
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              {data.hangToCut.species.map(r => (
+                <div key={r.sp} style={{
+                  flex: '1 1 125px', minWidth: 118,
+                  background: 'rgba(255,255,255,0.02)', borderRadius: 4,
+                  borderLeft: `3px solid ${SPECIES_COLOR[r.sp]}`, padding: '0.45rem 0.65rem',
+                }}>
+                  <div style={{ fontSize: '0.7rem', color: SPECIES_COLOR[r.sp], fontWeight: 700 }}>
+                    {r.sp} <span style={{ color: C.lightBrown, fontWeight: 400 }}>· {r.n} cut</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.3rem' }}>
+                    <span style={{ fontSize: '1.25rem', fontWeight: 600, color: C.cream, fontVariantNumeric: 'tabular-nums' }}>
+                      {r.days}
+                    </span>
+                    <span style={{ fontSize: '0.68rem', color: C.tan }}>days</span>
+                  </div>
+                  <div style={{ fontSize: '0.66rem', color: C.lightBrown, marginTop: 1 }}>
+                    {r.min === r.max ? `all ${r.min}d` : `range ${r.min}–${r.max}d`}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p style={{ fontSize: '0.72rem', color: C.lightBrown, margin: '0.75rem 0 0', lineHeight: 1.5 }}>
+              Harvest day to the day the carcass hit the table.
+              {data.hangToCut.fromScan > 0
+                ? <> {data.hangToCut.fromScan} come from a processing scan — the cut actually happening;</>
+                : <> None come from a processing scan yet;</>}
+              {' '}the rest fall back to the first cut schedule the carcass appeared on, which runs a little short.
+              Carcasses with neither are estimated at their own species&apos; median, not a blended one.
+            </p>
+          </div>
+        )}
 
         {/* The average carried over the selected period, with today measured
             against it. Over the average = work piling up; under = gaining. */}
@@ -643,8 +698,10 @@ export default function PerformancePage() {
           {data?.trackingStart && data.estimatedExits > 0 && (
             <p style={{ fontSize: '0.72rem', color: C.lightBrown, margin: '0.75rem 0 0', lineHeight: 1.5 }}>
               Dashed stretch = before {dateLabel(data.trackingStart, { month: 'short', day: 'numeric' })}, when the cut
-              schedule started recording exact cut dates. {data.estimatedExits} earlier carcasses are shown leaving the
-              cooler {data.medianHangDays} days after harvest (the typical hang time) — treat that stretch as an estimate.
+              schedule started recording exact cut dates. {data.estimatedExits} carcasses have no cut date and are shown
+              leaving the cooler at their own species&apos; median hang above — a beef after{' '}
+              {data.hangToCut.species.find(s => s.sp === 'Beef')?.days ?? data.medianHangDays} days, not the blended
+              figure that used to flatten every species onto one — so treat that stretch as an estimate.
             </p>
           )}
         </div>

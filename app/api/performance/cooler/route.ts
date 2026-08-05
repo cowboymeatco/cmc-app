@@ -49,7 +49,7 @@ function carcassLbs(h: HarvestRow): number {
 }
 
 export async function GET() {
-  const [harvestRes, scheduleRes, planRes] = await Promise.all([
+  const [harvestRes, scheduleRes, planRes, scanRes] = await Promise.all([
     supabase
       .from('harvest_log')
       .select('id,harvest_date,status,species,hot_carcass_weight_lbs,half_1_weight_lbs,half_2_weight_lbs')
@@ -67,10 +67,18 @@ export async function GET() {
       .select('appointment_id,kind,manual_rank,break_date,schedule_date')
       .order('schedule_date', { ascending: false })
       .order('manual_rank',   { ascending: true }),
+    // When a carcass was actually broken down. The processing scanner writes an
+    // input row the day the carcass hits the table, so this is a record of the
+    // event rather than a plan about it — the only true cut date the system has.
+    supabase
+      .from('processing_inputs')
+      .select('linked_harvest_id,session_date')
+      .not('linked_harvest_id', 'is', null),
   ])
   if (harvestRes.error)  return NextResponse.json({ error: harvestRes.error.message },  { status: 500 })
   if (scheduleRes.error) return NextResponse.json({ error: scheduleRes.error.message }, { status: 500 })
   if (planRes.error)     return NextResponse.json({ error: planRes.error.message },     { status: 500 })
+  if (scanRes.error)     return NextResponse.json({ error: scanRes.error.message },     { status: 500 })
 
   const carcasses = (harvestRes.data ?? []) as HarvestRow[]
   const today     = isoDate()
@@ -101,22 +109,68 @@ export async function GET() {
     }
   }
 
-  // Earliest scheduled cut date per carcass.
-  const cutDateByLog = new Map<string, string>()
+  // ── When each carcass actually left the cooler ──────────────────────────────
+  // Best evidence first. A scanner input row is the carcass on the table, an
+  // event that happened. The earliest plan it appears in is only a proxy — and
+  // a biased one, since it records when someone first SCHEDULED the animal, not
+  // when they cut it (beef reads 12 days that way against 15 by scan).
+  const scannedCutDay = new Map<string, string>()
+  for (const r of (scanRes.data ?? []) as { linked_harvest_id: string; session_date: string | null }[]) {
+    if (!r.session_date) continue
+    const prev = scannedCutDay.get(r.linked_harvest_id)
+    if (!prev || r.session_date < prev) scannedCutDay.set(r.linked_harvest_id, r.session_date)
+  }
+  const plannedCutDay = new Map<string, string>()
   for (const item of scheduleRes.data ?? []) {
-    const prev = cutDateByLog.get(item.appointment_id)
-    if (!prev || item.schedule_date < prev) cutDateByLog.set(item.appointment_id, item.schedule_date)
+    const prev = plannedCutDay.get(item.appointment_id)
+    if (!prev || item.schedule_date < prev) plannedCutDay.set(item.appointment_id, item.schedule_date)
+  }
+  const cutDateByLog = new Map<string, string>()
+  for (const h of carcasses) {
+    const d = scannedCutDay.get(h.id) ?? plannedCutDay.get(h.id)
+    if (d) cutDateByLog.set(h.id, d)
   }
 
-  // Median hang time where both dates are known, for estimating the rest.
-  const knownHangs = carcasses
-    .filter(h => h.status !== 'chilling' && cutDateByLog.has(h.id))
-    .map(h => daysBetweenISO(h.harvest_date, cutDateByLog.get(h.id)!))
-    .filter(d => d >= 0)
-    .sort((a, b) => a - b)
-  const medianHangDays = knownHangs.length
-    ? knownHangs[Math.floor(knownHangs.length / 2)]
-    : FALLBACK_HANG_DAYS
+  // ── Hang to cut, PER SPECIES ────────────────────────────────────────────────
+  // One blended median is a mix reading, not a fact about any animal: it read
+  // "3 days", which is right for hogs and 12 days wrong for beef, because the
+  // carcasses with cut records skew short-hang. Beef hangs ~15 days, hogs ~3,
+  // lamb and goat ~2 — no single number covers that (Charlie, 2026-08-05).
+  const median = (xs: number[]) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] : null)
+  const hangsBySpecies = new Map<Species, number[]>()
+  const allHangs: number[] = []
+  for (const h of carcasses) {
+    if (h.status === 'chilling') continue
+    const cut = cutDateByLog.get(h.id)
+    if (!cut) continue
+    const d = daysBetweenISO(h.harvest_date, cut)
+    if (d < 0) continue
+    const sp = speciesOf(h)
+    const bucket = hangsBySpecies.get(sp)
+    if (bucket) bucket.push(d); else hangsBySpecies.set(sp, [d])
+    allHangs.push(d)
+  }
+  const medianBySpecies = new Map<Species, number>()
+  for (const [sp, xs] of hangsBySpecies) {
+    const m = median(xs)
+    if (m != null) medianBySpecies.set(sp, m)
+  }
+  const medianHangDays = median(allHangs) ?? FALLBACK_HANG_DAYS
+  const hangToCut = {
+    overall: median(allHangs),
+    species: SPECIES.map(sp => {
+      const xs = hangsBySpecies.get(sp) ?? []
+      const m  = medianBySpecies.get(sp)
+      if (m == null) return null
+      const sorted = [...xs].sort((a, b) => a - b)
+      return { sp, days: m, n: xs.length, min: sorted[0], max: sorted[sorted.length - 1] }
+    }).filter(Boolean) as { sp: Species; days: number; n: number; min: number; max: number }[],
+    // How much of this rests on a real scan versus a plan proxy — the caller
+    // says so rather than presenting an estimate as a measurement.
+    fromScan: carcasses.filter(h => h.status !== 'chilling' && scannedCutDay.has(h.id)).length,
+    known:    allHangs.length,
+    total:    carcasses.filter(h => h.status !== 'chilling').length,
+  }
 
   // First date with an exact (non-estimated) cut record.
   const exactCutDates = carcasses
@@ -134,7 +188,11 @@ export async function GET() {
       if (h.status !== 'chilling') {
         out = cutDateByLog.get(h.id) ?? null
         if (!out) {
-          out = addDaysISO(h.harvest_date, medianHangDays)
+          // Estimate on the animal's OWN species. The blended median put every
+          // unrecorded beef out of the cooler 3 days after harvest instead of
+          // ~15, so the chart lost roughly twelve days of load per carcass on
+          // the 102 carcasses that have no cut record.
+          out = addDaysISO(h.harvest_date, medianBySpecies.get(speciesOf(h)) ?? medianHangDays)
           estimatedExits++
         }
         if (out < h.harvest_date) out = h.harvest_date
@@ -212,7 +270,7 @@ export async function GET() {
   }
 
   if (!intervals.length) {
-    return NextResponse.json({ series: [], asOf: today, trackingStart, medianHangDays, estimatedExits, hanging, ytd, stale, drawdown })
+    return NextResponse.json({ series: [], asOf: today, trackingStart, medianHangDays, estimatedExits, hanging, ytd, stale, drawdown, hangToCut })
   }
 
   // Daily series: a carcass counts on days [in, out) — it hangs the day it
@@ -239,5 +297,5 @@ export async function GET() {
     series.push({ d, head, lbs: Math.round(lbs), sp, spLbs })
   }
 
-  return NextResponse.json({ series, asOf: today, trackingStart, medianHangDays, estimatedExits, hanging, ytd, stale, drawdown })
+  return NextResponse.json({ series, asOf: today, trackingStart, medianHangDays, estimatedExits, hanging, ytd, stale, drawdown, hangToCut })
 }
