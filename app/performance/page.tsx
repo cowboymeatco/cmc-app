@@ -360,22 +360,23 @@ export default function PerformancePage() {
 
   const now = data?.series[data.series.length - 1]
 
-  // Averages ACROSS the selected period, each against the equivalent period
-  // before it. A point-in-time number can't answer "are we falling behind or
-  // getting faster" — but average pounds carried in the cooler can: if the
-  // cooler is holding more on average than it did last month, work is backing
-  // up faster than it's going out (Charlie, 2026-08-05).
+  // The average carried across the selected period, and where TODAY sits
+  // against it. Charlie's framing, and the right one: "if I currently have more
+  // than the average I'm slowing down, less and I'm going faster" — the average
+  // is the yardstick and today is the reading (2026-08-05).
+  //
+  // Deliberately NOT this period's average vs the previous period's. That
+  // answers a different, slower question (is the average itself drifting?) and
+  // on 2026-08-05 the two pointed opposite ways: the 30-day average had fallen
+  // 26% while the cooler sat 159% ABOVE that average. One says relax, the other
+  // says you're buried. Only one of them is about today.
   const periodAvg = useMemo(() => {
     if (!data) return null
     const days = RANGES.find(r => r.key === range)?.days ?? Infinity
     const all  = data.series
     const cur  = days === Infinity ? all : all.slice(-days)
     if (cur.length === 0) return null
-    // The equivalent stretch immediately before. "All" has nothing before it,
-    // and a partial prior window is a weak comparison — below half the current
-    // length we show the average without a direction rather than imply one.
-    const prevRaw = days === Infinity ? [] : all.slice(-(days * 2), -days)
-    const prev    = prevRaw.length >= cur.length / 2 ? prevRaw : []
+    const today = cur[cur.length - 1]
 
     // Empty days count toward the cooler load — a day with nothing hanging is a
     // real zero and part of how well they're keeping up. Per-head is pooled
@@ -387,25 +388,28 @@ export default function PerformancePage() {
       const head = arr.reduce((a, p) => a + h(p), 0)
       return head > 0 ? lbs / head : null
     }
-    const stat = (n: number | null, p: number | null) => ({
-      now: n, prev: p,
-      pct: n != null && p != null && p !== 0 ? ((n - p) / p) * 100 : null,
+    const stat = (avg: number | null, nowVal: number | null) => ({
+      avg, now: nowVal,
+      pct: avg != null && nowVal != null && avg !== 0 ? ((nowVal - avg) / avg) * 100 : null,
     })
 
     return {
-      from:      cur[0].d,
-      to:        cur[cur.length - 1].d,
-      dayCount:  cur.length,
-      prevDays:  prev.length,
-      lbs:       stat(meanOf(cur, p => p.lbs),  meanOf(prev, p => p.lbs)),
-      head:      stat(meanOf(cur, p => p.head), meanOf(prev, p => p.head)),
-      perHead:   stat(pooled(cur, p => p.lbs, p => p.head), pooled(prev, p => p.lbs, p => p.head)),
-      species:   SPECIES.map(sp => {
-        const n = pooled(cur,  p => p.spLbs?.[sp] ?? 0, p => p.sp?.[sp] ?? 0)
-        if (n == null) return null
-        const p = pooled(prev, p => p.spLbs?.[sp] ?? 0, p => p.sp?.[sp] ?? 0)
-        return { sp, ...stat(n, p) }
-      }).filter(Boolean) as { sp: Species; now: number | null; prev: number | null; pct: number | null }[],
+      from:     cur[0].d,
+      to:       today.d,
+      dayCount: cur.length,
+      lbs:      stat(meanOf(cur, p => p.lbs),  today.lbs),
+      head:     stat(meanOf(cur, p => p.head), today.head),
+      perHead:  stat(pooled(cur, p => p.lbs, p => p.head),
+                     today.head > 0 ? today.lbs / today.head : null),
+      species:  SPECIES.map(sp => {
+        const headNow = today.sp?.[sp] ?? 0
+        const avg = pooled(cur, p => p.spLbs?.[sp] ?? 0, p => p.sp?.[sp] ?? 0)
+        if (avg == null && headNow === 0) return null
+        return {
+          sp, head: headNow,
+          ...stat(avg, headNow > 0 ? (today.spLbs?.[sp] ?? 0) / headNow : null),
+        }
+      }).filter(Boolean) as { sp: Species; head: number; avg: number | null; now: number | null; pct: number | null }[],
     }
   }, [data, range])
 
@@ -462,36 +466,36 @@ export default function PerformancePage() {
             sub="median, from the cut schedule" />
         </div>
 
-        {/* Averages across the selected period, each against the equivalent
-            stretch before it. This is the "keeping up?" panel: a rising average
-            cooler load means work is arriving faster than it leaves. */}
+        {/* The average carried over the selected period, with today measured
+            against it. Over the average = work piling up; under = gaining. */}
         {periodAvg && (() => {
-          const rangeLabel = RANGES.find(r => r.key === range)?.label.toLowerCase() ?? ''
+          const rangeLabel  = RANGES.find(r => r.key === range)?.label.toLowerCase() ?? ''
           const periodLabel = range === 'all' ? `all ${periodAvg.dayCount} days` : `the last ${rangeLabel}`
-          // Name the prior window by the days it ACTUALLY holds. A 60-day range
-          // only has 52 days of history behind it, and calling that "prior 60
-          // days" would overstate what the percentage is measured against.
-          const priorLabel = periodAvg.prevDays > 0 ? `prior ${periodAvg.prevDays} days` : null
-          // Under 2% either way is noise — one animal in or out moves a cooler
-          // this size more than that. Only call a direction past it.
-          const dirOf = (pct: number | null) => (pct == null ? 0 : pct > 2 ? 1 : pct < -2 ? -1 : 0)
-          // Rising cooler load = falling behind, so up is the WARNING colour
-          // here. On average weight, up is just bigger animals — neither good
-          // nor bad — so those read neutral.
-          const Trend = ({ pct, invert }: { pct: number | null; invert?: boolean }) => {
+          const avgLabel    = range === 'all' ? `${periodAvg.dayCount}-day` : rangeLabel.replace(' days', '-day')
+          // Day-to-day swing on a cooler this size is big; under 5% off the
+          // average isn't a direction, it's noise.
+          const dirOf = (pct: number | null) => (pct == null ? 0 : pct > 5 ? 1 : pct < -5 ? -1 : 0)
+
+          // Carrying MORE than the period average = falling behind, so over is
+          // the warning colour and under is the win. Per-head weight is neither
+          // good nor bad, so it stays neutral.
+          const OverUnder = ({ pct, load }: { pct: number | null; load?: boolean }) => {
             const dir = dirOf(pct)
-            if (pct == null || !priorLabel) {
-              return <span style={{ fontSize: '0.7rem', color: C.lightBrown }}>no earlier stretch to compare</span>
-            }
-            const good = invert ? dir < 0 : dir > 0
-            const col  = dir === 0 ? C.lightBrown : good ? '#3E9D63' : '#CE6A20'
+            if (pct == null) return <span style={{ fontSize: '0.72rem', color: C.lightBrown }}>&mdash;</span>
+            const col = !load ? C.tan : dir === 0 ? C.lightBrown : dir > 0 ? '#CE6A20' : '#3E9D63'
             return (
-              <span style={{ fontSize: '0.7rem', color: col }}>
-                {dir === 0 ? 'flat' : <>{dir > 0 ? '▲' : '▼'} {Math.abs(pct).toFixed(0)}%</>}
-                <span style={{ color: C.lightBrown }}> vs {priorLabel}</span>
+              <span style={{ fontSize: '0.72rem', color: col, fontWeight: 700 }}>
+                {dir === 0
+                  ? <>on the {avgLabel} average</>
+                  : <>
+                      {dir > 0 ? '▲' : '▼'} {Math.abs(pct).toFixed(0)}% {dir > 0 ? 'over' : 'under'}
+                      <span style={{ color: C.lightBrown, fontWeight: 400 }}> the {avgLabel} average</span>
+                    </>}
               </span>
             )
           }
+          const verdict = dirOf(periodAvg.lbs.pct)
+
           return (
             <div style={{
               background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4,
@@ -499,35 +503,40 @@ export default function PerformancePage() {
             }}>
               <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.8rem' }}>
                 <span style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.15em' }}>
-                  Averaged over {periodLabel}
+                  Where today sits vs {periodLabel}
                 </span>
                 <span style={{ fontSize: '0.72rem', color: C.lightBrown }}>
-                  {dateLabel(periodAvg.from, { month: 'short', day: 'numeric' })} – {dateLabel(periodAvg.to, { month: 'short', day: 'numeric' })}
+                  {dateLabel(periodAvg.from, { month: 'short', day: 'numeric' })} &ndash; {dateLabel(periodAvg.to, { month: 'short', day: 'numeric' })}
                   {' · '}{periodAvg.dayCount} days
                 </span>
               </div>
 
               <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '0.8rem' }}>
                 {[
-                  { label: 'Pounds in the cooler', v: periodAvg.lbs,     unit: 'lbs',  invert: true,  accent: LBS_COLOR },
-                  { label: 'Head in the cooler',   v: periodAvg.head,    unit: 'head', invert: true,  accent: HEAD_COLOR },
-                  { label: 'Per head',             v: periodAvg.perHead, unit: 'lbs',  invert: false, accent: C.medBrown },
+                  { label: 'Pounds in the cooler', v: periodAvg.lbs,     unit: 'lbs',      load: true,  accent: LBS_COLOR },
+                  { label: 'Head in the cooler',   v: periodAvg.head,    unit: 'head',     load: true,  accent: HEAD_COLOR },
+                  { label: 'Per head',             v: periodAvg.perHead, unit: 'lbs/head', load: false, accent: C.medBrown },
                 ].map(t => (
                   <div key={t.label} style={{
-                    flex: '1 1 170px', minWidth: 160,
+                    flex: '1 1 190px', minWidth: 180,
                     background: 'rgba(255,255,255,0.03)', borderRadius: 4,
                     borderLeft: `3px solid ${t.accent}`, padding: '0.6rem 0.8rem',
                   }}>
                     <div style={{ fontSize: '0.68rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
                       {t.label}
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', margin: '0.15rem 0 0.2rem' }}>
+                    {/* Average is the big number — the yardstick — with today
+                        beneath it as the reading against that yardstick. */}
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', margin: '0.15rem 0 0.1rem' }}>
                       <span style={{ fontSize: '1.5rem', fontWeight: 600, color: C.cream, fontVariantNumeric: 'tabular-nums' }}>
-                        {t.v.now != null ? fmt(Math.round(t.v.now)) : '—'}
+                        {t.v.avg != null ? fmt(Math.round(t.v.avg)) : '—'}
                       </span>
-                      <span style={{ fontSize: '0.72rem', color: C.tan }}>{t.unit}</span>
+                      <span style={{ fontSize: '0.72rem', color: C.tan }}>{t.unit} avg</span>
                     </div>
-                    <Trend pct={t.v.pct} invert={t.invert} />
+                    <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginBottom: '0.15rem' }}>
+                      today: <strong style={{ color: C.cream }}>{t.v.now != null ? fmt(Math.round(t.v.now)) : '—'}</strong>
+                    </div>
+                    <OverUnder pct={t.v.pct} load={t.load} />
                   </div>
                 ))}
               </div>
@@ -538,24 +547,28 @@ export default function PerformancePage() {
                     const dir = dirOf(r.pct)
                     return (
                       <div key={r.sp} style={{
-                        flex: '1 1 120px', minWidth: 112,
+                        flex: '1 1 125px', minWidth: 118,
                         background: 'rgba(255,255,255,0.02)', borderRadius: 4,
                         borderLeft: `3px solid ${SPECIES_COLOR[r.sp]}`, padding: '0.45rem 0.65rem',
                       }}>
-                        <div style={{ fontSize: '0.7rem', color: SPECIES_COLOR[r.sp], fontWeight: 700 }}>{r.sp}</div>
+                        <div style={{ fontSize: '0.7rem', color: SPECIES_COLOR[r.sp], fontWeight: 700 }}>
+                          {r.sp} <span style={{ color: C.lightBrown, fontWeight: 400 }}>· {r.head} head</span>
+                        </div>
                         <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.3rem' }}>
                           <span style={{ fontSize: '1.05rem', fontWeight: 600, color: C.cream, fontVariantNumeric: 'tabular-nums' }}>
                             {r.now != null ? fmt(Math.round(r.now)) : '—'}
                           </span>
                           <span style={{ fontSize: '0.66rem', color: C.tan }}>lbs/head</span>
                         </div>
-                        {priorLabel && (
-                          <div style={{ fontSize: '0.66rem', color: dir === 0 ? C.lightBrown : '#C9A882', marginTop: 1 }}>
-                            {r.pct == null
-                              ? <span style={{ color: C.lightBrown }}>none hanging then</span>
-                              : dir === 0 ? 'flat' : <>{dir > 0 ? '▲' : '▼'} {Math.abs(r.pct).toFixed(0)}%</>}
-                          </div>
-                        )}
+                        <div style={{ fontSize: '0.66rem', color: C.lightBrown, marginTop: 1 }}>
+                          {r.avg == null
+                            ? 'none in range'
+                            : r.now == null
+                              ? <>none hanging · {fmt(Math.round(r.avg))} avg</>
+                              : dir === 0
+                                ? <>on the average ({fmt(Math.round(r.avg))})</>
+                                : <>{dir > 0 ? '▲' : '▼'} {Math.abs(r.pct!).toFixed(0)}% vs {fmt(Math.round(r.avg))} avg</>}
+                        </div>
                       </div>
                     )
                   })}
@@ -563,11 +576,13 @@ export default function PerformancePage() {
               )}
 
               <p style={{ fontSize: '0.72rem', color: C.lightBrown, margin: '0.8rem 0 0', lineHeight: 1.5 }}>
-                Average of every day in the range, empty days included
-                {priorLabel ? <>, against the {periodAvg.prevDays} days immediately before</> : <> (no earlier stretch on record to compare against)</>}.
-                {' '}A <strong style={{ color: '#CE6A20' }}>rising</strong> cooler load means carcasses are arriving faster than they&apos;re being cut;
-                <strong style={{ color: '#3E9D63' }}> falling</strong> means you&apos;re gaining on it. Per-head weight is neither — it just says
-                whether the animals are bigger, and the species rows say it without the mix getting in the way.
+                The average is every day in the range, empty days included. Today
+                {verdict > 0
+                  ? <> is carrying <strong style={{ color: '#CE6A20' }}>more than that average &mdash; work is piling up faster than it&apos;s going out</strong>.</>
+                  : verdict < 0
+                    ? <> is carrying <strong style={{ color: '#3E9D63' }}>less than that average &mdash; you&apos;re gaining on it</strong>.</>
+                    : <> is sitting on the average &mdash; holding steady.</>}
+                {' '}Per-head weight is neither good nor bad, so it stays neutral; the species rows read it without the mix getting in the way.
               </p>
             </div>
           )
