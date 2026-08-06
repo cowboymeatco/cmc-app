@@ -1911,6 +1911,11 @@ export default function CuttingInstructionsPage() {
   const [filterSlaughter, setFilterSlaughter] = useState<string>('')
   const [showLinkPicker, setShowLinkPicker] = useState(false)
   const [linking, setLinking]           = useState(false)
+  // Carcasses hanging on each appointment in the link picker, keyed by
+  // appointment id. A producer with several animals booked reads as the same
+  // line repeated — the hanging weight is what tells them apart (Jill,
+  // 2026-08-06). Loaded when the picker opens; an unharvested booking has none.
+  const [pickerCarcasses, setPickerCarcasses] = useState<Record<string, { tag: string; lbs: number | null }[]>>({})
   // Copy-this-card-onto-another-share flow: which portion the copy is for, and
   // whether one is being made right now.
   const [showCopyPicker, setShowCopyPicker] = useState(false)
@@ -2186,6 +2191,46 @@ export default function CuttingInstructionsPage() {
     a.customers?.some(c => !c.linked_cutting_instruction_id) &&
     sameSpecies(a.species, selectedSpecies)
   ).sort((a, b) => a.harvest_date.localeCompare(b.harvest_date))
+  const linkableIds = linkableAppts.map(a => a.id).join(',')
+
+  // Weights for the picker, fetched only while it's open — the list is short
+  // and this keeps the page load free of a call nobody needs until they link.
+  useEffect(() => {
+    if ((!showLinkPicker && !showCopyPicker) || !linkableIds) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res  = await fetch(`/api/harvest?appointment_ids=${encodeURIComponent(linkableIds)}`)
+        const data = await res.json()
+        if (cancelled || !Array.isArray(data)) return
+        const next: Record<string, { tag: string; lbs: number | null }[]> = {}
+        for (const l of data) {
+          const halves = (l.half_1_weight_lbs ?? 0) + (l.half_2_weight_lbs ?? 0)
+          const lbs = l.hot_carcass_weight_lbs ?? (halves > 0 ? halves : null)
+          ;(next[l.appointment_id] ??= []).push({ tag: l.carcass_tag ?? '', lbs: lbs == null ? null : Number(lbs) })
+        }
+        setPickerCarcasses(next)
+      } catch { /* weights are a nicety here — linking still works without them */ }
+    })()
+    return () => { cancelled = true }
+  }, [showLinkPicker, showCopyPicker, linkableIds])
+
+  // Hanging weight beside the producer's name in both animal pickers, so two
+  // bookings from the same ranch aren't the same line twice (Jill, 2026-08-06).
+  // Only weighed carcasses show — a booking not yet killed says nothing rather
+  // than implying a zero.
+  function hangingNote(apptId: string) {
+    const weighed = (pickerCarcasses[apptId] ?? []).filter(c => c.lbs != null)
+    if (!weighed.length) return null
+    return (
+      <span style={{ color: '#7CAFDD', fontWeight: 400, marginLeft: '0.5rem', fontSize: '0.82rem' }}>
+        {/* Label first — trailing it after a list of two animals read as though
+            only the last one was hanging. */}
+        · hanging: {weighed.map(c => `${c.tag ? `#${c.tag} ` : ''}${c.lbs} lbs`).join(', ')}
+      </span>
+    )
+  }
+
   const sections = sectionsFor(selectedSpecies)
   const isV2 = selected?.data?.formVersion === 'v2'
 
@@ -2584,6 +2629,7 @@ export default function CuttingInstructionsPage() {
                   <div style={{ fontWeight: 700, color: 'var(--cream)', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
                     {speciesEmblem(a.species)} {a.species} · {new Date(a.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
                     {a.source && <span style={{ color: 'var(--tan)', fontWeight: 400, marginLeft: '0.5rem' }}>· {a.source}</span>}
+                    {hangingNote(a.id)}
                   </div>
                   {a.customers?.filter(c => !c.linked_cutting_instruction_id).map((c, idx) => (
                     <button key={c.id} onClick={() => linkToCustomer(a.id, a.customers.indexOf(c))} disabled={linking}
@@ -2633,6 +2679,7 @@ export default function CuttingInstructionsPage() {
                   <div style={{ fontWeight: 700, color: 'var(--cream)', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
                     {speciesEmblem(a.species)} {a.species} · {new Date(a.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
                     {a.source && <span style={{ color: 'var(--tan)', fontWeight: 400, marginLeft: '0.5rem' }}>· {a.source}</span>}
+                    {hangingNote(a.id)}
                   </div>
                   {a.customers?.filter(c => !c.linked_cutting_instruction_id).map(c => (
                     <button key={c.id} onClick={() => copyToShare(a.id, a.customers.indexOf(c))} disabled={copying || linking}
