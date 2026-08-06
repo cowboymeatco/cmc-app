@@ -611,11 +611,25 @@ function ExportTab() {
   // label still prints blank, because nothing references it. Importing a fresh
   // .ht repairs the link — this is what actually bit the jerky.
   const [unlinkedIng, setUnlinkedIng] = useState<PluItem[]>([])
+  // Active PLUs the kiosk push will silently leave behind, because it only sends
+  // items with a real price. $0.01 is the deliberate placeholder for wild-game
+  // service items, wholesale cut codes, meat boxes and NFHC — those are meant to
+  // be skipped. No price at all means unfinished, and the push says "3/3 scales"
+  // either way, so the item just never shows up at the scale (Charlie's German
+  // Cheddar Brotwurst, 2026-08-06). Not filtered by the export controls above —
+  // the push always covers every active PLU, whatever this tab is showing.
+  const [unpriced, setUnpriced] = useState<PluItem[]>([])
 
   useEffect(() => {
     fetch('/api/processing?active=false')
       .then(r => r.json())
       .then(d => setRetired(Array.isArray(d) ? d : []))
+      .catch(() => {})
+    fetch('/api/processing?active=true')
+      .then(r => r.json())
+      .then(d => setUnpriced(
+        (Array.isArray(d) ? d : []).filter((i: PluItem) => i.price == null || Number(i.price) === 0)
+      ))
       .catch(() => {})
   }, [])
 
@@ -909,7 +923,33 @@ function ExportTab() {
         </h3>
         <p style={{ color: C.tan, fontSize: '0.82rem', lineHeight: 1.6, margin: '0 0 1rem' }}>
           Send current prices to all shop scales automatically — the kiosk does the on-site push. No file, no HCT.
+          Only PLUs that <strong style={{ color: C.cream }}>have a price</strong> are sent.
         </p>
+
+        {/* A push reports "3/3 scales" whether or not your item was in it, so an
+            unpriced PLU looks synced and simply isn't on the scale. Call the
+            skipped ones out by name here, next to the button that skips them. */}
+        {unpriced.length > 0 && (
+          <div style={{ background: 'rgba(245,158,11,0.10)', border: `1px solid ${C.yellow}`, borderRadius: 4, padding: '0.85rem 1rem', margin: '0 0 1rem' }}>
+            <div style={{ color: C.yellow, fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.3rem' }}>
+              ⚠ {unpriced.length} active {unpriced.length === 1 ? 'PLU has' : 'PLUs have'} no price — {unpriced.length === 1 ? 'it won’t' : 'they won’t'} be pushed
+            </div>
+            <div style={{ color: C.lightBrown, fontSize: '0.78rem', lineHeight: 1.6, marginBottom: '0.5rem' }}>
+              The push only sends priced items, and it still reports every scale as updated — so these
+              look synced and never arrive. Set a price on the item&apos;s <strong style={{ color: C.tan }}>Pricing</strong>{' '}
+              tab in the PLU Browser and push again. (Wild game, cut codes and meat boxes are priced $0.01 on
+              purpose and are meant to stay off the scale — they aren&apos;t listed here.)
+            </div>
+            <div style={{ maxHeight: 160, overflowY: 'auto', fontSize: '0.76rem', color: C.tan, lineHeight: 1.75 }}>
+              {unpriced.map(i => (
+                <div key={i.id}>
+                  <span style={{ fontFamily: 'monospace', color: C.lightBrown }}>{i.plu_number}</span>{' '}{i.item_name}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <button style={BTN(pushing ? C.medBrown : C.tan)} onClick={handlePush} disabled={pushing}>
           {pushing ? 'Queuing…' : '🛰 Push to scales'}
         </button>
