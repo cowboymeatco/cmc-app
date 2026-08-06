@@ -885,7 +885,7 @@ function renderV2Detail(ci: RawInstruction) {
             <V2Field label="Short Ribs Add-ons" value={v2adds(d.shortRibs?.addons)} addon />
             <V2Field label="Plate" value={v2fmt(d.plate?.cut)} />
           </V2Section>
-          <V2Section title="Ribeye">
+          <V2Section title="Rib">
             <V2Field label="Style" value={
               d.ribeye?.ribeye2
                 ? sidePair(v2fmt(d.ribeye.style), v2fmt(d.ribeye.ribeye2.style))
@@ -898,8 +898,8 @@ function renderV2Detail(ci: RawInstruction) {
             } />
             {d.ribeye?.ribeye2 ? (
               <>
-                <V2Field label="Ribeye 1 Add-ons" value={v2adds(ribeyeAdds(d.ribeye))} addon />
-                <V2Field label="Ribeye 2 Add-ons" value={v2adds(ribeyeAdds(d.ribeye.ribeye2))} addon />
+                <V2Field label="Rib 1 Add-ons" value={v2adds(ribeyeAdds(d.ribeye))} addon />
+                <V2Field label="Rib 2 Add-ons" value={v2adds(ribeyeAdds(d.ribeye.ribeye2))} addon />
               </>
             ) : (
               <V2Field label="Add-ons" value={v2adds(ribeyeAdds(d.ribeye))} addon />
@@ -1075,7 +1075,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
   const PRIMAL_COLORS: Record<string, { bar: string; text: string; tint: string }> = {
     'Chuck':              { bar: '#2e7d32', text: '#ffffff', tint: '#edf5ee' },
     'Plate & Short Ribs': { bar: '#f2c200', text: '#4a3800', tint: '#fdf8e0' },
-    'Ribeye':             { bar: '#f2c200', text: '#4a3800', tint: '#fdf8e0' },
+    'Rib':                { bar: '#f2c200', text: '#4a3800', tint: '#fdf8e0' },
     'Short Loin':         { bar: '#b71c1c', text: '#ffffff', tint: '#fbecec' },
     'Sirloin':            { bar: '#b71c1c', text: '#ffffff', tint: '#fbecec' },
     'Flank':              { bar: '#b71c1c', text: '#ffffff', tint: '#fbecec' },
@@ -1151,11 +1151,11 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
     // actually was (Jill, 2026-07-28).
     const ribeyeLine = (r?: { style?: string | null; cut?: string | null; thickness?: string | null } | null) =>
       [fmt(r?.style ?? ''), withT(r?.cut ?? '', r?.thickness ?? '')].filter(Boolean).join(' · ')
-    cutSections += sec('Ribeye', (d.ribeye?.ribeye2
+    cutSections += sec('Rib', (d.ribeye?.ribeye2
       ? [
-          row('Ribeye (1)', ribeyeLine(d.ribeye)),
+          row('Rib (1)', ribeyeLine(d.ribeye)),
           ribeyeAdds(d.ribeye).length ? row('  Add-ons (1)', adds(ribeyeAdds(d.ribeye)), true) : '',
-          row('Ribeye (2)', ribeyeLine(d.ribeye.ribeye2)),
+          row('Rib (2)', ribeyeLine(d.ribeye.ribeye2)),
           ribeyeAdds(d.ribeye.ribeye2).length ? row('  Add-ons (2)', adds(ribeyeAdds(d.ribeye.ribeye2)), true) : '',
         ]
       : [
@@ -1334,12 +1334,12 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
       else { pc('Short Ribs', fmt(d.shortRibs.cut)); if (d.shortRibs.addons?.length) pc('  Add-on', adds(d.shortRibs.addons), true) }
     }
     if (d.plate?.cut) { d.plate.cut === 'grind' ? pg('Plate') : pc('Plate / Beef Bacon', fmt(d.plate.cut)) }
-    ps('Ribeye')
+    ps('Rib')
     // grind lives at the style level for ribeye (the wizard clears cut when style is grind)
     const packRibeye = (r: any, sfx: string) => {
-      if (r.style === 'grind' || r.cut === 'grind') { pg(`Ribeye${sfx}`); return }
+      if (r.style === 'grind' || r.cut === 'grind') { pg(`Rib${sfx}`); return }
       if (!r.cut) return
-      pc(`Ribeye${sfx}`, [fmt(r.style), withT(r.cut, r.thickness ?? '')].filter(Boolean).join(' · '))
+      pc(`Rib${sfx}`, [fmt(r.style), withT(r.cut, r.thickness ?? '')].filter(Boolean).join(' · '))
       const a = ribeyeAdds(r)
       if (a.length) pc('  Add-on', adds(a), true)
     }
