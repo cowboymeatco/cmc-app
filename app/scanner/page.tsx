@@ -468,6 +468,11 @@ export default function ScannerPage() {
   const inputsRef     = useRef<ProcessingInput[]>([])
   const boxesRef      = useRef<BoxRecord[]>([])
   const unpackBoxRef  = useRef<((serial: string) => void) | null>(null)
+  // The scan bar's buffer, mirrored synchronously. The gun fires faster than
+  // React re-renders, so the DOM input's value can't be trusted to hold what
+  // has already been typed — this ref is what the next character appends to.
+  const scanValueRef  = useRef('')
+  const applyScanRef  = useRef<((raw: string) => void) | null>(null)
 
   activeBoxRef.current  = activeBox
   pluMapRef.current     = pluMap
@@ -478,6 +483,14 @@ export default function ScannerPage() {
   inputsRef.current     = inputs
   boxesRef.current      = boxes
   unpackBoxRef.current  = unpackBox
+  applyScanRef.current  = applyScanInput
+
+  // Every write to the scan bar goes through here so the ref and the state can
+  // never disagree about what is in it.
+  function setScan(v: string) {
+    scanValueRef.current = v
+    setScanValue(v)
+  }
 
   // ── Load sessions list ───────────────────────────────────────────────────���───
   const loadSessions = useCallback(async () => {
@@ -533,12 +546,20 @@ export default function ScannerPage() {
       const box = activeBoxRef.current
       if (!box || box.is_closed) return
       const target = e.target as HTMLElement
-      if (target === scanRef.current) return
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
+      // Any other field — weight entry, notes, a modal — keeps its own keys.
+      if (target !== scanRef.current && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      if (e.ctrlKey || e.metaKey || e.altKey) return
       if (/^[\dA-Za-z-]$/.test(e.key)) {
+        // The scan bar is fed from here even when it already has focus. Letting
+        // the browser type into it instead would make the DOM value the source
+        // of truth for the next character, and after a click moves focus off the
+        // bar that value is a render behind — the gun's first digit lands in
+        // state, the second overwrites it, and the barcode is one short of the
+        // 13 that trigger a save. It then sits there silently and every later
+        // scan is appended onto the wreckage. One ordered path, no lost digits.
         e.preventDefault()
         scanRef.current?.focus()
-        setScanValue(prev => prev + e.key)
+        applyScanRef.current?.(scanValueRef.current + e.key)
       }
     }
     document.addEventListener('keydown', onKey)
@@ -551,6 +572,25 @@ export default function ScannerPage() {
       setTimeout(() => scanRef.current?.focus(), 80)
     }
   }, [started, activeBox])
+
+  // ── What a scan-bar value means ──────────────────────────────────────────────
+  // Shared by the input's own onChange and the global key redirect, so a code
+  // is read the same way however its characters arrived.
+  function applyScanInput(raw: string) {
+    // CMC box identifier complete (CMC-YYYYMMDD-NNN = 16 chars)
+    if (/^CMC-\d{8}-\d{3}$/.test(raw)) { addInput(raw); return }
+    // Carcass tag complete (CT-{uuid} = "CT-" + 36 char UUID = 39 chars)
+    if (/^CT-[0-9a-f-]{36}$/.test(raw)) { addInput(raw); return }
+    // Carcass half tag complete (YYDDD-TAG-SIDE or YYMMDD-TAG-SIDE)
+    if (/^\d{5,6}-\w+-[LR]$/i.test(raw)) { addInput(raw.toUpperCase()); return }
+    // Partial CMC/CT prefix or carcass tag building up — don't strip
+    if (/^(CMC|CT)/i.test(raw) || /^\d{5,6}-[\w-]*$/.test(raw)) { setScan(raw); return }
+    // Cure seal complete — the leading zero means it can't be a Hobart
+    // EAN prefix mid-stream (those start '2')
+    if (isCureTagNumber(raw)) { openCureModal(raw); return }
+    // Hobart EAN-13: digits only — the scan-queue effect fires once 13 arrive
+    setScan(raw.replace(/\D/g, ''))
+  }
 
   // ── Process a scan ────────────────────────────────────────────────────────────
   const doScan = useCallback(async (raw: string) => {
@@ -647,7 +687,7 @@ export default function ScannerPage() {
   useEffect(() => {
     if (!/^\d{13}/.test(scanValue)) return
     const code = scanValue.slice(0, 13)
-    setScanValue(scanValue.slice(13))
+    setScan(scanValue.slice(13))
     scanQueueRef.current.push(code)
     pumpScanQueue()
   }, [scanValue, pumpScanQueue])
@@ -658,8 +698,21 @@ export default function ScannerPage() {
   useEffect(() => {
     if (!BOX_SERIAL_RE.test(scanValue)) return
     const code = scanValue.toUpperCase()
-    setScanValue('')
+    setScan('')
     unpackBoxRef.current?.(code)
+  }, [scanValue])
+
+  // A gun delivers its 13 digits in well under a second, so digits still sitting
+  // in the bar after that came from a scan that arrived incomplete — a misread,
+  // or a label pulled away mid-beam. Drop them. Left alone they'd be treated as
+  // the front of the NEXT barcode, which shifts it out of alignment and quietly
+  // breaks every scan that follows until someone thinks to clear the bar.
+  useEffect(() => {
+    if (!/^\d{1,12}$/.test(scanValue)) return
+    const t = setTimeout(() => {
+      if (scanValueRef.current === scanValue) setScan('')
+    }, 1200)
+    return () => clearTimeout(t)
   }, [scanValue])
 
   // ── Session record helpers ───────────────────────────────────────────────────
@@ -1276,7 +1329,7 @@ export default function ScannerPage() {
   // Seals are single-use, so a rescan of a used number shows whose piece it is
   // (that's how the smokehouse identifies a tag) instead of re-recording it.
   async function openCureModal(tagNumber: string) {
-    setScanValue('')
+    setScan('')
     setCureWeight('')
     let existing: CureTag | null = null
     try {
@@ -1356,7 +1409,7 @@ export default function ScannerPage() {
   // ── Add input from CMC box scan or carcass tag scan ──────────────────────────
   async function addInput(identifier: string) {
     const isCarcass = /^CT-/.test(identifier) || /^\d{5,6}-\w+(-[LR])?$/i.test(identifier)
-    setScanValue('')
+    setScan('')
     setFlash('ok')
     setLastKind('ok')
     setLastItem(isCarcass ? `🐄 Carcass tag: ${identifier}` : `📦 Box: ${identifier}`)
@@ -2158,29 +2211,16 @@ export default function ScannerPage() {
           <input
             ref={scanRef}
             value={scanValue}
-            onChange={e => {
-              const raw = e.target.value
-              // CMC box identifier complete (CMC-YYYYMMDD-NNN = 16 chars)
-              if (/^CMC-\d{8}-\d{3}$/.test(raw)) { addInput(raw); return }
-              // Carcass tag complete (CT-{uuid} = "CT-" + 36 char UUID = 39 chars)
-              if (/^CT-[0-9a-f-]{36}$/.test(raw)) { addInput(raw); return }
-              // Carcass half tag complete (YYDDD-TAG-SIDE or YYMMDD-TAG-SIDE)
-              if (/^\d{5,6}-\w+-[LR]$/i.test(raw)) { addInput(raw.toUpperCase()); return }
-              // Partial CMC/CT prefix or carcass tag building up — don't strip
-              if (/^(CMC|CT)/i.test(raw) || /^\d{5,6}-[\w-]*$/.test(raw)) { setScanValue(raw); return }
-              // Cure seal complete — the leading zero means it can't be a Hobart
-              // EAN prefix mid-stream (those start '2')
-              if (isCureTagNumber(raw)) { openCureModal(raw); return }
-              // Hobart EAN-13: digits only — the scan-queue effect fires once 13 arrive
-              setScanValue(raw.replace(/\D/g, ''))
-            }}
+            // Backspace, paste and the like still land here; the gun's digits
+            // come through the global key redirect above.
+            onChange={e => applyScanInput(e.target.value)}
             onKeyDown={e => {
               if (e.key === 'Enter' && scanValue.length > 0 && scanValue.length < 13) {
                 if (/^CMC-\d{8}-\d{3}$/.test(scanValue)) addInput(scanValue)
                 else if (/^CT-[0-9a-f-]{36}$/.test(scanValue)) addInput(scanValue)
                 else if (/^\d{5,6}-\w+(-[LR])?$/i.test(scanValue)) addInput(scanValue.toUpperCase())
                 else if (isCureTagNumber(scanValue)) openCureModal(scanValue)
-                else { const v = scanValue; setScanValue(''); doScan(v) }
+                else { const v = scanValue; setScan(''); doScan(v) }
               }
             }}
             disabled={!isOpen}
@@ -2195,7 +2235,7 @@ export default function ScannerPage() {
             }}
           />
           {scanValue && (
-            <button onClick={e => { e.stopPropagation(); setScanValue('') }} style={{ background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '1.3rem', lineHeight: 1 }}>×</button>
+            <button onClick={e => { e.stopPropagation(); setScan('') }} style={{ background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '1.3rem', lineHeight: 1 }}>×</button>
           )}
         </div>
 
