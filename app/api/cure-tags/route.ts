@@ -12,6 +12,7 @@ const SHEET_PRODUCT: Record<string, string> = {
   'Ham':            'Cured & Smoked Ham',
   'Bacon':          'Bacon',
   'Shoulder Bacon': 'Shoulder Bacon',
+  'Bone-In Loin':   'Smoked Chops',
   'Hocks':          'Cured & Smoked Hocks',
 }
 

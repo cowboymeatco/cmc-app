@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useMemo, useState, useCallback } from 'react'
-import { CureTag, CureTagRoll } from '@/lib/types'
+import { CureTag } from '@/lib/types'
 
 // ══════════════════════════════════════════════════════════════════════════════
 // IN CURE — numbered seals riding on hams/bacons through the cure cooler.
@@ -37,7 +37,6 @@ const dayDiff = (fromIso: string, toIso?: string | null) =>
 
 export default function CureTagsTab() {
   const [tags,    setTags]    = useState<CureTag[]>([])
-  const [rolls,   setRolls]   = useState<CureTagRoll[]>([])
   const [loading, setLoading] = useState(true)
   const [err,     setErr]     = useState('')
 
@@ -45,25 +44,12 @@ export default function CureTagsTab() {
   const [search,       setSearch]       = useState('')
   const [busyId,       setBusyId]       = useState<string | null>(null)
 
-  // Roll registration
-  const [showRolls, setShowRolls] = useState(false)
-  const [rollStart, setRollStart] = useState('')
-  const [rollEnd,   setRollEnd]   = useState('')
-  const [rollNote,  setRollNote]  = useState('')
-  const [rollErr,   setRollErr]   = useState('')
-  const [rollBusy,  setRollBusy]  = useState(false)
-
   const load = useCallback(async () => {
     setLoading(true); setErr('')
     try {
-      const [tagRes, rollRes] = await Promise.all([
-        fetch('/api/cure-tags?instructions=1'),
-        fetch('/api/cure-tags/rolls'),
-      ])
-      const tagData  = await tagRes.json()
-      const rollData = await rollRes.json()
-      setTags(Array.isArray(tagData) ? tagData : [])
-      setRolls(Array.isArray(rollData) ? rollData : [])
+      const res  = await fetch('/api/cure-tags?instructions=1')
+      const data = await res.json()
+      setTags(Array.isArray(data) ? data : [])
     } catch { setErr('Could not load cure tags.') }
     finally { setLoading(false) }
   }, [])
@@ -101,23 +87,6 @@ export default function CureTagsTab() {
     } finally { setBusyId(null) }
   }
 
-  async function registerRoll() {
-    setRollErr(''); setRollBusy(true)
-    try {
-      const res = await fetch('/api/cure-tags/rolls', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ start: rollStart.trim(), end: rollEnd.trim(), note: rollNote.trim() }),
-      })
-      const data = await res.json()
-      if (!res.ok) { setRollErr(data.error ?? 'Could not register the roll.'); return }
-      setRolls(prev => [data, ...prev])
-      setRollStart(''); setRollEnd(''); setRollNote('')
-    } catch { setRollErr('Could not register the roll.') }
-    finally { setRollBusy(false) }
-  }
-
-  const pad = (n: number, digits: number) => String(n).padStart(digits, '0')
-
   const th: React.CSSProperties = { textAlign: 'left', padding: '0.6rem 0.7rem', color: C.tan, fontWeight: 700, whiteSpace: 'nowrap', fontSize: '0.76rem', textTransform: 'uppercase', letterSpacing: '0.06em' }
   const td: React.CSSProperties = { padding: '0.5rem 0.7rem', color: C.cream, whiteSpace: 'nowrap' }
 
@@ -135,39 +104,7 @@ export default function CureTagsTab() {
           value={search} onChange={e => setSearch(e.target.value)}
           style={{ ...INPUT, flex: 1, minWidth: 180 }}
         />
-        <button onClick={() => setShowRolls(v => !v)} style={{
-          background: 'transparent', color: C.tan, border: `1px solid ${C.tan}`, borderRadius: 3,
-          padding: '0.5rem 1.1rem', fontSize: '0.82rem', fontWeight: 700, cursor: 'pointer',
-        }}>
-          {showRolls ? 'Hide seal rolls' : `Seal rolls (${rolls.length})`}
-        </button>
       </div>
-
-      {/* Seal rolls — register the printed range when a new roll arrives */}
-      {showRolls && (
-        <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '1rem 1.25rem', marginBottom: '1rem' }}>
-          <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.75rem' }}>
-            Registered seal rolls — the scanner only reads numbers in these ranges as cure tags
-          </div>
-          {rolls.map(r => (
-            <div key={r.id} style={{ color: C.cream, fontSize: '0.85rem', fontFamily: 'monospace', marginBottom: '0.35rem' }}>
-              {pad(r.start_number, r.digits)} – {pad(r.end_number, r.digits)}
-              <span style={{ color: C.lightBrown }}>  ·  {r.end_number - r.start_number + 1} seals{r.note ? `  ·  ${r.note}` : ''}</span>
-            </div>
-          ))}
-          {!rolls.length && <div style={{ color: C.lightBrown, fontSize: '0.85rem', marginBottom: '0.5rem' }}>No rolls yet — register the first one when the seals arrive.</div>}
-          <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', alignItems: 'center', marginTop: '0.75rem' }}>
-            <input placeholder="First seal # (e.g. 0036001)" value={rollStart} onChange={e => setRollStart(e.target.value)} style={{ ...INPUT, width: 190, fontFamily: 'monospace' }} />
-            <input placeholder="Last seal # (e.g. 0036500)" value={rollEnd} onChange={e => setRollEnd(e.target.value)} style={{ ...INPUT, width: 190, fontFamily: 'monospace' }} />
-            <input placeholder="Note (optional)" value={rollNote} onChange={e => setRollNote(e.target.value)} style={{ ...INPUT, flex: 1, minWidth: 140 }} />
-            <button onClick={registerRoll} disabled={rollBusy || !rollStart.trim() || !rollEnd.trim()} style={{
-              background: C.tan, color: C.dark, border: 'none', borderRadius: 3,
-              padding: '0.5rem 1.1rem', fontSize: '0.82rem', fontWeight: 700, cursor: 'pointer', opacity: rollBusy ? 0.6 : 1,
-            }}>+ Register roll</button>
-          </div>
-          {rollErr && <div style={{ color: C.amber, fontSize: '0.8rem', marginTop: '0.5rem' }}>{rollErr}</div>}
-        </div>
-      )}
 
       {/* Tag list */}
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, overflow: 'hidden' }}>

@@ -317,15 +317,6 @@ export interface CarcassAssignment {
 // Numbered tamper seals zip-tied to hams/bacons on the cut floor. The number
 // carries the customer through the cure cooler to the smokehouse.
 
-export interface CureTagRoll {
-  id:           string
-  created_at:   string
-  start_number: number
-  end_number:   number
-  digits:       number   // printed length incl. leading zeros ("0036013" = 7)
-  note:         string | null
-}
-
 export interface CureTag {
   id:            string
   created_at:    string
@@ -342,14 +333,11 @@ export interface CureTag {
   instruction?:  string | null
 }
 
-// A scanned code is a cure tag when its digits fall inside a registered roll
-// and it's printed at that roll's length. Length must match exactly so a
-// mistyped 4-digit PLU can never land inside a seal range.
-export function matchCureTag(code: string, rolls: CureTagRoll[]): boolean {
-  if (!/^\d{5,12}$/.test(code)) return false
-  const n = parseInt(code, 10)
-  return rolls.some(r => code.length === r.digits && n >= r.start_number && n <= r.end_number)
-}
+// The seals print as 7 digits with a leading zero ("0341981"). Nothing else in
+// the plant scans that shape — Hobart barcodes are 13 digits starting '2',
+// carcass tags carry dashes, PLUs run 6 digits or fewer and never start with 0 —
+// so the shape alone is the signal (Charlie, 2026-08-06: judge by the digits).
+export const isCureTagNumber = (code: string) => /^0\d{6}$/.test(code)
 
 // ── Delivery Scans ────────────────────────────────────────────────────────────
 

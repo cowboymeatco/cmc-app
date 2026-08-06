@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useState, useRef, useCallback } from 'react'
 import Link from 'next/link'
-import { matchCureTag, type ProcessingInput, type CureTag, type CureTagRoll } from '@/lib/types'
+import { isCureTagNumber, type ProcessingInput, type CureTag } from '@/lib/types'
 import { isoDate } from '@/lib/dates'
 
 const C = {
@@ -421,10 +421,8 @@ export default function ScannerPage() {
 
   // ── Cure tag intake ──────────────────────────────────────────────────────────
   // Numbered tamper seals zip-tied to hams/bacons headed to the cure cooler.
-  // A scanned seal number opens the product picker; the piece leaves with the
-  // customer's name riding on the tag. Registered rolls (the printed number
-  // ranges) are what make a bare digit string recognizable as a seal.
-  const [cureRolls,   setCureRolls]   = useState<CureTagRoll[]>([])
+  // A scanned seal number (7 digits, leading zero) opens the product picker;
+  // the piece leaves with the customer's name riding on the tag.
   const [cureModal,   setCureModal]   = useState<{ tagNumber: string; existing: CureTag | null } | null>(null)
   const [cureWeight,  setCureWeight]  = useState('')
   const [cureSaving,  setCureSaving]  = useState(false)
@@ -470,7 +468,6 @@ export default function ScannerPage() {
   const inputsRef     = useRef<ProcessingInput[]>([])
   const boxesRef      = useRef<BoxRecord[]>([])
   const unpackBoxRef  = useRef<((serial: string) => void) | null>(null)
-  const cureRollsRef  = useRef<CureTagRoll[]>([])
 
   activeBoxRef.current  = activeBox
   pluMapRef.current     = pluMap
@@ -481,7 +478,6 @@ export default function ScannerPage() {
   inputsRef.current     = inputs
   boxesRef.current      = boxes
   unpackBoxRef.current  = unpackBox
-  cureRollsRef.current  = cureRolls
 
   // ── Load sessions list ───────────────────────────────────────────────────���───
   const loadSessions = useCallback(async () => {
@@ -496,15 +492,6 @@ export default function ScannerPage() {
 
   useEffect(() => { loadSessions() }, [loadSessions])
   useEffect(() => { loadOrders() }, [loadOrders])
-
-  // Registered seal rolls — loaded once; no rolls registered means no digit
-  // string ever reads as a cure tag, so nothing changes until seals arrive.
-  useEffect(() => {
-    fetch('/api/cure-tags/rolls')
-      .then(r => r.json())
-      .then(d => { if (Array.isArray(d)) setCureRolls(d) })
-      .catch(() => {})
-  }, [])
 
   // ── Quarter-aware yield ───────────────────────────────────────────────────────
   // When a carcass half in this session's inputs is also scanned in another
@@ -1339,6 +1326,33 @@ export default function ScannerPage() {
     }
   }
 
+  // Out of the smokehouse: scanning the tag back in flips it to done, so the
+  // crew can start scanning the finished product into the customer's boxes.
+  async function markCureDone(tag: CureTag) {
+    if (cureSaving) return
+    setCureSaving(true)
+    try {
+      const res = await fetch('/api/cure-tags', {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ id: tag.id, status: 'done' }),
+      })
+      if (!res.ok) throw new Error()
+      setLastKind('ok')
+      setLastItem(`🏷 Tag ${tag.tag_number} · ${tag.product} · ${tag.customer_name} — out of cure ✓`)
+      setFlash('ok')
+      setTimeout(() => setFlash(null), 2500)
+      setCureModal(null)
+    } catch {
+      setFlash('bad')
+      setLastKind('bad')
+      setLastItem('Could not mark the tag done — rescan the seal')
+    } finally {
+      setCureSaving(false)
+      scanRef.current?.focus()
+    }
+  }
+
   // ── Add input from CMC box scan or carcass tag scan ──────────────────────────
   async function addInput(identifier: string) {
     const isCarcass = /^CT-/.test(identifier) || /^\d{5,6}-\w+(-[LR])?$/i.test(identifier)
@@ -2154,9 +2168,9 @@ export default function ScannerPage() {
               if (/^\d{5,6}-\w+-[LR]$/i.test(raw)) { addInput(raw.toUpperCase()); return }
               // Partial CMC/CT prefix or carcass tag building up — don't strip
               if (/^(CMC|CT)/i.test(raw) || /^\d{5,6}-[\w-]*$/.test(raw)) { setScanValue(raw); return }
-              // Cure seal complete — seals print with leading zeros, so a full-length
-              // in-range code starting '0' can't be a Hobart EAN prefix (those start '2')
-              if (raw.startsWith('0') && matchCureTag(raw, cureRollsRef.current)) { openCureModal(raw); return }
+              // Cure seal complete — the leading zero means it can't be a Hobart
+              // EAN prefix mid-stream (those start '2')
+              if (isCureTagNumber(raw)) { openCureModal(raw); return }
               // Hobart EAN-13: digits only — the scan-queue effect fires once 13 arrive
               setScanValue(raw.replace(/\D/g, ''))
             }}
@@ -2165,7 +2179,7 @@ export default function ScannerPage() {
                 if (/^CMC-\d{8}-\d{3}$/.test(scanValue)) addInput(scanValue)
                 else if (/^CT-[0-9a-f-]{36}$/.test(scanValue)) addInput(scanValue)
                 else if (/^\d{5,6}-\w+(-[LR])?$/i.test(scanValue)) addInput(scanValue.toUpperCase())
-                else if (matchCureTag(scanValue, cureRollsRef.current)) openCureModal(scanValue)
+                else if (isCureTagNumber(scanValue)) openCureModal(scanValue)
                 else { const v = scanValue; setScanValue(''); doScan(v) }
               }
             }}
@@ -2763,7 +2777,8 @@ export default function ScannerPage() {
             </div>
 
             {cureModal.existing ? (
-              // Seal already in use — identify, don't re-record
+              // Seal already in use — identify it. Scanning a tag back in after
+              // the smokehouse is how the finished piece gets marked done.
               <>
                 <div style={{ color: C.yellow, fontWeight: 700, fontSize: '0.85rem', marginBottom: '1rem' }}>
                   Already tagged — this seal is in use
@@ -2776,9 +2791,18 @@ export default function ScannerPage() {
                   {cureModal.existing.weight_lbs != null ? `  ·  ${Number(cureModal.existing.weight_lbs).toFixed(2)} lb` : ''}
                   {'  ·  '}{cureModal.existing.status === 'done' ? '✓ Done' : 'In cure'}
                 </div>
+                {cureModal.existing.status === 'curing' && (
+                  <button
+                    onClick={() => markCureDone(cureModal.existing!)}
+                    disabled={cureSaving}
+                    style={{ width: '100%', background: C.green, color: C.dark, border: 'none', borderRadius: 4, padding: '0.85rem', fontSize: '0.95rem', fontWeight: 700, cursor: cureSaving ? 'default' : 'pointer', opacity: cureSaving ? 0.5 : 1, marginBottom: '0.6rem' }}
+                  >
+                    ✓ Out of cure — mark done
+                  </button>
+                )}
                 <button
                   onClick={() => { setCureModal(null); scanRef.current?.focus() }}
-                  style={{ width: '100%', background: C.tan, color: C.dark, border: 'none', borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer' }}
+                  style={{ width: '100%', background: cureModal.existing.status === 'curing' ? 'transparent' : C.tan, color: cureModal.existing.status === 'curing' ? C.lightBrown : C.dark, border: cureModal.existing.status === 'curing' ? '1px solid rgba(166,120,90,0.3)' : 'none', borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer' }}
                 >
                   Close
                 </button>
@@ -2802,7 +2826,7 @@ export default function ScannerPage() {
                   Tap what the tag is on — saves right away
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '1.25rem' }}>
-                  {['Ham', 'Bacon', 'Shoulder Bacon', 'Hocks', 'Jowl', 'Other'].map(p => (
+                  {['Ham', 'Bacon', 'Shoulder Bacon', 'Bone-In Loin', 'Hocks', 'Jowl', 'Other'].map(p => (
                     <button
                       key={p}
                       disabled={cureSaving}
