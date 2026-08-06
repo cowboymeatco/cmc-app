@@ -239,6 +239,13 @@ function CustomerDetail({
                   {ci.customer_name && ci.customer_name !== customer.name && (
                     <span style={{ color: C.lightBrown, marginLeft: '0.4rem' }}>· {ci.customer_name}</span>
                   )}
+                  {/* Reached this record through the phone/email on the form, not
+                      through the account — say so, or it reads as a stray sheet. */}
+                  {ci.customer_id && ci.customer_id !== customer.id && (
+                    <span style={{ color: C.lightBrown, marginLeft: '0.4rem', fontStyle: 'italic', fontSize: '0.78rem' }}>
+                      · submitted by them
+                    </span>
+                  )}
                 </span>
                 <span style={{ color: C.lightBrown, fontSize: '0.75rem' }}>
                   {new Date(ci.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}

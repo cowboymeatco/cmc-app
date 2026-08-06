@@ -15,11 +15,10 @@ export async function GET(req: NextRequest) {
   if (id) {
     const [custRes, ciRes, apptRes] = await Promise.all([
       supabase.from('customers').select('*').eq('id', id).single(),
-      supabase
-        .from('cutting_instructions')
-        .select('*')
-        .eq('customer_id', id)
-        .order('created_at', { ascending: false }),
+      // Their account's sheets plus the ones they submitted under their own
+      // phone/email — a sheet's customer_id is the account the animal is booked
+      // under, so the person who filled the form out is often someone else.
+      supabase.rpc('customer_cut_sheets', { p_customer_id: id }),
       supabase
         .from('harvest_appointments')
         .select('id, harvest_date, species, head_count, status, animal_description')
@@ -58,14 +57,12 @@ export async function GET(req: NextRequest) {
   // read fails the list still serves, just without counts.
   const rows = (data ?? []) as (Record<string, unknown> & { id: string })[]
   if (rows.length > 0) {
-    const { data: cis } = await supabase
-      .from('cutting_instructions')
-      .select('customer_id')
-      .not('customer_id', 'is', null)
+    // Counted the same way the detail view lists them, so the column can't
+    // promise a number the record then fails to show.
+    const { data: cis } = await supabase.rpc('customer_cut_sheet_counts')
     const counts = new Map<string, number>()
-    for (const ci of cis ?? []) {
-      const cid = ci.customer_id as string
-      counts.set(cid, (counts.get(cid) ?? 0) + 1)
+    for (const row of (cis ?? []) as { customer_id: string; cut_sheets: number }[]) {
+      counts.set(row.customer_id, Number(row.cut_sheets))
     }
     for (const c of rows) c.cut_sheet_count = counts.get(c.id) ?? 0
   }

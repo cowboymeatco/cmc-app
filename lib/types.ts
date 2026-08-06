@@ -69,6 +69,9 @@ export interface CuttingInstruction {
   customer_name: string
   species:      string
   data:         Record<string, string>
+  // The ACCOUNT the animal is booked under — a business or household, not
+  // necessarily the person who filled the sheet out.
+  customer_id?: string | null
 }
 
 // ── Receiving ─────────────────────────────────────────────────────────────────
