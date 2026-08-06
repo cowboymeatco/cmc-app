@@ -27,6 +27,11 @@ interface Sheet {
   customer_name: string
   species:       string | null
   date:          string | null
+  portion:       string | null
+  // Whole-carcass hanging weights, as they print on the cut card — one entry
+  // per animal the sheet is linked to, carrying its id so a split animal is
+  // counted once in the column total.
+  carcasses:     { id: string; lbs: number | null }[]
   products:      VAItem[]
 }
 
@@ -41,6 +46,28 @@ const COL_ORDER = [
   'Brats', 'Snack Sticks', 'Summer Sausage', 'Jerky', 'Hot Dogs',
 ]
 const colRank = (p: string) => { const i = COL_ORDER.indexOf(p); return i === -1 ? 999 : i }
+
+// Hanging weight is the WHOLE carcass, same as the cut card — so a partial
+// share gets its size called out next to the number rather than the weight
+// being scaled down. A whole share adds nothing and stays quiet.
+const PORTION_TAG: Record<string, string> = {
+  half: '½', 'half-ab': '½', quarter: '¼',
+  'three-quarter': '¾', 'three-quarter-abc': '¾',
+}
+const hangLbs = (s: Sheet) => {
+  const known = s.carcasses.filter(c => c.lbs != null)
+  return known.length ? known.reduce((n, c) => n + (c.lbs as number), 0) : null
+}
+const fmtLbs = (n: number) => String(Math.round(n * 10) / 10)
+// Cell/CSV text: "412" — or "412 · ½" on a share, "2 hd · 950" on a customer
+// taking more than one animal.
+const hangText = (s: Sheet) => {
+  const lbs = hangLbs(s)
+  if (lbs == null) return ''
+  const tag  = PORTION_TAG[s.portion ?? ''] ?? ''
+  const head = s.carcasses.length > 1 ? `${s.carcasses.length} hd · ` : ''
+  return `${head}${fmtLbs(lbs)}${tag ? ` · ${tag}` : ''}`
+}
 
 const speciesEmoji = (s: string | null) =>
   s === 'Pork' ? '🐷' : s === 'Beef' ? '🐄' : s === 'Lamb' ? '🐑' : s === 'Goat' ? '🐐' : '🥩'
@@ -144,10 +171,20 @@ export default function ValueAddReport() {
     () => cols.map(c => rows.reduce((n, s) => n + itemsFor(s, c).reduce((m, it) => m + qtyOf(it), 0), 0)),
     [cols, rows],
   )
+  // Pounds on the rail behind these sheets. A split animal shows on two sheets
+  // but is ONE carcass — keyed by carcass id so it's counted once.
+  const hangTotal = useMemo(() => {
+    const byCarcass = new Map<string, number>()
+    for (const s of rows) for (const c of s.carcasses) if (c.lbs != null) byCarcass.set(c.id, c.lbs)
+    return [...byCarcass.values()].reduce((a, b) => a + b, 0)
+  }, [rows])
 
   function exportCSV() {
     const out = rows.map(s => {
-      const base: Record<string, unknown> = { date: s.date ?? '', customer: s.customer_name, species: s.species ?? '' }
+      const base: Record<string, unknown> = {
+        date: s.date ?? '', customer: s.customer_name, species: s.species ?? '',
+        hanging_lbs: hangLbs(s) ?? '', portion: s.portion ?? '', head: s.carcasses.length,
+      }
       for (const c of cols) { const items = itemsFor(s, c); base[c] = items.length ? cellText(items) : '' }
       base.total = rowQty(s)
       return base
@@ -166,7 +203,7 @@ export default function ValueAddReport() {
         const items = itemsFor(s, c)
         return `<td class="ctr${items.some(it => it.detail) ? ' det' : ''}">${items.length ? escHtml(cellText(items)) : ''}</td>`
       }).join('')
-      return `<tr><td class="cust">${escHtml(s.customer_name)}</td><td class="date">${escHtml(fmtDay(s.date ?? ''))}</td>${cells}<td class="ctr tot">${rowQty(s)}</td></tr>`
+      return `<tr><td class="cust">${escHtml(s.customer_name)}</td><td class="date">${escHtml(fmtDay(s.date ?? ''))}</td><td class="ctr hang">${escHtml(hangText(s))}</td>${cells}<td class="ctr tot">${rowQty(s)}</td></tr>`
     }).join('')
     const totalsRow = colTotals.map(n => `<td class="ctr">${n}</td>`).join('')
     const generated = new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
@@ -189,6 +226,7 @@ export default function ValueAddReport() {
   td.det { font-size: 7.5pt }
   td.cust { font-weight: bold; white-space: nowrap }
   td.date { white-space: nowrap; font-family: monospace; font-size: 7.5pt }
+  td.hang { white-space: nowrap; font-weight: bold }
   td.tot, th.tot { font-weight: bold }
   tr.totals td { border-top: 1.5pt solid #000; font-weight: bold; background: #f2f2f2 }
   .foot { margin-top: 8px; font-size: 7.5pt; color: #666; text-align: right }
@@ -202,11 +240,11 @@ export default function ValueAddReport() {
     <span><strong>Kill dates:</strong> ${escHtml(fmtDay(from))} – ${escHtml(fmtDay(to))}</span>
   </div>
   <table>
-    <thead><tr><th>Customer</th><th>Kill date</th>${headCols}<th class="tot">Total</th></tr></thead>
+    <thead><tr><th>Customer</th><th>Kill date</th><th class="prod">Hanging wt</th>${headCols}<th class="tot">Total</th></tr></thead>
     <tbody>${bodyRows}</tbody>
-    <tfoot><tr class="totals"><td>Total · ${rows.length}</td><td></td>${totalsRow}<td class="ctr">${rows.reduce((n, s) => n + rowQty(s), 0)}</td></tr></tfoot>
+    <tfoot><tr class="totals"><td>Total · ${rows.length}</td><td></td><td class="ctr">${hangTotal ? `${fmtLbs(hangTotal)} lbs` : ''}</td>${totalsRow}<td class="ctr">${rows.reduce((n, s) => n + rowQty(s), 0)}</td></tr></tfoot>
   </table>
-  <div class="foot">Built from the cut sheets · Generated ${escHtml(generated)}</div>
+  <div class="foot">Hanging weight is the whole carcass (½ / ¾ / ¼ marks a partial share) · Built from the cut sheets · Generated ${escHtml(generated)}</div>
   <script>window.onload = () => setTimeout(() => window.print(), 200)</script>
 </body></html>`
 
@@ -282,6 +320,7 @@ export default function ValueAddReport() {
                   <tr style={{ background: 'rgba(166,120,90,0.14)' }}>
                     <th style={{ position: 'sticky', left: 0, background: '#2a160a', textAlign: 'left', padding: '0.6rem 0.8rem', color: C.tan, fontWeight: 700, whiteSpace: 'nowrap', zIndex: 2 }}>Customer</th>
                     <th style={{ textAlign: 'left', padding: '0.6rem 0.7rem', color: C.tan, fontWeight: 700, whiteSpace: 'nowrap' }}>Kill date</th>
+                    <th title="Whole-carcass hanging weight, the way it prints on the cut card" style={{ textAlign: 'right', padding: '0.6rem 0.7rem', color: C.tan, fontWeight: 700, whiteSpace: 'nowrap' }}>Hanging wt</th>
                     {cols.map(c => (
                       <th key={c} style={{ padding: '0.6rem 0.6rem', color: C.cream, fontWeight: 700, whiteSpace: 'nowrap', borderLeft: '1px solid rgba(166,120,90,0.12)', fontSize: '0.76rem' }}>{c}</th>
                     ))}
@@ -293,6 +332,19 @@ export default function ValueAddReport() {
                     <tr key={s.id} style={{ borderTop: '1px solid rgba(166,120,90,0.1)' }}>
                       <td style={{ position: 'sticky', left: 0, background: C.dark, padding: '0.45rem 0.8rem', color: C.cream, fontWeight: 600, whiteSpace: 'nowrap', zIndex: 1 }}>{s.customer_name}</td>
                       <td style={{ padding: '0.45rem 0.7rem', color: C.lightBrown, whiteSpace: 'nowrap', fontFamily: 'monospace' }}>{s.date ?? '—'}</td>
+                      <td style={{ padding: '0.45rem 0.7rem', textAlign: 'right', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
+                        {hangLbs(s) == null
+                          ? <span style={{ color: 'rgba(166,120,90,0.35)' }} title={s.carcasses.length
+                              ? 'Carcass linked, but no weight recorded yet'
+                              : 'This sheet is not linked to a check-in animal yet'}>—</span>
+                          : <>
+                              {s.carcasses.length > 1 && <span style={{ color: C.lightBrown, fontSize: '0.72rem' }}>{s.carcasses.length} hd&nbsp;·&nbsp;</span>}
+                              <span style={{ color: C.cream, fontWeight: 700 }}>{fmtLbs(hangLbs(s) as number)}</span>
+                              {/* Separated by a dot — "182 · ½" can't be misread as 182.5 the way "182½" can. */}
+                              {PORTION_TAG[s.portion ?? ''] &&
+                                <span style={{ color: C.blue, fontSize: '0.76rem' }} title={`${s.portion} share`}> · {PORTION_TAG[s.portion ?? '']}</span>}
+                            </>}
+                      </td>
                       {cols.map(c => {
                         const items = itemsFor(s, c)
                         const hasDetail = items.some(it => it.detail)
@@ -312,6 +364,9 @@ export default function ValueAddReport() {
                   <tr style={{ borderTop: '2px solid rgba(166,120,90,0.4)', background: 'rgba(166,120,90,0.1)' }}>
                     <td style={{ position: 'sticky', left: 0, background: '#2a160a', padding: '0.55rem 0.8rem', color: C.tan, fontWeight: 800, whiteSpace: 'nowrap', zIndex: 1 }}>Total · {totalCustomers}</td>
                     <td />
+                    <td style={{ padding: '0.55rem 0.7rem', textAlign: 'right', color: C.amber, fontWeight: 800, whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
+                      {hangTotal ? `${fmtLbs(hangTotal)} lbs` : ''}
+                    </td>
                     {colTotals.map((n, i) => (
                       <td key={i} style={{ padding: '0.55rem 0.6rem', textAlign: 'center', color: C.amber, fontWeight: 800, borderLeft: '1px solid rgba(166,120,90,0.12)' }}>{n}</td>
                     ))}
@@ -329,8 +384,12 @@ export default function ValueAddReport() {
           product they ordered — a whole hog has two bellies and two hams, so bacon and cured ham often read 2; ham shows
           its cut and smokehouse cells show the lbs and flavor. The <strong style={{ color: C.tan }}>Total</strong> column
           sums a customer&apos;s value-add pieces; the bottom row totals the pieces of each product across all customers.
-          Kill date is the linked appointment&apos;s harvest date, or the date on the sheet. Beef &amp; lamb currently
-          show the shared smokehouse and ground-sausage items only.
+          Kill date is the linked appointment&apos;s harvest date, or the date on the sheet.
+          {' '}<strong style={{ color: C.tan }}>Hanging weight</strong> is the whole carcass off the harvest log — the same
+          number that prints on the cut card — so a partial share carries a ½ · ¾ · ¼ mark beside it rather than a scaled
+          weight, and a customer taking more than one animal reads &ldquo;2 hd&rdquo; with both added up. A dash means no
+          carcass is linked to that sheet yet. The column total counts each carcass once, so a split animal isn&apos;t
+          doubled. Beef &amp; lamb currently show the shared smokehouse and ground-sausage items only.
         </p>
 
       </main>

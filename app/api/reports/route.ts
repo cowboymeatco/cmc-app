@@ -96,21 +96,87 @@ export async function GET(req: NextRequest) {
     // page pivots them into a customer × product table.
     const [{ data: cis, error: ciErr }, { data: appts }] = await Promise.all([
       supabase.from('cutting_instructions').select('id, customer_name, species, data, status').neq('status', 'archived'),
-      supabase.from('harvest_appointments').select('harvest_date, customers'),
+      supabase.from('harvest_appointments').select('id, harvest_date, customers'),
     ])
     if (ciErr) return NextResponse.json({ error: ciErr.message }, { status: 500 })
 
-    // ci id → scheduled harvest date, from the appointment slot it's linked to.
-    const dateByCi = new Map<string, string>()
+    // ci id → scheduled harvest date, and ci id → the customer SLOTS it's linked
+    // to (appointment + slot id), which is what points at a real carcass.
+    const dateByCi  = new Map<string, string>()
+    const slotsByCi = new Map<string, { apptId: string; slotId: string }[]>()
     for (const a of appts ?? []) {
       for (const c of (a.customers as Array<Record<string, unknown>> ?? [])) {
         const id = String(c?.linked_cutting_instruction_id ?? '')
-        if (id && a.harvest_date) dateByCi.set(id, a.harvest_date as string)
+        if (!id) continue
+        if (a.harvest_date) dateByCi.set(id, a.harvest_date as string)
+        const list = slotsByCi.get(id) ?? []
+        list.push({ apptId: String(a.id), slotId: String(c?.id ?? '') })
+        slotsByCi.set(id, list)
       }
     }
 
+    // Hanging weight per cut sheet — the same carcass resolution the printed cut
+    // card uses (app/cutting-instructions): the explicit assignment for the
+    // customer's slot, else the only animal on the check-in. A customer taking
+    // more than one animal's worth is linked on several appointments, so the
+    // weights of the DISTINCT carcasses add up. Scoped to the linked check-ins
+    // so neither table is read whole as they grow.
+    const apptIds = [...new Set([...slotsByCi.values()].flat().map(s => s.apptId))]
+    const [{ data: logs }, { data: asgs }] = apptIds.length
+      ? await Promise.all([
+          supabase.from('harvest_log')
+            .select('id, appointment_id, hot_carcass_weight_lbs, half_1_weight_lbs, half_2_weight_lbs')
+            .in('appointment_id', apptIds),
+          supabase.from('carcass_assignments')
+            .select('harvest_log_id, appointment_id, appointment_customer_id, linked_cutting_instruction_id')
+            .in('appointment_id', apptIds),
+        ])
+      : [{ data: [] as Record<string, unknown>[] }, { data: [] as Record<string, unknown>[] }]
+
+    // A buyer can be moved onto an animal booked under a sibling check-in, so an
+    // assignment may point outside the set just read. Pull those in too.
+    const wtByLog = new Map<string, number | null>()
+    const logIdsOn = new Map<string, string[]>()   // appointment id → its carcasses
+    const hang = (l: Record<string, unknown>) => {
+      const hcw = l.hot_carcass_weight_lbs as number | null
+      if (hcw != null) return Number(hcw)
+      const h1 = l.half_1_weight_lbs as number | null
+      const h2 = l.half_2_weight_lbs as number | null
+      return h1 != null || h2 != null ? Number(h1 ?? 0) + Number(h2 ?? 0) : null
+    }
+    for (const l of logs ?? []) {
+      wtByLog.set(String(l.id), hang(l))
+      const list = logIdsOn.get(String(l.appointment_id)) ?? []
+      list.push(String(l.id)); logIdsOn.set(String(l.appointment_id), list)
+    }
+    const strayIds = [...new Set((asgs ?? [])
+      .map(a => String(a.harvest_log_id ?? ''))
+      .filter(id => id && !wtByLog.has(id)))]
+    if (strayIds.length) {
+      const { data: strays } = await supabase.from('harvest_log')
+        .select('id, hot_carcass_weight_lbs, half_1_weight_lbs, half_2_weight_lbs')
+        .in('id', strayIds)
+      for (const l of strays ?? []) wtByLog.set(String(l.id), hang(l))
+    }
+
+    function carcassesFor(ciId: string): string[] {
+      const out: string[] = []
+      for (const { apptId, slotId } of slotsByCi.get(ciId) ?? []) {
+        const asg = (asgs ?? []).find(a =>
+          String(a.appointment_id) === apptId &&
+          ((slotId && String(a.appointment_customer_id) === slotId) ||
+           String(a.linked_cutting_instruction_id ?? '') === ciId))
+        const onAppt = logIdsOn.get(apptId) ?? []
+        // No assignment and more than one animal on the check-in — nobody knows
+        // which carcass is theirs, so the weight stays blank rather than guessed.
+        const logId = asg ? String(asg.harvest_log_id) : onAppt.length === 1 ? onAppt[0] : ''
+        if (logId && !out.includes(logId)) out.push(logId)
+      }
+      return out
+    }
+
     const rows = (cis ?? []).map(ci => {
-      const data = ci.data as { killDate?: string } | null
+      const data = ci.data as { killDate?: string; portion?: string } | null
       const kd = data?.killDate
       const date = dateByCi.get(ci.id as string) ?? (kd && kd !== 'Unknown' ? kd : null)
       return {
@@ -118,6 +184,11 @@ export async function GET(req: NextRequest) {
         customer_name: ci.customer_name,
         species:       ci.species,
         date,
+        portion:       data?.portion ?? null,
+        // Whole-carcass hanging weights, the way they print on the cut card —
+        // portion rides alongside rather than scaling them. One entry per
+        // animal, carrying its id so a split animal counts once in a total.
+        carcasses:     carcassesFor(ci.id as string).map(id => ({ id, lbs: wtByLog.get(id) ?? null })),
         products:      extractValueAdd(ci.species as string, ci.data),
       }
     }).filter(r =>
