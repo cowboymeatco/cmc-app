@@ -1083,6 +1083,34 @@ export default function ScannerPage() {
     openPrintWindow(closed, snap, labelFlags)
   }
 
+  // ── Reopen a closed box ──────────────────────────────────────────────────────
+  // Closing was one-way, so a box shut by mistake — or one that turns out to have
+  // room left — meant a hand edit in the database. The totals stay as they are;
+  // closing it again recomputes them from the scans.
+  async function reopenBox(box: BoxRecord) {
+    if (!box.is_closed) return
+    // The label in the printer already states this box's weight and cut count.
+    // Adding to it makes that label wrong, so say so before opening it back up.
+    const msg = box.total_cuts
+      ? `Reopen Box ${box.box_number}? It's labelled ${Number(box.total_weight_lbs ?? 0).toFixed(2)} lb / ${box.total_cuts} cuts — anything you add now means reprinting that label.`
+      : `Reopen Box ${box.box_number}?`
+    if (!window.confirm(msg)) return
+    await fetch('/api/boxes', {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ id: box.id, is_closed: false }),
+    })
+    const reopened = { ...box, is_closed: false }
+    setBoxes(prev => prev.map(b => b.id === box.id ? reopened : b))
+    // Make it the box being scanned into — reopening one and then scanning into
+    // whatever was active before is how meat lands in the wrong box.
+    setActiveBox(reopened)
+    const res  = await fetch(`/api/boxes/scans?box_id=${box.id}`)
+    const data = await res.json()
+    setScans(Array.isArray(data) ? ([...data] as ScanLine[]).reverse() : [])
+    setTimeout(() => scanRef.current?.focus(), 80)
+  }
+
   // ── Print label ───────────────────────────────────────────────────────────────
   // `format` forces a layout; left off, the label route decides — a box headed
   // to value add prints the WIP tag instead of the finished box label.
@@ -2171,7 +2199,7 @@ export default function ScannerPage() {
             key={box.id}
             onClick={() => switchBox(box)}
             onContextMenu={e => { e.preventDefault(); setBoxMenu({ box, x: e.clientX, y: e.clientY }) }}
-            title="Right-click to reassign to another session"
+            title={box.is_closed ? 'Right-click to reopen it or reassign it to another session' : 'Right-click to reassign to another session'}
             style={{
               padding: '0.35rem 0.9rem', borderRadius: 3, cursor: 'pointer',
               fontSize: '0.85rem', fontWeight: 700, whiteSpace: 'nowrap',
@@ -2651,6 +2679,13 @@ export default function ScannerPage() {
               style={{ display: 'block', width: '100%', textAlign: 'left', background: 'transparent', border: 'none', color: C.cream, padding: '0.7rem 1.1rem', fontSize: '0.88rem', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
               ⇄ Reassign Box {boxMenu.box.box_number} to another session…
             </button>
+            {boxMenu.box.is_closed && (
+              <button
+                onClick={e => { e.stopPropagation(); const b = boxMenu.box; setBoxMenu(null); reopenBox(b) }}
+                style={{ display: 'block', width: '100%', textAlign: 'left', background: 'transparent', border: 'none', borderTop: '1px solid rgba(166,120,90,0.25)', color: C.cream, padding: '0.7rem 1.1rem', fontSize: '0.88rem', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                ↩ Reopen Box {boxMenu.box.box_number}
+              </button>
+            )}
           </div>
         </div>
       )}
