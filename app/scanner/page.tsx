@@ -442,6 +442,19 @@ export default function ScannerPage() {
   const [mergeSource,      setMergeSource]      = useState<SessionWithStats | null>(null)
   const [mergeBusy,        setMergeBusy]        = useState(false)
 
+  // Where the crew was in the session list when they opened a session. Opening
+  // one swaps the whole screen out, so coming back landed at the top and the
+  // hunt for where you'd been started over (Charlie, 2026-08-06).
+  const listScrollY = useRef(0)
+  const restoreList = useRef(false)
+
+  // Every way into a session goes through here, so the spot in the list is
+  // always taken before the screen changes.
+  function enterSession() {
+    listScrollY.current = window.scrollY
+    setStarted(true)
+  }
+
   // ── Box reassignment (right-click a box tab) ─────────────────────────────────
   const [boxMenu,          setBoxMenu]          = useState<{ box: BoxRecord; x: number; y: number } | null>(null)
   const [reassignBox,      setReassignBox]      = useState<BoxRecord | null>(null)
@@ -493,18 +506,32 @@ export default function ScannerPage() {
   }
 
   // ── Load sessions list ───────────────────────────────────────────────────���───
+  // A refresh keeps the list on screen. Blanking it behind "Loading sessions…"
+  // collapsed a 6,000px page to a single line, and the browser clamps the scroll
+  // position to fit what's left — so coming back from a session, or moving a
+  // box, dumped the crew at the top of 143 sessions every time (Charlie,
+  // 2026-08-06). Only the very first load has nothing worth keeping.
   const loadSessions = useCallback(async () => {
     setSessionsLoading(true)
     try {
       const res  = await fetch('/api/processing/sessions')
       const data = await res.json()
       setSessions(Array.isArray(data) ? data as SessionWithStats[] : [])
-    } catch { setSessions([]) }
+    } catch { /* keep what's on screen — a failed refresh shouldn't empty the list */ }
     setSessionsLoading(false)
   }, [])
 
   useEffect(() => { loadSessions() }, [loadSessions])
   useEffect(() => { loadOrders() }, [loadOrders])
+
+  // Back on the list after a session: put the crew where they left off. Runs
+  // once per return — a later refresh of the list must not yank the page to an
+  // old position while someone is reading it.
+  useEffect(() => {
+    if (started || !restoreList.current || sessions.length === 0) return
+    restoreList.current = false
+    window.scrollTo(0, listScrollY.current)
+  }, [started, sessions.length])
 
   // ── Quarter-aware yield ───────────────────────────────────────────────────────
   // When a carcass half in this session's inputs is also scanned in another
@@ -826,7 +853,7 @@ export default function ScannerPage() {
     // Normalize the state too — a trailing space typed in the form would
     // otherwise split every later box/input onto a different session key.
     setCustomer(cust)
-    setStarted(true)
+    enterSession()
     const res = await fetch('/api/boxes', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -856,7 +883,7 @@ export default function ScannerPage() {
     const existingType   = (existing?.box_type as BoxType) ?? 'USDA'
     setCustomer(cust)
     setDate(dt)
-    setStarted(true)
+    enterSession()
     setCurrentStatus(existingStatus)
     setBoxType(existingType)
     setLabelFlags(flagsForType(existingType, DEFAULT_FLAGS))
@@ -933,7 +960,7 @@ export default function ScannerPage() {
     const uiType = storedType ?? 'USDA'
     setCustomer(cust)
     setDate(dt)
-    setStarted(true)
+    enterSession()
     setCurrentStatus('scanning')
     setBoxType(uiType)
     setLabelFlags(flagsForType(uiType, DEFAULT_FLAGS))
@@ -1644,7 +1671,13 @@ export default function ScannerPage() {
       picked_up: { label: 'Picked Up',  color: C.green,         dot: '✓' },
     }
 
-    function SessionCard({ s }: { s: SessionWithStats }) {
+    // Plain functions that return JSX, NOT components. Declared inside the
+    // render, a component gets a fresh identity every time state changes, so
+    // React tears down all 143 cards and builds them again — the date input
+    // loses focus mid-entry and the grid flickers on every keystroke. Called as
+    // functions, the elements just take their place in this tree and React
+    // reconciles them by key like any other list.
+    function sessionCard(s: SessionWithStats) {
       const dateStr = new Date(s.session_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
       const cfg = STATUS_CFG[s.status]
       // Days waiting — in our freezer, or on the shelf in Baker (where it bills monthly)
@@ -1655,7 +1688,7 @@ export default function ScannerPage() {
       const isMergeSource = mergeSource !== null
         && mergeSource.customer_name === s.customer_name && mergeSource.session_date === s.session_date
       return (
-        <div style={{ background: 'rgba(255,255,255,0.03)', border: isMergeSource ? `1px solid ${C.yellow}` : '1px solid rgba(166,120,90,0.2)', borderRadius: 6, padding: '0.9rem 1.1rem' }}>
+        <div key={`${s.customer_name}|${s.session_date}`} style={{ background: 'rgba(255,255,255,0.03)', border: isMergeSource ? `1px solid ${C.yellow}` : '1px solid rgba(166,120,90,0.2)', borderRadius: 6, padding: '0.9rem 1.1rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.25rem' }}>
             <span style={{ color: C.cream, fontWeight: 700, fontSize: '0.95rem' }}>{s.customer_name}</span>
             <span style={{ color: C.lightBrown, fontSize: '0.75rem' }}>{dateStr}</span>
@@ -1781,18 +1814,18 @@ export default function ScannerPage() {
       )
     }
 
-    function Section({ title, color, items, showAll, onToggle }: {
+    function section({ title, color, items, showAll, onToggle }: {
       title: string; color: string; items: SessionWithStats[]; showAll?: boolean; onToggle?: () => void
     }) {
       if (items.length === 0) return null
       const visible = showAll !== undefined ? (showAll ? items : items.slice(0, 6)) : items
       return (
-        <div style={{ marginBottom: '1.75rem' }}>
+        <div key={title} style={{ marginBottom: '1.75rem' }}>
           <div style={{ fontSize: '0.65rem', color, textTransform: 'uppercase', letterSpacing: '0.14em', fontWeight: 700, marginBottom: '0.65rem' }}>
             {title} ({items.length})
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(255px, 1fr))', gap: '0.65rem' }}>
-            {visible.map(s => <SessionCard key={`${s.customer_name}|${s.session_date}`} s={s} />)}
+            {visible.map(s => sessionCard(s))}
           </div>
           {onToggle && items.length > 6 && (
             <button onClick={onToggle} style={{ marginTop: '0.5rem', background: 'none', border: 'none', color: C.lightBrown, fontSize: '0.75rem', cursor: 'pointer', textDecoration: 'underline' }}>
@@ -1939,7 +1972,7 @@ export default function ScannerPage() {
               </div>
             </div>
           )}
-          {sessionsLoading ? (
+          {sessionsLoading && sessions.length === 0 ? (
             <div style={{ textAlign: 'center', color: C.lightBrown, padding: '3rem', fontSize: '0.9rem' }}>Loading sessions…</div>
           ) : sessions.length === 0 ? (
             inProgressOrders.length > 0 ? null : (
@@ -1966,11 +1999,11 @@ export default function ScannerPage() {
           ) : (
             <>
               {/* A search should surface every hit, not hide one behind "Show all 46" */}
-              <Section title="● Scanning"       color={C.yellow}  items={scanning} />
-              <Section title="◆ Value Add Queue" color="#E8883A"   items={valueAdd} />
-              <Section title="🧊 Freezer — Ready for Pickup" color="#7CAFDD" items={freezer} showAll={showAllFreezer || searching} onToggle={() => setShowAllFreezer(p => !p)} />
-              <Section title="🚚 Baker Storage"  color={C.tan}     items={bakerStorage} showAll={showAllBaker || searching} onToggle={() => setShowAllBaker(p => !p)} />
-              <Section title="✓ Picked Up"       color={C.green}   items={pickedUp} showAll={showAllPickedUp || searching} onToggle={() => setShowAllPickedUp(p => !p)} />
+              {section({ title: '● Scanning',        color: C.yellow, items: scanning })}
+              {section({ title: '◆ Value Add Queue', color: '#E8883A', items: valueAdd })}
+              {section({ title: '🧊 Freezer — Ready for Pickup', color: '#7CAFDD', items: freezer, showAll: showAllFreezer || searching, onToggle: () => setShowAllFreezer(p => !p) })}
+              {section({ title: '🚚 Baker Storage',  color: C.tan,    items: bakerStorage, showAll: showAllBaker || searching, onToggle: () => setShowAllBaker(p => !p) })}
+              {section({ title: '✓ Picked Up',       color: C.green,  items: pickedUp, showAll: showAllPickedUp || searching, onToggle: () => setShowAllPickedUp(p => !p) })}
             </>
           )}
 
@@ -2089,7 +2122,7 @@ export default function ScannerPage() {
         justifyContent: 'space-between', flexShrink: 0,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
-          <button onClick={() => { setStarted(false); loadSessions() }} style={{ background: 'none', border: 'none', color: C.lightBrown, fontSize: '0.8rem', cursor: 'pointer', padding: 0 }}>
+          <button onClick={() => { restoreList.current = true; setStarted(false); loadSessions() }} style={{ background: 'none', border: 'none', color: C.lightBrown, fontSize: '0.8rem', cursor: 'pointer', padding: 0 }}>
             ← Sessions
           </button>
           <span style={{ color: 'rgba(166,120,90,0.35)' }}>|</span>
