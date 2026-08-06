@@ -3,13 +3,14 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import CutScheduleTab from './CutScheduleTab'
+import CureTagsTab from './CureTagsTab'
 import CloverTab from './CloverTab'
 import QuickBooksTab from './QuickBooksTab'
 import AlignmentTab from './AlignmentTab'
 import { buildHtFile, buildExptxtCsv, needsIngredientStatement, type HobartPlu, type ExpandedText } from '@/lib/hobart'
 import { isoDate } from '@/lib/dates'
 
-type Tab = 'browser' | 'upload' | 'export' | 'cleanup' | 'cut-schedule' | 'box-labels' | 'clover' | 'quickbooks' | 'alignment'
+type Tab = 'browser' | 'upload' | 'export' | 'cleanup' | 'cut-schedule' | 'in-cure' | 'box-labels' | 'clover' | 'quickbooks' | 'alignment'
 
 interface PluItem {
   id:                 string
@@ -1702,6 +1703,7 @@ interface TabDef { id: Tab; label: string }
 // Used every shift — always visible.
 const DAILY_TABS: TabDef[] = [
   { id: 'cut-schedule', label: '📋 Cut Schedule' },
+  { id: 'in-cure',      label: '🧊 In Cure' },
   { id: 'box-labels',   label: '🏷️ Box Labels' },
   { id: 'browser',      label: '🔪 PLU Browser' },
 ]
@@ -1811,6 +1813,7 @@ export default function ProcessingPage() {
 
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1400px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
         {tab === 'cut-schedule' && <CutScheduleTab />}
+        {tab === 'in-cure'      && <CureTagsTab />}
         {tab === 'box-labels'   && <BoxLabelsTab />}
         {tab === 'browser'      && <BrowserTab />}
         {tab === 'alignment'    && <AlignmentTab />}

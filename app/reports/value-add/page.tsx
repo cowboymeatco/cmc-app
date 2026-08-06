@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { isoDate } from '@/lib/dates'
 
@@ -71,6 +71,7 @@ function download(content: string, filename: string) {
   document.body.removeChild(a); URL.revokeObjectURL(url)
 }
 
+
 export default function ValueAddReport() {
   const today = isoDate()
   const yearStart = today.slice(0, 4) + '-01-01'
@@ -84,6 +85,7 @@ export default function ValueAddReport() {
   const [species, setSpecies] = useState('Pork') // hogs first
   const [search,  setSearch]  = useState('')
   const [sortKey, setSortKey] = useState<'date' | 'customer'>('date')
+
 
   useEffect(() => {
     let cancelled = false
@@ -235,6 +237,7 @@ export default function ValueAddReport() {
 
       <main style={{ padding: '1.5rem 2rem', maxWidth: 1280, margin: '0 auto', boxSizing: 'border-box' }}>
 
+
         {/* Controls */}
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '1rem' }}>
           <input type="date" value={from} onChange={e => setFrom(e.target.value)} style={{ ...INPUT, width: 150 }} />
@@ -329,6 +332,7 @@ export default function ValueAddReport() {
           Kill date is the linked appointment&apos;s harvest date, or the date on the sheet. Beef &amp; lamb currently
           show the shared smokehouse and ground-sausage items only.
         </p>
+
       </main>
     </div>
   )

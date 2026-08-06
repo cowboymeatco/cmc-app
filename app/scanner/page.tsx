@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useState, useRef, useCallback } from 'react'
 import Link from 'next/link'
-import type { ProcessingInput } from '@/lib/types'
+import { matchCureTag, type ProcessingInput, type CureTag, type CureTagRoll } from '@/lib/types'
 import { isoDate } from '@/lib/dates'
 
 const C = {
@@ -419,6 +419,16 @@ export default function ScannerPage() {
   const [weightEntry, setWeightEntry] = useState('')
   const weightInputRef = useRef<HTMLInputElement>(null)
 
+  // ── Cure tag intake ──────────────────────────────────────────────────────────
+  // Numbered tamper seals zip-tied to hams/bacons headed to the cure cooler.
+  // A scanned seal number opens the product picker; the piece leaves with the
+  // customer's name riding on the tag. Registered rolls (the printed number
+  // ranges) are what make a bare digit string recognizable as a seal.
+  const [cureRolls,   setCureRolls]   = useState<CureTagRoll[]>([])
+  const [cureModal,   setCureModal]   = useState<{ tagNumber: string; existing: CureTag | null } | null>(null)
+  const [cureWeight,  setCureWeight]  = useState('')
+  const [cureSaving,  setCureSaving]  = useState(false)
+
   // ── Session management ─────────────────────────────────��──────────────────────
   const [sessions,         setSessions]         = useState<SessionWithStats[]>([])
   const [sessionsLoading,  setSessionsLoading]  = useState(true)
@@ -460,6 +470,7 @@ export default function ScannerPage() {
   const inputsRef     = useRef<ProcessingInput[]>([])
   const boxesRef      = useRef<BoxRecord[]>([])
   const unpackBoxRef  = useRef<((serial: string) => void) | null>(null)
+  const cureRollsRef  = useRef<CureTagRoll[]>([])
 
   activeBoxRef.current  = activeBox
   pluMapRef.current     = pluMap
@@ -470,6 +481,7 @@ export default function ScannerPage() {
   inputsRef.current     = inputs
   boxesRef.current      = boxes
   unpackBoxRef.current  = unpackBox
+  cureRollsRef.current  = cureRolls
 
   // ── Load sessions list ───────────────────────────────────────────────────���───
   const loadSessions = useCallback(async () => {
@@ -484,6 +496,15 @@ export default function ScannerPage() {
 
   useEffect(() => { loadSessions() }, [loadSessions])
   useEffect(() => { loadOrders() }, [loadOrders])
+
+  // Registered seal rolls — loaded once; no rolls registered means no digit
+  // string ever reads as a cure tag, so nothing changes until seals arrive.
+  useEffect(() => {
+    fetch('/api/cure-tags/rolls')
+      .then(r => r.json())
+      .then(d => { if (Array.isArray(d)) setCureRolls(d) })
+      .catch(() => {})
+  }, [])
 
   // ── Quarter-aware yield ───────────────────────────────────────────────────────
   // When a carcass half in this session's inputs is also scanned in another
@@ -1260,6 +1281,60 @@ export default function ScannerPage() {
     } finally {
       setProcessing(false)
       processingRef.current = false
+      scanRef.current?.focus()
+    }
+  }
+
+  // ── Cure tag: open picker / save ─────────────────────────────────────────────
+  // Seals are single-use, so a rescan of a used number shows whose piece it is
+  // (that's how the smokehouse identifies a tag) instead of re-recording it.
+  async function openCureModal(tagNumber: string) {
+    setScanValue('')
+    setCureWeight('')
+    let existing: CureTag | null = null
+    try {
+      const res = await fetch(`/api/cure-tags?tag=${encodeURIComponent(tagNumber)}`)
+      existing = await res.json()
+    } catch { existing = null }
+    setCureModal({ tagNumber, existing })
+  }
+
+  async function saveCureTag(product: string) {
+    if (!cureModal || cureSaving) return
+    setCureSaving(true)
+    try {
+      const res = await fetch('/api/cure-tags', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          tag_number:    cureModal.tagNumber,
+          product,
+          customer_name: customer,
+          session_date:  date,
+          weight_lbs:    cureWeight ? parseFloat(cureWeight) : null,
+        }),
+      })
+      const row: CureTag = await res.json()
+      if (res.status === 409) {
+        setLastKind('warn')
+        setLastItem(`🏷 Tag ${cureModal.tagNumber} already used — ${row.product} · ${row.customer_name}`)
+        setFlash('warn')
+        setTimeout(() => setFlash(null), 4000)
+      } else if (!res.ok) {
+        throw new Error()
+      } else {
+        setLastKind('ok')
+        setLastItem(`🏷 Tag ${row.tag_number} · ${row.product} → Curing · ${row.customer_name}`)
+        setFlash('ok')
+        setTimeout(() => setFlash(null), 2500)
+      }
+      setCureModal(null)
+    } catch {
+      setFlash('bad')
+      setLastKind('bad')
+      setLastItem('Cure tag save failed — rescan the seal')
+    } finally {
+      setCureSaving(false)
       scanRef.current?.focus()
     }
   }
@@ -2079,6 +2154,9 @@ export default function ScannerPage() {
               if (/^\d{5,6}-\w+-[LR]$/i.test(raw)) { addInput(raw.toUpperCase()); return }
               // Partial CMC/CT prefix or carcass tag building up — don't strip
               if (/^(CMC|CT)/i.test(raw) || /^\d{5,6}-[\w-]*$/.test(raw)) { setScanValue(raw); return }
+              // Cure seal complete — seals print with leading zeros, so a full-length
+              // in-range code starting '0' can't be a Hobart EAN prefix (those start '2')
+              if (raw.startsWith('0') && matchCureTag(raw, cureRollsRef.current)) { openCureModal(raw); return }
               // Hobart EAN-13: digits only — the scan-queue effect fires once 13 arrive
               setScanValue(raw.replace(/\D/g, ''))
             }}
@@ -2087,6 +2165,7 @@ export default function ScannerPage() {
                 if (/^CMC-\d{8}-\d{3}$/.test(scanValue)) addInput(scanValue)
                 else if (/^CT-[0-9a-f-]{36}$/.test(scanValue)) addInput(scanValue)
                 else if (/^\d{5,6}-\w+(-[LR])?$/i.test(scanValue)) addInput(scanValue.toUpperCase())
+                else if (matchCureTag(scanValue, cureRollsRef.current)) openCureModal(scanValue)
                 else { const v = scanValue; setScanValue(''); doScan(v) }
               }
             }}
@@ -2671,6 +2750,77 @@ export default function ScannerPage() {
                 ✓ Record
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Cure tag modal (seal scanned — pick what the tag is riding on) ── */}
+      {cureModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}>
+          <div style={{ background: C.darkBrown, border: '1px solid rgba(166,120,90,0.4)', borderRadius: 8, padding: '2rem', width: '100%', maxWidth: 380 }}>
+            <div style={{ fontFamily: 'Georgia, serif', color: C.cream, fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '0.5rem' }}>
+              🏷 Cure Tag {cureModal.tagNumber}
+            </div>
+
+            {cureModal.existing ? (
+              // Seal already in use — identify, don't re-record
+              <>
+                <div style={{ color: C.yellow, fontWeight: 700, fontSize: '0.85rem', marginBottom: '1rem' }}>
+                  Already tagged — this seal is in use
+                </div>
+                <div style={{ color: C.cream, fontWeight: 700, fontSize: '1.15rem', marginBottom: '0.3rem' }}>
+                  {cureModal.existing.product} · {cureModal.existing.customer_name}
+                </div>
+                <div style={{ color: C.lightBrown, fontSize: '0.85rem', marginBottom: '1.5rem' }}>
+                  Tagged {cureModal.existing.session_date ?? cureModal.existing.created_at.slice(0, 10)}
+                  {cureModal.existing.weight_lbs != null ? `  ·  ${Number(cureModal.existing.weight_lbs).toFixed(2)} lb` : ''}
+                  {'  ·  '}{cureModal.existing.status === 'done' ? '✓ Done' : 'In cure'}
+                </div>
+                <button
+                  onClick={() => { setCureModal(null); scanRef.current?.focus() }}
+                  style={{ width: '100%', background: C.tan, color: C.dark, border: 'none', borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  Close
+                </button>
+              </>
+            ) : (
+              <>
+                <div style={{ color: C.lightBrown, fontSize: '0.85rem', marginBottom: '1.25rem' }}>
+                  Going to cure for <strong style={{ color: C.cream }}>{customer}</strong>
+                </div>
+                <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.65rem' }}>
+                  Weight (lbs) — optional
+                </div>
+                <input
+                  type="number" step="0.01" min="0.01"
+                  value={cureWeight}
+                  onChange={e => setCureWeight(e.target.value)}
+                  placeholder="—"
+                  style={{ width: '100%', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(166,120,90,0.4)', borderRadius: 4, padding: '0.6rem 0.75rem', color: C.cream, fontSize: '1.2rem', fontFamily: 'monospace', outline: 'none', marginBottom: '1.25rem', boxSizing: 'border-box' }}
+                />
+                <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.65rem' }}>
+                  Tap what the tag is on — saves right away
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '1.25rem' }}>
+                  {['Ham', 'Bacon', 'Shoulder Bacon', 'Hocks', 'Jowl', 'Other'].map(p => (
+                    <button
+                      key={p}
+                      disabled={cureSaving}
+                      onClick={() => saveCureTag(p)}
+                      style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.4)', color: C.cream, borderRadius: 4, padding: '0.85rem 0.5rem', fontSize: '0.95rem', fontWeight: 700, cursor: cureSaving ? 'default' : 'pointer', opacity: cureSaving ? 0.5 : 1 }}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={() => { setCureModal(null); scanRef.current?.focus() }}
+                  style={{ width: '100%', background: 'transparent', border: '1px solid rgba(166,120,90,0.3)', color: C.lightBrown, borderRadius: 4, padding: '0.7rem', fontSize: '0.9rem', cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
