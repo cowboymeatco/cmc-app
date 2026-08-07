@@ -1621,6 +1621,14 @@ export default function ScannerPage() {
   // it gets labelled "combined" and the per-input breakdown is shown, not hidden
   // behind the collapse (Charlie, 2026-07-29).
   const multiInput     = inputs.length > 1
+  // AE asked whether the yield is per box (2026-08-07) — it never is. It's every
+  // box in the session against everything scanned in, which is why it doesn't
+  // move when you switch box tabs. Spell the arithmetic out on hover.
+  const boxCount       = boxes.length
+  const yieldTip       =
+    `Whole session, not the box you're on — it won't change when you switch box tabs.\n` +
+    `${totalOutputLbs.toFixed(1)} lbs packed across ${boxCount} box${boxCount === 1 ? '' : 'es'} ÷ ${totalInputLbs.toFixed(1)} lbs scanned in` +
+    (multiInput ? `\nAll ${inputs.length} inputs combined — not one case on its own.` : '')
 
   // ══════════════════════════════════════════════════════════════════════════════
   // SETUP SCREEN
@@ -2199,8 +2207,8 @@ export default function ScannerPage() {
               ⋈ {poolYieldPct.toFixed(1)}% combined yield
             </span>
           ) : totalInputLbs > 0 && totalOutputLbs > 0 && (
-            <span style={{ fontSize: '0.78rem', fontWeight: 700, color: yieldColor, fontFamily: 'monospace' }}>
-              {yieldPct.toFixed(1)}% {multiInput ? `combined (${inputs.length} in)` : 'yield'}
+            <span title={yieldTip} style={{ fontSize: '0.78rem', fontWeight: 700, color: yieldColor, fontFamily: 'monospace' }}>
+              {yieldPct.toFixed(1)}% {multiInput ? `combined (${inputs.length} in)` : 'session yield'}
             </span>
           )}
           <span style={{ fontSize: '0.72rem', color: C.lightBrown }}>{Object.keys(pluMap).length} PLUs</span>
@@ -2483,7 +2491,7 @@ export default function ScannerPage() {
                 <span style={{ fontSize: '0.68rem', color: 'rgba(166,120,90,0.35)' }}>→</span>
                 <span style={{ fontSize: '0.78rem', color: C.cream }}>{totalOutputLbs.toFixed(2)} lbs out</span>
                 {!sharedActive && (
-                  <span title={multiInput ? `Combined across all ${inputs.length} inputs scanned in — not one case on its own` : undefined} style={{
+                  <span title={yieldTip} style={{
                     fontSize: '0.74rem', fontWeight: 700, borderRadius: 3, padding: '0.1rem 0.45rem', flexShrink: 0,
                     background: yieldPct >= 80 ? 'rgba(76,175,80,0.18)' : yieldPct >= 65 ? 'rgba(217,119,6,0.18)' : 'rgba(229,62,62,0.18)',
                     color: yieldColor,
