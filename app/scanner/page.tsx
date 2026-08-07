@@ -1106,20 +1106,40 @@ export default function ScannerPage() {
   const linkedOrder = activeBox?.order_id ? orders.find(o => o.id === activeBox.order_id) ?? null : null
 
   // ── Close box + auto-print label ─────────────────────────────────────────────
+  // The totals are the server's answer, computed off the scans it holds — this
+  // no longer sends its own. If the list on screen had drifted from what was
+  // saved, the closed box comes back with the real numbers and the scan list is
+  // refreshed to match, so the crew sees the extra package here rather than
+  // finding it on the printed label (Chris, 2026-08-07).
   async function closeBox() {
     const box = activeBox
     if (!box || box.is_closed) return
-    const snap        = scansRef.current
-    const totalWeight = snap.reduce((s, sc) => s + (Number(sc.weight_lbs) || 0), 0)
-    const totalCuts   = snap.length
-    await fetch('/api/boxes', {
+    const snap = scansRef.current
+    const res  = await fetch('/api/boxes', {
       method:  'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ id: box.id, is_closed: true, total_weight_lbs: totalWeight, total_cuts: totalCuts }),
+      body:    JSON.stringify({ id: box.id, is_closed: true }),
     })
-    const closed = { ...box, is_closed: true, total_weight_lbs: totalWeight, total_cuts: totalCuts }
+    const saved: BoxRecord | null = res.ok ? await res.json().catch(() => null) : null
+    const closed: BoxRecord = saved ?? {
+      ...box,
+      is_closed: true,
+      total_weight_lbs: snap.reduce((s, sc) => s + (Number(sc.weight_lbs) || 0), 0),
+      total_cuts: snap.length,
+    }
     setBoxes(prev => prev.map(b => b.id === box.id ? closed : b))
     setActiveBox(closed)
+    if (closed.total_cuts !== snap.length) {
+      const fresh = await fetch(`/api/boxes/scans?box_id=${box.id}`).then(r => r.json()).catch(() => null)
+      if (Array.isArray(fresh)) setScans(([...fresh] as ScanLine[]).reverse())
+      setLastKind('warn')
+      setLastItem(
+        `Box ${closed.box_number} closed at ${closed.total_cuts} cuts · ${Number(closed.total_weight_lbs).toFixed(2)} lb ` +
+        `— the list on screen showed ${snap.length}. Check it against the box before the label goes on.`
+      )
+      setFlash('warn')
+      setTimeout(() => setFlash(null), 6000)
+    }
     openPrintWindow(closed, snap, labelFlags)
   }
 

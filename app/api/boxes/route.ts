@@ -41,6 +41,27 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
   const { id, ...updates } = body
+
+  // Closing a box: the weight and cut count come from the scans in the database,
+  // never from the browser's copy of them. The scanner used to post its own
+  // in-memory totals, so a tab that was missing a scan — a save whose response
+  // never came back, another device packing the same box — wrote a short total
+  // onto the box while the label, which always sums the database, printed the
+  // real one. The box then read 3 lb lighter than its own label (Chris,
+  // 2026-08-07). One source of truth ends that whole class of complaint.
+  if (updates.is_closed === true) {
+    const { data: scans, error: scanErr } = await supabase
+      .from('box_scans')
+      .select('weight_lbs, quantity')
+      .eq('box_id', id)
+    if (scanErr) return NextResponse.json({ error: scanErr.message }, { status: 500 })
+    const rows = scans ?? []
+    updates.total_weight_lbs = rows.reduce((s, r) => s + (Number(r.weight_lbs) || 0), 0)
+    // Counted the way the label counts them, so the footer and the box record
+    // can't drift apart either.
+    updates.total_cuts = rows.reduce((s, r) => s + (Number(r.quantity) || 1), 0)
+  }
+
   const { data, error } = await supabase
     .from('boxes')
     .update(updates)
