@@ -1135,10 +1135,11 @@ export default function ScannerPage() {
       setLastKind('warn')
       setLastItem(
         `Box ${closed.box_number} closed at ${closed.total_cuts} cuts · ${Number(closed.total_weight_lbs).toFixed(2)} lb ` +
-        `— the list on screen showed ${snap.length}. Check it against the box before the label goes on.`
+        `— the list on screen showed ${snap.length}. The list above is now what's saved: if a package is on it twice, ` +
+        `reopen the box, remove the extra line with ×, and close it again to reprint.`
       )
       setFlash('warn')
-      setTimeout(() => setFlash(null), 6000)
+      setTimeout(() => setFlash(null), 9000)
     }
     openPrintWindow(closed, snap, labelFlags)
   }
