@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
+import InvoiceSlips, { SlipInvoice } from '@/components/InvoiceSlips'
 
 // Billing: producer -> QuickBooks customer recognition (phase 1), then
 // billable events review + accumulating invoices (next phases).
@@ -138,6 +139,16 @@ export default function BillingPage() {
   const [ringSearch, setRingSearch] = useState('')
   const [ringBusy, setRingBusy] = useState<string | null>(null)
   const [ringMsg, setRingMsg] = useState<string | null>(null)
+
+  // barcode slips — set = render + print, cleared when the print dialog closes
+  const [slips, setSlips] = useState<SlipInvoice[] | null>(null)
+  const slipsDone = useCallback(() => setSlips(null), [])
+  const ringFilter = useCallback((invoices: OpenInvoiceRow[]) => {
+    const q = ringSearch.trim().toLowerCase()
+    return q
+      ? invoices.filter(i => i.customerName.toLowerCase().includes(q) || i.docNumber.toLowerCase().includes(q))
+      : invoices
+  }, [ringSearch])
 
   // register cleanup
   const [sweep, setSweep] = useState<SweepData | null>(null)
@@ -336,16 +347,26 @@ export default function BillingPage() {
               </div>
               {ringMsg && <div style={{ color: C.green, fontSize: '0.78rem', marginTop: '0.3rem' }}>{ringMsg}</div>}
             </div>
-            <input
-              value={ringSearch}
-              onChange={e => setRingSearch(e.target.value)}
-              placeholder="Search name or invoice #…"
-              style={{
-                background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.35)',
-                borderRadius: 3, padding: '0.45rem 0.7rem', color: C.cream, fontSize: '0.85rem',
-                outline: 'none', minWidth: 220,
-              }}
-            />
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <input
+                value={ringSearch}
+                onChange={e => setRingSearch(e.target.value)}
+                placeholder="Search name or invoice #…"
+                style={{
+                  background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.35)',
+                  borderRadius: 3, padding: '0.45rem 0.7rem', color: C.cream, fontSize: '0.85rem',
+                  outline: 'none', minWidth: 220,
+                }}
+              />
+              {ringUp && ringFilter(ringUp.invoices).length > 0 && (
+                <button
+                  onClick={() => setSlips(ringFilter(ringUp.invoices))}
+                  title="Print a barcode slip for each invoice listed below — scan it into the Clover order search"
+                  style={{ ...BTN(C.tan), whiteSpace: 'nowrap' }}>
+                  🖨 Slips ({ringFilter(ringUp.invoices).length})
+                </button>
+              )}
+            </div>
           </div>
 
           {ringUp?.ordersError && (
@@ -359,11 +380,7 @@ export default function BillingPage() {
           ) : ringUp.invoices.length === 0 ? (
             <div style={{ color: C.lightBrown, fontSize: '0.83rem' }}>No unpaid invoices in QuickBooks.</div>
           ) : (() => {
-            const q = ringSearch.trim().toLowerCase()
-            const rows = q
-              ? ringUp.invoices.filter(i =>
-                  i.customerName.toLowerCase().includes(q) || i.docNumber.toLowerCase().includes(q))
-              : ringUp.invoices
+            const rows = ringFilter(ringUp.invoices)
             if (rows.length === 0) {
               return <div style={{ color: C.lightBrown, fontSize: '0.83rem' }}>No open invoice matches “{ringSearch}”.</div>
             }
@@ -388,7 +405,13 @@ export default function BillingPage() {
                         <td style={{ ...TD, fontFamily: 'monospace', color: C.lightBrown }}>{inv.docNumber}</td>
                         <td style={{ ...TD, fontFamily: 'monospace', color: C.lightBrown }}>{inv.txnDate}</td>
                         <td style={{ ...TD, color: C.yellow, fontFamily: 'monospace' }}>${inv.balance.toFixed(2)}</td>
-                        <td style={{ ...TD, textAlign: 'right' }}>
+                        <td style={{ ...TD, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                          <button onClick={() => setSlips([inv])}
+                            title="Print a barcode slip — scan it into the Clover order search"
+                            style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.35)',
+                              padding: '0.3rem 0.6rem', fontSize: '0.76rem', marginRight: '0.4rem' }}>
+                            🖨
+                          </button>
                           <button onClick={() => sendToRegister(inv)} disabled={ringBusy === inv.id}
                             style={{ ...BTN(inv.onRegister ? 'transparent' : C.green, inv.onRegister ? C.lightBrown : C.dark),
                               border: inv.onRegister ? '1px solid rgba(166,120,90,0.35)' : 'none',
@@ -756,6 +779,8 @@ export default function BillingPage() {
       <footer style={{ background: 'var(--dark)', borderTop: '1px solid rgba(166,120,90,0.2)', padding: '0.5rem 2rem', textAlign: 'center', fontSize: '0.72rem', color: C.lightBrown, flexShrink: 0 }}>
         Cowboy Meat Company · 1109 Front St, Forsyth MT · (406) 346-7660
       </footer>
+
+      {slips && <InvoiceSlips invoices={slips} onDone={slipsDone} />}
     </div>
   )
 }
