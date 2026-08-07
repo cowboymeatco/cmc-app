@@ -1,8 +1,13 @@
 export interface BoxScan   { id: string; item_name: string; plu_number: string; weight_lbs: number; quantity: number }
 export interface BoxRecord { id: string; customer_name: string; pack_date: string; box_number: number; is_closed: boolean; is_final: boolean; total_weight_lbs: number; total_cuts: number; serial_number?: string; box_label?: string | null; notes?: string | null; wip_intent_key?: string | null; wip_intent_label?: string | null }
-export interface LabelFlags { usda_bug: boolean; retail_exempt: boolean; not_for_sale: boolean }
+// not_for_human: product going out as animal food. It carries the required
+// "NOT FOR HUMAN CONSUMPTION" statement and must NOT bear the mark of
+// inspection, so it is the one flag that suppresses the USDA bug outright.
+// Independent of not_for_sale — pet food is sold, and a custom-exempt animal's
+// pet food is both.
+export interface LabelFlags { usda_bug: boolean; retail_exempt: boolean; not_for_sale: boolean; not_for_human: boolean }
 
-export const DEFAULT_FLAGS: LabelFlags = { usda_bug: true, retail_exempt: false, not_for_sale: false }
+export const DEFAULT_FLAGS: LabelFlags = { usda_bug: true, retail_exempt: false, not_for_sale: false, not_for_human: false }
 
 // CMC's USDA establishment number — appears in the center of the mark of
 // inspection (from the Grant of Inspection). If blank the stamp prints "EST. ____".
@@ -122,9 +127,14 @@ export function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlag
   // no legend; otherwise the approved USDA mark of inspection (default on).
   const markHTML = flags.not_for_sale
     ? `<div class="mark"><div class="nfs">NOT FOR SALE</div></div>`
-    : flags.usda_bug
+    : flags.usda_bug && !flags.not_for_human
       ? `<div class="mark up"><img class="usdaimg" src="/usda-legend.png" alt="USDA Inspected EST. 47648"></div>`
       : ''
+  // Animal food. Full width rather than tucked in the small mark slot: the
+  // statement has to be legible across a delivery, and it is 24 characters.
+  const petHTML = flags.not_for_human
+    ? `<div class="nfh">NOT FOR HUMAN CONSUMPTION</div>`
+    : ''
   const exemptHTML   = flags.retail_exempt ? `<div class="badge">RETAIL EXEMPT</div>` : ''
   const producerHTML = animal?.producer ? `<div class="producer">Producer: <b>${escLabel(animal.producer)}</b></div>` : ''
   const weightHTML   = animal?.hangingWeightLbs ? `<div class="hangwt">Hanging Wt: ${animal.hangingWeightLbs} lb</div>` : ''
@@ -165,6 +175,10 @@ export function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlag
               font-family: 'Arial Narrow', Arial, sans-serif; font-size: 11pt; padding: 1px 0; }
   .footer   { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 10pt; font-weight: bold; text-align: center; margin-top: 2px; }
   .badge    { text-align: center; font-size: 7.5pt; font-weight: bold; border: 1px solid #000; border-radius: 2px; padding: 1px 4px; display: inline-block; margin: 2px auto; letter-spacing: 0.06em; }
+  /* Bordered rather than a solid fill — a black bar this size burns a lot of
+     ribbon on the label printer and prints muddy on direct thermal. */
+  .nfh      { text-align: center; font-size: 12pt; font-weight: bold; letter-spacing: 0.04em;
+              border: 2.5px solid #000; border-radius: 2px; padding: 2px 3px; margin: 3px 0; line-height: 1.1; }
   .barcode  { text-align: center; margin: 4px 0 2px; }
   .barcode svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
   .serial   { text-align: center; font-size: 10pt; font-family: monospace; letter-spacing: 0.1em; font-weight: bold; margin: 4px 0 2px; }
@@ -173,6 +187,7 @@ export function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlag
 </head>
 <body>
   <img class="logo" src="/cmc-logo.png" alt="Cowboy Meat Co">
+  ${petHTML}
   ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
   <div class="customer">${escLabel(displayCustomerName(box.customer_name, animal?.hangingWeightLbs)).toUpperCase()}</div>
   ${producerHTML}

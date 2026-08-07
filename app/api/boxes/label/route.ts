@@ -315,17 +315,24 @@ export async function GET(req: NextRequest) {
   //   4. The scanned carcass USDA kill type.
   //   5. Default: USDA on (Charlie's rule for the unresolved case).
   // USDA and CMC both carry the USDA bug (both are inspected, for sale); only
-  // Custom reads NOT FOR SALE.
+  // Custom reads NOT FOR SALE, and Pet Food carries no mark at all.
   const kt = animal?.killType
   const isCustom =
     kt === 'Custom' ? true :          // legal floor — can't be sold
     sessionType === 'Custom' ? true : // crew declared custom-exempt
     false                             // USDA / CMC / unresolved → USDA-on
+  // Animal food is its own thing: it's sold (so not NOT FOR SALE) but it may not
+  // carry the mark of inspection, and it must say NOT FOR HUMAN CONSUMPTION.
+  // A pet-food session off a custom-exempt animal gets both statements.
+  const isPetFood = sessionType === 'Pet Food'
   const usdaParam = searchParams.get('usda')
   const nfsParam  = searchParams.get('nfs')
+  const petParam  = searchParams.get('pet')
+  const notForHuman = petParam != null ? petParam === '1' : isPetFood
   const flags: LabelFlags = {
-    usda_bug:      usdaParam != null ? usdaParam !== '0' : !isCustom,
+    usda_bug:      usdaParam != null ? usdaParam !== '0' : (!isCustom && !notForHuman),
     not_for_sale:  nfsParam  != null ? nfsParam === '1'  : isCustom,
+    not_for_human: notForHuman,
     retail_exempt: searchParams.get('exempt') === '1',
   }
 

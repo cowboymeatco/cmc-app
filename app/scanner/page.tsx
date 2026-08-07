@@ -122,18 +122,31 @@ interface SharedYield {
   shared_identifiers: Record<string, string[]>
 }
 
-interface LabelFlags { usda_bug: boolean; retail_exempt: boolean; not_for_sale: boolean }
-const DEFAULT_FLAGS: LabelFlags = { usda_bug: true, retail_exempt: false, not_for_sale: false }
+interface LabelFlags { usda_bug: boolean; retail_exempt: boolean; not_for_sale: boolean; not_for_human: boolean }
+const DEFAULT_FLAGS: LabelFlags = { usda_bug: true, retail_exempt: false, not_for_sale: false, not_for_human: false }
 
 // A session's compliance/ownership type, picked once up front and sticky for
 // every box in it. USDA + CMC print the USDA bug (both inspected, for sale);
-// Custom (custom-exempt) prints NOT FOR SALE. Drives the label mark server-side.
-type BoxType = 'USDA' | 'Custom' | 'CMC'
-const BOX_TYPES: BoxType[] = ['USDA', 'Custom', 'CMC']
-// Map a box type onto the two compliance-mark flags, leaving retail_exempt (an
+// Custom (custom-exempt) prints NOT FOR SALE; Pet Food prints NOT FOR HUMAN
+// CONSUMPTION and no mark of inspection. Drives the label mark server-side.
+type BoxType = 'USDA' | 'Custom' | 'CMC' | 'Pet Food'
+const BOX_TYPES: BoxType[] = ['USDA', 'Custom', 'CMC', 'Pet Food']
+// Map a box type onto the compliance-mark flags, leaving retail_exempt (an
 // independent add-on badge) untouched.
 function flagsForType(t: BoxType, prev: LabelFlags): LabelFlags {
-  return { ...prev, usda_bug: t !== 'Custom', not_for_sale: t === 'Custom' }
+  return {
+    ...prev,
+    usda_bug:      t !== 'Custom' && t !== 'Pet Food',
+    not_for_sale:  t === 'Custom',
+    not_for_human: t === 'Pet Food',
+  }
+}
+// What each type does to the label, in one line — used by both pickers.
+const BOX_TYPE_HELP: Record<BoxType, string> = {
+  USDA:       'USDA — labels print the USDA mark of inspection.',
+  CMC:        'CMC — labels print the USDA mark of inspection.',
+  Custom:     'Custom-exempt — labels print NOT FOR SALE.',
+  'Pet Food': 'Animal food — labels print NOT FOR HUMAN CONSUMPTION and no USDA mark.',
 }
 
 const LBL: React.CSSProperties = {
@@ -1146,6 +1159,7 @@ export default function ScannerPage() {
     if (!flags.usda_bug)     p.set('usda',   '0')
     if (flags.retail_exempt) p.set('exempt', '1')
     if (flags.not_for_sale)  p.set('nfs',    '1')
+    if (flags.not_for_human) p.set('pet',    '1')
     if (format)              p.set('format', format)
     window.open(`/api/boxes/label?${p}`, '_blank')
   }
@@ -2092,9 +2106,7 @@ export default function ScannerPage() {
                   ))}
                 </div>
                 <div style={{ fontSize: '0.66rem', color: C.lightBrown, marginTop: '0.4rem', lineHeight: 1.35 }}>
-                  {boxType === 'Custom'
-                    ? 'Custom-exempt — labels print NOT FOR SALE.'
-                    : `${boxType} — labels print the USDA mark of inspection.`}
+                  {BOX_TYPE_HELP[boxType]}
                 </div>
               </div>
               <div style={{ marginBottom: '1.5rem' }}>
@@ -2439,7 +2451,7 @@ export default function ScannerPage() {
                 <button
                   key={t}
                   onClick={() => applyBoxType(t)}
-                  title={t === 'Custom' ? 'Custom-exempt — prints NOT FOR SALE' : `${t} — prints the USDA mark`}
+                  title={BOX_TYPE_HELP[t]}
                   style={{
                     background: boxType === t ? 'rgba(201,168,130,0.28)' : 'rgba(255,255,255,0.03)',
                     border: `1px solid ${boxType === t ? 'rgba(201,168,130,0.6)' : 'rgba(166,120,90,0.2)'}`,

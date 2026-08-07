@@ -26,6 +26,9 @@ export async function GET(req: NextRequest) {
     usda_bug:      sp.get('usda') === '1',
     not_for_sale:  sp.get('nfs')  === '1',
     retail_exempt: sp.get('exempt') === '1',
+    // A WIP tag never leaves the plant, so the animal-food statement has no
+    // place on it — the finished box label is what carries it.
+    not_for_human: false,
   }
 
   return new NextResponse(generateWIPLabel(wipDataFromJob(data as WIPJob), flags), {
