@@ -1,14 +1,15 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { getOpenInvoices, getInvoice } from '@/lib/qboInvoices'
-import { createRingUpOrder, getUnpaidRingUpOrders, parseRingUpDocNumber } from '@/lib/cloverOrders'
+import { createRingUpOrder, findRingUpOrdersFor, getRingUpOrders, parseRingUpDocNumber } from '@/lib/cloverOrders'
 
 // Send a QuickBooks invoice to the Clover register as a pre-labelled open order,
 // so paying a processing bill at the counter is one click and always reads the
 // same on the receipt and in the books.
 //
-// GET  -> { invoices, openOrders }  open QBO invoices + what's already waiting
+// GET  -> { invoices }  open QBO invoices, each flagged if it's already waiting
 // POST { invoiceId } -> creates the open Clover order for that invoice
+// POST { invoiceId, force } -> creates it even though one is already waiting
 
 export async function GET() {
   try {
@@ -16,7 +17,7 @@ export async function GET() {
     // plainly instead of failing the whole page.
     const [invoices, orders] = await Promise.all([
       getOpenInvoices(),
-      getUnpaidRingUpOrders().catch(e => (e instanceof Error ? e.message : String(e))),
+      getRingUpOrders().catch(e => (e instanceof Error ? e.message : String(e))),
     ])
 
     const ordersFailed = typeof orders === 'string'
@@ -34,7 +35,6 @@ export async function GET() {
         // re-ring one, but the UI should warn before making a duplicate.
         onRegister: docsOnRegister.has(inv.docNumber),
       })),
-      openOrders: ordersFailed ? [] : orders,
       ordersError: ordersFailed ? orders : undefined,
     })
   } catch (e) {
@@ -44,7 +44,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const { invoiceId } = await req.json()
+    const { invoiceId, force } = await req.json()
     if (!invoiceId) {
       return NextResponse.json({ error: 'invoiceId is required' }, { status: 400 })
     }
@@ -60,6 +60,23 @@ export async function POST(req: NextRequest) {
         { error: `Invoice ${invoice.docNumber} has no balance due — nothing to ring up` },
         { status: 400 }
       )
+    }
+
+    // Ask the register itself, every time. The page's "● on register" flag is a
+    // snapshot, and when the Clover read is slow or fails it renders as "not
+    // sent" — so four presses of the button made four orders for INV 2603C
+    // rather than three no-ops (Charlie, 2026-08-07). Refusing here means a
+    // duplicate can only ever be deliberate.
+    if (!force) {
+      const existing = await findRingUpOrdersFor(invoice.docNumber)
+      if (existing.length > 0) {
+        return NextResponse.json({
+          error:
+            `${invoice.customerName} — INV ${invoice.docNumber} is already on the register` +
+            `${existing.length > 1 ? ` (${existing.length} times)` : ''}.`,
+          alreadyOnRegister: existing.map(o => ({ id: o.id, title: o.title })),
+        }, { status: 409 })
+      }
     }
 
     const order = await createRingUpOrder({

@@ -69,7 +69,6 @@ interface OpenInvoiceRow {
 }
 interface RingUpData {
   invoices: OpenInvoiceRow[]
-  openOrders: { id: string; title?: string }[]
   ordersError?: string
 }
 interface SweepDecision {
@@ -214,20 +213,32 @@ export default function BillingPage() {
 
   // Push one invoice to the register as a pre-labelled open order. The amount
   // is re-read from QuickBooks server-side, so what rings is the balance now.
+  //
+  // The duplicate check is the server's, not this page's: it asks Clover at the
+  // moment of the press and answers 409 if an order is already waiting. The
+  // confirm below is the only way past it, so a stale flag or a slow Clover read
+  // can no longer turn repeated presses into repeated orders.
   async function sendToRegister(inv: OpenInvoiceRow) {
-    if (inv.onRegister && !confirm(
-      `${inv.customerName} — INV ${inv.docNumber} is already waiting on the register.\n\n` +
-      `Send it again? That creates a SECOND open order for the same invoice.`
-    )) return
     setRingBusy(inv.id)
     setRingMsg(null)
     try {
-      const res = await fetch('/api/clover/ring-up', {
+      const post = (force: boolean) => fetch('/api/clover/ring-up', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ invoiceId: inv.id }),
+        body: JSON.stringify({ invoiceId: inv.id, force }),
       })
-      const json = await res.json()
+      let res = await post(false)
+      let json = await res.json()
+      if (res.status === 409) {
+        const already = (json.alreadyOnRegister ?? []).length
+        if (!confirm(
+          `${json.error}\n\n` +
+          `Send it again? That leaves ${already + 1} open orders for the same invoice ` +
+          `and the counter can ring the customer up twice.`
+        )) { setRingBusy(null); return }
+        res = await post(true)
+        json = await res.json()
+      }
       if (!res.ok || json.error) throw new Error(json.error ?? 'Send failed')
       setRingMsg(`✓ ${json.title} — $${Number(json.amount).toFixed(2)} is on the register. Pull it up under Open Orders.`)
       await load()
@@ -495,6 +506,16 @@ export default function BillingPage() {
                       <span style={{ color: C.cream }}>{d.title}</span> — {d.reason}
                     </div>
                   ))}
+                  {/* Charlie asked what to do about one of these: Tana Cates bought a
+                      summer sausage when she picked up her hog, so the register ticket
+                      no longer matches the invoice. Nothing is broken — say so here,
+                      where the situation actually shows up. */}
+                  <div style={{ paddingLeft: '0.6rem', marginTop: '0.35rem', color: C.lightBrown, fontStyle: 'italic' }}>
+                    Something was rung onto the order at the counter, so it no longer matches the
+                    invoice on its own. That ticket is the sale of record — take it as it stands,
+                    and the invoice is settled in QuickBooks the usual way. Nothing here needs
+                    fixing in the app; the sync just won&apos;t touch an order someone is working on.
+                  </div>
                 </div>
               )}
 

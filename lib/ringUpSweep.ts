@@ -68,24 +68,100 @@ export async function planSweep(ctx?: {
   const openDocs = ctx?.openDocNumbers
     ?? new Set((await getOpenInvoices()).map(i => i.docNumber))
 
+  // Duplicates are judged first and across the whole list — they're the one
+  // removal that can't be decided one order at a time.
+  const dupes = await planDuplicates(orders)
+
   const decisions: SweepDecision[] = []
   for (const o of orders) {
-    decisions.push(await decide(o, openDocs))
+    decisions.push(dupes.get(o.id) ?? await decide(o, openDocs))
+  }
+  return decisions
+}
+
+function baseOf(o: CloverOrder) {
+  const lineItems = lineItemsOf(o)
+  return {
+    orderId: o.id,
+    docNumber: parseRingUpDocNumber(o.title) ?? '',
+    title: o.title ?? '',
+    // order.total is null until a device opens the order, so fall back to the
+    // line items we already have in hand.
+    amountCents: o.total ?? (lineItems.length ? lineItems.reduce((s, li) => s + (li.price ?? 0), 0) : null),
+  }
+}
+
+// The same invoice sitting on the register more than once — INV 2603C was there
+// four times on 2026-08-07, from repeated presses of Send to Register while the
+// Clover read was too slow to tell the page it had already gone.
+//
+// This is the ONE removal that doesn't wait for the invoice to be settled in
+// QuickBooks. The harm is happening right now: a cashier pulls up the customer,
+// sees four identical tickets and has no way to know which is the live one, and
+// ringing two of them charges the customer twice.
+//
+// Same gates as everywhere else — a duplicate carrying a payment or a cashier's
+// added items is somebody's work, not clutter. One order per invoice survives
+// and it is always one with a correct single line item; if none of them looks
+// right, the whole group is left for a person.
+async function planDuplicates(orders: CloverOrder[]): Promise<Map<string, SweepDecision>> {
+  const byDoc = new Map<string, CloverOrder[]>()
+  for (const o of orders) {
+    const doc = parseRingUpDocNumber(o.title)
+    if (!doc) continue
+    const group = byDoc.get(doc)
+    if (group) group.push(o)
+    else byDoc.set(doc, [o])
+  }
+
+  const isIntact = (o: CloverOrder) => {
+    const li = lineItemsOf(o)
+    return li.length === 1 && li[0].name === o.title
+  }
+
+  const decisions = new Map<string, SweepDecision>()
+  for (const [doc, group] of byDoc) {
+    if (group.length < 2) continue
+    // getRingUpOrders comes back newest first, so this keeps the most recent
+    // intact order — the one whose amount was rung against the current balance.
+    const keeper = group.find(isIntact)
+    if (!keeper) continue
+
+    for (const o of group) {
+      if (o.id === keeper.id) continue
+      const base = baseOf(o)
+      const keep = (reason: string): SweepDecision => ({ ...base, action: 'keep', reason })
+
+      const extras = lineItemsOf(o).filter(li => li.name !== o.title)
+      if (extras.length > 0) {
+        decisions.set(o.id, keep(`duplicate of INV ${doc}, but a cashier added ${extras.map(li => li.name ?? 'unnamed').join(', ')} — needs a person`))
+        continue
+      }
+      try {
+        const payments = await getOrderPayments(o.id)
+        if (payments.length > 0) {
+          const total = payments.reduce((s, p) => s + (p.amount ?? 0), 0)
+          decisions.set(o.id, keep(`duplicate of INV ${doc}, but paid on the register ($${(total / 100).toFixed(2)})`))
+          continue
+        }
+      } catch (e) {
+        decisions.set(o.id, keep(`could not verify (${e instanceof Error ? e.message : String(e)})`))
+        continue
+      }
+      decisions.set(o.id, {
+        ...base,
+        action: 'remove',
+        reason: `duplicate ring-up order for INV ${doc} — keeping ${keeper.id}`,
+      })
+    }
   }
   return decisions
 }
 
 async function decide(o: CloverOrder, openDocs: Set<string>): Promise<SweepDecision> {
-    const docNumber = parseRingUpDocNumber(o.title) ?? ''
+    const base = baseOf(o)
+    const { docNumber } = base
     const lineItems = lineItemsOf(o)
-    const base = {
-      orderId: o.id,
-      docNumber,
-      title: o.title ?? '',
-      // order.total is null until a device opens the order, so fall back to the
-      // line items we already have in hand.
-      amountCents: o.total ?? (lineItems.length ? lineItems.reduce((s, li) => s + (li.price ?? 0), 0) : null),
-    }
     const keep = (reason: string): SweepDecision => ({ ...base, action: 'keep', reason })
 
     // Free gate — still an open invoice, so nothing to reconcile. No API calls.

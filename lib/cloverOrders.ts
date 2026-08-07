@@ -143,12 +143,6 @@ export async function getOrderPayments(orderId: string): Promise<{ id: string; a
   return (data.elements ?? []) as { id: string; amount: number }[]
 }
 
-export async function getOrderLineItems(orderId: string): Promise<CloverLineItem[]> {
-  const { mid } = creds()
-  const data = await cloverFetch(`/merchants/${mid}/orders/${orderId}/line_items`)
-  return (data.elements ?? []) as CloverLineItem[]
-}
-
 // Void an order off the register. Only ever called on an order the sweep has
 // already proven is ours, unpaid, settled in QuickBooks and carrying nothing
 // but its own invoice line.
@@ -157,18 +151,16 @@ export async function deleteOrder(orderId: string): Promise<void> {
   await cloverFetch(`/merchants/${mid}/orders/${orderId}`, { method: 'DELETE' })
 }
 
-export async function getUnpaidRingUpOrders(limit = 200): Promise<CloverOrder[]> {
-  const ours = await getRingUpOrders(limit)
-
-  const checked = await Promise.all(ours.map(async o => {
-    // A payments read failure must not masquerade as "unpaid" — that would
-    // re-flag a settled invoice as still waiting. Treat it as paid (hide it)
-    // and let the explicit duplicate confirm catch a genuine re-send.
-    try {
-      return (await getOrderPayments(o.id)).length === 0 ? o : null
-    } catch {
-      return null
-    }
-  }))
-  return checked.filter((o): o is CloverOrder => o !== null)
+// Every ring-up order on the register for one invoice, newest first.
+//
+// This is the duplicate guard, and it deliberately does NOT check payments.
+// Asking Clover "has this been paid" costs a call per order; doing that for all
+// 82 orders on the register just to render the billing page took minutes and
+// then failed, which left every invoice looking un-sent and let one press of
+// Send to Register become four (INV 2603C, 2026-08-07). Presence on the
+// register is the whole question here — payment state belongs to the sweep,
+// which only pays for it on the handful of orders it intends to touch.
+export async function findRingUpOrdersFor(docNumber: string): Promise<CloverOrder[]> {
+  const ours = await getRingUpOrders()
+  return ours.filter(o => parseRingUpDocNumber(o.title) === docNumber)
 }
