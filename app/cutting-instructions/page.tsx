@@ -1631,10 +1631,11 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
   // The logo (white variant for the dark bar) replaces the "Cowboy Meat Company"
   // wordmark. Absolute origin so it still resolves inside the printed blob doc.
   const assetBase = typeof window !== 'undefined' ? window.location.origin : ''
-  const hdr = (subtitle: string) =>
+  const hdr = (subtitle: string, badge = '') =>
     `<div style="background:#1A0A04;color:#F2E8D9;padding:9px 16px;display:flex;align-items:center;justify-content:space-between;margin-bottom:9px">
        <div style="display:flex;align-items:center;gap:14px"><img src="${assetBase}/cmc-logo-white.png" alt="Cowboy Meat Co" style="height:34px;display:block">
             <span style="font-size:16px;color:#C9A882;letter-spacing:0.05em">— ${subtitle}</span></div>
+       ${badge}
        <div style="font-size:13px;color:#C9A882">Submitted: ${submittedDate}</div>
      </div>`
 
@@ -1709,6 +1710,18 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
        </div>
      </div>`
 
+  // The packager boxes and labels the meat, so whether it can ever be sold has
+  // to be on their sheet too (Charlie, 2026-08-07) — page 1's badge lives in the
+  // cut-card info grid, which page 2 doesn't print. Colours flip against the
+  // dark header bar: Custom Exempt fills, USDA outlines. An unknown kill type
+  // says so rather than printing nothing, which would read as saleable.
+  const inspectionBadge = (carcass: CarcassInfo) =>
+    carcass.killType === 'Custom'
+      ? `<div style="background:#F2E8D9;color:#1A0A04;font-size:15px;font-weight:bold;letter-spacing:0.06em;padding:3px 10px">${killTypeLabel(carcass.killType)}</div>`
+      : carcass.killType
+        ? `<div style="border:1.5px solid #C9A882;font-size:15px;font-weight:bold;letter-spacing:0.06em;padding:2px 9px">${killTypeLabel(carcass.killType)}</div>`
+        : `<div style="border:1.5px dashed #C9A882;color:#C9A882;font-size:15px;font-weight:bold;letter-spacing:0.06em;padding:2px 9px">INSPECTION NOT RECORDED</div>`
+
   return carcasses.map((carcass, ci_) => {
   // "1 of 2" only when there really are several, so a normal single-animal
   // card reads exactly as it always has.
@@ -1730,7 +1743,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
 
 <!-- PAGE 2: PACKAGING SHEET — 3-column table layout -->
 <div class="page packsheet${last ? '' : ' pagebreak'}">
-  ${hdr('Packaging Sheet' + ofN)}
+  ${hdr('Packaging Sheet' + ofN, inspectionBadge(carcass))}
   ${unassignedBand(carcass)}
   ${grindBand}
   <div style="font-size:16px;color:#555;margin-bottom:8px">
