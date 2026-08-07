@@ -504,14 +504,23 @@ async function carcassInfoForAppt(ci: RawInstruction, appt: HarvestAppointment):
   }
 }
 
-// Scheduled slaughter date: linked appointment's harvest date wins,
-// otherwise the kill date the customer picked on the form (v2)
-function slaughterDateFor(ci: RawInstruction, appointments: HarvestAppointment[]): string | null {
+// Scheduled slaughter date, and whether anything has actually confirmed it.
+//
+// A linked appointment carries the plant's own harvest date — that's fact. The
+// v2 form date is whatever the customer typed when they filled the sheet in,
+// and it is regularly wrong: eight cards filed the week of 2026-08-03 said
+// "Sat Aug 1" for animals harvested that Monday (Charlie, 2026-08-07). Both are
+// worth showing — Jill uses the customer's date to find the right animal — but
+// only one is worth reading as the harvest date, so callers get told which.
+function slaughterDateFor(
+  ci: RawInstruction,
+  appointments: HarvestAppointment[],
+): { date: string | null; scheduled: boolean } {
   const appt = appointments.find(a => a.customers?.some(c => c.linked_cutting_instruction_id === ci.id))
-  if (appt?.harvest_date) return appt.harvest_date
+  if (appt?.harvest_date) return { date: appt.harvest_date, scheduled: true }
   const kd = ci.data?.killDate
-  if (kd && kd !== 'Unknown') return kd
-  return null
+  if (kd && kd !== 'Unknown') return { date: kd, scheduled: false }
+  return { date: null, scheduled: false }
 }
 
 // Leading 26px column is the batch-print tickbox.
@@ -2070,7 +2079,7 @@ export default function CuttingInstructionsPage() {
       if (!match) return false
     }
     if (filterSlaughter) {
-      const sd = slaughterDateFor(i, appointments)
+      const sd = slaughterDateFor(i, appointments).date
       if (filterSlaughter === '__none__' ? !!sd : sd !== filterSlaughter) return false
     }
     return true
@@ -2078,13 +2087,16 @@ export default function CuttingInstructionsPage() {
 
   // Slaughter dates present in the active (non-archived) cards, newest first, for
   // the filter dropdown. A card with no scheduled kill date falls under "— none —".
+  const activeSlaughter = instructions
+    .filter(i => i.status !== 'archived')
+    .map(i => slaughterDateFor(i, appointments))
   const slaughterDates = Array.from(new Set(
-    instructions
-      .filter(i => i.status !== 'archived')
-      .map(i => slaughterDateFor(i, appointments))
-      .filter((d): d is string => !!d)
+    activeSlaughter.map(s => s.date).filter((d): d is string => !!d)
   )).sort((a, b) => b.localeCompare(a))
-  const anyNoSlaughter = instructions.some(i => i.status !== 'archived' && !slaughterDateFor(i, appointments))
+  // A date nothing is linked to is a date only customers have vouched for —
+  // the dropdown says so rather than offering it as a harvest day.
+  const scheduledDates = new Set(activeSlaughter.filter(s => s.scheduled).map(s => s.date))
+  const anyNoSlaughter = activeSlaughter.some(s => !s.date)
 
   const pendingCount  = instructions.filter(i => i.status === 'pending').length
   const linkedCount   = instructions.filter(i => i.status === 'linked').length
@@ -2356,7 +2368,9 @@ export default function CuttingInstructionsPage() {
               <option value="">🔪 All harvest dates</option>
               {slaughterDates.map(d => (
                 <option key={d} value={d}>
+                  {scheduledDates.has(d) ? '' : '~ '}
                   {new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                  {scheduledDates.has(d) ? '' : ' (customer’s date)'}
                 </option>
               ))}
               {anyNoSlaughter && <option value="__none__">— no harvest date —</option>}
@@ -2433,7 +2447,19 @@ export default function CuttingInstructionsPage() {
                       <div style={{ fontWeight: 600, color: 'var(--cream)', fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
                       <div style={{ fontSize: '0.78rem', color: 'var(--tan)' }}>{species}</div>
                       <div style={{ fontSize: '0.78rem', color: 'var(--tan)', whiteSpace: 'nowrap' }}>{fmtShortDate(ci.created_at)}</div>
-                      <div style={{ fontSize: '0.78rem', color: slaughter ? 'var(--cream)' : 'rgba(166,120,90,0.5)', whiteSpace: 'nowrap' }}>{fmtShortDate(slaughter)}</div>
+                      {/* An unconfirmed date is dimmed and prefixed "~" so it
+                          can't be read as the day the animal was killed. */}
+                      <div
+                        title={slaughter.date && !slaughter.scheduled
+                          ? 'The date the customer wrote on their own form. This card is not linked to a harvest appointment yet, so nothing has confirmed it.'
+                          : undefined}
+                        style={{
+                          fontSize: '0.78rem', whiteSpace: 'nowrap',
+                          color: !slaughter.date ? 'rgba(166,120,90,0.5)' : slaughter.scheduled ? 'var(--cream)' : 'var(--tan)',
+                          fontStyle: slaughter.date && !slaughter.scheduled ? 'italic' : undefined,
+                        }}>
+                        {slaughter.date && !slaughter.scheduled ? '~' : ''}{fmtShortDate(slaughter.date)}
+                      </div>
                       <div><StatusBadge status={ci.status} needsCarcass={(carcassStates[ci.id] ?? []).some(s => s.state === 'ambiguous')} /></div>
                     </div>
                   )
