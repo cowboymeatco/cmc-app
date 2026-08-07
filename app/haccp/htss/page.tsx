@@ -143,12 +143,25 @@ interface CookSummary {
   rhOkTotal:   number
   ovenOkTotal: number
   coreOkTotal: number
+  steamOnMin:  number
+  steamPct:    number
   ovenCLMet:   boolean  // oven ≥ 145°F for ≥ 4 min
   coreCLMet:   boolean  // core ≥ 145°F for ≥ 4 min
   wbCLMet:     boolean  // WB hit 125°F at any point
   rhCLMet:     boolean  // RH ≥ 30% at any point
+  steamCLMet:  boolean  // steam on ≥ 50% of cycle AND ≥ 60 min
   phases:      PhaseResult[]
 }
+
+// The controller export has no steam-valve column (Date,Time,Batch#,Truck#,
+// Operator,Temperature,Temperature SP,Humidity,Humidity SP,Core Probe 1,
+// Damper %Out), so "steam on" is inferred from the humidity loop: the valve
+// opens when humidity is called for and the chamber is drier than the
+// setpoint. Deliberately NOT "Humidity SP > 0" — that is true for 451 of 452
+// minutes on a normal jerky run, so it would pass every cook ever uploaded and
+// tell nobody anything. This is a proxy, not a valve-state record; the label
+// on the tile says so.
+const steamOn = (r: CookRow) => r.rhSP > 0 && r.rhPct < r.rhSP
 
 function analyze(rows: CookRow[]): CookSummary {
   const phases: PhaseResult[] = []
@@ -190,10 +203,14 @@ function analyze(rows: CookRow[]): CookSummary {
     rhOkTotal:   rows.filter(r => r.rhPct >= 30).length,
     ovenOkTotal: rows.filter(r => r.dryBulbF >= 145).length,
     coreOkTotal: rows.filter(r => r.coreTempF >= 145).length,
+    steamOnMin:  rows.filter(steamOn).length,
+    steamPct:    rows.length ? (rows.filter(steamOn).length / rows.length) * 100 : 0,
     ovenCLMet:   rows.filter(r => r.dryBulbF >= 145).length >= 4,
     coreCLMet:   rows.filter(r => r.coreTempF >= 145).length >= 4,
     wbCLMet:     rows.some(r => r.wetBulbF >= 125),
     rhCLMet:     rows.some(r => r.rhPct >= 30),
+    // Both halves of the CL: at least half the cycle, and never less than an hour
+    steamCLMet:  rows.filter(steamOn).length >= rows.length / 2 && rows.filter(steamOn).length >= 60,
     phases,
   }
 }
@@ -482,12 +499,6 @@ export default function HTSSPage() {
                 ok={csvData.ovenCLMet}
               />
               <Stat
-                label="Core ≥ 145°F"
-                value={`${csvData.coreOkTotal} min`}
-                sub={csvData.coreCLMet ? 'CL Met (≥ 4 min)' : csvData.coreOkTotal === 0 ? 'Never reached' : 'Need ≥ 4 min'}
-                ok={csvData.coreCLMet}
-              />
-              <Stat
                 label="WB ≥ 125°F"
                 value={`${csvData.wbOkTotal} min`}
                 sub={csvData.wbCLMet ? 'CL Met at some point' : 'Never reached — see note'}
@@ -499,13 +510,25 @@ export default function HTSSPage() {
                 sub={csvData.rhCLMet ? 'CL Met at some point' : 'Never reached'}
                 ok={csvData.rhCLMet}
               />
+              <Stat
+                label="Steam On"
+                value={`${csvData.steamOnMin} min`}
+                sub={`${csvData.steamPct.toFixed(0)}% of cycle · ${csvData.steamCLMet ? 'CL Met (≥ 50% & ≥ 1 hr)' : 'Need ≥ 50% & ≥ 1 hr'}`}
+                ok={csvData.steamCLMet}
+              />
             </div>
 
             {/* Peak values */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem', marginBottom: '1.5rem' }}>
               <Stat label="Peak Oven Temp" value={`${csvData.peakOven.toFixed(1)}°F`} ok={csvData.peakOven >= 145} sub={csvData.peakOven >= 145 ? 'Above 145°F' : 'Never hit 145°F'} />
-              <Stat label="Peak Core Temp" value={`${csvData.peakCore.toFixed(1)}°F`} ok={csvData.peakCore >= 145} sub={csvData.peakCore >= 145 ? 'Hit lethality temp' : 'Below 145°F'} />
               <Stat label="Peak Wet Bulb"  value={`${csvData.peakWB.toFixed(1)}°F`}   ok={csvData.peakWB >= 125}  sub={csvData.peakWB >= 125 ? 'Hit 125°F WB CL' : 'Never hit 125°F WB'} />
+              {/* Alt-3 lethality is delivered by the oven/humidity schedule, not by
+                  product core — jerky is sliced too thin to seat a probe, and a
+                  still-drying strip sits between wet bulb and dry bulb no matter
+                  how long you hold it. Core is logged for reference, so it prints
+                  neutral: red here read as a deviation on cooks that passed
+                  every CL (Charlie, 2026-08-07). */}
+              <Stat label="Peak Core Temp" value={`${csvData.peakCore.toFixed(1)}°F`} sub={`${csvData.coreOkTotal} min ≥ 145°F · reference only, not a CL`} />
             </div>
 
             {/* Phase breakdown table */}
@@ -556,6 +579,21 @@ export default function HTSSPage() {
               <strong>weekly Direct Observation</strong> using a physical wet bulb thermometer (CCP 2B DO check). The calculated value is a useful
               pre-check and trend indicator, but meat releases moisture during cooking that can raise actual wet bulb above what the sensor alone shows.
               The DO with a calibrated thermometer remains the record of compliance.
+            </div>
+
+            {/* How the two inferred numbers are derived, said plainly on the page */}
+            <div style={{
+              background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.25)',
+              borderRadius: 4, padding: '1rem 1.25rem', marginBottom: '2rem', fontSize: '0.78rem', color: 'rgba(201,168,130,0.85)', lineHeight: 1.65,
+            }}>
+              <strong style={{ color: C.amber }}>Note — Steam On is inferred:</strong>{' '}
+              The controller export has no steam-valve column, so <strong>Steam On</strong> counts the minutes where humidity was called for and the
+              chamber sat below its humidity setpoint — the condition under which the valve opens. It is a close proxy, not a valve-state record.
+              <br /><br />
+              <strong style={{ color: C.amber }}>Note — Core Probe is reference only:</strong>{' '}
+              Alt-3 lethality is delivered by the oven and humidity schedule, not by product core temperature. Sliced jerky is too thin to seat a probe
+              meaningfully, and product still giving up moisture sits between wet bulb and dry bulb regardless of hold time — so a core reading below
+              145°F is expected and is <strong>not</strong> a deviation. Core is shown for trend only and is not scored against a critical limit.
             </div>
           </>
         )}
