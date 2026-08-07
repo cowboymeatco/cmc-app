@@ -155,13 +155,22 @@ interface CookSummary {
 
 // The controller export has no steam-valve column (Date,Time,Batch#,Truck#,
 // Operator,Temperature,Temperature SP,Humidity,Humidity SP,Core Probe 1,
-// Damper %Out), so "steam on" is inferred from the humidity loop: the valve
-// opens when humidity is called for and the chamber is drier than the
-// setpoint. Deliberately NOT "Humidity SP > 0" — that is true for 451 of 452
-// minutes on a normal jerky run, so it would pass every cook ever uploaded and
-// tell nobody anything. This is a proxy, not a valve-state record; the label
-// on the tile says so.
-const steamOn = (r: CookRow) => r.rhSP > 0 && r.rhPct < r.rhSP
+// Damper %Out), so "steam on" has to be inferred. This counts the minutes
+// where humidity was scheduled AND the chamber actually held it.
+//
+// Two rules were rejected getting here:
+//  · "Humidity SP > 0" is true for 451 of 452 minutes on a jerky run — it
+//    would pass every cook ever uploaded and tell nobody anything.
+//  · "chamber below setpoint" (valve actively calling) INVERTS. Checked
+//    against 14 jerky cooks: normal runs scored 52–86%, but 2026-07-30 —
+//    where the house failed to dry down and sat at 91% RH against a 14%
+//    setpoint — scored 34% and failed. It marked a cook down for being too
+//    wet, which is backwards for a limit meant to assure moisture is present.
+//
+// This rule reads a flat 60% on every normal jerky cook (the humid portion of
+// the recipe) and rises, never falls, when the house runs wet. It is a proxy,
+// not a valve-state record; the note on the page says so.
+const steamOn = (r: CookRow) => r.rhSP > 0 && r.rhPct >= 30
 
 function analyze(rows: CookRow[]): CookSummary {
   const phases: PhaseResult[] = []
@@ -587,8 +596,9 @@ export default function HTSSPage() {
               borderRadius: 4, padding: '1rem 1.25rem', marginBottom: '2rem', fontSize: '0.78rem', color: 'rgba(201,168,130,0.85)', lineHeight: 1.65,
             }}>
               <strong style={{ color: C.amber }}>Note — Steam On is inferred:</strong>{' '}
-              The controller export has no steam-valve column, so <strong>Steam On</strong> counts the minutes where humidity was called for and the
-              chamber sat below its humidity setpoint — the condition under which the valve opens. It is a close proxy, not a valve-state record.
+              The controller export has no steam-valve column, so <strong>Steam On</strong> counts the minutes where humidity was scheduled
+              (humidity setpoint above zero) and the chamber actually held it (RH ≥ 30%). It is a proxy, not a valve-state record — confirm the
+              definition against your written plan.
               <br /><br />
               <strong style={{ color: C.amber }}>Note — Core Probe is reference only:</strong>{' '}
               Alt-3 lethality is delivered by the oven and humidity schedule, not by product core temperature. Sliced jerky is too thin to seat a probe
