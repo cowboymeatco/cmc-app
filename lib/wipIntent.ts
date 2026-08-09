@@ -16,7 +16,7 @@ export interface SmokeOrder {
 
 const KIND_WORDS: Record<string, string> = {
   sticks:  'Snack Sticks',
-  brats:   'Brats',
+  brats:   'Brots',
   summer:  'Summer Sausage',
   jerky:   'Jerky',
   hotDogs: 'Hot Dogs',

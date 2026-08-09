@@ -75,7 +75,7 @@ function sharedValueAdd(d: Json): ValueAddItem[] {
   }
   const sh = asObj(d.smokehouse)
   out.push(...smokeItems(sh.sticks, 'Snack Sticks'))
-  out.push(...smokeItems(sh.brats,  'Brats'))
+  out.push(...smokeItems(sh.brats,  'Brots'))
   out.push(...smokeItems(sh.summer, 'Summer Sausage'))
   out.push(...smokeItems(sh.jerky,  'Jerky'))
   const hd = asObj(sh.hotDogs)

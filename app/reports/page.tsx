@@ -263,7 +263,7 @@ export default function ReportsPage() {
                 Value-Add Output
               </div>
               <p style={{ fontSize: '0.78rem', color: C.tan, margin: '0.25rem 0 0', lineHeight: 1.5 }}>
-                Who got value-add product — shoulder bacon to brats — by processing date. Sort &amp; filter by
+                Who got value-add product — shoulder bacon to brots — by processing date. Sort &amp; filter by
                 date and species. On-screen &amp; filterable.
               </p>
             </div>

@@ -43,7 +43,7 @@ const COL_ORDER = [
   'Pork Sausage', 'Pork Sausage Links', 'Pork Sausage Patties',
   'Italian Sausage', 'Italian Sausage Links', 'Italian Sausage Patties',
   'Jumpstart Spicy Sausage', 'Jumpstart Spicy Sausage Links', 'Jumpstart Spicy Sausage Patties',
-  'Brats', 'Snack Sticks', 'Summer Sausage', 'Jerky', 'Hot Dogs',
+  'Brots', 'Snack Sticks', 'Summer Sausage', 'Jerky', 'Hot Dogs',
 ]
 const colRank = (p: string) => { const i = COL_ORDER.indexOf(p); return i === -1 ? 999 : i }
 

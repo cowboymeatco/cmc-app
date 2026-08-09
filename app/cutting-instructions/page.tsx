@@ -153,7 +153,9 @@ function smokehouseRows(sm: any, f: (s: string) => string): Array<[string, strin
     }
   }
   add('Snack Sticks',   sm.sticks)
-  add('Brats',          sm.brats)
+  // "Brots" — brotwurst is the FSIS name for what we make; the JSON key stays
+  // `brats` because that's what every stored order already carries.
+  add('Brots',          sm.brats)
   add('Summer Sausage', sm.summer)
   add('Jerky',          sm.jerky)
   if (sm.hotDogs) {
