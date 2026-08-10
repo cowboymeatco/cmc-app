@@ -84,6 +84,49 @@ export async function getInvoiceByDocNumber(docNumber: string): Promise<OpenInvo
   return toOpenInvoice(matches[0])
 }
 
+// ── One customer's invoices, paid and unpaid ─────────────────────────────────
+// The portal's animal page asks "has this been paid?", which the open-invoice
+// list above cannot answer: an invoice that has been settled simply isn't in
+// it, and absence is not proof of payment. So this returns the customer's
+// recent invoices WITH their balances and lets the caller read paid off a zero
+// balance — a fact QBO stated, not an inference from a missing row.
+
+export interface CustomerInvoice {
+  id: string
+  docNumber: string
+  txnDate: string
+  dueDate: string | null
+  total: number
+  balance: number
+  paid: boolean
+}
+
+/**
+ * Recent invoices for one QBO customer, newest first. Empty means QBO has no
+ * invoices for them — which is different from "paid", and callers must say so.
+ */
+export async function getInvoicesForCustomer(
+  qboCustomerId: string,
+  limit = 20,
+): Promise<CustomerInvoice[]> {
+  // Ids come from our own link tables, never from user input, but a quoted
+  // literal goes into a query string either way — so strip anything that could
+  // close the quote rather than trusting the caller.
+  const safe = qboCustomerId.replace(/[^0-9]/g, '')
+  if (!safe) return []
+  const q = `select * from Invoice where CustomerRef = '${safe}' orderby TxnDate desc maxresults ${Math.max(1, Math.min(limit, 100))}`
+  const res = await qboFetch<InvoiceQueryResponse>(`query?query=${encodeURIComponent(q)}`)
+  return (res.QueryResponse.Invoice ?? []).map(inv => ({
+    id: inv.Id,
+    docNumber: inv.DocNumber ?? inv.Id,
+    txnDate: inv.TxnDate,
+    dueDate: inv.DueDate ?? null,
+    total: inv.TotalAmt ?? 0,
+    balance: inv.Balance ?? 0,
+    paid: (inv.Balance ?? 0) <= 0,
+  }))
+}
+
 // One invoice by id — re-read at ring-up time so the amount pushed to the
 // register is the balance right now, not whatever the UI last rendered.
 export async function getInvoice(id: string): Promise<OpenInvoice | null> {
