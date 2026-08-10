@@ -67,6 +67,26 @@ COOK_FILE_RE = re.compile(r"^.+_\d{2}-\d{2}-\d{4}-\d{2}-\d{2}-\d{2}(\.\d+)?\.csv
 # A cook Data File's own header, for anything that slips past the name check.
 COOK_HEADER_RE = re.compile(r"temperature\s*sp|humidity\s*sp|core\s*probe|damper\s*%", re.I)
 
+# Files that hold credentials. NEVER read or print these -- an earlier version
+# of --probe dumped .env to the terminal, service role key and all.
+SECRET_FILE_RE = re.compile(
+    r"^\.env|\.env$|\.env\.|secret|credential|password|\.pem$|\.key$|token", re.I)
+
+# Belt and braces for anything that slips through: redact long key-ish values
+# before printing a line.
+REDACT_RES = [
+    re.compile(r"(?i)\b([A-Za-z0-9_]*(?:KEY|SECRET|TOKEN|PASSWORD|PWD)[A-Za-z0-9_]*\s*[=:]\s*)(\S+)"),
+    re.compile(r"\b(eyJ[A-Za-z0-9_\-]{10,})[A-Za-z0-9_\-.]*"),   # JWTs
+    re.compile(r"\b([A-Za-z0-9_\-]{40,})\b"),                     # long opaque blobs
+]
+
+
+def redact(line):
+    line = REDACT_RES[0].sub(lambda m: m.group(1) + "<redacted>", line)
+    line = REDACT_RES[1].sub("<redacted-jwt>", line)
+    line = REDACT_RES[2].sub("<redacted>", line)
+    return line
+
 TABLE = "smokehouse_alarm"
 
 # ── Column sniffing ────────────────────────────────────────────────────────────
@@ -383,9 +403,13 @@ def probe(root):
     cook_content = []
     unknown = []
     parsed = []
+    secrets = []
 
     for path in sorted(Path(root).rglob("*")):
         if not path.is_file():
+            continue
+        if SECRET_FILE_RE.search(path.name):
+            secrets.append(path)   # named only, never opened
             continue
         if COOK_FILE_RE.match(path.name):
             cook_named += 1
@@ -405,6 +429,9 @@ def probe(root):
     print(f"Cook Data Files (skipped by content):  {len(cook_content)}")
     print(f"Parsed as alarms:                      {len(parsed)}")
     print(f"Unrecognized:                          {len(unknown)}")
+    if secrets:
+        print(f"Credential files (NOT opened):         {len(secrets)}  "
+              f"[{', '.join(p.name for p in secrets)}]")
 
     for path, records in parsed:
         print(f"\n--- PARSED AS ALARMS: {path.relative_to(root)}  ({len(records)} rows)")
@@ -419,7 +446,7 @@ def probe(root):
                     if i >= 8:
                         print("    ...")
                         break
-                    print(f"    {line.rstrip()[:200]}")
+                    print(f"    {redact(line.rstrip()[:200])}")
         except OSError as exc:
             print(f"    (unreadable: {exc})")
     if len(unknown) > 12:
