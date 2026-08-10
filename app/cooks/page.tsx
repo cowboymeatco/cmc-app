@@ -32,7 +32,7 @@ interface Alarm {
   cook_id: string | null; cook_file: string | null
 }
 interface AlarmFeed {
-  everImported: boolean; total: number; faults: number
+  everImported: boolean; total: number; faults: number; comms: number
   byChannel: Record<string, number>; byCook: Record<string, number>
   alarms: Alarm[]
 }
@@ -97,12 +97,18 @@ export default function CookTagging() {
   const shown = useMemo(() => onlyUntagged ? cooks.filter(c => !c.profile_key) : cooks, [cooks, onlyUntagged])
   const tagged = cooks.filter(c => c.profile_key).length
 
-  // Faults only (alarm/warning) — routine start/stop events would drown the signal.
+  // Sensor faults only. Routine events would drown the signal, and 'comms'
+  // (FTP/network/email) is plumbing — every wet bulb alarm is trailed by an
+  // "Email Error" because the controller tries to mail it and fails, which
+  // would double every cook's badge for no reason.
+  const isSensorFault = (a: Alarm) =>
+    (a.severity === 'alarm' || a.severity === 'warning') && a.channel !== 'comms'
+
   const alarmsByCook = useMemo(() => {
     const map = new Map<string, Alarm[]>()
     for (const a of alarms?.alarms ?? []) {
       if (!a.cook_id) continue
-      if (a.severity !== 'alarm' && a.severity !== 'warning') continue
+      if (!isSensorFault(a)) continue
       const list = map.get(a.cook_id)
       if (list) list.push(a); else map.set(a.cook_id, [a])
     }
@@ -117,7 +123,7 @@ export default function CookTagging() {
     [alarms])
 
   const unlinkedFaults = useMemo(() =>
-    (alarms?.alarms ?? []).filter(a => !a.cook_id && (a.severity === 'alarm' || a.severity === 'warning')).length,
+    (alarms?.alarms ?? []).filter(a => !a.cook_id && isSensorFault(a)).length,
     [alarms])
 
   return (
@@ -171,8 +177,9 @@ export default function CookTagging() {
                 ))}
               </div>
               <p style={{ color: C.lightBrown, fontSize: '0.72rem', margin: '0.6rem 0 0', lineHeight: 1.6 }}>
-                {alarms.faults} faults across {alarms.total} logged events.
+                {alarms.faults} sensor faults across {alarms.total} logged events.
                 {unlinkedFaults > 0 && ` ${unlinkedFaults} fell outside any cook (idle house).`}
+                {alarms.comms > 0 && ` ${alarms.comms} network/FTP warnings counted separately.`}
                 {channelRanking.length > 0 && channelRanking[0][1] >= alarms.faults * 0.5 && (
                   <> One channel — <strong style={{ color: C.orange }}>{CHANNEL_LABEL[channelRanking[0][0]] ?? channelRanking[0][0]}</strong> — is
                   raising most of them, which points at that sensor rather than the process.</>

@@ -56,20 +56,28 @@ export async function GET(req: NextRequest) {
 
   // Rollup by channel, alarms/warnings only — routine start/stop events would
   // swamp the counts and tell us nothing about a sick sensor.
+  //
+  // 'comms' (FTP, network ping, email) is counted separately, never in
+  // byChannel. It is ~85% of the log by volume, so leaving it in buries every
+  // real sensor fault under plumbing noise and makes the rollup useless.
   const faults = alarms.filter(a => a.severity === 'alarm' || a.severity === 'warning')
   const byChannel: Record<string, number> = {}
   const byCook: Record<string, number> = {}
+  let comms = 0
   for (const a of faults) {
     const ch = a.channel ?? 'other'
+    if (ch === 'comms') { comms++; continue }
     byChannel[ch] = (byChannel[ch] ?? 0) + 1
     if (a.cook_id) byCook[a.cook_id] = (byCook[a.cook_id] ?? 0) + 1
   }
+  const sensorFaults = faults.length - comms
 
   return NextResponse.json({
     days,
     everImported: (everImportedCount ?? 0) > 0,
     total: alarms.length,
-    faults: faults.length,
+    faults: sensorFaults,
+    comms,
     byChannel,
     byCook,
     alarms,

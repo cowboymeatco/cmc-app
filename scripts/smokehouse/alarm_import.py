@@ -65,7 +65,20 @@ LOCAL_TZ = "America/Denver"
 COOK_FILE_RE = re.compile(r"^.+_\d{2}-\d{2}-\d{4}-\d{2}-\d{2}-\d{2}(\.\d+)?\.csv$", re.I)
 
 # A cook Data File's own header, for anything that slips past the name check.
-COOK_HEADER_RE = re.compile(r"temperature\s*sp|humidity\s*sp|core\s*probe|damper\s*%", re.I)
+# Must match the FIRST line and hit at least two markers: a real alarm file's
+# first line can legitimately read "Core Probe 1 Temperature Sensor Error",
+# which is one marker and must not be mistaken for cook data.
+COOK_HEADER_MARKERS = [
+    re.compile(r"temperature\s*sp", re.I),
+    re.compile(r"humidity\s*sp", re.I),
+    re.compile(r"core\s*probe", re.I),
+    re.compile(r"damper\s*%", re.I),
+]
+
+
+def looks_like_cook_data(text):
+    first_line = text.lstrip().split("\n", 1)[0]
+    return sum(1 for m in COOK_HEADER_MARKERS if m.search(first_line)) >= 2
 
 # Files that hold credentials. NEVER read or print these -- an earlier version
 # of --probe dumped .env to the terminal, service role key and all.
@@ -113,9 +126,16 @@ CHANNEL_PATTERNS = [
     ("core",     r"\bcore\b|product|probe|internal|\bpt\s*\d|meat"),
     ("rh",       r"humid|\brh\b|moist"),
     ("dry_bulb", r"dry[\s_-]*bulb|\bdb\b|chamber|cabinet|cook\s*temp"),
+    # Network/FTP/email plumbing, not the process. This is the bulk of the log
+    # by volume, so it gets its own channel and is kept out of the sensor
+    # rollup -- otherwise it buries every real sensor fault.
+    ("comms",    r"\bftp\b|ping|network|check\s*cable|server\s*down|email|communication|write error"),
 ]
 
 SEVERITY_PATTERNS = [
+    # Infrastructure first: "NTS Ping Failed" contains "fail" and would
+    # otherwise read as a process alarm. These are warnings about plumbing.
+    ("warning", r"check\s*cable|server\s*down|ping\s*failed|^ftp!|email error"),
     # Word-bounded on purpose: a bare "over" also matches "Recovery", which is
     # an ordinary event, not an alarm.
     ("alarm",   r"alarm|fault|fail|error|trip|deviat|\bhigh\b|\blow\b|\bover[\s_-]*temp|\bunder[\s_-]*temp"),
@@ -255,6 +275,85 @@ def map_columns(header):
     return mapping
 
 
+DATE_CELL_RE = re.compile(r"^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$")
+TIME_CELL_RE = re.compile(r"^\d{1,2}:\d{2}(:\d{2})?\s*([AaPp]\.?[Mm]\.?)?$")
+
+
+def sniff_positional(rows):
+    """Work out the layout of a file with NO header row.
+
+    The real controller export is exactly this: `Message,M/D/YYYY,H:MM AM/PM`
+    with no header line anywhere in 2,300+ files. Identify the date and time
+    columns by what their values look like and treat everything else as the
+    message. Returns (date_col, time_col, msg_cols) or None.
+    """
+    sample = [r for r in rows[:25] if any(str(c).strip() for c in r)]
+    if not sample:
+        return None
+    ncols = max(len(r) for r in sample)
+
+    def column(i):
+        return [str(r[i]).strip() for r in sample if i < len(r) and str(r[i]).strip()]
+
+    date_col = time_col = None
+    for i in range(ncols):
+        vals = column(i)
+        if not vals:
+            continue
+        if date_col is None and all(DATE_CELL_RE.match(v) for v in vals):
+            date_col = i
+        elif time_col is None and all(TIME_CELL_RE.match(v) for v in vals):
+            time_col = i
+
+    if date_col is None or time_col is None:
+        return None
+    msg_cols = [i for i in range(ncols) if i not in (date_col, time_col)]
+    return date_col, time_col, msg_cols
+
+
+def parse_positional(rows, path, layout):
+    date_col, time_col, msg_cols = layout
+    records = []
+    for line_no, row in enumerate(rows, start=1):
+        if not any(str(c).strip() for c in row):
+            continue
+
+        def cell(i):
+            return str(row[i]).strip() if i < len(row) else ""
+
+        raised_at = parse_when(cell(date_col), cell(time_col))
+        if not raised_at:
+            continue
+
+        message = " ".join(filter(None, (cell(i) for i in msg_cols))).strip() or None
+        raw = {"message": message, "date": cell(date_col), "time": cell(time_col)}
+        # Line number is part of the identity: the controller does log the same
+        # alarm twice in the same minute (03-30-2018 has "Hotplate Temperature
+        # Sensor Error" twice at 9:37 AM), and both are real. Hashing content
+        # alone would silently drop the second. Daily files never change once
+        # the day is past, so line numbers stay stable across re-imports.
+        hash_src = dict(raw, line_no=line_no)
+        records.append({
+            "oven":        "Oven1",
+            "raised_at":   raised_at,
+            "cleared_at":  None,
+            "ack_at":      None,
+            "code":        None,
+            "message":     message,
+            "severity":    classify(SEVERITY_PATTERNS, message or "", "unknown"),
+            "channel":     classify(CHANNEL_PATTERNS, message or "", "other"),
+            "value_f":     None,
+            "setpoint_f":  None,
+            "source_file": path.name,
+            "line_no":     line_no,
+            "raw":         raw,
+            "row_hash":    hashlib.sha1(
+                json.dumps(hash_src, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            ).hexdigest(),
+        })
+    return records
+
+
 def find_header(rows):
     """Controllers often prefix an export with title/blank lines. Find the real
     header: the first row that yields a usable timestamp column."""
@@ -279,7 +378,7 @@ def parse_alarm_file(path):
 
     # Second line of defence behind the filename check: a cook Data File that
     # got renamed still must not be read as an alarm log.
-    if COOK_HEADER_RE.search(text[:2048]):
+    if looks_like_cook_data(text):
         return [], "cook data file, not alarms"
 
     try:
@@ -293,7 +392,13 @@ def parse_alarm_file(path):
 
     header_idx, mapping = find_header(rows)
     if mapping is None:
-        return [], "no recognizable header (timestamp + message/code)"
+        # No header. The controller's own export is like this, so fall back to
+        # identifying columns by the shape of their values.
+        layout = sniff_positional(rows)
+        if layout is None:
+            return [], "no recognizable header, and no date+time columns found"
+        records = parse_positional(rows, path, layout)
+        return records, None if records else "date+time columns found but no parsable rows"
 
     header = [str(c).strip() for c in rows[header_idx]]
     records = []
