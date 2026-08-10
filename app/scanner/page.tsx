@@ -3,6 +3,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import { isCureTagNumber, type ProcessingInput, type CureTag } from '@/lib/types'
 import { isoDate } from '@/lib/dates'
+import { speciesIcon, speciesFromDescription } from '@/lib/cutSchedule'
 
 const C = {
   dark:       '#1A0A04',
@@ -1502,7 +1503,9 @@ export default function ScannerPage() {
     setScan('')
     setFlash('ok')
     setLastKind('ok')
-    setLastItem(isCarcass ? `🐄 Carcass tag: ${identifier}` : `📦 Box: ${identifier}`)
+    // The tag alone doesn't say what animal it is — that comes back with the
+    // resolved line below. A neutral tag beats guessing a cow.
+    setLastItem(isCarcass ? `🏷 Carcass tag: ${identifier}` : `📦 Box: ${identifier}`)
     setTimeout(() => setFlash(null), 2000)
     try {
       const res = await fetch('/api/processing/inputs', {
@@ -1524,7 +1527,7 @@ export default function ScannerPage() {
       // Show what the scan resolved to (weight, producer, cooler pull)
       const resolved = inp.description || identifier
       const wt = inp.weight_lbs != null ? `  ·  ${Number(inp.weight_lbs).toFixed(1)} lb` : ''
-      setLastItem(`${isCarcass ? '🐄' : '📦'} ${resolved}${wt}${inp.cooler_pulled ? '  ·  ✓ pulled from cooler' : ''}`)
+      setLastItem(`${isCarcass ? speciesIcon(speciesFromDescription(inp.description)) : '📦'} ${resolved}${wt}${inp.cooler_pulled ? '  ·  ✓ pulled from cooler' : ''}`)
     } catch {
       setFlash('bad')
       setLastKind('bad')
@@ -1751,7 +1754,14 @@ export default function ScannerPage() {
           {(s.animals?.length ?? 0) > 0 && (
             <div style={{ color: C.tan, fontSize: '0.72rem', marginBottom: '0.7rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
               title={s.animals!.join('\n')}>
-              🐄 {s.animals!.join(' · ')}
+              {/* Each animal wears its OWN species — one leading cow put a 🐄
+                  on hog sessions, and a mixed session can't have one icon. */}
+              {s.animals!.map((a, i) => (
+                <span key={a}>
+                  {i > 0 && ' · '}
+                  {speciesIcon(speciesFromDescription(a))} {a}
+                </span>
+              ))}
             </div>
           )}
           {mergeSource ? (
@@ -2562,7 +2572,7 @@ export default function ScannerPage() {
                   fontSize: '0.7rem', color: C.tan, background: 'rgba(0,0,0,0.25)',
                   border: '1px solid rgba(166,120,90,0.18)', borderRadius: 3, padding: '0.12rem 0.4rem',
                 }}>
-                  {inp.input_type === 'premade' ? '📦' : inp.input_type === 'carcass' ? '🐄' : '🥩'}{' '}
+                  {inp.input_type === 'premade' ? '📦' : inp.input_type === 'carcass' ? speciesIcon(speciesFromDescription(inp.description)) : '🥩'}{' '}
                   {inp.box_identifier || inp.description || '—'}
                   {inp.weight_lbs != null && <span style={{ color: C.lightBrown, fontFamily: 'monospace' }}> · {Number(inp.weight_lbs).toFixed(1)}lb</span>}
                 </span>
@@ -2634,7 +2644,7 @@ export default function ScannerPage() {
                         {idx + 1}.
                       </span>
                       <span style={{ fontSize: '0.78rem', flexShrink: 0 }}>
-                        {inp.input_type === 'premade' ? '📦' : inp.input_type === 'carcass' ? '🐄' : '🥩'}
+                        {inp.input_type === 'premade' ? '📦' : inp.input_type === 'carcass' ? speciesIcon(speciesFromDescription(inp.description)) : '🥩'}
                       </span>
                       {/* Description */}
                       <span style={{ flex: 1, color: C.cream, fontSize: '0.84rem', fontWeight: 600 }}>

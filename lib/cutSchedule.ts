@@ -157,6 +157,21 @@ export function speciesIcon(s: string): string {
   return SPECIES_EMOJI[s] ?? '🏷'
 }
 
+/**
+ * The species a carcass input's description opens with. /api/processing/inputs
+ * writes exactly two shapes — "Hog Carcass — Tag 03 (Producer)" and
+ * "Hog — Tag 03 L Half (Producer)" — so the species is the first word.
+ *
+ * The scanner had no species to hand and painted a cow on everything, which
+ * put a 🐄 on hog sessions (Charlie, 2026-08-09). Returns '' for anything not
+ * in the palette, and speciesIcon() falls back to the neutral tag rather than
+ * guessing an animal.
+ */
+export function speciesFromDescription(desc: string | null | undefined): string {
+  const first = (desc ?? '').trim().split(/\s+/)[0] ?? ''
+  return Object.prototype.hasOwnProperty.call(SPECIES_EMOJI, first) ? first : ''
+}
+
 // A split animal shows as 2+ rows that share harvest_log_id but is ONE
 // physical carcass — head counts and hanging weight must count it once.
 // These are the only two places that rule lives.
