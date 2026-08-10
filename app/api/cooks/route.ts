@@ -23,19 +23,29 @@ export async function GET(req: NextRequest) {
     .order('started_at', { ascending: false })
     .limit(300)
 
-  const [{ data: cooks, error }, { data: profiles }] = await Promise.all([
+  const [{ data: cooks, error }, { data: profiles }, { data: rhFaults }] = await Promise.all([
     q,
     supabase.from('cook_profile').select('profile_key, display_name').eq('active', true),
+    // Humidity sensor health, derived from the readings themselves — this works
+    // with no help from the controller's alarm log.
+    supabase
+      .from('smokehouse_rh_fault_v')
+      .select('cook_id, stuck_value, stuck_samples, stuck_started_at, mean_abs_rh_err')
+      .eq('suspect', true),
   ])
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   const nameByKey = new Map<string, string>()
   for (const p of profiles ?? []) nameByKey.set(String(p.profile_key), p.display_name as string)
 
+  const faultByCook = new Map<string, Record<string, unknown>>()
+  for (const f of rhFaults ?? []) faultByCook.set(String(f.cook_id), f)
+
   const rows = (cooks ?? []).map(c => {
     const start = c.started_at ? new Date(c.started_at as string).getTime() : 0
     const end   = c.ended_at   ? new Date(c.ended_at   as string).getTime() : 0
     const hours = start && end && end > start ? Math.round((end - start) / 360000) / 10 : null
+    const fault = faultByCook.get(String(c.id))
     return {
       id:           c.id,
       started_at:   c.started_at,
@@ -44,6 +54,14 @@ export async function GET(req: NextRequest) {
       profile_key:  (c.profile_key as string) ?? null,
       recipe:       c.profile_key ? nameByKey.get(String(c.profile_key)) ?? null : null,
       operator:     (c.operator as string) ?? null,
+      rh_fault:     fault
+        ? {
+            stuck_value:     Number(fault.stuck_value),
+            stuck_samples:   Number(fault.stuck_samples),
+            stuck_started_at: fault.stuck_started_at as string,
+            mean_abs_rh_err: Number(fault.mean_abs_rh_err),
+          }
+        : null,
     }
   })
 

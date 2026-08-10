@@ -13,9 +13,14 @@ const C = {
   green:      '#4CAF50',
 }
 
+interface RhFault {
+  stuck_value: number; stuck_samples: number
+  stuck_started_at: string; mean_abs_rh_err: number
+}
 interface Cook {
   id: string; started_at: string | null; ended_at: string | null
   hours: number | null; profile_key: string | null; recipe: string | null; operator: string | null
+  rh_fault: RhFault | null
 }
 interface Profile { profile_key: string; display_name: string }
 
@@ -209,6 +214,16 @@ export default function CookTagging() {
                   </div>
                 </div>
                 <div style={{ flex: 1 }} />
+                {c.rh_fault && (
+                  <span
+                    title={`Humidity read exactly ${c.rh_fault.stuck_value}% for ${c.rh_fault.stuck_samples} straight readings (~${Math.round(c.rh_fault.stuck_samples / 60 * 10) / 10}h) while humidity control was active. A working sensor jitters; this one stopped moving.`}
+                    style={{
+                      background: 'rgba(239,68,68,0.14)', border: '1px solid rgba(239,68,68,0.5)',
+                      borderRadius: 4, padding: '0.25rem 0.55rem', color: '#F87171',
+                      fontSize: '0.7rem', fontWeight: 700, whiteSpace: 'nowrap', cursor: 'help',
+                    }}
+                  >RH stuck {c.rh_fault.stuck_value}%</span>
+                )}
                 {cookAlarms.length > 0 && (
                   <button
                     onClick={() => setOpenAlarms(prev => prev === c.id ? null : c.id)}
