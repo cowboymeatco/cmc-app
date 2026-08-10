@@ -49,7 +49,7 @@ function carcassLbs(h: HarvestRow): number {
 }
 
 export async function GET() {
-  const [harvestRes, scheduleRes, planRes, scanRes] = await Promise.all([
+  const [harvestRes, scheduleRes, planRes, scanRes, bookedRes] = await Promise.all([
     supabase
       .from('harvest_log')
       .select('id,harvest_date,status,species,hot_carcass_weight_lbs,half_1_weight_lbs,half_2_weight_lbs')
@@ -74,11 +74,21 @@ export async function GET() {
       .from('processing_inputs')
       .select('linked_harvest_id,session_date')
       .not('linked_harvest_id', 'is', null),
+    // Animals still to come. The draw-down used to run the cooler to empty and
+    // stop, which is only true if nothing else is booked — and something almost
+    // always is (Charlie, 2026-08-10).
+    supabase
+      .from('harvest_appointments')
+      .select('harvest_date,species,head_count,status')
+      .gte('harvest_date', isoDate())
+      .neq('status', 'Complete')
+      .order('harvest_date', { ascending: true }),
   ])
   if (harvestRes.error)  return NextResponse.json({ error: harvestRes.error.message },  { status: 500 })
   if (scheduleRes.error) return NextResponse.json({ error: scheduleRes.error.message }, { status: 500 })
   if (planRes.error)     return NextResponse.json({ error: planRes.error.message },     { status: 500 })
   if (scanRes.error)     return NextResponse.json({ error: scanRes.error.message },     { status: 500 })
+  if (bookedRes.error)   return NextResponse.json({ error: bookedRes.error.message },   { status: 500 })
 
   const carcasses = (harvestRes.data ?? []) as HarvestRow[]
   const today     = isoDate()
@@ -246,16 +256,70 @@ export async function GET() {
   // point: it shows what's left unaccounted for at the end of the plan.
   const chilling = carcasses.filter(h => h.status === 'chilling' && h.harvest_date)
   const lastDay  = Array.from(plannedDay.values()).sort().pop() ?? null
-  const projection: { d: string; head: number; lbs: number; cut: number; cutLbs: number }[] = []
-  if (lastDay && lastDay >= today) {
-    for (let d = today; d <= lastDay; d = addDaysISO(d, 1)) {
+
+  // ── What's still coming in ──────────────────────────────────────────────────
+  // Booked appointments carry a head count and a species but no weight — the
+  // scale supplies that on kill day — so each head is valued at the median
+  // carcass we've actually hung for that species. Measured, not assumed, and it
+  // moves as the herd does. Only dates strictly AFTER today count: an animal
+  // killed this morning is already a harvest_log row, and counting the
+  // appointment too would hang it twice.
+  const lbsBySpecies = new Map<Species, number[]>()
+  for (const h of carcasses) {
+    const lbs = carcassLbs(h)
+    if (lbs <= 0) continue
+    const bucket = lbsBySpecies.get(speciesOf(h))
+    if (bucket) bucket.push(lbs); else lbsBySpecies.set(speciesOf(h), [lbs])
+  }
+  const allLbs = carcasses.map(carcassLbs).filter(l => l > 0)
+  const medianLbs = (sp: Species) => median(lbsBySpecies.get(sp) ?? []) ?? median(allLbs) ?? 0
+
+  const bookedRows = (bookedRes.data ?? []) as {
+    harvest_date: string | null; species: string | null; head_count: number | null; status: string | null
+  }[]
+  const arrivals = new Map<string, { head: number; lbs: number }>()
+  for (const r of bookedRows) {
+    if (!r.harvest_date || r.harvest_date <= today) continue
+    const head = Number(r.head_count ?? 0)
+    if (head <= 0) continue
+    const sp  = speciesOf({ species: r.species } as HarvestRow)
+    const day = arrivals.get(r.harvest_date) ?? { head: 0, lbs: 0 }
+    day.head += head
+    day.lbs  += head * medianLbs(sp)
+    arrivals.set(r.harvest_date, day)
+  }
+  const lastArrival = Array.from(arrivals.keys()).sort().pop() ?? null
+
+  // The window runs to whichever comes later — the end of the cut plan or the
+  // last booked kill — but never further than the horizon, because past a month
+  // out the bars are too thin to read and the plan behind them is guesswork.
+  const HORIZON_DAYS = 28
+  const horizon = addDaysISO(today, HORIZON_DAYS)
+  let end: string | null = null
+  if (lastDay && lastDay >= today) end = lastDay
+  if (lastArrival && (!end || lastArrival > end)) end = lastArrival
+  if (end && end > horizon) end = horizon
+
+  // inHead / inLbs are the share of that day's total that hasn't been killed
+  // yet, so the chart can stack booked-but-not-here on top of what's hanging.
+  const projection: { d: string; head: number; lbs: number; cut: number; cutLbs: number; inHead: number; inLbs: number }[] = []
+  if (end) {
+    let inHead = 0, inLbs = 0
+    for (let d = today; d <= end; d = addDaysISO(d, 1)) {
+      const arrived = arrivals.get(d)
+      if (arrived) { inHead += arrived.head; inLbs += arrived.lbs }
       let head = 0, lbs = 0, cut = 0, cutLbs = 0
       for (const h of chilling) {
         const day = plannedDay.get(h.id)
         if (!day || day > d) { head++; lbs += carcassLbs(h) }
         else                 { cut++;  cutLbs += carcassLbs(h) }
       }
-      projection.push({ d, head, lbs: Math.round(lbs), cut, cutLbs: Math.round(cutLbs) })
+      projection.push({
+        d,
+        head: head + inHead, lbs: Math.round(lbs + inLbs),
+        cut,  cutLbs: Math.round(cutLbs),
+        inHead, inLbs: Math.round(inLbs),
+      })
     }
   }
   const unplanned = chilling.filter(h => !plannedDay.has(h.id))
@@ -263,6 +327,17 @@ export async function GET() {
     days:      projection,
     planDate,
     lastDay,
+    // Kill days inside the window, so the chart can mark them.
+    arrivals:  Array.from(arrivals.entries())
+      .filter(([d]) => !end || d <= end)
+      .map(([d, a]) => ({ d, head: a.head, lbs: Math.round(a.lbs) }))
+      .sort((a, b) => (a.d < b.d ? -1 : 1)),
+    // Booked past the horizon — named so the window doesn't read as "and then
+    // nothing".
+    beyond: (() => {
+      const out = Array.from(arrivals.entries()).filter(([d]) => end != null && d > end)
+      return { head: out.reduce((s, [, a]) => s + a.head, 0), lbs: Math.round(out.reduce((s, [, a]) => s + a.lbs, 0)) }
+    })(),
     unplanned: {
       head: unplanned.length,
       lbs:  Math.round(unplanned.reduce((s, h) => s + carcassLbs(h), 0)),

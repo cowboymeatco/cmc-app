@@ -16,6 +16,9 @@ const C = {
 const LBS_COLOR  = '#CE6A20'
 const HEAD_COLOR = '#3E9D63'
 const WARN_COLOR = '#FAB219'
+// Booked-but-not-killed, on the draw-down only. Deliberately not LBS_COLOR:
+// pounds that aren't in the building yet shouldn't read as pounds that are.
+const IN_COLOR   = '#4FB3C9'
 const GRID       = 'rgba(166,120,90,0.15)'
 
 // Head count is stacked by species: a beef is ten lambs by weight, so the head
@@ -55,9 +58,11 @@ interface CoolerData {
     total:    number
   }
   drawdown:       {
-    days:      { d: string; head: number; lbs: number; cut: number; cutLbs: number }[]
+    days:      { d: string; head: number; lbs: number; cut: number; cutLbs: number; inHead: number; inLbs: number }[]
     planDate:  string | null
     lastDay:   string | null
+    arrivals:  { d: string; head: number; lbs: number }[]
+    beyond:    { head: number; lbs: number }
     unplanned: { head: number; lbs: number }
   }
 }
@@ -713,6 +718,15 @@ export default function PerformancePage() {
           const days   = data.drawdown.days
           const maxLbs = Math.max(...days.map(p => p.lbs), 1)
           const start  = days[0]
+          const anyIn  = days.some(p => p.inLbs > 0)
+          // Booking out a month puts ~30 bars in a phone-width row. Past that,
+          // a number over every bar is a smear — the tooltip still has it, and
+          // the axis keeps Mondays and kill days as anchors.
+          const dense    = days.length > 16
+          const arriveOn = new Map(data.drawdown.arrivals.map(a => [a.d, a]))
+          const isMonday = (iso: string) => new Date(iso + 'T12:00:00').getDay() === 1
+          // The plan only reaches empty if nothing is booked behind it.
+          const emptyDay = anyIn ? null : data.drawdown.lastDay
           return (
             <div style={{ marginTop: '1rem', background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '1.25rem' }}>
               <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.9rem' }}>
@@ -721,7 +735,7 @@ export default function PerformancePage() {
                     Projected draw-down
                   </div>
                   <div style={{ fontSize: '0.78rem', color: C.tan, marginTop: '0.25rem' }}>
-                    If the cut schedule runs as laid out
+                    If the cut schedule runs as laid out{anyIn && <>, with what&rsquo;s booked to come in</>}
                     {data.drawdown.planDate && <> · plan saved {dateLabel(data.drawdown.planDate, { month: 'short', day: 'numeric' })}</>}
                   </div>
                 </div>
@@ -730,28 +744,51 @@ export default function PerformancePage() {
                     tile above and says so. */}
                 <div style={{ fontSize: '0.78rem', color: C.lightBrown }}>
                   after today: <strong style={{ color: C.cream }}>{fmt(start.head)} head</strong> / {fmt(start.lbs)} lbs
-                  {data.drawdown.lastDay && <> → empty {dateLabel(data.drawdown.lastDay, { weekday: 'short', month: 'short', day: 'numeric' })}</>}
+                  {emptyDay && <> → empty {dateLabel(emptyDay, { weekday: 'short', month: 'short', day: 'numeric' })}</>}
+                  {anyIn && <> → <strong style={{ color: C.cream }}>{fmt(days[days.length - 1].head)} head</strong> / {fmt(days[days.length - 1].lbs)} lbs on {dateLabel(days[days.length - 1].d, { weekday: 'short', month: 'short', day: 'numeric' })}</>}
                 </div>
               </div>
 
+              {/* A month of bars is 4px each on a phone — unreadable, and the
+                  dates under them clip to nothing. The chart gets a floor of
+                  24px per day and scrolls sideways inside its own box instead;
+                  on a desktop the days still spread to fill the width. */}
+              <div style={{ overflowX: 'auto', overflowY: 'hidden', paddingBottom: '0.15rem' }}>
+              <div style={{ minWidth: days.length * 24 }}>
               <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'flex-end', height: 130 }}>
                 {days.map((p, i) => {
                   const prev  = i > 0 ? days[i - 1] : null
                   // A day nothing comes off — a weekend, or a break nobody dated.
                   const idle  = !!prev && prev.lbs === p.lbs
+                  const came  = arriveOn.get(p.d)
+                  // The stack splits what's hanging now from what's only booked,
+                  // so a bar that grows can't be mistaken for one that hasn't
+                  // been cut down yet.
+                  const inPct = p.lbs > 0 ? (p.inLbs / p.lbs) * 100 : 0
+                  const tip = [
+                    dateLabel(p.d, { weekday: 'long', month: 'short', day: 'numeric' }),
+                    `${fmt(p.head)} head / ${fmt(p.lbs)} lbs in the cooler`,
+                    p.inLbs > 0 ? `includes ${fmt(p.inHead)} head / ${fmt(p.inLbs)} lbs booked but not killed yet` : '',
+                    came ? `${fmt(came.head)} head come in this day` : '',
+                    idle && !came ? 'nothing scheduled to come off' : '',
+                  ].filter(Boolean).join(' — ')
                   return (
                     <div key={p.d} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: '100%' }}>
-                      <div style={{ fontSize: '0.62rem', color: C.cream, textAlign: 'center', marginBottom: 3, fontVariantNumeric: 'tabular-nums' }}>
-                        {p.head}
+                      <div style={{ fontSize: '0.62rem', textAlign: 'center', marginBottom: 3, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', color: came ? IN_COLOR : C.cream }}>
+                        {came ? `+${came.head}` : dense ? '' : p.head}
                       </div>
                       <div
-                        title={`${dateLabel(p.d, { weekday: 'long', month: 'short', day: 'numeric' })} — ${fmt(p.head)} head / ${fmt(p.lbs)} lbs still hanging${idle ? ' (nothing scheduled to come off)' : ''}`}
+                        title={tip}
                         style={{
                           height: `${Math.max((p.lbs / maxLbs) * 100, p.lbs > 0 ? 2 : 0)}%`,
-                          background: idle ? 'rgba(206,106,32,0.35)' : LBS_COLOR,
-                          borderRadius: '2px 2px 0 0', minHeight: p.lbs > 0 ? 2 : 0,
+                          display: 'flex', flexDirection: 'column',
+                          borderRadius: '2px 2px 0 0', overflow: 'hidden',
+                          minHeight: p.lbs > 0 ? 2 : 0,
                         }}
-                      />
+                      >
+                        {inPct > 0 && <div style={{ height: `${inPct}%`, background: IN_COLOR, flexShrink: 0 }} />}
+                        <div style={{ flex: 1, background: idle ? 'rgba(206,106,32,0.35)' : LBS_COLOR }} />
+                      </div>
                     </div>
                   )
                 })}
@@ -759,15 +796,35 @@ export default function PerformancePage() {
 
               <div style={{ display: 'flex', gap: '0.35rem', marginTop: '0.35rem' }}>
                 {days.map(p => (
-                  <div key={p.d} style={{ flex: 1, minWidth: 0, textAlign: 'center', fontSize: '0.6rem', color: C.lightBrown, whiteSpace: 'nowrap', overflow: 'hidden' }}>
-                    {dateLabel(p.d, { weekday: 'short' })}
+                  // Dense labels sit on blank neighbours, so they're let to
+                  // spill rather than clip to "8/1".
+                  <div key={p.d} style={{ flex: 1, minWidth: 0, textAlign: 'center', fontSize: '0.6rem', color: arriveOn.has(p.d) ? C.tan : C.lightBrown, whiteSpace: 'nowrap', overflow: dense ? 'visible' : 'hidden' }}>
+                    {/* Weekday alone stops meaning anything once the window
+                        spans a month — four Mondays read the same. Dense mode
+                        switches to the date. */}
+                    {dense
+                      ? (isMonday(p.d) || arriveOn.has(p.d) ? dateLabel(p.d, { month: 'numeric', day: 'numeric' }) : '')
+                      : dateLabel(p.d, { weekday: 'short' })}
                   </div>
                 ))}
               </div>
+              </div>
+              </div>
 
               <p style={{ fontSize: '0.72rem', color: C.lightBrown, margin: '0.85rem 0 0', lineHeight: 1.5 }}>
-                Bar = pounds still hanging at the end of that day, number above = head.
+                Bar = pounds in the cooler at the end of that day{dense ? '' : ', number above = head'}.
                 Faded bars are days the plan takes nothing off.
+                {anyIn && (
+                  <>
+                    {' '}<span style={{ display: 'inline-block', width: 9, height: 9, background: IN_COLOR, borderRadius: 2, marginRight: 4 }} />
+                    <span style={{ color: IN_COLOR, fontWeight: 600 }}>Blue</span>{' '}is booked but not killed yet —
+                    each head valued at the median carcass we&rsquo;ve hung for its species, and none of it
+                    has a cut day, so it stacks up until someone schedules it.
+                    {data.drawdown.beyond.head > 0 && (
+                      <> Another <strong style={{ color: C.cream }}>{fmt(data.drawdown.beyond.head)} head</strong> are booked past this window.</>
+                    )}
+                  </>
+                )}
                 {data.drawdown.unplanned.head > 0 ? (
                   <>
                     {' '}<strong style={{ color: WARN_COLOR }}>
@@ -778,7 +835,7 @@ export default function PerformancePage() {
                     and the line reaches the floor.
                   </>
                 ) : (
-                  <> Every carcass in the cooler has a day, so the plan clears it out.</>
+                  <> Every carcass hanging today has a day, so the plan clears out what&rsquo;s in there now.</>
                 )}
               </p>
             </div>

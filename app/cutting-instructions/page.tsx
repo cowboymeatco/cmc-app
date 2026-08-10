@@ -715,9 +715,16 @@ export function fracThick(v: string | number | null | undefined): string {
 function v2thick(v: string): string { return fracThick(v) }
 function v2withT(cut: string, t: string): string { return [v2fmt(cut), v2thick(t)].filter(Boolean).join(' — ') }
 function v2adds(arr: string[]): string { return arr?.length ? arr.map(v2fmt).join(', ') : '' }
-// A round sent to jerky carries its flavor; split rounds show both sides
-function v2roundOne(r: any): string { return r?.cut === 'jerky' ? `Jerky${r.jerkyFlavor ? ` — ${v2fmt(r.jerkyFlavor)}` : ''}` : v2withT(r?.cut ?? '', r?.thickness ?? '') }
-function v2roundVal(r: any): string { return r?.round2 ? sidePair(v2roundOne(r), v2roundOne(r.round2)) : v2roundOne(r) }
+// A round sent to jerky carries its flavor; split rounds show both sides. A
+// round taken as roasts carries a count, per side like the arm and the tip.
+function v2roundOne(r: any, perHalf = false): string {
+  return r?.cut === 'jerky'
+    ? `Jerky${r.jerkyFlavor ? ` — ${v2fmt(r.jerkyFlavor)}` : ''}`
+    : roastOr(r?.cut, r?.roastCount, c => v2withT(c, r?.thickness ?? ''), perHalf)
+}
+function v2roundVal(r: any, whole = false): string {
+  return r?.round2 ? sidePair(v2roundOne(r), v2roundOne(r.round2)) : v2roundOne(r, whole)
+}
 
 // The ribeye's only value-add is Seasoned (roast cuts only), and the wizard
 // stores it as a boolean rather than the addons array every other primal uses.
@@ -946,10 +953,12 @@ function renderV2Detail(ci: RawInstruction) {
             ) : (
               <V2Field label="Sirloin Tip Add-ons" value={v2adds(d.sirloinTip?.addons)} addon />
             )}
-            <V2Field label="Bottom Round" value={v2roundVal(d.bottomRound)} />
+            <V2Field label="Bottom Round" value={v2roundVal(d.bottomRound, isWholeAnimal(d.portion))} />
             <V2Field label="Bottom Round Add-ons" value={v2adds(d.bottomRound?.addons)} addon />
-            <V2Field label="Top Round" value={v2roundVal(d.topRound)} />
+            {d.bottomRound?.round2 && <V2Field label="Bottom Round 2 Add-ons" value={v2adds(d.bottomRound.round2.addons)} addon />}
+            <V2Field label="Top Round" value={v2roundVal(d.topRound, isWholeAnimal(d.portion))} />
             <V2Field label="Top Round Add-ons" value={v2adds(d.topRound?.addons)} addon />
+            {d.topRound?.round2 && <V2Field label="Top Round 2 Add-ons" value={v2adds(d.topRound.round2.addons)} addon />}
             <V2Field label="Round Shank / Marrow" value={v2fmt(d.roundShank?.marrow)} />
           </V2Section>
           </>)}
@@ -1077,9 +1086,24 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
   const wline = (w: number) => `<span style="display:inline-block;min-width:${w}px;border-bottom:1.5px solid #1A0A04">&nbsp;</span>`
   // Jill's wording: a kept-whole rack reads "Frenched Rack of Lamb/Goat"
   const rackDisplay = (v?: string) => v === 'whole-rack' ? `Frenched Rack of ${sp === 'goat' ? 'Goat' : 'Lamb'}` : fmt(v ?? '')
-  // A round sent to jerky carries its flavor; split rounds print both sides
-  const roundOne = (r: any) => r?.cut === 'jerky' ? `Jerky${r.jerkyFlavor ? ` — ${fmt(r.jerkyFlavor)}` : ''}` : withT(r?.cut ?? '', r?.thickness ?? '')
-  const roundVal = (r: any) => r?.round2 ? sidePair(roundOne(r), roundOne(r.round2)) : roundOne(r)
+  // A round sent to jerky carries its flavor; split rounds print both sides. A
+  // round taken as roasts carries a count like the arm and the tip do, and that
+  // count is per side — but a split round already prints each side on its own,
+  // so only the unsplit case doubles for a whole beef.
+  const roundOne = (r: any, perHalf = false) => r?.cut === 'jerky'
+    ? `Jerky${r.jerkyFlavor ? ` — ${fmt(r.jerkyFlavor)}` : ''}`
+    : roastOr(r?.cut, r?.roastCount, c => withT(c, r?.thickness ?? ''), perHalf)
+  const roundVal = (r: any) => r?.round2
+    ? sidePair(roundOne(r), roundOne(r.round2))
+    : roundOne(r, wholeAnimal)
+  // Split rounds can be seasoned on one side and not the other, so each side
+  // gets its own add-on line rather than one merged list.
+  const roundAddonRows = (r: any) => r?.round2
+    ? [
+        r.addons?.length        ? row('  Add-ons (1)', adds(r.addons), true)        : '',
+        r.round2.addons?.length ? row('  Add-ons (2)', adds(r.round2.addons), true) : '',
+      ].join('')
+    : (r?.addons?.length ? row('  Add-ons', adds(r.addons), true) : '')
 
   // Primal color coding for the cutting table (Chris): chuck green,
   // rib & plate yellow, rest of the beef red
@@ -1201,11 +1225,11 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
           ].join('')
         : (d.sirloinTip?.addons?.length ? row('  Add-ons', adds(d.sirloinTip.addons), true) : ''),
       row('Bottom Round', roundVal(d.bottomRound)),
-      d.bottomRound?.addons?.length ? row('  Add-ons', adds(d.bottomRound.addons), true) : '',
+      roundAddonRows(d.bottomRound),
       d.eyeOfRound?.cut ? row('Eye of Round', withT(d.eyeOfRound.cut, d.eyeOfRound.thickness ?? '')) : '',
       d.rumpRoast?.cut  ? row('Rump Roast',   withT(d.rumpRoast.cut,  d.rumpRoast.thickness  ?? '')) : '',
       row('Top Round', roundVal(d.topRound)),
-      d.topRound?.addons?.length ? row('  Add-ons', adds(d.topRound.addons), true) : '',
+      roundAddonRows(d.topRound),
       row('Round Shank / Marrow', fmt(d.roundShank?.marrow)),
     ].join(''))
   }
@@ -1415,7 +1439,10 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
       pc(`${label}${sfx}`, roundOne(r))
       if (r.addons?.length) pc('  Add-on', adds(r.addons), true)
     }
+    // roundOne carries the roast count, so differing counts split the lines.
+    // Seasoned on one side only is a real packing difference too.
     const sameRound = (a: any, b: any) => roundOne(a) === roundOne(b) && a?.cut === b?.cut
+      && adds(a?.addons ?? []) === adds(b?.addons ?? [])
     if (d.bottomRound?.round2 && !sameRound(d.bottomRound, d.bottomRound.round2)) { packRound('Bottom Round', d.bottomRound, ' (1)'); packRound('Bottom Round', d.bottomRound.round2, ' (2)') }
     else packRound('Bottom Round', d.bottomRound)
     if (d.eyeOfRound?.cut)  { d.eyeOfRound.cut  === 'grind' ? pg('Eye of Round')  : pc('Eye of Round',  withT(d.eyeOfRound.cut,  d.eyeOfRound.thickness  ?? '')) }
@@ -1914,7 +1941,7 @@ const FAKE_CI: RawInstruction = {
     flank:     { cut: 'keep-whole' },
     sirloinTip:  { mode: 'split', cut: 'roast-half', thickness: '', addons: ['seasoned'], tip2: { cut: 'steaks', thickness: '1', addons: [] } },
     bottomRound: { cut: 'jerky', jerkyFlavor: 'cowboy-ranch' },
-    topRound:    { cut: 'cubed-steak' },
+    topRound:    { cut: 'roasts', roastCount: '3', addons: ['seasoned'] },
     roundShank:  { marrow: 'canoe' },
     trim:        { fatPct: '85/15', pattyPct: 30, patties: { size: '4:1', pkg: '1lb' }, loose: { packSize: '1.5', rollstock: false } },
     specialty: { interest: 'yes', notes: 'Interested in smoked brisket and beef sticks' },
