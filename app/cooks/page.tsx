@@ -19,6 +19,24 @@ interface Cook {
 }
 interface Profile { profile_key: string; display_name: string }
 
+interface Alarm {
+  id: string; raised_at: string; cleared_at: string | null
+  code: string | null; message: string | null
+  severity: string | null; channel: string | null
+  value_f: number | null; setpoint_f: number | null
+  cook_id: string | null; cook_file: string | null
+}
+interface AlarmFeed {
+  everImported: boolean; total: number; faults: number
+  byChannel: Record<string, number>; byCook: Record<string, number>
+  alarms: Alarm[]
+}
+
+const CHANNEL_LABEL: Record<string, string> = {
+  wet_bulb: 'Wet bulb', dry_bulb: 'Dry bulb', rh: 'Humidity',
+  core: 'Product core', damper: 'Damper', other: 'Other',
+}
+
 const INPUT: React.CSSProperties = {
   background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(166,120,90,0.35)',
   borderRadius: 4, padding: '0.4rem 0.6rem', color: C.cream, fontSize: '0.85rem', outline: 'none',
@@ -37,16 +55,22 @@ export default function CookTagging() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState<Record<string, boolean>>({})
   const [onlyUntagged, setOnlyUntagged] = useState(false)
+  const [alarms, setAlarms] = useState<AlarmFeed | null>(null)
+  const [openAlarms, setOpenAlarms] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
     Promise.all([
       fetch('/api/cooks?days=60').then(r => r.json()),
       fetch('/api/cook-profile').then(r => r.json()),
-    ]).then(([c, p]) => {
+      // Alarm log is optional — it only has data once alarm_import.py is running
+      // on the kiosk, so a failure here must not take the tagging page down.
+      fetch('/api/smokehouse-alarms?days=60').then(r => r.json()).catch(() => null),
+    ]).then(([c, p, a]) => {
       if (cancelled) return
       setCooks(Array.isArray(c?.cooks) ? c.cooks : [])
       setProfiles(Array.isArray(p?.profiles) ? p.profiles.map((x: Profile) => ({ profile_key: x.profile_key, display_name: x.display_name })) : [])
+      setAlarms(a && Array.isArray(a.alarms) ? a as AlarmFeed : null)
     }).catch(() => {}).finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [])
@@ -68,6 +92,29 @@ export default function CookTagging() {
   const shown = useMemo(() => onlyUntagged ? cooks.filter(c => !c.profile_key) : cooks, [cooks, onlyUntagged])
   const tagged = cooks.filter(c => c.profile_key).length
 
+  // Faults only (alarm/warning) — routine start/stop events would drown the signal.
+  const alarmsByCook = useMemo(() => {
+    const map = new Map<string, Alarm[]>()
+    for (const a of alarms?.alarms ?? []) {
+      if (!a.cook_id) continue
+      if (a.severity !== 'alarm' && a.severity !== 'warning') continue
+      const list = map.get(a.cook_id)
+      if (list) list.push(a); else map.set(a.cook_id, [a])
+    }
+    // The feed is newest-first, but inside a single cook you read the alarms
+    // forward to follow how it went wrong.
+    for (const list of map.values()) list.sort((x, y) => x.raised_at.localeCompare(y.raised_at))
+    return map
+  }, [alarms])
+
+  const channelRanking = useMemo(() =>
+    Object.entries(alarms?.byChannel ?? {}).sort((a, b) => b[1] - a[1]),
+    [alarms])
+
+  const unlinkedFaults = useMemo(() =>
+    (alarms?.alarms ?? []).filter(a => !a.cook_id && (a.severity === 'alarm' || a.severity === 'warning')).length,
+    [alarms])
+
   return (
     <div style={{ minHeight: '100vh', background: C.darkBrown }}>
       <header style={{ background: C.dark, borderBottom: '1px solid rgba(166,120,90,0.3)', padding: '0 2rem', height: 72, display: 'flex', alignItems: 'center', gap: '1rem' }}>
@@ -80,6 +127,56 @@ export default function CookTagging() {
       </header>
 
       <main style={{ padding: '1.5rem 2rem', maxWidth: 900, margin: '0 auto', boxSizing: 'border-box' }}>
+        {/* Controller alarm log. Empty until alarm_import.py runs on the kiosk —
+            say so plainly rather than showing a convincing-looking zero. */}
+        <section style={{
+          background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 6,
+          padding: '0.9rem 1rem', marginBottom: '1rem',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <span style={{ color: C.cream, fontSize: '0.82rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+              Controller alarms
+            </span>
+            <span style={{ color: C.lightBrown, fontSize: '0.72rem' }}>last 60 days</span>
+          </div>
+
+          {!alarms || !alarms.everImported ? (
+            <p style={{ color: C.lightBrown, fontSize: '0.75rem', margin: '0.5rem 0 0', lineHeight: 1.6 }}>
+              No alarm log imported yet. Run <code style={{ color: C.tan }}>alarm_import.py</code> on the
+              packaging kiosk to start feeding it.
+            </p>
+          ) : alarms.faults === 0 ? (
+            <p style={{ color: C.lightBrown, fontSize: '0.75rem', margin: '0.5rem 0 0' }}>
+              {alarms.total > 0 ? `${alarms.total} events logged, none of them faults.` : 'No alarms logged.'}
+            </p>
+          ) : (
+            <>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.6rem' }}>
+                {channelRanking.map(([ch, n], i) => (
+                  <div key={ch} style={{
+                    background: i === 0 ? 'rgba(251,146,60,0.14)' : 'rgba(255,255,255,0.04)',
+                    border: `1px solid ${i === 0 ? 'rgba(251,146,60,0.45)' : 'rgba(166,120,90,0.25)'}`,
+                    borderRadius: 4, padding: '0.35rem 0.7rem',
+                  }}>
+                    <div style={{ color: i === 0 ? C.orange : C.cream, fontSize: '1rem', fontWeight: 700, lineHeight: 1.1 }}>{n}</div>
+                    <div style={{ color: C.lightBrown, fontSize: '0.66rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                      {CHANNEL_LABEL[ch] ?? ch}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p style={{ color: C.lightBrown, fontSize: '0.72rem', margin: '0.6rem 0 0', lineHeight: 1.6 }}>
+                {alarms.faults} faults across {alarms.total} logged events.
+                {unlinkedFaults > 0 && ` ${unlinkedFaults} fell outside any cook (idle house).`}
+                {channelRanking.length > 0 && channelRanking[0][1] >= alarms.faults * 0.5 && (
+                  <> One channel — <strong style={{ color: C.orange }}>{CHANNEL_LABEL[channelRanking[0][0]] ?? channelRanking[0][0]}</strong> — is
+                  raising most of them, which points at that sensor rather than the process.</>
+                )}
+              </p>
+            </>
+          )}
+        </section>
+
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
           <span style={{ color: C.tan, fontSize: '0.85rem', fontWeight: 700 }}>{tagged} of {cooks.length} tagged</span>
           <div style={{ flex: 1 }} />
@@ -96,10 +193,12 @@ export default function CookTagging() {
           <div style={{ padding: '2rem', textAlign: 'center', color: C.lightBrown }}>{onlyUntagged ? 'Every recent cook is tagged. 🎉' : 'No cooks in the last 60 days.'}</div>
         ) : (
           <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 6, overflow: 'hidden' }}>
-            {shown.map((c, i) => (
-              <div key={c.id} style={{
+            {shown.map((c, i) => {
+              const cookAlarms = alarmsByCook.get(c.id) ?? []
+              return (
+              <div key={c.id} style={{ borderTop: i === 0 ? 'none' : '1px solid rgba(166,120,90,0.1)' }}>
+              <div style={{
                 display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.7rem 1rem',
-                borderTop: i === 0 ? 'none' : '1px solid rgba(166,120,90,0.1)',
                 background: c.profile_key ? 'transparent' : 'rgba(251,146,60,0.05)',
               }}>
                 <span style={{ width: 8, height: 8, borderRadius: '50%', background: c.profile_key ? C.green : C.orange, flexShrink: 0 }} />
@@ -110,6 +209,17 @@ export default function CookTagging() {
                   </div>
                 </div>
                 <div style={{ flex: 1 }} />
+                {cookAlarms.length > 0 && (
+                  <button
+                    onClick={() => setOpenAlarms(prev => prev === c.id ? null : c.id)}
+                    title={`${cookAlarms.length} alarm${cookAlarms.length === 1 ? '' : 's'} during this cook`}
+                    style={{
+                      background: 'rgba(251,146,60,0.14)', border: '1px solid rgba(251,146,60,0.45)',
+                      borderRadius: 4, padding: '0.25rem 0.55rem', color: C.orange,
+                      fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
+                    }}
+                  >⚠ {cookAlarms.length} {openAlarms === c.id ? '▴' : '▾'}</button>
+                )}
                 <select
                   value={c.profile_key ?? ''}
                   onChange={e => tag(c, e.target.value)}
@@ -120,7 +230,37 @@ export default function CookTagging() {
                 </select>
                 <span style={{ width: 44, fontSize: '0.7rem', color: C.lightBrown, textAlign: 'right' }}>{saving[c.id] ? 'saving…' : c.profile_key ? '✓' : ''}</span>
               </div>
-            ))}
+
+              {openAlarms === c.id && (
+                <div style={{ padding: '0 1rem 0.8rem 2.1rem', background: 'rgba(0,0,0,0.18)' }}>
+                  {cookAlarms.map(a => (
+                    <div key={a.id} style={{
+                      display: 'flex', gap: '0.7rem', alignItems: 'baseline',
+                      padding: '0.3rem 0', fontSize: '0.75rem', borderBottom: '1px solid rgba(166,120,90,0.08)',
+                    }}>
+                      <span style={{ color: C.lightBrown, minWidth: 62, fontVariantNumeric: 'tabular-nums' }}>
+                        {new Date(a.raised_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+                      </span>
+                      <span style={{
+                        color: a.channel === 'wet_bulb' ? C.orange : C.tan,
+                        minWidth: 82, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.05em',
+                      }}>{CHANNEL_LABEL[a.channel ?? 'other'] ?? a.channel}</span>
+                      <span style={{ color: C.cream, flex: 1 }}>{a.message ?? a.code ?? '—'}</span>
+                      {a.value_f != null && (
+                        <span style={{ color: C.lightBrown, fontVariantNumeric: 'tabular-nums' }}>
+                          {a.value_f}{a.setpoint_f != null ? ` / sp ${a.setpoint_f}` : ''}
+                        </span>
+                      )}
+                      <span style={{ color: a.cleared_at ? C.green : C.orange, fontSize: '0.68rem', minWidth: 54, textAlign: 'right' }}>
+                        {a.cleared_at ? 'cleared' : 'open'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              </div>
+              )
+            })}
           </div>
         )}
 

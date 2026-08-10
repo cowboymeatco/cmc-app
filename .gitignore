@@ -45,3 +45,8 @@ next-env.d.ts
 
 .vercel
 .env*.local
+
+# python (scripts/smokehouse)
+__pycache__/
+*.pyc
+scripts/smokehouse/supabase.env

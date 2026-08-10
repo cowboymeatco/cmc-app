@@ -91,9 +91,12 @@ CHANNEL_PATTERNS = [
 ]
 
 SEVERITY_PATTERNS = [
-    ("alarm",   r"alarm|fault|fail|error|trip|deviat|\bhigh\b|\blow\b|over|under"),
+    # Word-bounded on purpose: a bare "over" also matches "Recovery", which is
+    # an ordinary event, not an alarm.
+    ("alarm",   r"alarm|fault|fail|error|trip|deviat|\bhigh\b|\blow\b|\bover[\s_-]*temp|\bunder[\s_-]*temp"),
     ("warning", r"warn|caution|advisor"),
-    ("event",   r"start|stop|begin|end|login|logout|change|ack|mode|stage|step"),
+    # "ack" is word-bounded: unbounded it also matches "feedback".
+    ("event",   r"start|stop|begin|\bend\b|login|logout|change|\back\b|mode|stage|step"),
 ]
 
 TRUTHY_EMPTY = {"", "-", "--", "n/a", "na", "none", "null"}
