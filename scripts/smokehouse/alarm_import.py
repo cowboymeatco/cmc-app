@@ -60,7 +60,12 @@ DEFAULT_DIR = r"C:\CMC\smokehouse"
 LOCAL_TZ = "America/Denver"
 
 # Cook Data Files look like: SNACK STICKS_08-06-2026-11-38-38.csv
-COOK_FILE_RE = re.compile(r"^.+_\d{2}-\d{2}-\d{4}-\d{2}-\d{2}-\d{2}\.csv$", re.I)
+# The FTP drop also holds numbered duplicates of the same file -- TRI TIP_12-18
+# -2025-09-13-10.5.csv, .6, .7 -- so the suffix is optional here.
+COOK_FILE_RE = re.compile(r"^.+_\d{2}-\d{2}-\d{4}-\d{2}-\d{2}-\d{2}(\.\d+)?\.csv$", re.I)
+
+# A cook Data File's own header, for anything that slips past the name check.
+COOK_HEADER_RE = re.compile(r"temperature\s*sp|humidity\s*sp|core\s*probe|damper\s*%", re.I)
 
 TABLE = "smokehouse_alarm"
 
@@ -252,6 +257,11 @@ def parse_alarm_file(path):
     if not text.strip():
         return [], "empty"
 
+    # Second line of defence behind the filename check: a cook Data File that
+    # got renamed still must not be read as an alarm log.
+    if COOK_HEADER_RE.search(text[:2048]):
+        return [], "cook data file, not alarms"
+
     try:
         dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
     except csv.Error:
@@ -364,32 +374,64 @@ def candidate_files(root):
 
 
 def probe(root):
+    """Inventory the drop. Shows the interesting files in full and the boring
+    ones as a count -- a wall of identical cook files hides the one thing we
+    are actually looking for."""
     print(f"Probing {root}\n" + "=" * 72)
-    found = 0
-    for path in candidate_files(root):
-        found += 1
-        stat = path.stat()
-        print(f"\n--- {path.relative_to(root)}")
-        print(f"    {stat.st_size:,} bytes   modified {datetime.fromtimestamp(stat.st_mtime):%Y-%m-%d %H:%M}")
+
+    cook_named = 0
+    cook_content = []
+    unknown = []
+    parsed = []
+
+    for path in sorted(Path(root).rglob("*")):
+        if not path.is_file():
+            continue
+        if COOK_FILE_RE.match(path.name):
+            cook_named += 1
+            continue
+        if path.suffix.lower() not in (".csv", ".txt", ".log", ".tsv", ".dat", ""):
+            continue
+
+        records, note = parse_alarm_file(path)
+        if note == "cook data file, not alarms":
+            cook_content.append(path)
+        elif records:
+            parsed.append((path, records))
+        else:
+            unknown.append((path, note))
+
+    print(f"\nCook Data Files (skipped by name):     {cook_named}")
+    print(f"Cook Data Files (skipped by content):  {len(cook_content)}")
+    print(f"Parsed as alarms:                      {len(parsed)}")
+    print(f"Unrecognized:                          {len(unknown)}")
+
+    for path, records in parsed:
+        print(f"\n--- PARSED AS ALARMS: {path.relative_to(root)}  ({len(records)} rows)")
+        for rec in records[:5]:
+            print(f"    {rec['raised_at']}  [{rec['channel']}/{rec['severity']}]  {rec['message']}")
+
+    for path, note in unknown[:12]:
+        print(f"\n--- UNRECOGNIZED: {path.relative_to(root)}  -- {note}")
         try:
             with path.open("r", encoding="utf-8-sig", errors="replace") as fh:
                 for i, line in enumerate(fh):
-                    if i >= 15:
+                    if i >= 8:
                         print("    ...")
                         break
                     print(f"    {line.rstrip()[:200]}")
         except OSError as exc:
             print(f"    (unreadable: {exc})")
+    if len(unknown) > 12:
+        print(f"\n({len(unknown) - 12} more unrecognized files not shown)")
 
-        records, note = parse_alarm_file(path)
-        print(f"    => parser: {len(records)} rows" + (f" -- {note}" if note else ""))
-        if records:
-            print(f"    => sample: {json.dumps(records[0], default=str)[:300]}")
-
-    if not found:
-        print("\nNothing here but cook Data Files. The controller may write its alarm")
-        print("log somewhere else, or export it only on demand. Check the HMI for an")
-        print("alarm history export and point --dir at wherever it lands.")
+    if not parsed:
+        print("\n" + "-" * 72)
+        print("No alarm log found in this directory. If everything above is cook data,")
+        print("the controller is not dropping its alarm history on the FTP share and")
+        print("has to be told to export it -- look on the HMI for Alarm History /")
+        print("Alarm Log / Event Log with an Export or Save to USB option, then point")
+        print("--dir at wherever that lands.")
     print("\n" + "=" * 72)
 
 
