@@ -254,6 +254,25 @@ export async function GET(req: NextRequest) {
         }
       }
 
+      // A split carcass is ONE plan row carrying one buyer's slot id, so
+      // naming the event off that id alone would drop the other half's buyer.
+      // The assignments know every portion — use them when there's more than
+      // one, so the calendar says what the schedule says.
+      const { data: planAssigns } = logIds.length
+        ? await supabase.from('carcass_assignments')
+            .select('harvest_log_id, customer_name')
+            .in('harvest_log_id', logIds)
+        : { data: [] }
+      const assignedNames = new Map<string, string[]>()
+      for (const a of planAssigns ?? []) {
+        const key = a.harvest_log_id as string
+        const nm  = ((a.customer_name as string) ?? '').trim()
+        if (!key || !nm) continue
+        const bucket = assignedNames.get(key)
+        if (bucket) { if (!bucket.includes(nm)) bucket.push(nm) }
+        else assignedNames.set(key, [nm])
+      }
+
       let cutDay = planDate ?? ''
       for (const r of plan) {
         if (r.kind === 'break') {
@@ -262,8 +281,11 @@ export async function GET(req: NextRequest) {
           continue
         }
         if (!cutDay || cutDay < from || cutDay > to) continue
-        const log  = logById.get(r.appointment_id as string)
-        const name = custName.get(r.appointment_customer_id as string) || (log?.producer as string) || ''
+        const log    = logById.get(r.appointment_id as string)
+        const shared = assignedNames.get(r.appointment_id as string) ?? []
+        const name   = shared.length > 1
+          ? [...shared].sort((a, b) => a.localeCompare(b)).join(' + ')
+          : custName.get(r.appointment_customer_id as string) || (log?.producer as string) || ''
         events.push({
           id: `cut-${r.id}`, lane: 'processing', date: cutDay, planned: true,
           title: `📋 ${name || 'Planned cut'}`,

@@ -5,7 +5,7 @@ import { HarvestAppointment, HarvestLog, CarcassAssignment } from '@/lib/types'
 import AssignCarcassesModal from './AssignCarcassesModal'
 import {
   type PriorityWeights, type ScheduleEntry, type BreakItem, type ListItem,
-  DEFAULT_WEIGHTS, WEIGHT_LABELS, buildEntries, loadScheduleData, uniqueCarcasses as uniqueOf, splitPartners,
+  DEFAULT_WEIGHTS, WEIGHT_LABELS, buildEntries, loadScheduleData, uniqueCarcasses as uniqueOf,
   calcScore, speciesColor, speciesIcon, portionBadge, cutDateByKey, hangAtCut, hangColor,
   carcassTotals,
 } from '@/lib/cutSchedule'
@@ -198,17 +198,15 @@ export default function CutScheduleTab() {
   // Called here and will also be called by the processing scanner
   const handleMarkCut = async (entry: ScheduleEntry) => {
     // Cut status lives on the harvest log (the physical carcass), so a split
-    // animal can only be marked cut as a whole — warn before taking the other
-    // customer's half off the schedule with it.
-    const siblings = entries.filter(
-      (e): e is ScheduleEntry =>
-        e.type === 'carcass' && e.harvest_log_id === entry.harvest_log_id && e.key !== entry.key
-    )
-    if (siblings.length > 0) {
-      const others = siblings.map(s => s.customer_name).join(', ')
+    // animal can only be marked cut as a whole. The row is now the carcass
+    // rather than one buyer's portion, so the warning reads off its own cut
+    // customers — the check used to look for sibling ROWS, which no longer
+    // exist, and would have gone quiet without anyone noticing.
+    if (entry.cut_customers.length > 1) {
+      const others = entry.cut_customers.map(c => `${c.portion} — ${c.name}`).join(', ')
       const ok = window.confirm(
-        `This carcass${entry.carcass_tag ? ` (tag ${entry.carcass_tag})` : ''} is split with ${others}. ` +
-        `Marking it cut removes ALL of its cut jobs from the schedule. Only continue if every portion has been cut.`
+        `This carcass${entry.carcass_tag ? ` (tag ${entry.carcass_tag})` : ''} is split between ${others}. ` +
+        `Marking it cut takes the whole animal off the schedule. Only continue if EVERY portion has been cut.`
       )
       if (!ok) return
     }
@@ -267,9 +265,6 @@ export default function CutScheduleTab() {
   // ── Render ────────────────────────────────────────────────────────────────────
   const carcasses = entries.filter((e): e is ScheduleEntry => e.type === 'carcass')
   const uniqueCarcasses = uniqueOf(carcasses)
-  // Rows that are portions of ONE animal, so the planner can see at a glance
-  // why a day's row count runs ahead of its carcass count.
-  const partners = splitPartners(carcasses)
 
   // How long each carcass will have hung by the day it's laid out to be cut.
   // Split rows share a carcass, so the averages run off the deduped list.
@@ -511,27 +506,19 @@ export default function CutScheduleTab() {
             // Walk bottom-up, accumulating carcasses; each break claims whatever
             // has piled up beneath it, then resets. Deduped by carcass so a split
             // animal counts its hanging weight once, not once per customer portion.
-            // `jobs` counts the ROWS as well, because a split animal is one
-            // carcass and two cut sheets — a day that quotes only carcasses
-            // reads as a miscount against the rows below it.
-            const dayTotals = new Map<string, { lbs: number; count: number; jobs: number }>()
+            const dayTotals = new Map<string, { lbs: number; count: number }>()
             {
               let lbs = 0
-              let jobs = 0
               let ids = new Set<string>()
               for (let i = entries.length - 1; i >= 0; i--) {
                 const e = entries[i]
                 if (e.type === 'break') {
-                  dayTotals.set(e.key, { lbs, count: ids.size, jobs })
+                  dayTotals.set(e.key, { lbs, count: ids.size })
                   lbs = 0
-                  jobs = 0
                   ids = new Set<string>()
-                } else {
-                  jobs++
-                  if (!ids.has(e.harvest_log_id)) {
-                    ids.add(e.harvest_log_id)
-                    if (e.hot_carcass_weight_lbs != null) lbs += e.hot_carcass_weight_lbs
-                  }
+                } else if (!ids.has(e.harvest_log_id)) {
+                  ids.add(e.harvest_log_id)
+                  if (e.hot_carcass_weight_lbs != null) lbs += e.hot_carcass_weight_lbs
                 }
               }
             }
@@ -544,7 +531,7 @@ export default function CutScheduleTab() {
 
               // ── Day break divider ──────────────────────────────────────────────
               if (entry.type === 'break') {
-                const day = dayTotals.get(entry.key) ?? { lbs: 0, count: 0, jobs: 0 }
+                const day = dayTotals.get(entry.key) ?? { lbs: 0, count: 0 }
                 return (
                   <div
                     key={entry.key}
@@ -611,7 +598,6 @@ export default function CutScheduleTab() {
                       </span>
                       <span style={{ color: C.lightBrown, fontSize: '0.64rem' }}>
                         · {day.count} {day.count === 1 ? 'carcass' : 'carcasses'} this day
-                        {day.jobs > day.count && ` · ${day.jobs} cut sheets`}
                       </span>
                     </span>
                     <button
@@ -688,19 +674,21 @@ export default function CutScheduleTab() {
                           {entry.carcass_tag}
                         </span>
                       )}
-                      {/* Two rows, one animal. The weight column repeats the
-                          WHOLE carcass on each, so this badge is what stops the
-                          day being read as two head. */}
-                      {(partners.get(entry.key)?.length ?? 0) > 0 && (
+                      {/* One row, one animal — the customer column already
+                          carries both names. This says how many sheets come off
+                          it, and which portion each buyer took. */}
+                      {entry.cut_customers.length > 1 && (
                         <span
-                          title={`Same carcass as ${partners.get(entry.key)!.join(', ')} — one animal, ${partners.get(entry.key)!.length + 1} cut sheets. Counts once toward head and hanging weight.`}
+                          title={entry.cut_customers
+                            .map(cc => `${cc.portion} — ${cc.name}${cc.has_instructions ? '' : ' (NO SHEET)'}`)
+                            .join('\n')}
                           style={{
                             fontSize: '0.6rem', fontWeight: 700, flexShrink: 0,
                             background: `${C.amber}1A`, border: `1px solid ${C.amber}55`, color: C.amber,
                             borderRadius: 3, padding: '0 5px', whiteSpace: 'nowrap',
                           }}
                         >
-                          🔗 split
+                          🔗 split · {entry.cut_customers.length} sheets
                         </span>
                       )}
                     </div>

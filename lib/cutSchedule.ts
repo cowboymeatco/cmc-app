@@ -15,6 +15,15 @@ export interface PriorityWeights {
 // portions sum to a whole).
 export const FRACTION: Record<string, number> = { Whole: 1, Half: 0.5, Quarter: 0.25 }
 
+/** One cut customer's claim on a carcass — their portion and their own sheet. */
+export interface CutCustomer {
+  appointment_customer_id: string
+  name:                    string
+  portion:                 string
+  has_instructions:        boolean
+  cutting_instruction_id:  string | null
+}
+
 export interface ScheduleEntry {
   type:                      'carcass'
   key:                       string
@@ -36,6 +45,11 @@ export interface ScheduleEntry {
   rank:                      number
   locked:                    boolean
   entry_notes:               string
+  /** Every cut customer on this carcass, one per assigned portion. A whole
+   *  animal to one buyer has one; a split has two or more. Empty when nobody
+   *  has been assigned yet. `customer_name` and `portion` above are display
+   *  summaries of this list. */
+  cut_customers:             CutCustomer[]
   customer_count:            number   // # of cut customers on the appointment (>1 & unassigned = collapsed, see buildEntries)
   assigned:                  boolean  // true = this row is a real carcass→customer assignment (one cut job per portion)
   appt_assigned_carcasses:   number   // # of this appointment's carcasses fully assigned (portions sum to a whole)
@@ -179,40 +193,25 @@ export function uniqueCarcasses(entries: ScheduleEntry[]): ScheduleEntry[] {
   return Array.from(new Map(entries.map(e => [e.harvest_log_id, e])).values())
 }
 
-// Head and cut jobs are DIFFERENT numbers whenever an animal is split, and both
-// are true: the cooler holds one carcass, the crew works two cut sheets. Quoting
-// only head next to a list of job cards reads as a miscount — Charlie counted 5
-// beef under Monday Aug 10 against a header saying 4 head (2026-08-09). Callers
-// show `jobs` alongside whenever the two disagree.
-export function carcassTotals(entries: ScheduleEntry[]): { head: number; jobs: number; lbs: number } {
+export function carcassTotals(entries: ScheduleEntry[]): { head: number; lbs: number } {
   const uniq = uniqueCarcasses(entries)
   return {
     head: uniq.length,
-    jobs: entries.length,
     lbs:  uniq.reduce((s, e) => s + (e.hot_carcass_weight_lbs ?? 0), 0),
   }
 }
 
 /**
- * For each row on a split carcass, the OTHER customers sharing that animal —
- * entry key → their names. Empty for a whole carcass. Lets a row say out loud
- * that the card above or below it is the same animal, which is also what the
- * cutter needs to know: one carcass comes off the rail, two sheets come off it.
+ * How much of a carcass its assigned portions add up to. Two halves make a
+ * Whole; a single assigned half stays a Half, because the rest of that animal
+ * is still looking for a buyer and the badge must not imply otherwise.
  */
-export function splitPartners(entries: ScheduleEntry[]): Map<string, string[]> {
-  const byCarcass = new Map<string, ScheduleEntry[]>()
-  for (const e of entries) {
-    const bucket = byCarcass.get(e.harvest_log_id)
-    if (bucket) bucket.push(e); else byCarcass.set(e.harvest_log_id, [e])
-  }
-  const out = new Map<string, string[]>()
-  for (const group of byCarcass.values()) {
-    if (group.length < 2) continue
-    for (const e of group) {
-      out.set(e.key, group.filter(o => o.key !== e.key).map(o => o.customer_name))
-    }
-  }
-  return out
+export function assignedPortion(cutCustomers: CutCustomer[]): string {
+  const sum = cutCustomers.reduce((s, c) => s + (FRACTION[c.portion] ?? 0), 0)
+  if (sum >= 0.999) return 'Whole'
+  if (sum >= 0.499) return 'Half'
+  if (sum >= 0.249) return 'Quarter'
+  return cutCustomers[0]?.portion ?? 'Whole'
 }
 
 export function portionBadge(p: string): { label: string; color: string } {
@@ -333,38 +332,67 @@ export function buildEntries(
     const logAssigns  = assignByLog.get(log.id) ?? []
 
     if (logAssigns.length > 0) {
-      // ── REAL FIX: this carcass is assigned to one or more cut customers.
-      // Emit one cut job per assigned portion (a true split → two rows that
-      // share harvest_log_id, so the head count / day totals still count the
-      // carcass once — those dedupe by harvest_log_id).
-      for (const asg of logAssigns) {
-        const cust    = customers.find(c => c.id === asg.appointment_customer_id)
-        const instrId = cust?.linked_cutting_instruction_id || asg.linked_cutting_instruction_id || null
-        const saved   = savedByKey.get(`${log.id}__${asg.appointment_customer_id}`)
-        raw.push({
-          key:                     `${log.id}__${asg.appointment_customer_id}`,
-          harvest_log_id:          log.id,
-          appointment_id:          log.id,
-          source_appointment_id:   appt?.id ?? log.appointment_id ?? null,
-          appointment_customer_id: asg.appointment_customer_id,
-          customer_name:           cust?.customer_name || asg.customer_name || 'Unknown',
-          producer:                log.producer ?? '',
-          species:                 log.species,
-          portion:                 asg.portion || cust?.portion || 'Whole',
-          harvest_date:            log.harvest_date,
-          carcass_tag:             log.carcass_tag,
-          hot_carcass_weight_lbs:  log.hot_carcass_weight_lbs,
-          has_instructions:        !!(instrId && instructionIds.has(instrId)),
-          cutting_instruction_id:  instrId,
-          days_hanging:            daysHanging,
-          locked:                  saved?.locked ?? false,
-          entry_notes:             saved?.notes  ?? '',
-          customer_count:          customers.length,
-          assigned:                true,
-          appt_assigned_carcasses: apptStats.get(log.appointment_id ?? '')?.assigned ?? 0,
-          appt_total_carcasses:    apptStats.get(log.appointment_id ?? '')?.total ?? 0,
+      // ── This carcass is assigned to one or more cut customers.
+      //
+      // ONE ROW PER CARCASS, listing every customer on it. A split animal is
+      // one thing hanging on the rail that happens to carry two cut sheets;
+      // showing it as two rows made a day's card count run ahead of its head
+      // count and read as a miscount (Charlie, 2026-08-09 — "one row per
+      // carcass with both names is better"). The cut sheets don't disappear,
+      // they move into cut_customers and render on the single row.
+      //
+      // Sorted by name so the key below is stable across loads.
+      const cutCustomers: CutCustomer[] = logAssigns
+        .map(asg => {
+          const cust    = customers.find(c => c.id === asg.appointment_customer_id)
+          const instrId = cust?.linked_cutting_instruction_id || asg.linked_cutting_instruction_id || null
+          return {
+            appointment_customer_id: asg.appointment_customer_id,
+            name:                    cust?.customer_name || asg.customer_name || 'Unknown',
+            portion:                 asg.portion || cust?.portion || 'Whole',
+            has_instructions:        !!(instrId && instructionIds.has(instrId)),
+            cutting_instruction_id:  instrId,
+          }
         })
-      }
+        .sort((a, b) => a.name.localeCompare(b.name))
+
+      // The saved plan may still hold a row PER PORTION from before this
+      // collapse. Match on any of them and take the earliest slot, so a split
+      // carcass keeps the place the planner gave it instead of losing its day
+      // and reappearing above the first break as unscheduled.
+      const saved = cutCustomers
+        .map(cc => savedByKey.get(`${log.id}__${cc.appointment_customer_id}`))
+        .filter((s): s is SavedItem => !!s)
+        .sort((a, b) => a.manual_rank - b.manual_rank)[0]
+
+      raw.push({
+        key:                     `${log.id}__${cutCustomers[0].appointment_customer_id}`,
+        harvest_log_id:          log.id,
+        appointment_id:          log.id,
+        source_appointment_id:   appt?.id ?? log.appointment_id ?? null,
+        appointment_customer_id: cutCustomers[0].appointment_customer_id,
+        customer_name:           cutCustomers.map(c => c.name).join(' + '),
+        producer:                log.producer ?? '',
+        species:                 log.species,
+        // What of the animal is actually spoken for — two halves make a whole,
+        // but a lone assigned half must not claim the carcass is fully placed.
+        portion:                 assignedPortion(cutCustomers),
+        harvest_date:            log.harvest_date,
+        carcass_tag:             log.carcass_tag,
+        hot_carcass_weight_lbs:  log.hot_carcass_weight_lbs,
+        // Every sheet has to be in before the row is clear — one missing sheet
+        // still stops the carcass, so the flag follows the weakest portion.
+        has_instructions:        cutCustomers.every(c => c.has_instructions),
+        cutting_instruction_id:  cutCustomers.length === 1 ? cutCustomers[0].cutting_instruction_id : null,
+        days_hanging:            daysHanging,
+        locked:                  saved?.locked ?? false,
+        entry_notes:             saved?.notes  ?? '',
+        cut_customers:           cutCustomers,
+        customer_count:          customers.length,
+        assigned:                true,
+        appt_assigned_carcasses: apptStats.get(log.appointment_id ?? '')?.assigned ?? 0,
+        appt_total_carcasses:    apptStats.get(log.appointment_id ?? '')?.total ?? 0,
+      })
       continue
     }
 
@@ -401,6 +429,9 @@ export function buildEntries(
       days_hanging:            daysHanging,
       locked:                  saved?.locked ?? false,
       entry_notes:             saved?.notes  ?? '',
+      // Nobody assigned yet — the buyers are known but not which carcass is
+      // whose, so there is no per-portion truth to list.
+      cut_customers:           [],
       customer_count:          customers.length,
       assigned:                false,
       appt_assigned_carcasses: apptStats.get(log.appointment_id ?? '')?.assigned ?? 0,

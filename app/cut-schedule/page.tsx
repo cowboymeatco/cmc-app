@@ -8,7 +8,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import {
   type ScheduleEntry,
-  DEFAULT_WEIGHTS, buildEntries, loadScheduleData, carcassTotals, splitPartners,
+  DEFAULT_WEIGHTS, buildEntries, loadScheduleData, carcassTotals,
   speciesColor, speciesIcon, portionBadge, hangAtCut, hangColor,
 } from '@/lib/cutSchedule'
 import { isoDate, dateLabel } from '@/lib/dates'
@@ -111,9 +111,6 @@ export default function CrewCutSchedulePage() {
   const totals        = carcassTotals(entries)
   const missingSheets = entries.filter(e => !e.has_instructions).length
   const todayISO      = isoDate()
-  // Which rows are two halves of one animal — the card count and the head count
-  // only reconcile on screen if the shared rows say so.
-  const partners      = splitPartners(entries)
   // Rail-order number per row, precomputed so rendering never mutates state.
   const orderNo       = new Map(entries.map((e, i) => [e.key, i + 1]))
 
@@ -171,10 +168,7 @@ export default function CrewCutSchedulePage() {
         {!loading && entries.length > 0 && (
           <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
             {[
-              // Split animals make the card count exceed the head count. Say so
-              // right on the tile rather than let the crew count cards and find
-              // the header short.
-              { label: totals.jobs > totals.head ? `head · ${totals.jobs} jobs` : 'head', value: String(totals.head), color: C.tan },
+              { label: 'head', value: String(totals.head), color: C.tan },
               { label: 'lb hanging', value: Math.round(totals.lbs).toLocaleString(), color: C.cream },
               { label: 'no sheet', value: String(missingSheets), color: missingSheets > 0 ? C.red : C.green },
             ].map(s => (
@@ -250,9 +244,7 @@ export default function CrewCutSchedulePage() {
                   ▸ {dayLabel(sec.date, sec.key === 'first')}
                 </span>
                 <span style={{ color: C.lightBrown, fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
-                  {secTotals.head} head
-                  {secTotals.jobs > secTotals.head && ` · ${secTotals.jobs} jobs`}
-                  {' · '}{Math.round(secTotals.lbs).toLocaleString()} lb
+                  {secTotals.head} head · {Math.round(secTotals.lbs).toLocaleString()} lb
                 </span>
               </div>
 
@@ -298,28 +290,42 @@ export default function CrewCutSchedulePage() {
                           {entry.carcass_tag && <span style={{ fontFamily: 'monospace' }}> · tag {entry.carcass_tag}</span>}
                           {entry.producer && <> · {entry.producer}</>}
                         </div>
-                        {/* One carcass, two cut sheets. Without this the second
-                            card looks like another animal and the head count
-                            looks wrong (Charlie, 2026-08-09). The weight on the
-                            right is the WHOLE carcass on both cards, so say
-                            that too — it must not be added up twice. */}
-                        {(partners.get(entry.key)?.length ?? 0) > 0 && (
-                          <div style={{
-                            fontSize: '0.72rem', color: C.amber, marginTop: 3, fontWeight: 700,
-                          }}>
-                            🔗 Same carcass as {partners.get(entry.key)!.join(', ')} — one animal, {(partners.get(entry.key)!.length + 1)} cut sheets
+                        {/* A split animal is ONE carcass with a sheet per
+                            portion. Each customer gets their own line with
+                            their own sheet status, so the cutter can see at a
+                            glance that one of the two is still missing. */}
+                        {entry.cut_customers.length > 1 ? (
+                          <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                            <div style={{ fontSize: '0.72rem', color: C.amber, fontWeight: 700 }}>
+                              🔗 Split — one animal, {entry.cut_customers.length} cut sheets
+                            </div>
+                            {entry.cut_customers.map(cc => (
+                              <div key={cc.appointment_customer_id} style={{ fontSize: '0.78rem', color: C.cream }}>
+                                <span style={{ color: C.lightBrown }}>{portionBadge(cc.portion).label}</span>{' '}
+                                {cc.name}{' '}
+                                {cc.has_instructions
+                                  ? <span style={{ color: C.green }}>✓</span>
+                                  : <span style={{
+                                      color: C.red, fontWeight: 700,
+                                      background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.4)',
+                                      borderRadius: 4, padding: '0 5px', fontSize: '0.7rem',
+                                    }}>⚠ NO SHEET</span>
+                                }
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: '0.78rem', marginTop: 3 }}>
+                            {entry.has_instructions
+                              ? <span style={{ color: C.green }}>✓ Cut sheet ready</span>
+                              : <span style={{
+                                  color: C.red, fontWeight: 700,
+                                  background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.4)',
+                                  borderRadius: 4, padding: '1px 7px',
+                                }}>⚠ NO CUT SHEET</span>
+                            }
                           </div>
                         )}
-                        <div style={{ fontSize: '0.78rem', marginTop: 3 }}>
-                          {entry.has_instructions
-                            ? <span style={{ color: C.green }}>✓ Cut sheet ready</span>
-                            : <span style={{
-                                color: C.red, fontWeight: 700,
-                                background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.4)',
-                                borderRadius: 4, padding: '1px 7px',
-                              }}>⚠ NO CUT SHEET</span>
-                          }
-                        </div>
                         {entry.entry_notes && (
                           <div style={{
                             fontSize: '0.8rem', color: C.tan, marginTop: 4,
