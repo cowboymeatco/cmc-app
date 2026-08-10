@@ -1,6 +1,11 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+// Service role, not the anon key: `customers` is under RLS (see
+// scripts/2026-08-09_rls_customers_phase2_lockdown.sql), and this route is
+// staff customer administration that legitimately reads and writes every row.
+// The anon key cannot do that any more, and cmc-app has no signed-in user to
+// derive an auth.uid() from. Server-side only — the key never reaches a browser.
+import { supabaseAdmin as supabase } from '@/lib/supabaseAdmin'
 
 // GET /api/customers
 //   ?search=text   â€” search name / ranch_name / phone / email (for autocomplete)

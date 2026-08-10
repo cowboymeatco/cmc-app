@@ -3,6 +3,9 @@
 export const maxDuration = 60
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+// producer_qbo_links is under RLS; the anon key can no longer write it and
+// this route is staff-side QuickBooks linking. Server-side only.
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { qboFetch } from '@/lib/qbo'
 
 // Producer -> QuickBooks customer recognition. Billing keys off
@@ -42,7 +45,7 @@ export async function GET(req: NextRequest) {
 
     const [{ data: harvests, error: hErr }, { data: links, error: lErr }] = await Promise.all([
       supabase.from('harvest_log').select('producer').not('producer', 'is', null).neq('producer', ''),
-      supabase.from('producer_qbo_links').select('producer_name, qbo_customer_id'),
+      supabaseAdmin.from('producer_qbo_links').select('producer_name, qbo_customer_id'),
     ])
     if (hErr) throw new Error(hErr.message)
     if (lErr) throw new Error(lErr.message)
@@ -137,7 +140,7 @@ export async function POST(req: NextRequest) {
     if (body.action === 'link') {
       const { producerName, qboId } = body
       if (!producerName || !qboId) return NextResponse.json({ error: 'producerName and qboId required' }, { status: 400 })
-      const { error } = await supabase
+      const { error } = await supabaseAdmin
         .from('producer_qbo_links')
         .upsert({ producer_name: producerName, qbo_customer_id: String(qboId) }, { onConflict: 'producer_name' })
       if (error) throw new Error(error.message)
@@ -147,7 +150,7 @@ export async function POST(req: NextRequest) {
     if (body.action === 'unlink') {
       const { producerName } = body
       if (!producerName) return NextResponse.json({ error: 'producerName required' }, { status: 400 })
-      const { error } = await supabase.from('producer_qbo_links').delete().eq('producer_name', producerName)
+      const { error } = await supabaseAdmin.from('producer_qbo_links').delete().eq('producer_name', producerName)
       if (error) throw new Error(error.message)
       return NextResponse.json({ ok: true })
     }

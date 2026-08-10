@@ -1,6 +1,9 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+// producer_qbo_links is under RLS; the anon key can no longer write it and
+// this route is staff-side QuickBooks linking. Server-side only.
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { killFeeCharge, cutWrapCharge, isExcludedProducer, PORTION_FRACTION, type BillingCharge } from '@/lib/billingRules'
 import type { AppointmentCustomer } from '@/lib/types'
 
@@ -70,7 +73,7 @@ export async function POST(req: NextRequest) {
         .gte('harvest_date', since)
         .not('producer', 'is', null)
         .neq('producer', ''),
-      supabase.from('producer_qbo_links').select('producer_name, qbo_customer_id'),
+      supabaseAdmin.from('producer_qbo_links').select('producer_name, qbo_customer_id'),
     ])
     if (hErr) throw new Error(hErr.message)
     if (lErr) throw new Error(lErr.message)

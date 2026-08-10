@@ -1,6 +1,11 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+// v_producer_customer_ties carries customer names and ids. A view reads its
+// base tables with the VIEW OWNER's rights, so RLS on `customers` does not
+// protect it — the anon grant has to come off the view itself, which means
+// this read moves to the service role. Server-side only.
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { extractValueAdd } from '@/lib/valueAdd'
 
 export const dynamic = 'force-dynamic'
@@ -78,7 +83,7 @@ export async function GET(req: NextRequest) {
     // One row per (animal × cut-customer tie) from v_producer_customer_ties.
     // Producer is on the animal; the customer is the physical carcass
     // assignment when there is one, else the customer booked on the appointment.
-    let q = supabase
+    let q = supabaseAdmin
       .from('v_producer_customer_ties')
       .select('harvest_date,species,kill_order,carcass_tag,ear_tag,sex,breed,kill_type,half_1_weight_lbs,half_2_weight_lbs,hanging_weight_lbs,producer,producer_id,customer_name,customer_id,portion,assigned,has_cut_sheet,payment_responsibility,producer_differs,harvest_log_id')
       .order('harvest_date', { ascending: false })

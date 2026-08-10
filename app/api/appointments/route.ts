@@ -1,6 +1,11 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+// `customers` is under RLS and the anon key can no longer reach it. Booking an
+// appointment auto-creates and re-roles producer/customer records, which is a
+// staff action with no signed-in user behind it, so those specific queries —
+// and only those — run on the service role. Server-side only.
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // GET /api/appointments â€” list appointments
 //   ?date=YYYY-MM-DD  â€” only that harvest date
@@ -57,7 +62,7 @@ async function linkCustomers(list: unknown): Promise<unknown> {
       if (seen.has(key)) { c.customer_id = seen.get(key)!; out.push(c); continue }
 
       // ilike with no wildcards is a case-insensitive exact match.
-      const { data: found } = await supabase
+      const { data: found } = await supabaseAdmin
         .from('customers').select('id').ilike('name', name).limit(1)
 
       let id = found?.[0]?.id as string | undefined
@@ -66,7 +71,7 @@ async function linkCustomers(list: unknown): Promise<unknown> {
         const contact = (c.contact_value ?? '').trim()
         const isEmail = contact.includes('@')
         const pref = c.contact_preference
-        const { data: created } = await supabase
+        const { data: created } = await supabaseAdmin
           .from('customers')
           .insert([{
             name,
@@ -143,15 +148,15 @@ async function resolveProducerId(source: unknown): Promise<string | null> {
   if (!name) return null
   try {
     // ilike with no wildcards is a case-insensitive exact match.
-    const { data } = await supabase.from('customers').select('id, role').ilike('name', name).limit(1)
+    const { data } = await supabaseAdmin.from('customers').select('id, role').ilike('name', name).limit(1)
     const found = data?.[0]
     if (found) {
       if (found.role === 'customer') {
-        await supabase.from('customers').update({ role: 'both' }).eq('id', found.id)
+        await supabaseAdmin.from('customers').update({ role: 'both' }).eq('id', found.id)
       }
       return found.id as string
     }
-    const { data: created } = await supabase
+    const { data: created } = await supabaseAdmin
       .from('customers')
       .insert([{
         name,
