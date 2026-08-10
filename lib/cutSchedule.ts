@@ -164,12 +164,40 @@ export function uniqueCarcasses(entries: ScheduleEntry[]): ScheduleEntry[] {
   return Array.from(new Map(entries.map(e => [e.harvest_log_id, e])).values())
 }
 
-export function carcassTotals(entries: ScheduleEntry[]): { head: number; lbs: number } {
+// Head and cut jobs are DIFFERENT numbers whenever an animal is split, and both
+// are true: the cooler holds one carcass, the crew works two cut sheets. Quoting
+// only head next to a list of job cards reads as a miscount — Charlie counted 5
+// beef under Monday Aug 10 against a header saying 4 head (2026-08-09). Callers
+// show `jobs` alongside whenever the two disagree.
+export function carcassTotals(entries: ScheduleEntry[]): { head: number; jobs: number; lbs: number } {
   const uniq = uniqueCarcasses(entries)
   return {
     head: uniq.length,
+    jobs: entries.length,
     lbs:  uniq.reduce((s, e) => s + (e.hot_carcass_weight_lbs ?? 0), 0),
   }
+}
+
+/**
+ * For each row on a split carcass, the OTHER customers sharing that animal —
+ * entry key → their names. Empty for a whole carcass. Lets a row say out loud
+ * that the card above or below it is the same animal, which is also what the
+ * cutter needs to know: one carcass comes off the rail, two sheets come off it.
+ */
+export function splitPartners(entries: ScheduleEntry[]): Map<string, string[]> {
+  const byCarcass = new Map<string, ScheduleEntry[]>()
+  for (const e of entries) {
+    const bucket = byCarcass.get(e.harvest_log_id)
+    if (bucket) bucket.push(e); else byCarcass.set(e.harvest_log_id, [e])
+  }
+  const out = new Map<string, string[]>()
+  for (const group of byCarcass.values()) {
+    if (group.length < 2) continue
+    for (const e of group) {
+      out.set(e.key, group.filter(o => o.key !== e.key).map(o => o.customer_name))
+    }
+  }
+  return out
 }
 
 export function portionBadge(p: string): { label: string; color: string } {

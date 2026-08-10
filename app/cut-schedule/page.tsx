@@ -8,7 +8,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import {
   type ScheduleEntry,
-  DEFAULT_WEIGHTS, buildEntries, loadScheduleData, carcassTotals,
+  DEFAULT_WEIGHTS, buildEntries, loadScheduleData, carcassTotals, splitPartners,
   speciesColor, speciesIcon, portionBadge, hangAtCut, hangColor,
 } from '@/lib/cutSchedule'
 import { isoDate, dateLabel } from '@/lib/dates'
@@ -111,6 +111,9 @@ export default function CrewCutSchedulePage() {
   const totals        = carcassTotals(entries)
   const missingSheets = entries.filter(e => !e.has_instructions).length
   const todayISO      = isoDate()
+  // Which rows are two halves of one animal — the card count and the head count
+  // only reconcile on screen if the shared rows say so.
+  const partners      = splitPartners(entries)
   // Rail-order number per row, precomputed so rendering never mutates state.
   const orderNo       = new Map(entries.map((e, i) => [e.key, i + 1]))
 
@@ -168,7 +171,10 @@ export default function CrewCutSchedulePage() {
         {!loading && entries.length > 0 && (
           <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
             {[
-              { label: 'head', value: String(totals.head), color: C.tan },
+              // Split animals make the card count exceed the head count. Say so
+              // right on the tile rather than let the crew count cards and find
+              // the header short.
+              { label: totals.jobs > totals.head ? `head · ${totals.jobs} jobs` : 'head', value: String(totals.head), color: C.tan },
               { label: 'lb hanging', value: Math.round(totals.lbs).toLocaleString(), color: C.cream },
               { label: 'no sheet', value: String(missingSheets), color: missingSheets > 0 ? C.red : C.green },
             ].map(s => (
@@ -244,7 +250,9 @@ export default function CrewCutSchedulePage() {
                   ▸ {dayLabel(sec.date, sec.key === 'first')}
                 </span>
                 <span style={{ color: C.lightBrown, fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
-                  {secTotals.head} head · {Math.round(secTotals.lbs).toLocaleString()} lb
+                  {secTotals.head} head
+                  {secTotals.jobs > secTotals.head && ` · ${secTotals.jobs} jobs`}
+                  {' · '}{Math.round(secTotals.lbs).toLocaleString()} lb
                 </span>
               </div>
 
@@ -290,6 +298,18 @@ export default function CrewCutSchedulePage() {
                           {entry.carcass_tag && <span style={{ fontFamily: 'monospace' }}> · tag {entry.carcass_tag}</span>}
                           {entry.producer && <> · {entry.producer}</>}
                         </div>
+                        {/* One carcass, two cut sheets. Without this the second
+                            card looks like another animal and the head count
+                            looks wrong (Charlie, 2026-08-09). The weight on the
+                            right is the WHOLE carcass on both cards, so say
+                            that too — it must not be added up twice. */}
+                        {(partners.get(entry.key)?.length ?? 0) > 0 && (
+                          <div style={{
+                            fontSize: '0.72rem', color: C.amber, marginTop: 3, fontWeight: 700,
+                          }}>
+                            🔗 Same carcass as {partners.get(entry.key)!.join(', ')} — one animal, {(partners.get(entry.key)!.length + 1)} cut sheets
+                          </div>
+                        )}
                         <div style={{ fontSize: '0.78rem', marginTop: 3 }}>
                           {entry.has_instructions
                             ? <span style={{ color: C.green }}>✓ Cut sheet ready</span>
