@@ -131,13 +131,37 @@ def env_config():
 
 # ── Parsing helpers ────────────────────────────────────────────────────────────
 
+_TZ_CACHE = []
+
+
 def local_tz():
+    """Local zone, or a hard stop.
+
+    Windows does not ship the IANA timezone database, so on the kiosk this
+    raises unless the `tzdata` package is installed. Falling back to UTC would
+    silently write every alarm 6-7 hours off -- they would still look like
+    perfectly good timestamps while lining up against nothing. Refuse instead.
+    """
+    if _TZ_CACHE:
+        return _TZ_CACHE[0]
+
     if ZoneInfo is None:
-        return timezone.utc
+        sys.exit(
+            f"Python {sys.version_info.major}.{sys.version_info.minor} has no zoneinfo module.\n"
+            "Python 3.9+ is required so alarm times convert to UTC correctly."
+        )
     try:
-        return ZoneInfo(LOCAL_TZ)
+        tz = ZoneInfo(LOCAL_TZ)
     except Exception:
-        return timezone.utc
+        sys.exit(
+            f"Timezone database missing -- cannot resolve {LOCAL_TZ}.\n"
+            "Windows does not ship one. Install it with:\n"
+            "    pip install tzdata\n"
+            "Refusing to continue: without it every alarm would be stored 6-7 hours\n"
+            "off and would not line up with the cook readings."
+        )
+    _TZ_CACHE.append(tz)
+    return tz
 
 
 DATE_FORMATS = [
@@ -408,6 +432,8 @@ def main():
     root = Path(args.dir)
     if not root.is_dir():
         sys.exit(f"Not a directory: {root}")
+
+    local_tz()  # fail fast on a missing tz database, before reading anything
 
     if args.probe:
         probe(root)

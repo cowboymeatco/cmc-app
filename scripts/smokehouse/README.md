@@ -13,7 +13,17 @@ log says it out loud, with a timestamp we can line up against the readings.
 1. Copy `alarm_import.py` to `C:\CMC\smokehouse\` on the packaging kiosk
    (desktop-dti17ih, under the `Cowboy Meat Co` user — same folder as `ftp_server.py`).
 
-2. **Probe first.** This reads only; it writes nothing:
+2. **Install the timezone database.** Windows doesn't ship one, and without it the
+   script cannot convert the controller's local timestamps to UTC:
+
+   ```
+   pip install tzdata
+   ```
+
+   It refuses to run rather than falling back to UTC — that would store every alarm
+   6-7 hours off while still looking like valid timestamps.
+
+3. **Probe first.** This reads only; it writes nothing:
 
    ```
    python alarm_import.py --probe
@@ -24,18 +34,18 @@ log says it out loud, with a timestamp we can line up against the readings.
    whether the controller drops an alarm file on its own or has to be told to export
    one from the HMI.
 
-3. Give it credentials — either the existing `SUPABASE_URL` /
+4. Give it credentials — either the existing `SUPABASE_URL` /
    `SUPABASE_SERVICE_ROLE_KEY` environment variables, or a `supabase.env` file next
    to the script with those two as `KEY=value` lines.
 
-4. Dry run, then real:
+5. Dry run, then real:
 
    ```
    python alarm_import.py --dry-run
    python alarm_import.py
    ```
 
-5. Once it works, schedule it the same way the other kiosk jobs are scheduled. Every
+6. Once it works, schedule it the same way the other kiosk jobs are scheduled. Every
    15 minutes is plenty — alarm logs are small and re-imports are free (see below).
 
 ## What it does
