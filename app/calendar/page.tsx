@@ -17,6 +17,9 @@ type View = 'week' | 'month' | 'quarter'
 interface CalEvent {
   id: string; lane: Lane; date: string; title: string; subtitle?: string; status?: string; href?: string; planned?: boolean
 }
+// When the kiosk last managed to import a cook cycle. Null on a database with
+// no cooks at all.
+interface SmokehouseFeed { lastCookAt: string | null; lastImportAt: string | null }
 
 const LANES: { key: Lane; label: string; emoji: string; color: string }[] = [
   { key: 'receiving',  label: 'Receiving',  emoji: '📦', color: '#60A5FA' },
@@ -63,6 +66,7 @@ export default function MasterCalendar() {
   const [anchor, setAnchor] = useState<Date>(() => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()) })
   const [active, setActive] = useState<Set<Lane>>(() => new Set(LANES.map(l => l.key)))
   const [events, setEvents] = useState<CalEvent[]>([])
+  const [feed, setFeed] = useState<SmokehouseFeed | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
 
@@ -83,7 +87,12 @@ export default function MasterCalendar() {
     setLoading(true); setErr('')
     fetch(`/api/calendar?from=${rangeFrom}&to=${rangeTo}`)
       .then(r => r.json())
-      .then(d => { if (!cancelled) setEvents(Array.isArray(d) ? d : []) })
+      .then(d => {
+        if (cancelled) return
+        // Tolerate the old bare-array shape as well as { events, smokehouseFeed }.
+        setEvents(Array.isArray(d) ? d : Array.isArray(d?.events) ? d.events : [])
+        setFeed(Array.isArray(d) ? null : d?.smokehouseFeed ?? null)
+      })
       .catch(() => { if (!cancelled) setErr('Could not load the calendar.') })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
@@ -105,6 +114,16 @@ export default function MasterCalendar() {
     for (const e of events) c[e.lane] = (c[e.lane] ?? 0) + 1
     return c
   }, [events])
+
+  // The Smokehouse lane is fed by an import that runs off-site, so it can die
+  // quietly and leave the lane looking merely idle. Past three days with nothing
+  // imported, say so — but only while looking at a range that reaches today, and
+  // only while the lane is actually switched on.
+  const staleFeed = useMemo(() => {
+    if (!feed?.lastImportAt || !active.has('smokehouse') || rangeTo < todayISO) return null
+    const days = Math.floor((Date.now() - new Date(feed.lastImportAt).getTime()) / 86_400_000)
+    return days >= 3 ? { days, lastCookAt: feed.lastCookAt } : null
+  }, [feed, active, rangeTo, todayISO])
 
   const navLabel = useMemo(() => {
     if (view === 'week') { const w = weekDays(anchor); return `${shortDay(w[0])} – ${shortDay(w[6])}, ${w[6].getFullYear()}` }
@@ -176,6 +195,22 @@ export default function MasterCalendar() {
         </div>
 
         {err && <div style={{ padding: '0.75rem', color: '#E8883A', fontSize: '0.85rem' }}>{err}</div>}
+
+        {staleFeed && (
+          <div style={{
+            display: 'flex', alignItems: 'baseline', gap: '0.5rem', flexWrap: 'wrap',
+            background: 'rgba(251,146,60,0.12)', border: '1px solid rgba(251,146,60,0.45)',
+            borderRadius: 5, padding: '0.55rem 0.85rem', marginBottom: '0.75rem',
+            color: '#FB923C', fontSize: '0.78rem', lineHeight: 1.6,
+          }}>
+            <strong>🔥 Smokehouse feed is {staleFeed.days} days behind.</strong>
+            <span style={{ color: C.cream }}>
+              The last cook imported off the controller
+              {staleFeed.lastCookAt ? ` started ${new Date(staleFeed.lastCookAt).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}` : ''} —
+              anything cooked since then is missing from this lane. Check <code style={{ color: C.tan }}>ftp_server.py</code> on the packaging kiosk.
+            </span>
+          </div>
+        )}
 
         <div style={{ opacity: loading ? 0.5 : 1, transition: 'opacity 0.15s' }}>
           {view === 'week'    && <WeekView    days={weekDays(anchor)} byDay={byDay} todayISO={todayISO} />}

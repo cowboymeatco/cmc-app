@@ -298,5 +298,27 @@ export async function GET(req: NextRequest) {
   }
 
   events.sort((a, b) => a.date.localeCompare(b.date) || a.lane.localeCompare(b.lane))
-  return NextResponse.json(events)
+
+  // ── Is the smokehouse feed still alive? ─────────────────────────────────────
+  // Cooks don't originate here — the controller pushes its Data Files to
+  // ftp_server.py on the packaging kiosk, which imports them into
+  // smokehouse_cook. When that import stops, the Smokehouse lane just goes
+  // quiet, and a quiet lane is indistinguishable from a week nobody cooked.
+  // Charlie ran a pulled pork and a hot dog cycle on 2026-08-10/11 and filed
+  // this as a calendar bug; the calendar was right, the feed had been dead
+  // since 08-07. Report the last import so the silence names itself.
+  const { data: lastCook } = await supabase
+    .from('smokehouse_cook')
+    .select('started_at, created_at')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  return NextResponse.json({
+    events,
+    smokehouseFeed: {
+      lastCookAt:   (lastCook?.started_at as string) ?? null,
+      lastImportAt: (lastCook?.created_at as string) ?? null,
+    },
+  })
 }

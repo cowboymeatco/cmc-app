@@ -1966,6 +1966,10 @@ export default function CuttingInstructionsPage() {
   // Slaughter (kill) date filter — Jill works a kill day at a time when linking
   // cut sheets to animals (Jill, 2026-07-29). '' = all dates.
   const [filterSlaughter, setFilterSlaughter] = useState<string>('')
+  // Free-text search across the card (Charlie, 2026-08-11). 141 cards is already
+  // more than the status/species/date chips can narrow to one row, and the thing
+  // you know is usually a name, a phone number or a carcass tag.
+  const [search, setSearch] = useState('')
   const [showLinkPicker, setShowLinkPicker] = useState(false)
   const [linking, setLinking]           = useState(false)
   // Carcasses hanging on each appointment in the link picker, keyed by
@@ -2096,8 +2100,33 @@ export default function CuttingInstructionsPage() {
   const needsCarcass = (id: string) => (carcassStates[id] ?? []).some(s => s.state === 'ambiguous')
   const needCarcassCount = instructions.filter(i => i.status !== 'archived' && needsCarcass(i.id)).length
 
+  // Everything about a card you might have in hand when you go looking for it:
+  // who it's for, how to reach them, the animal, the producer who brought it and
+  // the tag on the carcass it sits on. Digits are matched separately so a phone
+  // typed as 4065551234 still finds one stored as (406) 555-1234.
+  function haystack(ci: RawInstruction): string {
+    const d = ci.data ?? {}
+    const carcasses = carcassStates[ci.id] ?? []
+    const producers = appointments
+      .filter(a => a.customers?.some(c => c.linked_cutting_instruction_id === ci.id))
+      .map(a => a.source)
+    return [
+      d.customerName, d.customerPhone, (d.customerPhone ?? '').replace(/\D/g, ''),
+      d.customerEmail, d.notes, speciesOf(ci), ci.status,
+      ...producers,
+      ...carcasses.flatMap(c => [c.tag, c.lot, c.producer]),
+    ].filter(Boolean).join(' ').toLowerCase()
+  }
+
+  // Every word has to match, so "pinkerton hog" narrows rather than widens.
+  const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean)
+
   const filtered = instructions.filter(i => {
     const species = speciesOf(i)
+    if (terms.length) {
+      const hay = haystack(i)
+      if (!terms.every(t => hay.includes(t))) return false
+    }
     // Archived cards are hidden everywhere except the "archived" tab
     if (filterStatus === 'needs-carcass') {
       if (i.status === 'archived' || !needsCarcass(i.id)) return false
@@ -2119,6 +2148,11 @@ export default function CuttingInstructionsPage() {
     }
     return true
   })
+
+  // Cards the search matches that the status/species/date chips are hiding.
+  const elsewhereCount = terms.length
+    ? instructions.filter(i => terms.every(t => haystack(i).includes(t))).length - filtered.length
+    : 0
 
   // Slaughter dates present in the active (non-archived) cards, newest first, for
   // the filter dropdown. A card with no scheduled kill date falls under "— none —".
@@ -2410,7 +2444,27 @@ export default function CuttingInstructionsPage() {
               ))}
               {anyNoSlaughter && <option value="__none__">— no harvest date —</option>}
             </select>
-            <button onClick={load} style={{ ...btnStyle('transparent', 'var(--tan)'), border: '1px solid rgba(166,120,90,0.3)', marginLeft: 'auto' }}>↺</button>
+            <div style={{ position: 'relative', flex: '1 1 220px', minWidth: 180 }}>
+              <span style={{ position: 'absolute', left: '0.5rem', top: '50%', transform: 'translateY(-50%)', fontSize: '0.8rem', pointerEvents: 'none', opacity: 0.7 }}>🔍</span>
+              <input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Escape') setSearch('') }}
+                placeholder="Search name, phone, producer, tag…"
+                style={{
+                  width: '100%', boxSizing: 'border-box',
+                  background: 'rgba(0,0,0,0.25)', color: 'var(--cream)',
+                  border: `1px solid ${search ? 'var(--tan)' : 'rgba(166,120,90,0.3)'}`,
+                  borderRadius: 3, padding: '0.3rem 1.7rem 0.3rem 1.8rem',
+                  fontSize: '0.82rem', outline: 'none',
+                }}
+              />
+              {search && (
+                <button onClick={() => setSearch('')} title="Clear search"
+                  style={{ position: 'absolute', right: '0.35rem', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: 'var(--tan)', fontSize: '0.9rem', cursor: 'pointer', lineHeight: 1, padding: '0 0.2rem' }}>×</button>
+              )}
+            </div>
+            <button onClick={load} style={{ ...btnStyle('transparent', 'var(--tan)'), border: '1px solid rgba(166,120,90,0.3)' }}>↺</button>
           </div>
 
           {/* Batch bar — only once something's ticked, so it stays out of the way */}
@@ -2441,7 +2495,19 @@ export default function CuttingInstructionsPage() {
               <div style={{ textAlign: 'center', padding: '4rem', color: 'var(--tan)' }}>
                 <div style={{ fontSize: '2rem', marginBottom: '0.75rem' }}>📋</div>
                 <p>No cutting instructions found.</p>
-                <p style={{ fontSize: '0.8rem', marginTop: '0.5rem', opacity: 0.7 }}>Submissions from cowboymeats.com will appear here.</p>
+                {/* A search that hits nothing here but does hit elsewhere means
+                    the tabs are hiding it, not that the card doesn't exist. */}
+                {terms.length > 0 && elsewhereCount > 0 ? (
+                  <p style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>
+                    {elsewhereCount} match{elsewhereCount === 1 ? 'es' : ''} outside these filters —{' '}
+                    <button onClick={() => { setFilterStatus('all'); setFilterSpecies('all'); setFilterSlaughter('') }}
+                      style={{ background: 'none', border: 'none', color: 'var(--cream)', textDecoration: 'underline', cursor: 'pointer', font: 'inherit', padding: 0 }}>
+                      clear the filters
+                    </button>.
+                  </p>
+                ) : (
+                  <p style={{ fontSize: '0.8rem', marginTop: '0.5rem', opacity: 0.7 }}>Submissions from cowboymeats.com will appear here.</p>
+                )}
               </div>
             ) : (
               <>
