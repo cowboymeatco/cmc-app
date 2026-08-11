@@ -1,6 +1,15 @@
 -- ─────────────────────────────────────────────────────────────────────────────
 -- PHASE 2 of 2 — enable RLS and drop the anon grants.  THIS ONE BITES.
 --
+-- APPLIED 2026-08-10 (migration rls_customers_phase2_lockdown), after cmc-app
+-- ae1c0dd and portal d5e4b80 were both READY in production. Verified after, with
+-- the public anon key against the live REST API: SELECT / INSERT / UPDATE /
+-- DELETE on customers and producer_qbo_links all return 42501. Verified as a
+-- signed-in NON-staff user: sees exactly 1 row (their own), 0 rows belonging to
+-- anyone else; UPDATE of someone else's row affects 0 rows; DELETE denied; and
+-- setting is_staff = true on their own row is denied by the column grant.
+-- Verified as staff: sees all 332.
+--
 -- DO NOT RUN until BOTH are true:
 --   1. Phase 1 has run (the functions below are referenced by the policies).
 --   2. The app changes are DEPLOYED — cmc-app's customer routes on the service

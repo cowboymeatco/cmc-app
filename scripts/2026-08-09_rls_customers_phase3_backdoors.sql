@@ -28,14 +28,44 @@
 -- Nothing left calls them as anon.
 -- ─────────────────────────────────────────────────────────────────────────────
 
+-- APPLIED 2026-08-10, with two corrections found while running it. Both are
+-- folded in below; the file as written first time did NOT close these.
+--
+-- CORRECTION 1 — revoking from `anon` alone was a no-op on the functions.
+--   All three carried the Postgres default grant of EXECUTE to PUBLIC, which
+--   anon inherits, so after the original script ran customer_cut_sheet_counts()
+--   still answered an anonymous request with a row per customer. Verified live.
+--   Phase 1 avoided this by revoking `from public, anon` — these need the same.
+--   Symptom to watch for: `\df+` / pg_proc.proacl showing a leading `=X/...`
+--   entry, which is the PUBLIC grant.
+--
+-- CORRECTION 2 — a FOURTH door nobody had listed.
+--   cutting_instruction_contact_links is another postgres-owned view over
+--   `customers`, and anon held explicit full grants on it. It returns only
+--   (cutting_instruction_id, customer_id) rather than names or contacts, but
+--   that is still an enumeration of customer ids. It is read INTERNALLY by
+--   customer_cut_sheet_counts() and customer_cut_sheets(), which are SECURITY
+--   INVOKER, so `authenticated` must keep SELECT or the portal's cut sheet
+--   pages break.
+--
+-- Both views also carried INSERT/UPDATE/DELETE grants. Neither is auto-updatable
+-- (information_schema.views.is_updatable = NO), so those were inert rather than
+-- an escalation path, but they are narrowed to SELECT to match the intent.
+
 begin;
 
 revoke all on public.v_producer_customer_ties from anon;
+revoke all on public.v_producer_customer_ties from authenticated;
 grant select on public.v_producer_customer_ties to authenticated;
 
-revoke execute on function public.customer_cut_sheet_counts()            from anon;
-revoke execute on function public.customer_cut_sheets(uuid)              from anon;
-revoke execute on function public.customer_animals_via_cut_sheets(uuid)  from anon;
+revoke all on public.cutting_instruction_contact_links from anon;
+revoke all on public.cutting_instruction_contact_links from authenticated;
+grant select on public.cutting_instruction_contact_links to authenticated;
+
+-- `from public, anon` — see CORRECTION 1. Revoking from anon alone does nothing.
+revoke execute on function public.customer_cut_sheet_counts()            from public, anon;
+revoke execute on function public.customer_cut_sheets(uuid)              from public, anon;
+revoke execute on function public.customer_animals_via_cut_sheets(uuid)  from public, anon;
 
 grant execute on function public.customer_cut_sheet_counts()             to authenticated;
 grant execute on function public.customer_cut_sheets(uuid)               to authenticated;
@@ -53,6 +83,7 @@ commit;
 -- ── ROLLBACK ────────────────────────────────────────────────────────────────
 -- begin;
 -- grant select on public.v_producer_customer_ties to anon;
+-- grant select on public.cutting_instruction_contact_links to anon;
 -- grant execute on function public.customer_cut_sheet_counts()            to anon;
 -- grant execute on function public.customer_cut_sheets(uuid)              to anon;
 -- grant execute on function public.customer_animals_via_cut_sheets(uuid)  to anon;

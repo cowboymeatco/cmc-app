@@ -1,6 +1,10 @@
 -- ─────────────────────────────────────────────────────────────────────────────
 -- PHASE 1 of 2 — helper functions + RPCs.  ADDITIVE AND SAFE.
 --
+-- APPLIED 2026-08-10 (migration rls_customers_phase1_functions). Verified after:
+-- all five functions exist, prosecdef = true, search_path pinned to public,
+-- anon has no EXECUTE, authenticated does.
+--
 -- Run this FIRST, on its own.  It changes no permissions and no rows: it only
 -- creates functions.  Nothing behaves differently until the app code that calls
 -- them is deployed, and nothing locks down until phase 2 runs.
