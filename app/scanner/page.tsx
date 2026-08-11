@@ -523,6 +523,11 @@ export default function ScannerPage() {
   // has already been typed — this ref is what the next character appends to.
   const scanValueRef  = useRef('')
   const applyScanRef  = useRef<((raw: string) => void) | null>(null)
+  // Tray-seal capture when nothing is open to scan into. Digits buffer here
+  // and Enter (the gun's suffix) fires the packaging jump.
+  const sealBufRef      = useRef('')
+  const traySealRef     = useRef<((tagNumber: string) => void) | null>(null)
+  const traySealBusyRef = useRef(false)
 
   activeBoxRef.current  = activeBox
   pluMapRef.current     = pluMap
@@ -534,6 +539,7 @@ export default function ScannerPage() {
   boxesRef.current      = boxes
   unpackBoxRef.current  = unpackBox
   applyScanRef.current  = applyScanInput
+  traySealRef.current   = handleTraySeal
 
   // Every write to the scan bar goes through here so the ref and the state can
   // never disagree about what is in it.
@@ -606,10 +612,25 @@ export default function ScannerPage() {
   // ── Global key redirect: digits → scan input ─────────────────────────────────
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (!startedRef.current) return
       const box = activeBoxRef.current
-      if (!box || box.is_closed) return
       const target = e.target as HTMLElement
+      if (!startedRef.current || !box || box.is_closed) {
+        // Nothing open to scan into — the only scan that means anything here is
+        // a cure seal off the slicer tray, which jumps to its owner's session.
+        // Digits buffer until the gun's Enter suffix; requiring the terminator
+        // means a stray EAN can never fire on a 7-digit window of itself.
+        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
+        if (e.ctrlKey || e.metaKey || e.altKey) return
+        if (/^\d$/.test(e.key)) { sealBufRef.current += e.key; return }
+        if (e.key === 'Enter') {
+          const code = sealBufRef.current
+          sealBufRef.current = ''
+          if (isCureTagNumber(code)) traySealRef.current?.(code)
+          return
+        }
+        if (e.key !== 'Shift') sealBufRef.current = ''
+        return
+      }
       // Any other field — weight entry, notes, a modal — keeps its own keys.
       if (target !== scanRef.current && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
       if (e.ctrlKey || e.metaKey || e.altKey) return
@@ -915,8 +936,10 @@ export default function ScannerPage() {
   }
 
   // ── Reopen an existing session ───────────────────────────────────────────────
-  async function startSessionFromExisting(cust: string, dt: string) {
-    if (!pluLoaded) return
+  // Returns the session's boxes so a caller can decide whether to stand up a
+  // fresh one (the cure-packaging flow needs an open box ready to scan into).
+  async function startSessionFromExisting(cust: string, dt: string): Promise<BoxRecord[]> {
+    if (!pluLoaded) return []
     const existing = sessions.find(s => s.customer_name === cust && s.session_date === dt)
     const existingStatus = existing?.status ?? 'scanning'
     const existingType   = (existing?.box_type as BoxType) ?? 'USDA'
@@ -945,6 +968,46 @@ export default function ScannerPage() {
       .then((d: unknown) => { if (Array.isArray(d)) setInputs(d as ProcessingInput[]) })
       .catch(() => {})
     loadSharedYield(cust, dt)
+    return sorted
+  }
+
+  // ── Cure packaging: a tray seal scanned with no open box jumps to its owner ──
+  // The sliced bacon comes over with its seal on the tray. Scanning it — from
+  // the sessions screen or a session whose boxes are all closed — opens that
+  // customer's session, pulls the tag out of cure, and stands up a fresh box.
+  // The packager just scans packages until the next tray's seal arrives.
+  async function handleTraySeal(tagNumber: string) {
+    if (traySealBusyRef.current) return
+    traySealBusyRef.current = true
+    try {
+      const res = await fetch(`/api/cure-tags?tag=${encodeURIComponent(tagNumber)}`)
+      const tag: CureTag | null = await res.json().catch(() => null)
+      if (!tag) {
+        const msg = `Seal ${tagNumber} isn't tagged to a customer — tag it in from their session first`
+        if (!startedRef.current) window.alert(msg)
+        else {
+          setLastKind('warn'); setLastItem(`🏷 ${msg}`)
+          setFlash('warn'); setTimeout(() => setFlash(null), 4000)
+        }
+        return
+      }
+      if (tag.status === 'curing') {
+        await fetch('/api/cure-tags', {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ id: tag.id, status: 'done' }),
+        })
+      }
+      const dt = tag.session_date ?? isoDate()
+      const sorted = await startSessionFromExisting(tag.customer_name, dt)
+      if (!sorted.some(b => !b.is_closed)) await addBoxTo(tag.customer_name, dt, sorted)
+      setLastKind('ok')
+      setLastItem(`🏷 ${tag.product} · ${tag.customer_name}${tag.status === 'curing' ? ' — out of cure ✓' : ''} · scan packages`)
+      setFlash('ok')
+      setTimeout(() => setFlash(null), 3000)
+    } finally {
+      traySealBusyRef.current = false
+    }
   }
 
   // ── Rename the open session's customer ───────────────────────────────────────
@@ -1987,7 +2050,13 @@ export default function ScannerPage() {
             <span style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', fontSize: '1rem', opacity: 0.6 }}>🔍</span>
             <input
               value={sessionQuery}
-              onChange={e => setSessionQuery(e.target.value)}
+              onChange={e => {
+                const raw = e.target.value
+                // A cure seal scanned into the search box is a packaging jump,
+                // not a search — same behavior as scanning with nothing focused.
+                if (isCureTagNumber(raw.trim())) { setSessionQuery(''); handleTraySeal(raw.trim()); return }
+                setSessionQuery(raw)
+              }}
               placeholder="Find a session — customer, date, producer or tag…"
               style={{ ...INPUT, fontSize: '0.95rem', padding: '0.7rem 2.5rem' }}
             />
