@@ -33,7 +33,27 @@ interface Sheet {
   // counted once in the column total.
   carcasses:     { id: string; lbs: number | null }[]
   products:      VAItem[]
+  // Seal tags actually riding through the cure cooler for this customer —
+  // shown in the cell under what the sheet ordered, so an ordered ham with no
+  // tag next to it reads as a piece that never got tagged in.
+  cure_tags:     { tag_number: string; product: string; status: string }[]
 }
+
+// A tag's product → the column its ordered counterpart lives in.
+const TAG_COL: Record<string, string> = {
+  'Ham':            'Cured & Smoked Ham',
+  'Bacon':          'Bacon',
+  'Shoulder Bacon': 'Shoulder Bacon',
+  'Bone-In Loin':   'Smoked Chops',
+  'Hocks':          'Cured & Smoked Hocks',
+}
+
+const tagsFor = (s: Sheet, col: string) =>
+  (s.cure_tags ?? []).filter(t => (TAG_COL[t.product] ?? t.product) === col)
+
+// "🏷 0341981✓ · 0341982" — done gets the check, in-cure rides bare
+const tagText = (tags: { tag_number: string; status: string }[]) =>
+  tags.map(t => `${t.tag_number}${t.status === 'done' ? '✓' : ''}`).join(' · ')
 
 // Column order for the value-add matrix — the way the cut walks the hog, ending
 // with the smokehouse. Anything not listed sorts after, alphabetically.
@@ -185,7 +205,11 @@ export default function ValueAddReport() {
         date: s.date ?? '', customer: s.customer_name, species: s.species ?? '',
         hanging_lbs: hangLbs(s) ?? '', portion: s.portion ?? '', head: s.carcasses.length,
       }
-      for (const c of cols) { const items = itemsFor(s, c); base[c] = items.length ? cellText(items) : '' }
+      for (const c of cols) {
+        const items = itemsFor(s, c)
+        const tags  = tagsFor(s, c)
+        base[c] = [items.length ? cellText(items) : '', tags.length ? `🏷 ${tagText(tags)}` : ''].filter(Boolean).join('  ')
+      }
       base.total = rowQty(s)
       return base
     })
@@ -201,7 +225,9 @@ export default function ValueAddReport() {
     const bodyRows = rows.map(s => {
       const cells = cols.map(c => {
         const items = itemsFor(s, c)
-        return `<td class="ctr${items.some(it => it.detail) ? ' det' : ''}">${items.length ? escHtml(cellText(items)) : ''}</td>`
+        const tags  = tagsFor(s, c)
+        const tagLine = tags.length ? `<div class="tags">🏷 ${escHtml(tagText(tags))}</div>` : ''
+        return `<td class="ctr${items.some(it => it.detail) ? ' det' : ''}">${items.length ? escHtml(cellText(items)) : ''}${tagLine}</td>`
       }).join('')
       return `<tr><td class="cust">${escHtml(s.customer_name)}</td><td class="date">${escHtml(fmtDay(s.date ?? ''))}</td><td class="ctr hang">${escHtml(hangText(s))}</td>${cells}<td class="ctr tot">${rowQty(s)}</td></tr>`
     }).join('')
@@ -224,6 +250,7 @@ export default function ValueAddReport() {
   th.prod { text-align: center }
   td.ctr { text-align: center }
   td.det { font-size: 7.5pt }
+  .tags { font-family: 'Courier New', monospace; font-size: 6.5pt; color: #555; margin-top: 1px; white-space: nowrap }
   td.cust { font-weight: bold; white-space: nowrap }
   td.date { white-space: nowrap; font-family: monospace; font-size: 7.5pt }
   td.hang { white-space: nowrap; font-weight: bold }
@@ -348,11 +375,19 @@ export default function ValueAddReport() {
                       {cols.map(c => {
                         const items = itemsFor(s, c)
                         const hasDetail = items.some(it => it.detail)
+                        const tags = tagsFor(s, c)
                         return (
                           <td key={c} style={{ padding: '0.45rem 0.6rem', textAlign: 'center', borderLeft: '1px solid rgba(166,120,90,0.08)', whiteSpace: 'nowrap', color: hasDetail ? C.tan : C.green }}>
                             {items.length
                               ? <span style={{ fontSize: hasDetail ? '0.72rem' : '0.86rem', fontWeight: hasDetail ? 400 : 700 }}>{cellText(items)}</span>
-                              : <span style={{ color: 'rgba(166,120,90,0.18)' }}>·</span>}
+                              : tags.length
+                                ? null
+                                : <span style={{ color: 'rgba(166,120,90,0.18)' }}>·</span>}
+                            {tags.length > 0 && (
+                              <div style={{ fontFamily: 'monospace', fontSize: '0.66rem', color: C.amber, marginTop: 2 }} title="Seal tags in cure for this customer (✓ = out of cure)">
+                                🏷 {tagText(tags)}
+                              </div>
+                            )}
                           </td>
                         )
                       })}
@@ -389,7 +424,10 @@ export default function ValueAddReport() {
           number that prints on the cut card — so a partial share carries a ½ · ¾ · ¼ mark beside it rather than a scaled
           weight, and a customer taking more than one animal reads &ldquo;2 hd&rdquo; with both added up. A dash means no
           carcass is linked to that sheet yet. The column total counts each carcass once, so a split animal isn&apos;t
-          doubled. Beef &amp; lamb currently show the shared smokehouse and ground-sausage items only.
+          doubled. An amber <strong style={{ color: C.amber }}>🏷 line</strong> under a cell is the actual seal tag
+          in the cure cooler for that customer — <strong style={{ color: C.amber }}>✓</strong> means it&apos;s out of
+          cure — so an ordered ham with no tag under it hasn&apos;t been tagged in yet. Beef &amp; lamb currently show
+          the shared smokehouse and ground-sausage items only.
         </p>
 
       </main>

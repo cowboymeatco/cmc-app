@@ -99,11 +99,23 @@ export async function GET(req: NextRequest) {
     // customer asked for), not the packed scans — the source of truth before
     // anything is made. One object per cut sheet with its value-add items; the
     // page pivots them into a customer × product table.
-    const [{ data: cis, error: ciErr }, { data: appts }] = await Promise.all([
+    const [{ data: cis, error: ciErr }, { data: appts }, { data: cureTags }] = await Promise.all([
       supabase.from('cutting_instructions').select('id, customer_name, species, data, status').neq('status', 'archived'),
       supabase.from('harvest_appointments').select('id, harvest_date, customers'),
+      supabase.from('cure_tags').select('tag_number, product, customer_name, status'),
     ])
     if (ciErr) return NextResponse.json({ error: ciErr.message }, { status: 500 })
+
+    // Seal tags by customer — the ACTUAL pieces riding through the cure cooler,
+    // shown against what the sheet ordered. Tags know their customer, not which
+    // of a customer's animals, so a rare multi-sheet customer repeats them.
+    const tagsByName = new Map<string, { tag_number: string; product: string; status: string }[]>()
+    for (const t of cureTags ?? []) {
+      const key = String(t.customer_name ?? '').trim().toLowerCase()
+      const list = tagsByName.get(key) ?? []
+      list.push({ tag_number: String(t.tag_number), product: String(t.product), status: String(t.status) })
+      tagsByName.set(key, list)
+    }
 
     // ci id → scheduled harvest date, and ci id → the customer SLOTS it's linked
     // to (appointment + slot id), which is what points at a real carcass.
@@ -195,6 +207,7 @@ export async function GET(req: NextRequest) {
         // animal, carrying its id so a split animal counts once in a total.
         carcasses:     carcassesFor(ci.id as string).map(id => ({ id, lbs: wtByLog.get(id) ?? null })),
         products:      extractValueAdd(ci.species as string, ci.data),
+        cure_tags:     tagsByName.get(String(ci.customer_name ?? '').trim().toLowerCase()) ?? [],
       }
     }).filter(r =>
       r.products.length > 0 &&
