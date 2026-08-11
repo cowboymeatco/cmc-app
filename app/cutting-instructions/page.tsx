@@ -1366,7 +1366,13 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
     ps('Plate & Short Ribs')
     if (d.shortRibs?.cut) {
       if (d.shortRibs.cut === 'grind') pg('Short Ribs')
-      else { pc('Short Ribs', fmt(d.shortRibs.cut)); if (d.shortRibs.addons?.length) pc('  Add-on', adds(d.shortRibs.addons), true) }
+      else {
+        pc('Short Ribs', fmt(d.shortRibs.cut))
+        // Keep-half splits the set: half is packed as short ribs, the rest goes
+        // to grind, so it has to show up on BOTH lists or the packer loses it.
+        if (d.shortRibs.cut === 'keep-half') pg('Short Ribs (half)')
+        if (d.shortRibs.addons?.length) pc('  Add-on', adds(d.shortRibs.addons), true)
+      }
     }
     if (d.plate?.cut) { d.plate.cut === 'grind' ? pg('Plate') : pc('Plate / Beef Bacon', fmt(d.plate.cut)) }
     ps('Rib')
@@ -1931,7 +1937,7 @@ const FAKE_CI: RawInstruction = {
     armRoast:  { cut: 'thirds', addons: ['seasoned'], arm2: { cut: 'rancher-steaks', addons: [] } },
     flatIron:  { cut: 'steaks' },
     chuckRoll: { cut: 'chuck-steaks', addons: [], cut2: 'half', addons2: ['seasoned'] },
-    shortRibs: { cut: 'flanken' },
+    shortRibs: { cut: 'keep-half' },
     plate:     { cut: 'beef-bacon' },
     ribeye:    { style: 'boneless', cut: 'steaks', thickness: '1', seasoned: false, ribeye2: { style: 'bone-in', cut: 'rib-roast-half', thickness: '', seasoned: true } },
     shortLoin: { path: 'bone-in', tBoneThickness: '1.25', loin2: { path: 'boneless', tenderloin: { cut: 'filet', thickness: '2"' }, stripLoin: { cut: 'ny-strip', thickness: '1' } } },
