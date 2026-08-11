@@ -460,6 +460,7 @@ export default function ScannerPage() {
   // A scanned seal number (7 digits, leading zero) opens the product picker;
   // the piece leaves with the customer's name riding on the tag.
   const [cureModal,   setCureModal]   = useState<{ tagNumber: string; existing: CureTag | null } | null>(null)
+  const [cureProduct, setCureProduct] = useState<string | null>(null)
   const [cureWeight,  setCureWeight]  = useState('')
   const [cureSaving,  setCureSaving]  = useState(false)
 
@@ -1446,6 +1447,7 @@ export default function ScannerPage() {
   async function openCureModal(tagNumber: string) {
     setScan('')
     setCureWeight('')
+    setCureProduct(null)
     let existing: CureTag | null = null
     try {
       const res = await fetch(`/api/cure-tags?tag=${encodeURIComponent(tagNumber)}`)
@@ -3057,26 +3059,47 @@ export default function ScannerPage() {
                   style={{ width: '100%', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(166,120,90,0.4)', borderRadius: 4, padding: '0.6rem 0.75rem', color: C.cream, fontSize: '1.2rem', fontFamily: 'monospace', outline: 'none', marginBottom: '1.25rem', boxSizing: 'border-box' }}
                 />
                 <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.65rem' }}>
-                  Tap what the tag is on — saves right away
+                  What&apos;s the tag on?
                 </div>
+                {/* Pick, then confirm — a one-tap save closed the modal before the
+                    weight could go in (Charlie feedback, 2026-08-11). */}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '1.25rem' }}>
                   {['Ham', 'Bacon', 'Shoulder Bacon', 'Bone-In Loin', 'Hocks', 'Jowl', 'Other'].map(p => (
                     <button
                       key={p}
                       disabled={cureSaving}
-                      onClick={() => saveCureTag(p)}
-                      style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.4)', color: C.cream, borderRadius: 4, padding: '0.85rem 0.5rem', fontSize: '0.95rem', fontWeight: 700, cursor: cureSaving ? 'default' : 'pointer', opacity: cureSaving ? 0.5 : 1 }}
+                      onClick={() => setCureProduct(p)}
+                      style={{
+                        background: cureProduct === p ? C.tan : 'rgba(255,255,255,0.06)',
+                        border: `1px solid ${cureProduct === p ? C.tan : 'rgba(166,120,90,0.4)'}`,
+                        color: cureProduct === p ? C.dark : C.cream,
+                        borderRadius: 4, padding: '0.85rem 0.5rem', fontSize: '0.95rem', fontWeight: 700,
+                        cursor: cureSaving ? 'default' : 'pointer', opacity: cureSaving ? 0.5 : 1,
+                      }}
                     >
                       {p}
                     </button>
                   ))}
                 </div>
-                <button
-                  onClick={() => { setCureModal(null); scanRef.current?.focus() }}
-                  style={{ width: '100%', background: 'transparent', border: '1px solid rgba(166,120,90,0.3)', color: C.lightBrown, borderRadius: 4, padding: '0.7rem', fontSize: '0.9rem', cursor: 'pointer' }}
-                >
-                  Cancel
-                </button>
+                <div style={{ display: 'flex', gap: '0.6rem' }}>
+                  <button
+                    onClick={() => { setCureModal(null); scanRef.current?.focus() }}
+                    style={{ flex: 1, background: 'transparent', border: '1px solid rgba(166,120,90,0.3)', color: C.lightBrown, borderRadius: 4, padding: '0.85rem', fontSize: '0.9rem', cursor: 'pointer' }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => cureProduct && saveCureTag(cureProduct)}
+                    disabled={!cureProduct || cureSaving}
+                    style={{
+                      flex: 2, background: cureProduct ? C.green : C.medBrown, color: C.dark, border: 'none',
+                      borderRadius: 4, padding: '0.85rem', fontSize: '0.95rem', fontWeight: 700,
+                      cursor: cureProduct && !cureSaving ? 'pointer' : 'default', opacity: cureSaving ? 0.5 : cureProduct ? 1 : 0.6,
+                    }}
+                  >
+                    {cureProduct ? `✓ Send ${cureProduct} to cure` : 'Pick a product'}
+                  </button>
+                </div>
               </>
             )}
           </div>
