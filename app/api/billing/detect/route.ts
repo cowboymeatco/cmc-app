@@ -143,7 +143,7 @@ export async function POST(req: NextRequest) {
 
       // cut & wrap — only once the carcass is cut
       if (h.status === 'cut') {
-        // fully processed lamb: the $175 all-in fee replaces the $50
+        // fully processed lamb: the $180 all-in fee replaces the $50
         // kill-only fee, so retire any still-pending kill fee for it
         if (h.species === 'Lamb') supersededLambIds.push(h.id)
         const cutDate = (h.appointment_id && cutDateByAppt.get(h.appointment_id)) || today

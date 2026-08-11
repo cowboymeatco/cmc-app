@@ -17,16 +17,20 @@ export interface BillingCharge {
 }
 
 // QBO service items (SERVICE INCOME:CUSTOM KILL & PROCESSING) — ids resolved
-// live from QuickBooks 2026-07-11.
+// live from QuickBooks 2026-07-11; rates re-checked 2026-08-10 against both the
+// QBO item list and the rates actually billed on invoices since 2026-06-01.
+// These had drifted low (beef kill .33, whole/half 1.07, hog processing 1.10,
+// flat fees 175) while QBO had already moved up, so every generated charge was
+// undercutting the invoice. Re-verify here whenever QBO pricing changes.
 export const QBO_SERVICE_ITEMS = {
-  beefKill:        { id: '1215', name: 'Custom Beef Kill', rate: 0.33 },          // $/lb carcass
-  hogKill:         { id: '1247', name: 'Custom Hog Kill', rate: 0.53 },           // $/lb carcass
+  beefKill:        { id: '1215', name: 'Custom Beef Kill', rate: 0.38 },          // $/lb carcass
+  hogKill:         { id: '1247', name: 'Custom Hog Kill', rate: 0.58 },           // $/lb carcass
   lambKill:        { id: '1298', name: 'Lamb Kill Only', rate: 50 },              // flat per head
-  procWholeHalf:   { id: '1214', name: 'Custom Processing-Whole, Half', rate: 1.07 }, // $/lb carcass
-  procQuarters:    { id: '1216', name: 'Custom Processing-Quarters', rate: 1.12 },    // $/lb carcass
-  hogProcessing:   { id: '138',  name: 'Custom Hog Processing', rate: 1.10 },     // $/lb carcass
-  goatFlat:        { id: '134',  name: 'Goat Processing Flat Fee', rate: 175 },   // flat per head
-  lambSheepFlat:   { id: '105',  name: 'Custom Lamb/Sheep Flat Fee', rate: 175 }, // flat per head
+  procWholeHalf:   { id: '1214', name: 'Custom Processing-Whole, Half', rate: 1.17 }, // $/lb carcass
+  procQuarters:    { id: '1216', name: 'Custom Processing-Quarters', rate: 1.22 },    // $/lb carcass
+  hogProcessing:   { id: '138',  name: 'Custom Hog Processing', rate: 1.17 },     // $/lb carcass
+  goatFlat:        { id: '134',  name: 'Goat Processing Flat Fee', rate: 180 },   // flat per head
+  lambSheepFlat:   { id: '105',  name: 'Custom Lamb/Sheep Flat Fee', rate: 180 }, // flat per head
 } as const
 
 export const PORTION_FRACTION: Record<string, number> = {
@@ -45,7 +49,7 @@ export const isExcludedProducer = (name: string) =>
 
 // Kill fee for one carcass share. Beef/hog are $/lb on carcass weight;
 // lamb is flat per head — the $50 applies to KILL-ONLY lambs; when a lamb
-// is fully processed the detector supersedes it with the $175 all-in flat
+// is fully processed the detector supersedes it with the $180 all-in flat
 // fee at cut time. Goat kill is inside the flat processing fee -> null.
 export function killFeeCharge(species: string, carcassLbs: number | null, fraction: number, tag: string): BillingCharge | null {
   const frac = ` (${fraction === 1 ? 'whole' : fraction === 0.5 ? 'half' : fraction === 0.25 ? 'quarter' : fraction} share)`
