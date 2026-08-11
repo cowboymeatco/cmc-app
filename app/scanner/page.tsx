@@ -185,6 +185,7 @@ function buildPackoutHTML(
   dateISO: string,
   sortedBoxes: BoxRecord[],
   allScans: (ScanLine & { boxNum: number })[],
+  cureTags: CureTag[] = [],
 ): string {
   const dateStr   = new Date(dateISO + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
   const grandLbs  = allScans.reduce((t, sc) => t + (Number(sc.weight_lbs) || 0), 0)
@@ -280,6 +281,25 @@ function buildPackoutHTML(
   })
   const pieSvg = `<svg width="300" height="300" viewBox="0 0 300 300" xmlns="http://www.w3.org/2000/svg">${slices}${labels}</svg>`
 
+  // ── Cured & Smoked — seal-tagged pieces riding through the cure cooler ──
+  // On the slip so the customer's cutout tells the whole story: what's still
+  // in cure isn't missing, it's coming.
+  const cureSection = cureTags.length ? `
+  <div class="cure-head">Cured &amp; Smoked — seal-tagged pieces</div>
+  <table>
+    <thead><tr><th>Product</th><th class="num">Seal #</th><th class="num">Weight In (lbs)</th><th>Status</th></tr></thead>
+    <tbody>${cureTags.map((t, i) => `
+      <tr class="${i % 2 === 0 ? 'even' : 'odd'}">
+        <td>${esc(t.product)}</td>
+        <td class="num mono">${esc(t.tag_number)}</td>
+        <td class="num mono">${t.weight_lbs != null ? Number(t.weight_lbs).toFixed(2) : '—'}</td>
+        <td>${t.status === 'done'
+          ? `✓ Done${t.completed_at ? ` — ${fmtDue(t.completed_at.slice(0, 10))}` : ''}`
+          : `🧂 In cure since ${fmtDue(t.session_date ?? t.created_at.slice(0, 10))}`}</td>
+      </tr>`).join('')}
+    </tbody>
+  </table>` : ''
+
   return `<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>CMC Packout — ${esc(customer)} — ${dateISO}</title>
 <style>
@@ -312,6 +332,7 @@ function buildPackoutHTML(
   tr.subtotal td { border-top: 1pt solid #999; font-weight: bold }
   .swatch { display: inline-block; width: 9px; height: 9px; margin-right: 6px; border: 0.5pt solid #999; vertical-align: middle }
   .summary-wrap { display: flex; gap: 24px; align-items: flex-start; margin-top: 12px }
+  .cure-head { font-size: 10.5pt; font-weight: bold; letter-spacing: 0.06em; text-transform: uppercase; margin: 16px 0 4px; border-top: 1px solid #ccc; padding-top: 12px }
   .pie-box { flex-shrink: 0; text-align: center }
   .pie-cap { font-size: 9.5pt; font-weight: bold; margin-bottom: 6px }
   .summary-table { flex: 1 }
@@ -334,6 +355,7 @@ function buildPackoutHTML(
     </tbody>
   </table>
   <div class="box-line">${boxCount} box${boxCount !== 1 ? 'es' : ''} total</div>
+  ${cureSection}
   <div class="ack">
     <div class="ack-title">Customer Acknowledgement &nbsp;—&nbsp; I confirm receipt of all products listed above.</div>
     <div class="sig-grid">
@@ -855,7 +877,9 @@ export default function ScannerPage() {
       const d  = await r.json().catch(() => [])
       if (Array.isArray(d)) for (const sc of d as ScanLine[]) allScans.push({ ...sc, boxNum: box.box_number })
     }
-    const html = buildPackoutHTML(s.customer_name, s.session_date, sortedBoxes, allScans)
+    const cureRes  = await fetch(`/api/cure-tags?customer=${encodeURIComponent(s.customer_name)}`)
+    const cureData = await cureRes.json().catch(() => [])
+    const html = buildPackoutHTML(s.customer_name, s.session_date, sortedBoxes, allScans, Array.isArray(cureData) ? cureData : [])
     const win = window.open('', '_blank')
     if (win) { win.document.write(html); win.document.close() }
   }
@@ -1472,7 +1496,9 @@ export default function ScannerPage() {
 
   // Out of the smokehouse: scanning the tag back in flips it to done, so the
   // crew can start scanning the finished product into the customer's boxes.
-  async function markCureDone(tag: CureTag) {
+  // thenOpen jumps into the tag owner's session — the finished product packs
+  // into THEIR cutout, whichever session the seal happened to be scanned in.
+  async function markCureDone(tag: CureTag, thenOpen = false) {
     if (cureSaving) return
     setCureSaving(true)
     try {
@@ -1487,6 +1513,7 @@ export default function ScannerPage() {
       setFlash('ok')
       setTimeout(() => setFlash(null), 2500)
       setCureModal(null)
+      if (thenOpen) await openCureOwnerSession(tag)
     } catch {
       setFlash('bad')
       setLastKind('bad')
@@ -1495,6 +1522,11 @@ export default function ScannerPage() {
       setCureSaving(false)
       scanRef.current?.focus()
     }
+  }
+
+  async function openCureOwnerSession(tag: CureTag) {
+    setCureModal(null)
+    await startSessionFromExisting(tag.customer_name, tag.session_date ?? date)
   }
 
   // ── Add input from CMC box scan or carcass tag scan ──────────────────────────
@@ -1631,7 +1663,9 @@ export default function ScannerPage() {
       }
     }
 
-    const html = buildPackoutHTML(customer, date, sortedBoxes, allScans)
+    const cureRes  = await fetch(`/api/cure-tags?customer=${encodeURIComponent(customer)}`)
+    const cureData = await cureRes.json().catch(() => [])
+    const html = buildPackoutHTML(customer, date, sortedBoxes, allScans, Array.isArray(cureData) ? cureData : [])
     const win = window.open('', '_blank')
     if (win) { win.document.write(html); win.document.close() }
     setReportLoading(false)
@@ -2950,21 +2984,62 @@ export default function ScannerPage() {
                   {cureModal.existing.weight_lbs != null ? `  ·  ${Number(cureModal.existing.weight_lbs).toFixed(2)} lb` : ''}
                   {'  ·  '}{cureModal.existing.status === 'done' ? '✓ Done' : 'In cure'}
                 </div>
+                {cureModal.existing.customer_name.trim().toLowerCase() !== customer.trim().toLowerCase() && (
+                  <div style={{ color: C.yellow, fontSize: '0.82rem', marginBottom: '0.75rem' }}>
+                    This is <strong style={{ color: C.cream }}>{cureModal.existing.customer_name}</strong>&apos;s piece — you&apos;re in {customer}&apos;s session.
+                  </div>
+                )}
                 {cureModal.existing.status === 'curing' && (
+                  cureModal.existing.customer_name.trim().toLowerCase() === customer.trim().toLowerCase() ? (
+                    <button
+                      onClick={() => markCureDone(cureModal.existing!)}
+                      disabled={cureSaving}
+                      style={{ width: '100%', background: C.green, color: C.dark, border: 'none', borderRadius: 4, padding: '0.85rem', fontSize: '0.95rem', fontWeight: 700, cursor: cureSaving ? 'default' : 'pointer', opacity: cureSaving ? 0.5 : 1, marginBottom: '0.6rem' }}
+                    >
+                      ✓ Out of cure — mark done
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => markCureDone(cureModal.existing!, true)}
+                        disabled={cureSaving}
+                        style={{ width: '100%', background: C.green, color: C.dark, border: 'none', borderRadius: 4, padding: '0.85rem', fontSize: '0.95rem', fontWeight: 700, cursor: cureSaving ? 'default' : 'pointer', opacity: cureSaving ? 0.5 : 1, marginBottom: '0.6rem' }}
+                      >
+                        ✓ Done & open {cureModal.existing.customer_name}&apos;s session
+                      </button>
+                      <button
+                        onClick={() => markCureDone(cureModal.existing!)}
+                        disabled={cureSaving}
+                        style={{ width: '100%', background: 'transparent', border: `1px solid ${C.green}55`, color: C.green, borderRadius: 4, padding: '0.7rem', fontSize: '0.88rem', fontWeight: 700, cursor: cureSaving ? 'default' : 'pointer', opacity: cureSaving ? 0.5 : 1, marginBottom: '0.6rem' }}
+                      >
+                        ✓ Mark done only
+                      </button>
+                    </>
+                  )
+                )}
+                {cureModal.existing.status === 'done' && cureModal.existing.customer_name.trim().toLowerCase() !== customer.trim().toLowerCase() && (
                   <button
-                    onClick={() => markCureDone(cureModal.existing!)}
+                    onClick={() => openCureOwnerSession(cureModal.existing!)}
                     disabled={cureSaving}
-                    style={{ width: '100%', background: C.green, color: C.dark, border: 'none', borderRadius: 4, padding: '0.85rem', fontSize: '0.95rem', fontWeight: 700, cursor: cureSaving ? 'default' : 'pointer', opacity: cureSaving ? 0.5 : 1, marginBottom: '0.6rem' }}
+                    style={{ width: '100%', background: C.tan, color: C.dark, border: 'none', borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer', marginBottom: '0.6rem' }}
                   >
-                    ✓ Out of cure — mark done
+                    Open {cureModal.existing.customer_name}&apos;s session
                   </button>
                 )}
-                <button
-                  onClick={() => { setCureModal(null); scanRef.current?.focus() }}
-                  style={{ width: '100%', background: cureModal.existing.status === 'curing' ? 'transparent' : C.tan, color: cureModal.existing.status === 'curing' ? C.lightBrown : C.dark, border: cureModal.existing.status === 'curing' ? '1px solid rgba(166,120,90,0.3)' : 'none', borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer' }}
-                >
-                  Close
-                </button>
+                {(() => {
+                  // Close is the primary action only when there's nothing else to do
+                  // (a done tag scanned in its own session — pure lookup).
+                  const solo = cureModal.existing.status === 'done'
+                    && cureModal.existing.customer_name.trim().toLowerCase() === customer.trim().toLowerCase()
+                  return (
+                    <button
+                      onClick={() => { setCureModal(null); scanRef.current?.focus() }}
+                      style={{ width: '100%', background: solo ? C.tan : 'transparent', color: solo ? C.dark : C.lightBrown, border: solo ? 'none' : '1px solid rgba(166,120,90,0.3)', borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer' }}
+                    >
+                      Close
+                    </button>
+                  )
+                })()}
               </>
             ) : (
               <>

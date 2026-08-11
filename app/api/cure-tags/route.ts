@@ -34,6 +34,9 @@ export async function GET(req: NextRequest) {
 
   let q = supabase.from('cure_tags').select('*').order('created_at', { ascending: false })
   if (status === 'curing' || status === 'done') q = q.eq('status', status)
+  // ?customer= — one customer's tags, for the packout slip (case-insensitive)
+  const customer = searchParams.get('customer')
+  if (customer) q = q.ilike('customer_name', customer)
   const { data: tags, error } = await q
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
