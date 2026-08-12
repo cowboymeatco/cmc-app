@@ -132,8 +132,8 @@ const DEFAULT_FLAGS: LabelFlags = { usda_bug: true, retail_exempt: false, not_fo
 // CONSUMPTION and no mark of inspection. Drives the label mark server-side.
 type BoxType = 'USDA' | 'Custom' | 'CMC' | 'Pet Food'
 const BOX_TYPES: BoxType[] = ['USDA', 'Custom', 'CMC', 'Pet Food']
-// Map a box type onto the compliance-mark flags, leaving retail_exempt (an
-// independent add-on badge) untouched.
+// Map a box type onto the compliance-mark flags, leaving retail_exempt (picked
+// separately, and able to suppress this type's mark) untouched.
 function flagsForType(t: BoxType, prev: LabelFlags): LabelFlags {
   return {
     ...prev,
@@ -148,6 +148,14 @@ const BOX_TYPE_HELP: Record<BoxType, string> = {
   CMC:        'CMC — labels print the USDA mark of inspection.',
   Custom:     'Custom-exempt — labels print NOT FOR SALE.',
   'Pet Food': 'Animal food — labels print NOT FOR HUMAN CONSUMPTION and no USDA mark.',
+}
+// Retail exempt is the reason the product was not inspected, so it overrides
+// what the type would otherwise print. The picker has to say so, or it promises
+// a mark the label will not carry (Chris/Charlie, 2026-08-12).
+function boxTypeHelp(t: BoxType, retailExempt: boolean): string {
+  return retailExempt && (t === 'USDA' || t === 'CMC')
+    ? `${t}, retail exempt — labels print RETAIL EXEMPT and no USDA mark.`
+    : BOX_TYPE_HELP[t]
 }
 
 const LBL: React.CSSProperties = {
@@ -2242,7 +2250,7 @@ export default function ScannerPage() {
                   ))}
                 </div>
                 <div style={{ fontSize: '0.66rem', color: C.lightBrown, marginTop: '0.4rem', lineHeight: 1.35 }}>
-                  {BOX_TYPE_HELP[boxType]}
+                  {boxTypeHelp(boxType, labelFlags.retail_exempt)}
                 </div>
               </div>
               <div style={{ marginBottom: '1.5rem' }}>
@@ -2587,7 +2595,7 @@ export default function ScannerPage() {
                 <button
                   key={t}
                   onClick={() => applyBoxType(t)}
-                  title={BOX_TYPE_HELP[t]}
+                  title={boxTypeHelp(t, labelFlags.retail_exempt)}
                   style={{
                     background: boxType === t ? 'rgba(201,168,130,0.28)' : 'rgba(255,255,255,0.03)',
                     border: `1px solid ${boxType === t ? 'rgba(201,168,130,0.6)' : 'rgba(166,120,90,0.2)'}`,
@@ -2599,8 +2607,10 @@ export default function ScannerPage() {
                   {boxType === t ? '✓ ' : ''}{t}
                 </button>
               ))}
-              {/* Retail Exempt — independent add-on badge, orthogonal to box type */}
+              {/* Retail Exempt — an add-on to any box type, but NOT orthogonal:
+                  it suppresses the mark of inspection on whatever type is picked. */}
               <button
+                title="Retail exemption — labels print RETAIL EXEMPT and no USDA mark of inspection."
                 onClick={() => setLabelFlags(f => ({ ...f, retail_exempt: !f.retail_exempt }))}
                 style={{
                   background: labelFlags.retail_exempt ? 'rgba(201,168,130,0.2)' : 'rgba(255,255,255,0.03)',
