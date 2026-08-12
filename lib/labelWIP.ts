@@ -1,4 +1,4 @@
-import { makeCode39Barcode, julianYYDDD, displayCustomerName, LabelFlags, DEFAULT_FLAGS, LabelAnimal, BoxRecord, BoxScan, USDA_EST_NUMBER } from './label'
+import { makeCode39Barcode, julianYYDDD, displayCustomerName, LabelFlags, DEFAULT_FLAGS, LabelAnimal, BoxRecord, BoxScan, USDA_EST_NUMBER, marksInspection } from './label'
 
 // Work-in-progress tag — rides with the box from the processing room to value
 // add. Replaces the handwritten WIP sheet (WEIGHT / CUSTOMER / INTENT / LABEL /
@@ -149,10 +149,11 @@ export function generateWIPLabel(data: WIPTagData, flags: LabelFlags = DEFAULT_F
 
   // What inspection this came out of the processing room under. Custom-exempt
   // product can never carry the mark and must read NOT FOR SALE — printing it
-  // as a band, not just the small bug, so nobody has to squint at a tub.
+  // as a band, not just the small bug, so nobody has to squint at a tub. Retail
+  // exempt falls through to the unmarked band the same way (see marksInspection).
   const inspection = flags.not_for_sale
     ? `<div class="insp nfs">NOT FOR SALE &middot; CUSTOM EXEMPT</div>`
-    : flags.usda_bug
+    : marksInspection(flags)
       ? `<div class="insp usda">
            <img class="bug" src="/usda-legend.png" alt="USDA Inspected">
            <span>USDA INSPECTED &middot; EST. ${esc(USDA_EST_NUMBER)}</span>

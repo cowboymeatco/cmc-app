@@ -9,6 +9,18 @@ export interface LabelFlags { usda_bug: boolean; retail_exempt: boolean; not_for
 
 export const DEFAULT_FLAGS: LabelFlags = { usda_bug: true, retail_exempt: false, not_for_sale: false, not_for_human: false }
 
+// The one rule for whether a label may bear the mark of inspection, shared by
+// every label we print so the surfaces cannot drift apart.
+//
+// retail_exempt is an exemption FROM inspection — it is why the product was not
+// inspected — so a label claiming inspection alongside a RETAIL EXEMPT badge
+// contradicts itself (Chris/Charlie, 2026-08-12: "We retail exempt to bypass
+// USDA inspection"). Unlike custom-exempt it is still SOLD, so it suppresses
+// the mark without adding NOT FOR SALE.
+export function marksInspection(flags: LabelFlags): boolean {
+  return flags.usda_bug && !flags.not_for_human && !flags.retail_exempt
+}
+
 // CMC's USDA establishment number — appears in the center of the mark of
 // inspection (from the Grant of Inspection). If blank the stamp prints "EST. ____".
 export const USDA_EST_NUMBER = '47648'
@@ -124,10 +136,11 @@ export function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlag
 
   // The compliance mark rides on top of the box row, in the open right-hand
   // space, so it never pushes the lines apart. Custom exempt = NOT FOR SALE and
-  // no legend; otherwise the approved USDA mark of inspection (default on).
+  // no legend; otherwise the approved USDA mark of inspection when the product
+  // is actually entitled to it (see marksInspection).
   const markHTML = flags.not_for_sale
     ? `<div class="mark"><div class="nfs">NOT FOR SALE</div></div>`
-    : flags.usda_bug && !flags.not_for_human
+    : marksInspection(flags)
       ? `<div class="mark up"><img class="usdaimg" src="/usda-legend.png" alt="USDA Inspected EST. 47648"></div>`
       : ''
   // Animal food. Full width rather than tucked in the small mark slot: the
