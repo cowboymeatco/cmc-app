@@ -270,8 +270,14 @@ function sanitizeExpText(v: string): string {
 // A PLU that matches this and has a blank `ingredients` prints a label with no
 // ingredient statement and nothing anywhere says so — which is how a batch of
 // jerky reached the packing table unlabelled (Charlie, 2026-07-29).
+// `brotwurst` is the one that matters here and it was missing: the list carried
+// `brat`, which matches NOTHING in this catalogue — we make brotwurst, never
+// bratwurst ([[Brot vs Brat]]) — so all 32 brotwursts sailed past this check and
+// 12 of them sit with no statement, never once flagged (found 2026-08-13). `brat`
+// stays only to catch the name being typed wrong. `coil` is the fresh sausage
+// coils, seasoned and multi-ingredient like everything else on this list.
 const NEEDS_INGREDIENTS =
-  /jerky|sausage|brat|bacon|\bham\b|snack stick|summer|salami|bologna|hot dog|wiener|frank|seasoned|marinade|marinated|cured|smoked|pepperoni|chorizo|\blink|patty|meatball|loaf/i
+  /jerky|sausage|brotwurst|brat|coil|bacon|\bham\b|snack stick|summer|salami|bologna|hot dog|wiener|frank|seasoned|marinade|marinated|cured|smoked|pepperoni|chorizo|\blink|patty|meatball|loaf/i
 
 export function needsIngredientStatement(itemName: string | null | undefined): boolean {
   return NEEDS_INGREDIENTS.test(itemName ?? '')
