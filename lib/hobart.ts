@@ -105,8 +105,81 @@ function buildDt(name: string, msg?: string | null): string {
   return m ? `${base}\n${m}` : base
 }
 
-// Build one RT89 PLU record body (no trailing RS).
-export function buildRT89(plu: HobartPlu): string {
+// ──────────────────────────────────────────────────────────────────────────────
+// Label format for a PLU the scale has never sent us a record for.
+//
+// A new PLU has no skeleton, so every field falls back to the canonical default —
+// including l1 201, the FRESH CUT label. That is right for a new steak and wrong
+// for everything else: a new brotwurst, snack stick or sliced summer sausage
+// belongs on 202, jerky on 203, wild game on 300. Nobody sees it until the label
+// prints (Charlie, 2026-08-13: 25 active PLUs the scale had never seen, 17 of them
+// on the wrong label).
+//
+// So instead of one default, ask the book what its siblings use. Three signals,
+// most specific first: the product family by name, then wild game (which has its
+// own labels whatever the product is), then the PLU number series — the shop
+// numbers by product line, so 61xx is brots and 41xx is snack sticks. A signal
+// only counts when the group is big enough and agrees strongly; a thin or split
+// group falls through, and if nothing is confident we keep the 201 default.
+//
+// Back-tested by hiding each captured record and inferring it from the rest:
+// 341/368 correct. It only ever applies where there is NO captured record, so it
+// can never overwrite what the scale actually has.
+// ──────────────────────────────────────────────────────────────────────────────
+
+const MIN_SIBLINGS = 3      // fewer than this and the group proves nothing
+const MIN_AGREEMENT = 0.75  // a split group is a guess, not a pattern
+
+// Product families that carry their own label. Order matters only for reading;
+// an item matches at most one in practice.
+const LABEL_FAMILIES: ReadonlyArray<RegExp> = [
+  /snack stick/i,
+  /jerky/i,
+  /summer sausage|salami/i,
+  /brotwurst|hot dog|polish sausage/i,
+  /smoked .*(cheese|colby|cheddar|jack|swiss)/i,
+]
+
+const isWildGame = (name: string | null | undefined) => /wild game/i.test(name ?? '')
+const familyOf = (name: string | null | undefined) => LABEL_FAMILIES.findIndex((re) => re.test(name ?? ''))
+// PLU number series: everything but the last two digits, so 6132 → "61" sits with
+// 6100–6199, and 413001 → "4130" with the wholesale block.
+const seriesOf = (plu: string) => String(plu ?? '').replace(/\D/g, '').slice(0, -2) || '0'
+
+function confidentFormat(formats: string[]): string | null {
+  if (formats.length < MIN_SIBLINGS) return null
+  const counts = new Map<string, number>()
+  for (const f of formats) counts.set(f, (counts.get(f) ?? 0) + 1)
+  const [top, n] = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]
+  return n / formats.length >= MIN_AGREEMENT ? top : null
+}
+
+// The label format `plu` should get from the rest of the book, or null if the book
+// has nothing confident to say. `book` is the whole PLU list; only entries with a
+// captured skeleton count as evidence.
+export function inferLabelFormat(plu: HobartPlu, book: HobartPlu[]): string | null {
+  const evidence = book.filter((r) => r.plu_number !== plu.plu_number && r.skeleton?.l1)
+  const formatsOf = (rows: HobartPlu[]) => rows.map((r) => String(r.skeleton!.l1))
+  const game = isWildGame(plu.item_name)
+  const family = familyOf(plu.item_name)
+
+  if (family >= 0) {
+    const m = confidentFormat(formatsOf(evidence.filter(
+      (r) => familyOf(r.item_name) === family && isWildGame(r.item_name) === game)))
+    if (m) return m
+  }
+  if (game) {
+    const m = confidentFormat(formatsOf(evidence.filter((r) => isWildGame(r.item_name))))
+    if (m) return m
+  }
+  const series = seriesOf(plu.plu_number)
+  return confidentFormat(formatsOf(evidence.filter(
+    (r) => seriesOf(r.plu_number) === series && isWildGame(r.item_name) === game)))
+}
+
+// Build one RT89 PLU record body (no trailing RS). `labelFormat` is the inferred
+// fallback for a PLU with no captured record; it never overrides a real one.
+export function buildRT89(plu: HobartPlu, labelFormat?: string | null): string {
   const pluNo = sanitize(String(plu.plu_number ?? '').trim())
   const overrides: Record<string, string> = {
     'd#': sanitize(String(plu.department ?? '0').trim()) || '0',
@@ -125,6 +198,9 @@ export function buildRT89(plu: HobartPlu): string {
   // Falling back to the PLU-100 skeleton is only right for a PLU the scale has
   // never seen; using it for an existing item rewrites its label format.
   const skel = plu.skeleton ?? null
+  // No captured record → l1 would fall to the fresh-cut default. Use what the
+  // book says this item's siblings print on, when it says anything confident.
+  if (!skel && labelFormat) overrides['l1'] = sanitize(String(labelFormat).trim())
   const fields = RT89_TEMPLATE.map(([code, def]) =>
     code + (code in overrides ? overrides[code]
           : skel && code in skel ? sanitize(String(skel[code] ?? ''))
@@ -149,7 +225,10 @@ export function buildHtFile(plus: HobartPlu[]): string {
     // Department 0 always: every one of the 218 text records on the scale is d#0,
     // and it is what the EXPTXT CSV path writes, so both routes stay one library.
     .map((p) => buildRT97({ text_number: p.plu_number, text: p.ingredients as string, department: 0 }) + RS)
-  return texts.join('') + plus.map((p) => buildRT89(p) + RS).join('')
+  // A PLU the scale has never seen gets its label format from the rest of the
+  // book rather than the fresh-cut default — see inferLabelFormat().
+  return texts.join('') + plus.map((p) =>
+    buildRT89(p, p.skeleton ? null : inferLabelFormat(p, plus)) + RS).join('')
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

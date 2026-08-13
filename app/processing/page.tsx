@@ -7,7 +7,7 @@ import CureTagsTab from './CureTagsTab'
 import CloverTab from './CloverTab'
 import QuickBooksTab from './QuickBooksTab'
 import AlignmentTab from './AlignmentTab'
-import { buildHtFile, needsIngredientStatement, type HobartPlu } from '@/lib/hobart'
+import { buildHtFile, inferLabelFormat, needsIngredientStatement, type HobartPlu } from '@/lib/hobart'
 import { isoDate } from '@/lib/dates'
 
 type Tab = 'browser' | 'upload' | 'export' | 'cleanup' | 'cut-schedule' | 'in-cure' | 'box-labels' | 'clover' | 'quickbooks' | 'alignment'
@@ -580,6 +580,22 @@ function BrowserTab() {
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // EXPORT TAB
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// A plu_items row as the .ht builder wants it. `ingredients` drives both the RT97
+// statement record and the Ec link to it; `skeleton` is this item's own on-scale
+// record, above all its label format.
+const toHobartPlu = (i: PluItem): HobartPlu => ({
+  plu_number:    i.plu_number,
+  item_name:     i.item_name,
+  price:         i.price,
+  tare_weight:   i.tare_weight,
+  upc:           i.upc,
+  unit:          i.unit,
+  department:    i.department,
+  label_message: i.label_message,
+  ingredients:   i.ingredients,
+  skeleton:      i.ht_skeleton,
+})
+
 interface PushReq {
   id: string
   created_at: string
@@ -618,6 +634,11 @@ function ExportTab() {
   // Cheddar Brotwurst, 2026-08-06). Not filtered by the export controls above —
   // the push always covers every active PLU, whatever this tab is showing.
   const [unpriced, setUnpriced] = useState<PluItem[]>([])
+  // PLUs the scale has never sent us a record for, and the label format they will
+  // therefore be sent with — worked out from what their siblings print on rather
+  // than the fresh-cut default. It is an inference, so it is shown rather than
+  // made silently: a wrong one is only visible once a label prints.
+  const [inferredFmt, setInferredFmt] = useState<{ item: PluItem; format: string }[]>([])
 
   useEffect(() => {
     fetch('/api/processing?active=false')
@@ -648,6 +669,15 @@ function ExportTab() {
       (i.ingredients ?? '').trim() !== '' &&
       i.ht_skeleton != null && (i.ht_skeleton.Ec ?? '').trim() === ''
     ))
+    // Inference reads the whole book, not the filtered view — a sibling outside
+    // the current species filter is still evidence.
+    const book: HobartPlu[] = items.map(toHobartPlu)
+    setInferredFmt(
+      filtered
+        .filter(i => i.ht_skeleton == null)
+        .map(i => ({ item: i, format: inferLabelFormat(toHobartPlu(i), book) }))
+        .filter((r): r is { item: PluItem; format: string } => r.format != null)
+    )
     return filtered
   }
 
@@ -704,19 +734,7 @@ function ExportTab() {
   async function handleExportHt() {
     setExportingHt(true)
     const items = await fetchCount()
-    const plus: HobartPlu[] = items.map(i => ({
-      plu_number:    i.plu_number,
-      item_name:     i.item_name,
-      price:         i.price,
-      tare_weight:   i.tare_weight,
-      upc:           i.upc,
-      unit:          i.unit,
-      department:    i.department,
-      label_message: i.label_message,
-      ingredients:   i.ingredients, // drives the Ec "Expanded text" reference
-      skeleton:      i.ht_skeleton, // this item's own on-scale fields (label format et al)
-    }))
-    const ht = buildHtFile(plus)
+    const ht = buildHtFile(items.map(toHobartPlu))
     // Encode latin-1 (one byte per char) so the 0x1E/0x1F framing bytes match
     // the scale's native file exactly — no UTF-8 BOM, no multi-byte expansion.
     const bytes = new Uint8Array(ht.length)
@@ -807,6 +825,32 @@ function ExportTab() {
               {unlinkedIng.map(i => (
                 <div key={i.id}>
                   <span style={{ fontFamily: 'monospace', color: C.lightBrown }}>{i.plu_number}</span>{' '}{i.item_name}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* New PLUs the scale has never sent a record for. Their label format is
+            worked out from what their siblings print on — a good guess, but a
+            guess, and the only place it shows up otherwise is a printed label. */}
+        {inferredFmt.length > 0 && (
+          <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.35)', borderRadius: 4, padding: '0.85rem 1rem', margin: '1rem 0' }}>
+            <div style={{ color: C.tan, fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.3rem' }}>
+              🏷 {inferredFmt.length} new {inferredFmt.length === 1 ? 'item is' : 'items are'} getting a label format from their siblings
+            </div>
+            <div style={{ color: C.lightBrown, fontSize: '0.78rem', lineHeight: 1.6, marginBottom: '0.5rem' }}>
+              The scale has never sent us a record for these, so there is nothing to copy their label
+              format from. Rather than default them all to the fresh-cut label, each one takes the
+              format the rest of its product line prints on. Check the ones below — if a format is
+              wrong, set it at the scale and the next capture keeps it.
+            </div>
+            <div style={{ maxHeight: 190, overflowY: 'auto', fontSize: '0.76rem', color: C.tan, lineHeight: 1.75 }}>
+              {inferredFmt.map(({ item, format }) => (
+                <div key={item.id}>
+                  <span style={{ fontFamily: 'monospace', color: C.lightBrown }}>{item.plu_number}</span>{' '}
+                  {item.item_name}{' '}
+                  <span style={{ fontFamily: 'monospace', color: C.cream }}>→ {format}</span>
                 </div>
               ))}
             </div>
