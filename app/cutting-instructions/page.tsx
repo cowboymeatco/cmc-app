@@ -158,6 +158,14 @@ function smokehouseRows(sm: any, f: (s: string) => string): Array<[string, strin
   add('Brots',          sm.brats)
   add('Summer Sausage', sm.summer)
   add('Jerky',          sm.jerky)
+  // Jerky comes off the bottom round, which only yields so much. This is the
+  // customer's written answer on topping the order up out of our own cooler —
+  // the office bills off it, so it prints right under the jerky lines.
+  if (sm.jerkySupplement) {
+    rows.push(['Jerky Shortfall', sm.jerkySupplement === 'yes'
+      ? 'OK to add our bottom round — market price'
+      : 'DO NOT supplement — only their own animal'])
+  }
   if (sm.hotDogs) {
     const spec = [sm.hotDogs.lbs ? `${sm.hotDogs.lbs} lbs` : '', sm.hotDogs.cheese ? f(sm.hotDogs.cheese) : '']
       .filter(Boolean).join(' · ')
