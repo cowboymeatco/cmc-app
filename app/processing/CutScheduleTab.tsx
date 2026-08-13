@@ -7,7 +7,7 @@ import {
   type PriorityWeights, type ScheduleEntry, type BreakItem, type ListItem,
   DEFAULT_WEIGHTS, WEIGHT_LABELS, buildEntries, loadScheduleData, uniqueCarcasses as uniqueOf,
   calcScore, speciesColor, speciesIcon, portionBadge, cutDateByKey, hangAtCut, hangColor,
-  carcassTotals,
+  carcassTotals, HANG_TARGET_DAYS, type ProjectedDay,
 } from '@/lib/cutSchedule'
 import { isoDate, dateLabel } from '@/lib/dates'
 
@@ -43,6 +43,11 @@ export default function CutScheduleTab() {
   const [assignments, setAssignments] = useState<CarcassAssignment[]>([])
   const [assignModal, setAssignModal] = useState<{ appointments: HarvestAppointment[]; carcasses: HarvestLog[] } | null>(null)
 
+  // What's booked but not yet killed, projected onto the day it will be cut.
+  // Advisory only — see the Coming Up section below.
+  const [outlook,     setOutlook]     = useState<ProjectedDay[]>([])
+  const [showOutlook, setShowOutlook] = useState(false)
+
   const todayISO = isoDate()
 
   // ── Load from cooler inventory ────────────────────────────────────────────────
@@ -64,6 +69,17 @@ export default function CutScheduleTab() {
   }, [todayISO])
 
   useEffect(() => { loadAll() }, [loadAll])
+
+  // The outlook is derived from the harvest calendar, not the cooler, so it
+  // loads on its own and a failure here must never take the live plan with it.
+  useEffect(() => {
+    let alive = true
+    fetch('/api/cut-schedule/outlook?weeks=12')
+      .then(r => r.json())
+      .then(d => { if (alive && Array.isArray(d?.days)) setOutlook(d.days as ProjectedDay[]) })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [])
 
   // Open the assign modal for the carcass row's whole producer group. A company
   // dropping several hogs books ONE appointment per buyer, so scoping the modal
@@ -895,6 +911,9 @@ export default function CutScheduleTab() {
         </>
       )}
 
+      <ComingUp days={outlook} open={showOutlook} onToggle={() => setShowOutlook(v => !v)} />
+
+
       {/* Assign carcasses → cut customers */}
       {assignModal && (
         <AssignCarcassesModal
@@ -1012,6 +1031,105 @@ export default function CutScheduleTab() {
         )}
       </aside>
     )}
+    </div>
+  )
+}
+
+// ── Coming Up ─────────────────────────────────────────────────────────────────
+// The schedule above is meat already on the rail. This is what is booked but not
+// yet killed, projected onto the day it will most likely be cut: harvest date
+// plus the species' own hang, measured off 126 real carcasses (Beef 16d, Hog 3d,
+// Lamb/Goat 2d — see HANG_TARGET_DAYS).
+//
+// Deliberately NOT part of the plan above. These animals do not exist yet: no
+// tag, no hanging weight, no cut sheet, and nothing here is ordered, dragged or
+// saved. It is a load forecast — where the pile-ups are forming and where there
+// is room. When an animal is actually harvested it drops out of this list on its
+// own (the projection nets off carcasses already logged) and appears up top as a
+// normal row (Charlie, 2026-08-13).
+function ComingUp({ days, open, onToggle }: { days: ProjectedDay[]; open: boolean; onToggle: () => void }) {
+  if (days.length === 0) return null
+
+  const totalHead = days.reduce((s, d) => s + d.head, 0)
+  const totalLbs  = days.reduce((s, d) => s + d.est_lbs, 0)
+  // A day is "heavy" against the plant's own busiest real cut days rather than a
+  // number picked out of the air.
+  const HEAVY_HEAD = 12
+  const shown = open ? days : days.slice(0, 6)
+
+  return (
+    <div style={{ marginTop: '1.75rem' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+        <h3 style={{ margin: 0, color: C.cream, fontSize: '0.95rem', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+          Coming Up
+        </h3>
+        <span style={{ color: C.lightBrown, fontSize: '0.72rem' }}>
+          projected from booked harvests · next 12 weeks · {totalHead} head ≈ {Math.round(totalLbs).toLocaleString()} lb
+        </span>
+      </div>
+      <p style={{ margin: '0 0 0.6rem', color: C.lightBrown, fontSize: '0.7rem', lineHeight: 1.5, maxWidth: 760 }}>
+        Estimates, not records — these animals are still on the hoof. Cut day = kill day plus how long
+        that species actually hangs here ({Object.entries(HANG_TARGET_DAYS).map(([s, d]) => `${s} ${d}d`).join(' · ')});
+        pounds are median carcass weight × head. Each one moves into the schedule above the day it&apos;s killed.
+      </p>
+
+      <div style={{ border: '1px dashed rgba(166,120,90,0.4)', borderRadius: 4, overflow: 'hidden' }}>
+        {shown.map(d => {
+          const heavy = d.head >= HEAVY_HEAD
+          return (
+            <div key={d.date} style={{
+              display: 'flex', alignItems: 'flex-start', gap: '0.75rem',
+              padding: '0.5rem 0.8rem', borderBottom: '1px solid rgba(166,120,90,0.12)',
+              background: 'rgba(0,0,0,0.15)',
+            }}>
+              <div style={{ minWidth: 116 }}>
+                <div style={{ color: C.tan, fontSize: '0.78rem', fontWeight: 700 }}>{dateLabel(d.date)}</div>
+                <div style={{ color: C.lightBrown, fontSize: '0.64rem' }}>
+                  {new Date(`${d.date}T12:00:00`).toLocaleDateString('en-US', { weekday: 'long' })}
+                </div>
+              </div>
+              <div style={{ minWidth: 150, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                {Object.entries(d.species).map(([sp, n]) => (
+                  <span key={sp} style={{
+                    border: `1px solid ${speciesColor(sp)}`, color: speciesColor(sp),
+                    borderRadius: 3, padding: '0 5px', fontSize: '0.68rem', whiteSpace: 'nowrap',
+                  }}>{speciesIcon(sp)} {sp} ×{n}</span>
+                ))}
+              </div>
+              <div style={{ minWidth: 92, color: heavy ? C.amber : C.cream, fontSize: '0.76rem', fontWeight: 700 }}>
+                {d.head} head {heavy && <span title="A heavy day — worth spreading if you can">⚠</span>}
+              </div>
+              <div style={{ minWidth: 84, color: C.lightBrown, fontSize: '0.74rem' }}>
+                ≈{Math.round(d.est_lbs).toLocaleString()} lb
+              </div>
+              <div style={{ flex: 1, minWidth: 0, color: C.lightBrown, fontSize: '0.68rem', lineHeight: 1.45 }}>
+                {d.appts.map(a => {
+                  // Buyers if they're known, else the producer who booked it.
+                  // A booking with neither is a real gap, not a display quirk —
+                  // say so rather than inventing a name for it.
+                  const who = a.customers.length
+                    ? a.customers.slice(0, 2).join(', ') + (a.customers.length > 2 ? ` +${a.customers.length - 2}` : '')
+                    : a.producer || 'no buyer yet'
+                  return (
+                    <div key={a.appointment_id} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {who} <span style={{ color: 'rgba(166,120,90,0.65)' }}>· {a.head}× · kill {dateLabel(a.harvest_date)}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {days.length > 6 && (
+        <button onClick={onToggle} style={{
+          marginTop: '0.5rem', background: 'transparent', border: '1px solid rgba(166,120,90,0.35)',
+          color: C.tan, borderRadius: 4, padding: '0.3rem 0.9rem', fontSize: '0.74rem', cursor: 'pointer',
+        }}>
+          {open ? '▲ Show fewer' : `▼ Show all ${days.length} projected cut days`}
+        </button>
+      )}
     </div>
   )
 }
