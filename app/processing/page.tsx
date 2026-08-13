@@ -890,7 +890,8 @@ function ExportTab() {
           🛰 Push to Scales
         </h3>
         <p style={{ color: C.tan, fontSize: '0.82rem', lineHeight: 1.6, margin: '0 0 1rem' }}>
-          Send current prices to all shop scales automatically — the kiosk does the on-site push. No file, no HCT.
+          Send current prices <strong style={{ color: C.cream }}>and ingredient statements</strong> to all shop
+          scales automatically — the kiosk does the on-site push. No file, no HCT.
           Only PLUs that <strong style={{ color: C.cream }}>have a price</strong> are sent.
         </p>
 
