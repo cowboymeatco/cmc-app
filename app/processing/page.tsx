@@ -639,8 +639,16 @@ function ExportTab() {
   // than the fresh-cut default. It is an inference, so it is shown rather than
   // made silently: a wrong one is only visible once a label prints.
   const [inferredFmt, setInferredFmt] = useState<{ item: PluItem; format: string }[]>([])
+  // Every PLU, whatever this tab is filtered to. Label-format inference compares an
+  // item against its siblings, and a species filter must not shrink who counts as
+  // one — a new pork sausage still learns from the beef sausages.
+  const [book, setBook] = useState<PluItem[]>([])
 
   useEffect(() => {
+    fetch('/api/processing')
+      .then(r => r.json())
+      .then(d => setBook(Array.isArray(d) ? d : []))
+      .catch(() => {})
     fetch('/api/processing?active=false')
       .then(r => r.json())
       .then(d => setRetired(Array.isArray(d) ? d : []))
@@ -669,19 +677,19 @@ function ExportTab() {
       (i.ingredients ?? '').trim() !== '' &&
       i.ht_skeleton != null && (i.ht_skeleton.Ec ?? '').trim() === ''
     ))
-    // Inference reads the whole book, not the filtered view — a sibling outside
-    // the current species filter is still evidence.
-    const book: HobartPlu[] = items.map(toHobartPlu)
+    // Evidence is the whole book (falling back to what we have if it hasn't
+    // loaded yet) — a sibling outside the current filter still counts.
+    const evidence: HobartPlu[] = (book.length ? book : items).map(toHobartPlu)
     setInferredFmt(
       filtered
         .filter(i => i.ht_skeleton == null)
-        .map(i => ({ item: i, format: inferLabelFormat(toHobartPlu(i), book) }))
+        .map(i => ({ item: i, format: inferLabelFormat(toHobartPlu(i), evidence) }))
         .filter((r): r is { item: PluItem; format: string } => r.format != null)
     )
     return filtered
   }
 
-  useEffect(() => { fetchCount() }, [species, retailOnly, activeOnly]) // eslint-disable-line
+  useEffect(() => { fetchCount() }, [species, retailOnly, activeOnly, book]) // eslint-disable-line
 
   async function handleExport() {
     setExporting(true)
@@ -734,7 +742,9 @@ function ExportTab() {
   async function handleExportHt() {
     setExportingHt(true)
     const items = await fetchCount()
-    const ht = buildHtFile(items.map(toHobartPlu))
+    // Second argument: infer label formats against the whole book, not just the
+    // filtered slice being written.
+    const ht = buildHtFile(items.map(toHobartPlu), (book.length ? book : items).map(toHobartPlu))
     // Encode latin-1 (one byte per char) so the 0x1E/0x1F framing bytes match
     // the scale's native file exactly — no UTF-8 BOM, no multi-byte expansion.
     const bytes = new Uint8Array(ht.length)

@@ -219,7 +219,10 @@ export function buildRT89(plu: HobartPlu, labelFormat?: string | null): string {
 // the scale had never been given and it printed blank. That is why ingredients
 // "wouldn't send" (Jill, 2026-08-13): the RT89-only push could not carry them, and
 // the text had to be hand-imported through HCT's EXPTXT CSV tab.
-export function buildHtFile(plus: HobartPlu[]): string {
+// `book` is the evidence for label-format inference and defaults to the PLUs being
+// written. Pass the whole book when writing a subset: exporting one species must
+// not narrow the siblings an item is compared against.
+export function buildHtFile(plus: HobartPlu[], book: HobartPlu[] = plus): string {
   const texts = plus
     .filter((p) => String(p.ingredients ?? '').trim() !== '')
     // Department 0 always: every one of the 218 text records on the scale is d#0,
@@ -228,7 +231,7 @@ export function buildHtFile(plus: HobartPlu[]): string {
   // A PLU the scale has never seen gets its label format from the rest of the
   // book rather than the fresh-cut default — see inferLabelFormat().
   return texts.join('') + plus.map((p) =>
-    buildRT89(p, p.skeleton ? null : inferLabelFormat(p, plus)) + RS).join('')
+    buildRT89(p, p.skeleton ? null : inferLabelFormat(p, book)) + RS).join('')
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
