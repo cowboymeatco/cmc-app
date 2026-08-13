@@ -16,6 +16,10 @@ type View = 'week' | 'month' | 'quarter'
 
 interface CalEvent {
   id: string; lane: Lane; date: string; title: string; subtitle?: string; status?: string; href?: string; planned?: boolean
+  // Clock times, on the lanes that have them (smokehouse cooks). `nights` is the
+  // number of midnights a cook crosses; `carriedIn` marks the copy that sits on
+  // a morning the cook ran into rather than the day it was lit.
+  startsAt?: string; endsAt?: string; nights?: number; carriedIn?: boolean
 }
 // When the kiosk last managed to import a cook cycle. Null on a database with
 // no cooks at all.
@@ -214,6 +218,9 @@ export default function MasterCalendar() {
 
         <div style={{ opacity: loading ? 0.5 : 1, transition: 'opacity 0.15s' }}>
           {view === 'week'    && <WeekView    days={weekDays(anchor)} byDay={byDay} todayISO={todayISO} />}
+          {view === 'week' && active.has('smokehouse') && (
+            <SmokehouseWeek days={weekDays(anchor)} events={events} todayISO={todayISO} />
+          )}
           {view === 'month'   && <MonthView   year={anchor.getFullYear()} month={anchor.getMonth()} byDay={byDay} todayISO={todayISO} />}
           {view === 'quarter' && <QuarterView months={quarterMonths(anchor)} byDay={byDay} todayISO={todayISO} />}
         </div>
@@ -299,6 +306,135 @@ function WeekView({ days, byDay, todayISO }: { days: Date[]; byDay: Map<string, 
           </div>
         )
       })}
+    </div>
+  )
+}
+
+// ── Smokehouse: the week on a 24-hour axis ────────────────────────────────────
+// 84 of our 414 logged cooks cross midnight in Mountain time, so a lane keyed on
+// the day a cook was lit could never answer "how is the smokehouse actually
+// running this week" — a 10pm ham read as one Tuesday chip and left Wednesday
+// morning looking idle. Here every cook is a bar on a real time axis, cut at
+// midnight so
+// an overnight reads as one run continuing into the next column (Charlie,
+// 2026-08-13).
+const HOURS = Array.from({ length: 24 }, (_, i) => i)
+const HOUR_PX = 15
+const hourLabel = (h: number) => (h === 0 ? '12a' : h < 12 ? `${h}a` : h === 12 ? '12p' : `${h - 12}p`)
+const clockOf = (ts: string) =>
+  new Date(ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).replace(' ', '').toLowerCase()
+
+function SmokehouseWeek({ days, events, todayISO }: { days: Date[]; events: CalEvent[]; todayISO: string }) {
+  // Only the primary rows carry the true span — the carried-in copies exist for
+  // the day columns above and would draw the same cook twice here.
+  const cooks = events.filter(e => e.lane === 'smokehouse' && e.startsAt && !e.carriedIn)
+
+  type Seg = { key: string; col: number; top: number; height: number; e: CalEvent; head: boolean; tail: boolean }
+  const segs: Seg[] = []
+  for (const e of cooks) {
+    const s = new Date(e.startsAt!).getTime()
+    // A cook with no end time is still in the house; draw it up to now.
+    const end = e.endsAt ? new Date(e.endsAt).getTime() : Date.now()
+    if (!(end > s)) continue
+    days.forEach((d, col) => {
+      const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+      const dayEnd = dayStart + 86_400_000
+      const a = Math.max(s, dayStart)
+      const b = Math.min(end, dayEnd)
+      if (b <= a) return
+      segs.push({
+        key: `${e.id}-${col}`, col,
+        top: ((a - dayStart) / 3_600_000) * HOUR_PX,
+        height: Math.max(4, ((b - a) / 3_600_000) * HOUR_PX),
+        e, head: a === s, tail: b === end,
+      })
+    })
+  }
+
+  const now = new Date()
+  const nowISO = toISO(now)
+  const nowTop = (now.getHours() + now.getMinutes() / 60) * HOUR_PX
+
+  return (
+    <div style={{ marginTop: '1rem' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', marginBottom: 6, flexWrap: 'wrap' }}>
+        <span style={{ color: C.cream, fontWeight: 700, fontSize: '0.82rem' }}>🔥 Smokehouse — by the hour</span>
+        <span style={{ color: C.lightBrown, fontSize: '0.66rem' }}>
+          {cooks.length
+            ? `${cooks.length} cook${cooks.length === 1 ? '' : 's'} this week · a bar that reaches the bottom carries into the next day`
+            : 'no cooks logged this week'}
+        </span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: `34px ${DAY_COLS}`, background: C.dark, border: '1px solid rgba(166,120,90,0.15)', borderRadius: 4, overflow: 'hidden' }}>
+        <div style={{ borderBottom: '1px solid rgba(166,120,90,0.2)' }} />
+        {days.map(d => {
+          const iso = toISO(d)
+          return (
+            <div key={`h-${iso}`} style={{
+              textAlign: 'center', padding: '3px 0', borderBottom: '1px solid rgba(166,120,90,0.2)',
+              borderLeft: '1px solid rgba(166,120,90,0.12)',
+              color: iso === todayISO ? C.tan : C.lightBrown, fontSize: '0.6rem',
+              textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: iso === todayISO ? 800 : 400,
+            }}>{WEEKDAYS[d.getDay()]} {d.getDate()}</div>
+          )
+        })}
+
+        {/* hour gutter */}
+        <div style={{ position: 'relative', height: 24 * HOUR_PX }}>
+          {HOURS.filter(h => h % 3 === 0).map(h => (
+            <div key={h} style={{ position: 'absolute', top: h * HOUR_PX - 4, right: 4, fontSize: '0.54rem', color: 'rgba(166,120,90,0.75)', lineHeight: 1 }}>
+              {hourLabel(h)}
+            </div>
+          ))}
+        </div>
+
+        {days.map((d, col) => {
+          const iso = toISO(d)
+          return (
+            <div key={iso} style={{
+              position: 'relative', height: 24 * HOUR_PX,
+              borderLeft: '1px solid rgba(166,120,90,0.12)',
+              background: iso === todayISO ? 'rgba(201,168,130,0.05)' : 'transparent',
+            }}>
+              {HOURS.map(h => (
+                <div key={h} style={{
+                  position: 'absolute', top: h * HOUR_PX, left: 0, right: 0,
+                  borderTop: `1px solid rgba(166,120,90,${h % 6 === 0 ? 0.16 : 0.06})`,
+                }} />
+              ))}
+              {iso === nowISO && (
+                <div title="now" style={{ position: 'absolute', top: nowTop, left: 0, right: 0, borderTop: `1px solid ${C.tan}`, zIndex: 3 }} />
+              )}
+              {segs.filter(s => s.col === col).map(s => {
+                const label = s.e.title.replace(/[🔥↗↳]/g, '').trim()
+                const running = !s.e.endsAt
+                const tip = [label, s.e.subtitle, running ? 'still running' : ''].filter(Boolean).join(' — ')
+                const body = (
+                  <>
+                    {!s.head && <span style={{ color: C.tan }}>↳ </span>}
+                    {s.head ? `${clockOf(s.e.startsAt!)} ` : ''}{label}
+                  </>
+                )
+                const style: React.CSSProperties = {
+                  position: 'absolute', top: s.top, height: s.height, left: 2, right: 2,
+                  background: running ? 'transparent' : `${LANE_COLOR.smokehouse}30`,
+                  border: `1px ${running ? 'dashed' : 'solid'} ${LANE_COLOR.smokehouse}`,
+                  // Square off the edge that continues into the neighbouring day
+                  // so a split cook reads as one run, not two.
+                  borderTopLeftRadius: s.head ? 3 : 0, borderTopRightRadius: s.head ? 3 : 0,
+                  borderBottomLeftRadius: s.tail ? 3 : 0, borderBottomRightRadius: s.tail ? 3 : 0,
+                  borderTopWidth: s.head ? 1 : 0, borderBottomWidth: s.tail ? 1 : 0,
+                  color: C.cream, fontSize: '0.6rem', lineHeight: 1.15, padding: '1px 3px',
+                  overflow: 'hidden', textDecoration: 'none', zIndex: 2, boxSizing: 'border-box',
+                }
+                return s.e.href
+                  ? <a key={s.key} href={s.e.href} title={tip} style={style}>{body}</a>
+                  : <div key={s.key} title={tip} style={style}>{body}</div>
+              })}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }

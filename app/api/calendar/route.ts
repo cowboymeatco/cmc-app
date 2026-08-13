@@ -23,6 +23,16 @@ interface CalEvent {
   status?:   string
   href?:     string          // where the most relevant info for this item lives
   planned?:  boolean         // a scheduled/planned item (vs an actual record)
+  // Clock times, on the lanes that have them (smokehouse cooks). 84 of our 414
+  // logged cooks cross midnight in Mountain time, so a lane keyed only on the
+  // start day showed a 10pm cook as a Tuesday item and left Wednesday morning
+  // looking idle
+  // (Charlie, 2026-08-13). These drive the overnight marker and the hourly
+  // week timeline.
+  startsAt?: string          // ISO timestamp
+  endsAt?:   string          // ISO timestamp; absent while a cook is still running
+  nights?:   number          // midnights crossed; 0/absent for a same-day item
+  carriedIn?: boolean        // the tail of a cook that started on an earlier day
 }
 
 // Where clicking an event takes you — the page that holds the most relevant
@@ -38,6 +48,21 @@ const LANE_HREF: Record<Lane, string> = {
 }
 
 const day = (v: string | null | undefined): string => (v ? String(v).slice(0, 10) : '')
+
+// Calendar-day arithmetic on YYYY-MM-DD strings, done in local time so a cook
+// lands on the day the crew would say it ran.
+const shiftDay = (iso: string, delta: number): string => {
+  const [y, m, d] = iso.split('-').map(Number)
+  const dt = new Date(y, (m ?? 1) - 1, (d ?? 1) + delta)
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+}
+const dayBefore = (iso: string) => shiftDay(iso, -1)
+const localDay = (ts: string): string => {
+  const d = new Date(ts)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+const clock = (ts: string): string =>
+  new Date(ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).replace(' ', '').toLowerCase()
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -65,9 +90,12 @@ export async function GET(req: NextRequest) {
       .gte('session_date', from).lte('session_date', to),
     // Smokehouse — actual cook cycles (the real log), tagged with their recipe
     // on /cooks. Scheduling/planned cooks layer in next (Charlie, 2026-07-30).
+    // Reach back a day before the window: a cook lit at 9pm the night before
+    // `from` is still in the smokehouse for most of the first morning shown, and
+    // keying the fetch to started_at alone hid it entirely.
     supabase.from('smokehouse_cook')
       .select('id, started_at, ended_at, batch, operator, profile_key')
-      .gte('started_at', `${from}T00:00:00`).lte('started_at', `${to}T23:59:59`),
+      .gte('started_at', `${dayBefore(from)}T00:00:00`).lte('started_at', `${to}T23:59:59`),
     supabase.from('retail_orders')
       .select('id, due_date, customer_name, fulfillment_type, status')
       .gte('due_date', from).lte('due_date', to),
@@ -145,21 +173,53 @@ export async function GET(req: NextRequest) {
   }
 
   for (const r of cooks.data ?? []) {
-    const d = day(r.started_at as string)
-    if (!d) continue
+    if (!r.started_at) continue
+    const startISO = r.started_at as string
+    const endISO   = (r.ended_at as string) || ''
+    const d = localDay(startISO)
     // Duration off the log; a cook with no end time is still running.
-    const start = r.started_at ? new Date(r.started_at as string).getTime() : 0
-    const end   = r.ended_at   ? new Date(r.ended_at   as string).getTime() : 0
+    const start = new Date(startISO).getTime()
+    const end   = endISO ? new Date(endISO).getTime() : 0
     const hours = start && end && end > start ? Math.round((end - start) / 360000) / 10 : 0
-    const sub = [r.operator, hours ? `${hours}h` : ''].filter(Boolean).join(' · ')
     // Show the tagged recipe when the crew has set one; else the batch name; else generic.
     const recipe = r.profile_key ? recipeByKey.get(String(r.profile_key)) : ''
-    events.push({
-      id: `cook-${r.id}`, lane: 'smokehouse', date: d,
-      title: `🔥 ${recipe || r.batch || 'Cook'}`,
-      subtitle: sub || undefined,
-      status: r.ended_at ? 'complete' : 'active', href: LANE_HREF.smokehouse,
-    })
+    const title  = `🔥 ${recipe || r.batch || 'Cook'}`
+    // Midnights crossed. An unfinished cook is counted against right now, so a
+    // pit that has been running since yesterday reads as overnight while it runs.
+    const endDay = endISO ? localDay(endISO) : localDay(new Date().toISOString())
+    let nights = 0
+    for (let probe = d; probe < endDay && nights < 7; probe = shiftDay(probe, 1)) nights++
+
+    const sub = [
+      r.operator,
+      hours ? `${hours}h` : '',
+      // The times only earn their space once a cook leaves the day it started.
+      nights > 0 ? `${clock(startISO)} → ${endISO ? clock(endISO) : 'still running'}` : '',
+    ].filter(Boolean).join(' · ')
+
+    if (d >= from && d <= to) {
+      events.push({
+        id: `cook-${r.id}`, lane: 'smokehouse', date: d,
+        title: nights > 0 ? `${title} ↗` : title,
+        subtitle: sub || undefined,
+        status: endISO ? 'complete' : 'active', href: LANE_HREF.smokehouse,
+        startsAt: startISO, endsAt: endISO || undefined, nights,
+      })
+    }
+    // A cook that runs past midnight also belongs to the mornings it runs into,
+    // or those days read as empty while the smokehouse was working.
+    for (let i = 1; i <= nights; i++) {
+      const contDay = shiftDay(d, i)
+      if (contDay < from || contDay > to) continue
+      events.push({
+        id: `cook-${r.id}-n${i}`, lane: 'smokehouse', date: contDay,
+        title: `${title} ↳`,
+        subtitle: [`from ${clock(startISO)} ${i === 1 ? 'yesterday' : `${i}d ago`}`,
+                   endISO ? `ends ${clock(endISO)}` : 'still running'].join(' · '),
+        status: endISO ? 'complete' : 'active', href: LANE_HREF.smokehouse,
+        startsAt: startISO, endsAt: endISO || undefined, nights, carriedIn: true,
+      })
+    }
   }
 
   for (const r of retail.data ?? []) {
