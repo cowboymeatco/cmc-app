@@ -190,10 +190,14 @@ export function buildRT89(plu: HobartPlu, labelFormat?: string | null): string {
     'u$': priceToCents(plu.price),
     'ta': tareToGrams(plu.tare_weight),
   }
-  // Link to the ingredient statement: Ec ("Expanded text" number) = this PLU's
-  // number, matching the RT97 record buildHtFile() emits. Only set when the
-  // PLU actually has a statement, so we never blank an existing reference.
-  if (String(plu.ingredients ?? '').trim() !== '') overrides['Ec'] = pluNo
+  // The app owns the ingredient link in BOTH directions: point Ec ("Expanded
+  // text" number) at this PLU's own RT97 record when there is a statement, and
+  // clear it when there isn't. Leaving a stale pointer alone was the cautious
+  // choice while the scale was the source of truth; now that the app is, it just
+  // preserved rubbish — 51 PLUs pointed at text numbers the scale does not have,
+  // and BEEF EYE OF ROUND ROAST pointed at a pork bacon cure statement and
+  // printed it (2026-08-13). No statement here now means no statement there.
+  overrides['Ec'] = String(plu.ingredients ?? '').trim() !== '' ? pluNo : ''
   // Prefer this item's own on-scale values for everything we don't override.
   // Falling back to the PLU-100 skeleton is only right for a PLU the scale has
   // never seen; using it for an existing item rewrites its label format.
