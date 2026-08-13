@@ -18,8 +18,11 @@
 //   • The "NOT FOR HUMAN CONSUMPTION" style message rides INSIDE dt as a 2nd
 //     line joined by \n (0x0A): dt<name>\n<message>.
 //   • Ingredient statements are NOT stored on the PLU record. HCT keeps them in
-//     a separate Expanded Text file (EXPTXT.DAT), each keyed by a Text number,
-//     and the PLU references one by number. See buildExptxtCsv() below.
+//     a separate Expanded Text library (EXPTXT.DAT), each keyed by a Text number,
+//     and the PLU references one by number through Ec. The text itself travels as
+//     its own record type, RT97 (d#/r#/rt) — the scale's own export carries all
+//     218 of them, ahead of the PLUs. buildHtFile() emits both, so one file (and
+//     one "Push to scales") delivers the statement AND the link. See buildRT97().
 //
 // We generate by CLONING the canonical 105-field skeleton (captured from PLU
 // 100) and overwriting only the mapped fields. Every other field keeps the
@@ -41,7 +44,7 @@ export interface HobartPlu {
   label_message?: string | null // appended to dt as a \n line (e.g. NOT FOR HUMAN CONSUMPTION)
   ingredients?: string | null   // if non-empty → sets Ec (the "Expanded text" ref) = plu_number,
                                 //   linking this PLU to its EXPTXT record. The text itself lives
-                                //   in EXPTXT.DAT (see buildExptxtCsv), never on the PLU record.
+                                //   in its own RT97 record (see buildRT97), never on the PLU record.
   // This PLU's own RT89 field map as captured from a scale backup (plu_items.
   // ht_skeleton). Supplies every field the app does not own — most importantly
   // l1, the LABEL FORMAT. Without it each record inherits PLU 100's defaults,
@@ -115,7 +118,7 @@ export function buildRT89(plu: HobartPlu): string {
     'ta': tareToGrams(plu.tare_weight),
   }
   // Link to the ingredient statement: Ec ("Expanded text" number) = this PLU's
-  // number, matching the EXPTXT record buildExptxtCsv() emits. Only set when the
+  // number, matching the RT97 record buildHtFile() emits. Only set when the
   // PLU actually has a statement, so we never blank an existing reference.
   if (String(plu.ingredients ?? '').trim() !== '') overrides['Ec'] = pluNo
   // Prefer this item's own on-scale values for everything we don't override.
@@ -132,27 +135,32 @@ export function buildRT89(plu: HobartPlu): string {
 
 // Build a complete .ht file body from a list of PLUs. Each record is terminated
 // by RS (including the last), matching backup.ht's framing.
+//
+// Every PLU with an ingredient statement also gets its RT97 expanded-text record,
+// written FIRST — the order the scale's own export uses, and the order that means
+// the text exists before a PLU points at it. Without these the file ships only the
+// Ec pointer, so a statement written in the app aimed the label at a text record
+// the scale had never been given and it printed blank. That is why ingredients
+// "wouldn't send" (Jill, 2026-08-13): the RT89-only push could not carry them, and
+// the text had to be hand-imported through HCT's EXPTXT CSV tab.
 export function buildHtFile(plus: HobartPlu[]): string {
-  return plus.map((p) => buildRT89(p) + RS).join('')
+  const texts = plus
+    .filter((p) => String(p.ingredients ?? '').trim() !== '')
+    // Department 0 always: every one of the 218 text records on the scale is d#0,
+    // and it is what the EXPTXT CSV path writes, so both routes stay one library.
+    .map((p) => buildRT97({ text_number: p.plu_number, text: p.ingredients as string, department: 0 }) + RS)
+  return texts.join('') + plus.map((p) => buildRT89(p) + RS).join('')
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Expanded Text (EXPTXT.DAT) — the ingredient-statement library. HCT stores
-// these separately from PLUs and each PLU references one by its Text number.
-// Format VERIFIED against the shop's real HCT "Export CSV" of EXPTXT.DAT
-// (export_exptxt.csv, 2026-07, 218 records):
-//   • Header row: `Text number,Departmentnumber,Expanded Text,` (note: no space
-//     in "Departmentnumber", trailing comma).
-//   • Each row: `<textNumber>,<dept>,<text>,` — UNQUOTED. The text keeps its own
-//     commas raw; the parser takes the first two comma fields as number + dept
-//     and everything after (up to the trailing comma) as the text. Every dept in
-//     the shop's export is 0.
+// these separately from PLUs and each PLU references one by its Text number; we
+// key every statement by its own PLU number, so the app owns the library.
+// Verified against the shop's scale export (218 records, all department 0) and
+// HCT's own spec, resources/exptxt.properties.
 //   • `|` inside the text is a label line break; `<ESC>…` prefixes are font/size
 //     codes. We emit neither automatically — a caller may include `|` in text.
-//   • CRLF line endings (Windows / HCT).
 // ──────────────────────────────────────────────────────────────────────────────
-
-export const EXPTXT_HEADER = 'Text number,Departmentnumber,Expanded Text,'
 
 export interface ExpandedText {
   text_number: string | number      // → Text number (we key by PLU number)
@@ -187,16 +195,17 @@ export function needsIngredientStatement(itemName: string | null | undefined): b
   return NEEDS_INGREDIENTS.test(itemName ?? '')
 }
 
-// Build an EXPTXT.DAT "Import CSV" body from expanded-text records. Rows with an
-// empty number are skipped; empty text is allowed (emits `<num>,<dept>,,`).
-export function buildExptxtCsv(rows: ExpandedText[]): string {
-  const lines = rows
-    .filter((r) => String(r.text_number ?? '').trim() !== '')
-    .map((r) => {
-      const num  = String(r.text_number).trim()
-      const dept = String(r.department ?? '0').trim() || '0'
-      const text = sanitizeExpText(String(r.text ?? ''))
-      return `${num},${dept},${text},`
-    })
-  return [EXPTXT_HEADER, ...lines].join('\r\n') + '\r\n'
+// Build one RT97 expanded-text record body (no trailing RS) — the ingredient
+// statement itself, in the form that travels inside a .ht file and therefore over
+// the wire on a "Push to scales".
+//
+// Field order d#, r#, rt is the scale's own (all 218 records in backup.ht), and
+// HCT's spec for it is resources/exptxt.properties: record_command=RT97,
+// hts_tags=r#,d#,rt, send=true. `rt` is the statement; it must stay free of the
+// framing bytes, which sanitizeExpText guarantees.
+export function buildRT97(row: ExpandedText): string {
+  const num  = sanitize(String(row.text_number ?? '').trim())
+  const dept = sanitize(String(row.department ?? '0').trim()) || '0'
+  const text = sanitizeExpText(String(row.text ?? ''))
+  return 'RT97' + US + `d#${dept}` + US + `r#${num}` + US + `rt${text}`
 }
