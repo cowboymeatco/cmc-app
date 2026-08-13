@@ -57,12 +57,15 @@ const shiftDay = (iso: string, delta: number): string => {
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
 }
 const dayBefore = (iso: string) => shiftDay(iso, -1)
-const localDay = (ts: string): string => {
-  const d = new Date(ts)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-const clock = (ts: string): string =>
-  new Date(ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).replace(' ', '').toLowerCase()
+// Pinned to the plant's clock, NOT the server's. This runs on Vercel, which is
+// UTC — left to the machine's local zone a 4pm cook that finishes at 10pm the
+// same evening got flagged as running overnight, because in UTC it does. Only
+// Mountain time answers "did this cook cross midnight" the way the crew means it.
+const TZ = 'America/Denver'
+const DAY_FMT  = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' })
+const TIME_FMT = new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' })
+const localDay = (ts: string): string => DAY_FMT.format(new Date(ts))   // en-CA formats as YYYY-MM-DD
+const clock    = (ts: string): string => TIME_FMT.format(new Date(ts)).replace(/\s/g, '').toLowerCase()
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)

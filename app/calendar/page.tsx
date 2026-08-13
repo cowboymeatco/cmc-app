@@ -46,6 +46,24 @@ const DAY_COLS = 'repeat(7, minmax(0, 1fr))'
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 
 const toISO = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+// Everything with a clock time on it is read in the plant's timezone, not the
+// viewer's. The API already pins its side to Mountain; if the page disagreed, a
+// cook's bar would sit at one hour and its label would read another.
+const TZ = 'America/Denver'
+const TZ_DAY  = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' })
+const TZ_TIME = new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' })
+const TZ_WALL = new Intl.DateTimeFormat('en-US', {
+  timeZone: TZ, hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+})
+// The instant as the plant's wall clock reads it, flattened to a number so the
+// hour grid can do plain arithmetic on it.
+function wallMs(d: Date): number {
+  const p: Record<string, string> = {}
+  for (const { type, value } of TZ_WALL.formatToParts(d)) p[type] = value
+  return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute)
+}
+const wallDayMs = (d: Date) => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())
 const shortDay = (d: Date) => `${MONTHS[d.getMonth()].slice(0, 3)} ${d.getDate()}`
 
 // 42-cell (6-week) grid covering a month, starting on the Sunday on/before the 1st.
@@ -269,23 +287,102 @@ function DayNumber({ n, today, dim }: { n: number; today: boolean; dim: boolean 
 // ── Month: 6-week grid, up to 4 events + "N more" ──────────────────────────────
 function MonthView({ year, month, byDay, todayISO }: { year: number; month: number; byDay: Map<string, CalEvent[]>; todayISO: string }) {
   const grid = monthGrid(year, month)
+  const weeks = Array.from({ length: 6 }, (_, i) => grid.slice(i * 7, i * 7 + 7))
   return (
     <>
       <WeekdayHeader />
-      <div style={{ display: 'grid', gridTemplateColumns: DAY_COLS, gap: 1, background: 'rgba(166,120,90,0.15)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: 4, overflow: 'hidden' }}>
-        {grid.map(d => {
-          const iso = toISO(d); const inMonth = d.getMonth() === month
-          const evs = byDay.get(iso) ?? []; const shown = evs.slice(0, 4); const extra = evs.length - shown.length
-          return (
-            <div key={iso} style={{ background: inMonth ? C.dark : '#140803', minHeight: 108, padding: '0.35rem 0.4rem', display: 'flex', flexDirection: 'column', gap: 3 }}>
-              <DayNumber n={d.getDate()} today={iso === todayISO} dim={!inMonth} />
-              {shown.map(e => <EventPill key={e.id} e={e} showSub />)}
-              {extra > 0 && <div style={{ fontSize: '0.64rem', color: C.lightBrown, paddingLeft: 4 }}>+{extra} more</div>}
-            </div>
-          )
-        })}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 1, background: 'rgba(166,120,90,0.15)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: 4, overflow: 'hidden' }}>
+        {weeks.map((week, i) => (
+          <MonthWeekRow key={i} week={week} month={month} byDay={byDay} todayISO={todayISO} />
+        ))}
       </div>
     </>
+  )
+}
+
+// One week of the month grid. An overnight cook is NOT two chips here — it is a
+// single bar stretched across the days it ran, which is the whole point of
+// showing it on a month at all (Charlie, 2026-08-13). The bar lives in a lane
+// reserved under the day numbers so its ends line up across cells; the chips it
+// replaces are filtered out of the day lists below it.
+const SPAN_TOP = 27   // clears the cell padding + day number
+const SPAN_H   = 17   // one bar plus its gap
+const isoLocal = (ts: string) => TZ_DAY.format(new Date(ts))
+const addDays  = (iso: string, n: number) => {
+  const [y, m, d] = iso.split('-').map(Number)
+  return toISO(new Date(y, (m ?? 1) - 1, (d ?? 1) + n))
+}
+
+function MonthWeekRow({ week, month, byDay, todayISO }: { week: Date[]; month: number; byDay: Map<string, CalEvent[]>; todayISO: string }) {
+  const isoOf = week.map(toISO)
+  const first = isoOf[0], last = isoOf[6]
+
+  // A cook is one bar however many chips it left behind — the head and its
+  // carried-in copies share a base id, so collapse on that.
+  const bars = new Map<string, { e: CalEvent; from: number; to: number; opensLeft: boolean; opensRight: boolean }>()
+  for (const iso of isoOf) {
+    for (const e of byDay.get(iso) ?? []) {
+      if (!e.startsAt || !(e.nights ?? 0)) continue
+      const base = e.id.replace(/-n\d+$/, '')
+      if (bars.has(base)) continue
+      const startISO = isoLocal(e.startsAt)
+      const endISO   = addDays(startISO, e.nights!)
+      bars.set(base, {
+        e,
+        from: startISO < first ? 0 : isoOf.indexOf(startISO),
+        to:   endISO   > last  ? 6 : isoOf.indexOf(endISO),
+        opensLeft:  startISO < first,   // ran in from the week above
+        opensRight: endISO   > last,    // runs on into the week below
+      })
+    }
+  }
+  const spans = [...bars.values()].sort((a, b) => a.from - b.from || a.e.startsAt!.localeCompare(b.e.startsAt!))
+  const lane = spans.length * SPAN_H
+
+  return (
+    <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: DAY_COLS, gap: 1 }}>
+      {week.map(d => {
+        const iso = toISO(d); const inMonth = d.getMonth() === month
+        // Anything drawn as a bar is not repeated as a chip.
+        const evs = (byDay.get(iso) ?? []).filter(e => !(e.startsAt && (e.nights ?? 0)))
+        const shown = evs.slice(0, 4); const extra = evs.length - shown.length
+        return (
+          <div key={iso} style={{ background: inMonth ? C.dark : '#140803', minHeight: 108, padding: '0.35rem 0.4rem', display: 'flex', flexDirection: 'column', gap: 3 }}>
+            <DayNumber n={d.getDate()} today={iso === todayISO} dim={!inMonth} />
+            {lane > 0 && <div style={{ height: lane - 3, flexShrink: 0 }} />}
+            {shown.map(e => <EventPill key={e.id} e={e} showSub />)}
+            {extra > 0 && <div style={{ fontSize: '0.64rem', color: C.lightBrown, paddingLeft: 4 }}>+{extra} more</div>}
+          </div>
+        )
+      })}
+
+      {spans.map((s, i) => {
+        const label   = s.e.title.replace(/[🔥↗↳]/g, '').trim()
+        const running = !s.e.endsAt
+        const when    = `${clockOf(s.e.startsAt!)} → ${running ? 'still running' : clockOf(s.e.endsAt!)}`
+        const color   = LANE_COLOR[s.e.lane]
+        const style: React.CSSProperties = {
+          position: 'absolute', top: SPAN_TOP + i * SPAN_H, height: 15, zIndex: 2,
+          left:  `calc(${(s.from / 7) * 100}% + 4px)`,
+          width: `calc(${((s.to - s.from + 1) / 7) * 100}% - 8px)`,
+          background: running ? 'transparent' : `${color}2A`,
+          border: `1px ${running ? 'dashed' : 'solid'} ${color}`,
+          // Square off whichever end runs past this week so the bar reads as
+          // continuing rather than starting or stopping at the row break.
+          borderLeftWidth: s.opensLeft ? 0 : 1, borderRightWidth: s.opensRight ? 0 : 1,
+          borderTopLeftRadius: s.opensLeft ? 0 : 3, borderBottomLeftRadius: s.opensLeft ? 0 : 3,
+          borderTopRightRadius: s.opensRight ? 0 : 3, borderBottomRightRadius: s.opensRight ? 0 : 3,
+          color: C.cream, fontSize: '0.64rem', lineHeight: '13px', padding: '0 5px',
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          textDecoration: 'none', boxSizing: 'border-box',
+        }
+        const body = <>{s.opensLeft ? '↳ ' : ''}{s.e.title.startsWith('🔥') ? '🔥 ' : ''}{label}<span style={{ color: C.lightBrown }}> · {when}</span></>
+        const tip  = `${label} — ${when}${s.e.subtitle ? ` (${s.e.subtitle})` : ''}`
+        return s.e.href
+          ? <a key={s.e.id} href={s.e.href} title={tip} style={style}>{body}</a>
+          : <div key={s.e.id} title={tip} style={style}>{body}</div>
+      })}
+    </div>
   )
 }
 
@@ -321,8 +418,7 @@ function WeekView({ days, byDay, todayISO }: { days: Date[]; byDay: Map<string, 
 const HOURS = Array.from({ length: 24 }, (_, i) => i)
 const HOUR_PX = 15
 const hourLabel = (h: number) => (h === 0 ? '12a' : h < 12 ? `${h}a` : h === 12 ? '12p' : `${h - 12}p`)
-const clockOf = (ts: string) =>
-  new Date(ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).replace(' ', '').toLowerCase()
+const clockOf = (ts: string) => TZ_TIME.format(new Date(ts)).replace(/\s/g, '').toLowerCase()
 
 function SmokehouseWeek({ days, events, todayISO }: { days: Date[]; events: CalEvent[]; todayISO: string }) {
   // Only the primary rows carry the true span — the carried-in copies exist for
@@ -332,12 +428,12 @@ function SmokehouseWeek({ days, events, todayISO }: { days: Date[]; events: CalE
   type Seg = { key: string; col: number; top: number; height: number; e: CalEvent; head: boolean; tail: boolean }
   const segs: Seg[] = []
   for (const e of cooks) {
-    const s = new Date(e.startsAt!).getTime()
+    const s = wallMs(new Date(e.startsAt!))
     // A cook with no end time is still in the house; draw it up to now.
-    const end = e.endsAt ? new Date(e.endsAt).getTime() : Date.now()
+    const end = e.endsAt ? wallMs(new Date(e.endsAt)) : wallMs(new Date())
     if (!(end > s)) continue
     days.forEach((d, col) => {
-      const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+      const dayStart = wallDayMs(d)
       const dayEnd = dayStart + 86_400_000
       const a = Math.max(s, dayStart)
       const b = Math.min(end, dayEnd)
@@ -352,8 +448,9 @@ function SmokehouseWeek({ days, events, todayISO }: { days: Date[]; events: CalE
   }
 
   const now = new Date()
-  const nowISO = toISO(now)
-  const nowTop = (now.getHours() + now.getMinutes() / 60) * HOUR_PX
+  const nowISO = TZ_DAY.format(now)
+  const nowWall = wallMs(now)
+  const nowTop = ((nowWall - Math.floor(nowWall / 86_400_000) * 86_400_000) / 3_600_000) * HOUR_PX
 
   return (
     <div style={{ marginTop: '1rem' }}>
