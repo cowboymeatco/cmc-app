@@ -1567,13 +1567,16 @@ function WorksheetTab({ date }: { date: string }) {
         const cidStr = String(groupStart[gi] + r.slot - 1).padStart(2, '0')
         // Anything already saved in Part A/B prints pre-filled; untouched fields
         // stay blank for hand-writing at the rail.
+        // Kill order rides with the weights, NOT beside the carcass ID. Two bare
+        // numbers in columns 1 and 2 had the floor reading one for the other
+        // (Charlie, 2026-08-17); the length of the row between them is the fix.
         return `<tr>
         <td class="cid">${r.carcassTag ? esc(r.carcassTag) : cidStr}</td>
-        <td class="ko">${r.killOrder != null ? `<span class="pre">${r.killOrder}</span>` : ''}</td>
         <td class="kt"><span class="cb">${r.killType === 'Custom' ? '☑' : '☐'} Custom</span><span class="cb">${r.killType === 'USDA' ? '☑' : '☐'} USDA</span></td>
         <td class="id">${r.ear_tag ? esc(r.ear_tag) : '—'}${r.over_30_months ? ' <span class="otm">OTM</span>' : ''}</td>
         <td>${esc(r.sex)}</td>
         <td>${esc(r.breed)}</td>
+        <td class="ko">${r.killOrder != null ? `<span class="pre">${r.killOrder}</span>` : ''}</td>
         <td class="wt">${r.half1 != null ? `<span class="pre">${r.half1}</span>` : ''}</td>
         <td class="wt">${r.half2 != null ? `<span class="pre">${r.half2}</span>` : ''}</td>
         <td class="wt">${r.total != null ? `<span class="pre">${r.total}</span>` : ''}</td>
@@ -1614,8 +1617,8 @@ function WorksheetTab({ date }: { date: string }) {
       <div class="meta"><strong>${fmtDate}</strong> &nbsp;·&nbsp; Julian <strong>${julianCode(d)}</strong> &nbsp;·&nbsp; ${totalHead} head &nbsp;·&nbsp; ${groups.length} producer${groups.length === 1 ? '' : 's'}</div>
       <table>
         <thead><tr>
-          <th>Carcass ID</th><th>Kill Order</th><th>Kill Type</th><th>Ear Tag / ID</th><th>Sex</th><th>Breed</th>
-          <th>L Half (lbs)</th><th>R Half (lbs)</th><th>Total (lbs)</th>
+          <th>Carcass ID</th><th>Kill Type</th><th>Ear Tag / ID</th><th>Sex</th><th>Breed</th>
+          <th>Kill Order</th><th>L Half (lbs)</th><th>R Half (lbs)</th><th>Total (lbs)</th>
         </tr></thead>
         <tbody>${body}</tbody>
       </table>
