@@ -703,6 +703,8 @@ function CrewTab({ onError }: { onError: (e: string) => void }) {
 
   return (
     <>
+      <PayrollPull onAdded={load} onError={onError} />
+
       <div style={{ ...cardStyle, marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ color: C.tan, fontSize: 13, lineHeight: 1.5 }}>
           These names are what the crew taps to sign in. It records who did what —
@@ -744,6 +746,158 @@ function CrewTab({ onError }: { onError: (e: string) => void }) {
         ))}
       </div>
     </>
+  )
+}
+
+// Pull names from QuickBooks rather than typing them.
+//
+// Propose-and-accept, not a sync: everyone starts unticked and nothing is
+// written until someone presses Add.
+//
+// That design is forced by the data, not just caution. QuickBooks' Accounting
+// API can't say who currently works here — its "active" flag only means the
+// record isn't archived, so people who left years ago still come back. The
+// list below is therefore candidates, not staff, and the warning saying so is
+// not boilerplate: roughly half of it is expected to be leavers whose record
+// was never closed out.
+function PayrollPull({ onAdded, onError }: { onAdded: () => void; onError: (e: string) => void }) {
+  interface Candidate { qbo_id: string; name: string; hired: string | null; on_roster: boolean }
+
+  const [open,    setOpen]    = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [rows,    setRows]    = useState<Candidate[]>([])
+  const [picked,  setPicked]  = useState<Set<string>>(new Set())
+  const [note,    setNote]    = useState<string | null>(null)
+  const [busy,    setBusy]    = useState(false)
+
+  async function pull() {
+    setOpen(true)
+    setLoading(true)
+    setNote(null)
+    try {
+      const res  = await fetch('/api/cleaning/crew/payroll')
+      const body = await res.json()
+      if (!res.ok) { onError(body?.error ?? 'Could not reach QuickBooks.'); setOpen(false); return }
+      setRows(body.employees ?? [])
+      // Nothing pre-ticked: adding someone is a decision, and a pre-ticked list
+      // turns it into whatever the default was.
+      setPicked(new Set())
+      if (body.new_count === 0) {
+        setNote(`QuickBooks has ${body.total} active ${body.total === 1 ? 'employee' : 'employees'} — all already on the roster.`)
+      }
+    } catch {
+      onError('Could not reach QuickBooks — check your connection.')
+      setOpen(false)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function add() {
+    setBusy(true)
+    try {
+      const res = await fetch('/api/cleaning/crew/payroll', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ names: [...picked] }),
+      })
+      const body = await res.json()
+      if (!res.ok) { onError(body?.error ?? 'Could not add them.'); return }
+      setOpen(false)
+      setPicked(new Set())
+      onAdded()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const fresh = rows.filter(r => !r.on_roster)
+
+  if (!open) {
+    return (
+      <div style={{ marginBottom: 16 }}>
+        <BigButton label="⬇ Suggest names from QuickBooks" tone={C.dark} onClick={pull} />
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ ...cardStyle, marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ color: C.cream, fontSize: 15, fontWeight: 700 }}>From QuickBooks</span>
+        <button
+          onClick={() => setOpen(false)}
+          style={{ background: 'none', border: 'none', color: C.tan, fontSize: 18, cursor: 'pointer' }}
+        >
+          ✕
+        </button>
+      </div>
+
+      {loading && <div style={{ color: C.tan, fontSize: 14 }}>Asking QuickBooks…</div>}
+
+      {!loading && note && <Banner tone="info">{note}</Banner>}
+
+      {!loading && fresh.length > 0 && (
+        <>
+          <Banner tone="warn">
+            QuickBooks can&apos;t tell us who still works here — it only knows whether a
+            record was closed out. <strong>People who have left will be in this list.</strong>{' '}
+            Tick only the ones you know clean.
+          </Banner>
+
+          <div style={{ color: C.tan, fontSize: 13, lineHeight: 1.5 }}>
+            {fresh.length} {fresh.length === 1 ? 'name is' : 'names are'} not on the roster,
+            newest hire first.
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {fresh.map(r => {
+              const on = picked.has(r.name)
+              return (
+                <button
+                  key={r.qbo_id}
+                  onClick={() => setPicked(prev => {
+                    const next = new Set(prev)
+                    if (next.has(r.name)) next.delete(r.name); else next.add(r.name)
+                    return next
+                  })}
+                  style={{
+                    minHeight: 46, borderRadius: 8, textAlign: 'left', padding: '6px 12px',
+                    background: on ? C.medBrown : C.dark,
+                    border: `1px solid ${on ? C.amber : C.medBrown}`,
+                    color: on ? C.cream : C.tan, fontSize: 15, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', gap: 8,
+                  }}
+                >
+                  <span>{on ? '☑' : '☐'}</span>
+                  <span style={{ flex: 1 }}>{r.name}</span>
+                  {/* Hire date is the only cue here for spotting a stale record —
+                      a 2020 hire nobody recognises is almost certainly a leaver. */}
+                  {r.hired && (
+                    <span style={{ color: C.lightBrown, fontSize: 11, whiteSpace: 'nowrap' }}>
+                      hired {r.hired}
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+
+          <BigButton
+            label={busy ? 'Adding…' : picked.size ? `Add ${picked.size}` : 'Pick someone to add'}
+            onClick={add}
+            disabled={picked.size === 0 || busy}
+          />
+        </>
+      )}
+
+      {!loading && (
+        <div style={{ color: C.lightBrown, fontSize: 12, lineHeight: 1.5 }}>
+          Anyone already on the roster is left alone, including people you turned
+          off on purpose. Names and hire dates only — no pay information is read.
+        </div>
+      )}
+    </div>
   )
 }
 
