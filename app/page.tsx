@@ -38,6 +38,7 @@ export default function Dashboard() {
   const [newCutInstr, setNewCutInstr] = useState(0)
   const [orders,     setOrders]     = useState<number | null>(null)
   const [valueAdd,   setValueAdd]   = useState<number | null>(null)
+  const [cleaning,   setCleaning]   = useState<number | null>(null)
 
   // Red bubble: cutting instructions submitted since the last time the
   // Cutting Instructions page was opened on this device. First visit just
@@ -62,7 +63,9 @@ export default function Dashboard() {
       fetch(`/api/delivery?date=${todayISO}`).then(r => r.json()),
       fetch('/api/orders').then(r => r.json()),
       fetch('/api/value-add').then(r => r.json()),
-    ]).then(([apptRes, procRes, delivRes, ordersRes, vaRes]) => {
+      // peek=1 — reading the dashboard must not open tonight's cleaning shift.
+      fetch('/api/cleaning/shift?peek=1').then(r => r.json()),
+    ]).then(([apptRes, procRes, delivRes, ordersRes, vaRes, cleanRes]) => {
       const appts  = apptRes.status    === 'fulfilled' && Array.isArray(apptRes.value)    ? apptRes.value    : []
       const procs  = procRes.status    === 'fulfilled' && Array.isArray(procRes.value)    ? procRes.value    : []
       const deliv  = delivRes.status   === 'fulfilled' && Array.isArray(delivRes.value)   ? delivRes.value   : []
@@ -87,6 +90,16 @@ export default function Dashboard() {
       setCutInstr(missingCut)
       setOrders(ords.filter((o: Order) => o.status !== 'fulfilled').length)
       setValueAdd(vaJobs.filter((j: VAJob) => j.status !== 'complete').length)
+
+      // Null until a shift exists for the night, so the tile shows nothing
+      // rather than a misleading zero on a day nobody has started cleaning.
+      type CleanItem = { status: string }
+      const clean = cleanRes.status === 'fulfilled' ? cleanRes.value : null
+      setCleaning(
+        clean?.shift
+          ? (clean.items as CleanItem[]).filter(i => i.status === 'pending').length
+          : null,
+      )
     })
   }, [todayISO])
 
@@ -149,6 +162,13 @@ export default function Dashboard() {
       desc:  'Load out · Route & deliver',
       when:  'Pickup or delivery day',
       count: delivery,
+    },
+    {
+      href: '/cleaning',  icon: '🧽', color: '#38BDF8',
+      title: 'Cleaning & Sanitation',
+      desc:  'Nightly list · Procedures · Supplies',
+      when:  'After production shuts down',
+      count: cleaning,
     },
   ]
 
