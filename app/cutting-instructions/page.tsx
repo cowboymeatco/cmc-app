@@ -1545,7 +1545,7 @@ export default function CuttingInstructionsPage() {
   // appointment id. A producer with several animals booked reads as the same
   // line repeated — the hanging weight is what tells them apart (Jill,
   // 2026-08-06). Loaded when the picker opens; an unharvested booking has none.
-  const [pickerCarcasses, setPickerCarcasses] = useState<Record<string, { tag: string; lbs: number | null }[]>>({})
+  const [pickerCarcasses, setPickerCarcasses] = useState<Record<string, { tag: string; earTag: string; lbs: number | null }[]>>({})
   // Copy-this-card-onto-another-share flow: which portion the copy is for, and
   // whether one is being made right now.
   const [showCopyPicker, setShowCopyPicker] = useState(false)
@@ -1916,11 +1916,11 @@ export default function CuttingInstructionsPage() {
         const res  = await fetch(`/api/harvest?appointment_ids=${encodeURIComponent(linkableIds)}`)
         const data = await res.json()
         if (cancelled || !Array.isArray(data)) return
-        const next: Record<string, { tag: string; lbs: number | null }[]> = {}
+        const next: Record<string, { tag: string; earTag: string; lbs: number | null }[]> = {}
         for (const l of data) {
           const halves = (l.half_1_weight_lbs ?? 0) + (l.half_2_weight_lbs ?? 0)
           const lbs = l.hot_carcass_weight_lbs ?? (halves > 0 ? halves : null)
-          ;(next[l.appointment_id] ??= []).push({ tag: l.carcass_tag ?? '', lbs: lbs == null ? null : Number(lbs) })
+          ;(next[l.appointment_id] ??= []).push({ tag: l.carcass_tag ?? '', earTag: l.ear_tag ?? '', lbs: lbs == null ? null : Number(lbs) })
         }
         setPickerCarcasses(next)
       } catch { /* weights are a nicety here — linking still works without them */ }
@@ -1942,6 +1942,28 @@ export default function CuttingInstructionsPage() {
         · hanging: {weighed.map(c => `${c.tag ? `#${c.tag} ` : ''}${c.lbs} lbs`).join(', ')}
       </span>
     )
+  }
+
+  // Producer customer names are often hand-typed with the animal's ear tag as
+  // a suffix ("VML-Vermillion Ranch 626H") so staff can eyeball which carcass
+  // is whose. That suffix is typed once at booking; the real ear tag is typed
+  // again, separately, at receiving — nothing keeps the two in sync, and a
+  // slip either time reads as fine until someone compares them by eye
+  // (Charlie, 2026-08-18 — "VML-Vermillion Ranch 626G" vs ear tag 626H).
+  function embeddedEarTag(name: string): string | null {
+    const m = name.trim().match(/(\d{2,4}[A-Za-z])$/)
+    return m ? m[1].toUpperCase() : null
+  }
+
+  // Null when there's nothing to check against yet (no tag in the name, or
+  // this appointment's animals haven't been ear-tagged at receiving) — silence
+  // beats a false alarm on a booking that's still ahead of the kill floor.
+  function earTagMismatch(apptId: string, customerName: string): string | null {
+    const named = embeddedEarTag(customerName)
+    if (!named) return null
+    const tagged = (pickerCarcasses[apptId] ?? []).filter(c => c.earTag)
+    if (!tagged.length) return null
+    return tagged.some(c => c.earTag.toUpperCase() === named) ? null : named
   }
 
   const sections = sectionsFor(selectedSpecies)
@@ -2404,12 +2426,22 @@ export default function CuttingInstructionsPage() {
                     {a.source && <span style={{ color: 'var(--tan)', fontWeight: 400, marginLeft: '0.5rem' }}>· {a.source}</span>}
                     {hangingNote(a.id)}
                   </div>
-                  {a.customers?.filter(c => !c.linked_cutting_instruction_id).map((c, idx) => (
-                    <button key={c.id} onClick={() => linkToCustomer(a.id, a.customers.indexOf(c))} disabled={linking}
-                      style={{ display: 'block', width: '100%', textAlign: 'left', background: 'rgba(117,71,27,0.25)', border: '1px solid rgba(166,120,90,0.2)', borderRadius: '3px', padding: '0.5rem 0.75rem', marginBottom: '0.35rem', color: 'var(--cream)', cursor: 'pointer', fontSize: '0.85rem' }}>
-                      {linking ? 'Linking…' : `→ ${c.customer_name || 'Unnamed customer'} (${c.portion})`}
-                    </button>
-                  ))}
+                  {a.customers?.filter(c => !c.linked_cutting_instruction_id).map((c, idx) => {
+                    const mismatch = earTagMismatch(a.id, c.customer_name || '')
+                    return (
+                      <div key={c.id}>
+                        <button onClick={() => linkToCustomer(a.id, a.customers.indexOf(c))} disabled={linking}
+                          style={{ display: 'block', width: '100%', textAlign: 'left', background: 'rgba(117,71,27,0.25)', border: '1px solid rgba(166,120,90,0.2)', borderRadius: '3px', padding: '0.5rem 0.75rem', marginBottom: mismatch ? '0.15rem' : '0.35rem', color: 'var(--cream)', cursor: 'pointer', fontSize: '0.85rem' }}>
+                          {linking ? 'Linking…' : `→ ${c.customer_name || 'Unnamed customer'} (${c.portion})`}
+                        </button>
+                        {mismatch && (
+                          <div style={{ color: '#E8883A', fontSize: '0.72rem', marginBottom: '0.35rem', paddingLeft: '0.25rem' }}>
+                            ⚠ Name says {mismatch}, but no carcass on this appointment was ear-tagged {mismatch} at receiving — check before linking.
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
               ))
             )}
@@ -2454,12 +2486,22 @@ export default function CuttingInstructionsPage() {
                     {a.source && <span style={{ color: 'var(--tan)', fontWeight: 400, marginLeft: '0.5rem' }}>· {a.source}</span>}
                     {hangingNote(a.id)}
                   </div>
-                  {a.customers?.filter(c => !c.linked_cutting_instruction_id).map(c => (
-                    <button key={c.id} onClick={() => copyToShare(a.id, a.customers.indexOf(c))} disabled={copying || linking}
-                      style={{ display: 'block', width: '100%', textAlign: 'left', background: 'rgba(117,71,27,0.25)', border: '1px solid rgba(166,120,90,0.2)', borderRadius: '3px', padding: '0.5rem 0.75rem', marginBottom: '0.35rem', color: 'var(--cream)', cursor: copying ? 'wait' : 'pointer', fontSize: '0.85rem', opacity: copying ? 0.6 : 1 }}>
-                      {copying ? 'Copying…' : `→ ${c.customer_name || 'Unnamed customer'} (${c.portion})`}
-                    </button>
-                  ))}
+                  {a.customers?.filter(c => !c.linked_cutting_instruction_id).map(c => {
+                    const mismatch = earTagMismatch(a.id, c.customer_name || '')
+                    return (
+                      <div key={c.id}>
+                        <button onClick={() => copyToShare(a.id, a.customers.indexOf(c))} disabled={copying || linking}
+                          style={{ display: 'block', width: '100%', textAlign: 'left', background: 'rgba(117,71,27,0.25)', border: '1px solid rgba(166,120,90,0.2)', borderRadius: '3px', padding: '0.5rem 0.75rem', marginBottom: mismatch ? '0.15rem' : '0.35rem', color: 'var(--cream)', cursor: copying ? 'wait' : 'pointer', fontSize: '0.85rem', opacity: copying ? 0.6 : 1 }}>
+                          {copying ? 'Copying…' : `→ ${c.customer_name || 'Unnamed customer'} (${c.portion})`}
+                        </button>
+                        {mismatch && (
+                          <div style={{ color: '#E8883A', fontSize: '0.72rem', marginBottom: '0.35rem', paddingLeft: '0.25rem' }}>
+                            ⚠ Name says {mismatch}, but no carcass on this appointment was ear-tagged {mismatch} at receiving — check before linking.
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
               ))
             )}
