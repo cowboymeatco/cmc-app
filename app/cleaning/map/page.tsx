@@ -3,6 +3,10 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { dateLabel } from '@/lib/dates'
 import { AREA_STATE_COLOR, AREA_STATE_LABEL, type AreaState } from '@/lib/cleaning'
+import {
+  POINT_KIND, LAYERS, LAYER_LABEL, pointName,
+  type PlantPoint, type Layer,
+} from '@/lib/plantPoints'
 import { C, CleaningHeader, Banner, cardStyle } from '../ui'
 
 // The plant at a glance.
@@ -46,6 +50,13 @@ export default function PlantMap() {
   const boxRef = useRef<HTMLDivElement | null>(null)
   const [scale, setScale] = useState(1)
 
+  // Fixed points, and which layers are switched on. All off by default: the
+  // map's first job is still cleaning status, and dropping forty pins on it
+  // unasked would bury that.
+  const [points,     setPoints]     = useState<PlantPoint[]>([])
+  const [layersOn,   setLayersOn]   = useState<Set<Layer>>(new Set())
+  const [tappedPoint, setTappedPoint] = useState<PlantPoint | null>(null)
+
   const load = useCallback(() => {
     fetch('/api/cleaning/map')
       .then(r => r.json().then(b => ({ ok: r.ok, b })))
@@ -54,6 +65,13 @@ export default function PlantMap() {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    fetch('/api/plant-points')
+      .then(r => r.json())
+      .then(d => setPoints(Array.isArray(d) ? d : []))
+      .catch(() => { /* the map is still useful without fixtures */ })
+  }, [])
 
   // Track how wide the drawing actually renders, so label sizes can compensate.
   useEffect(() => {
@@ -95,6 +113,52 @@ export default function PlantMap() {
   }))
   const viewH = unplaced.length ? ch + 30 + Math.ceil(unplaced.length / 5) * 90 : ch
   const all   = [...placed, ...parked] as (Room & { x: number; y: number; w: number; h: number })[]
+
+  // Pins for the layers that are switched on, positioned inside their room.
+  const roomById = new Map(all.map(r => [r.id, r]))
+  const visiblePins: { point: PlantPoint; x: number; y: number }[] = []
+
+  // Grouped per room first, because laying them out needs to know how many
+  // share the room — a single drain and nine drains want different spacing.
+  const pending = new Map<string, PlantPoint[]>()
+  for (const p of points) {
+    if (!layersOn.has(POINT_KIND[p.kind].layer)) continue
+    if (p.map_x != null && p.map_y != null) {
+      visiblePins.push({ point: p, x: p.map_x, y: p.map_y })
+      continue
+    }
+    if (!p.area_id || !roomById.has(p.area_id)) continue   // room isn't drawn
+    if (!pending.has(p.area_id)) pending.set(p.area_id, [])
+    pending.get(p.area_id)!.push(p)
+  }
+
+  for (const [areaId, list] of pending) {
+    const room = roomById.get(areaId)!
+    // The room's name and status live in the top strip; pins start below it,
+    // or they sit on top of the label — which is exactly what the first
+    // version did.
+    const LABEL_STRIP = 50 / scale
+    const top    = room.y + LABEL_STRIP
+    const bottom = room.y + room.h
+    let step = 26 / scale
+
+    const perRow = Math.max(1, Math.floor((room.w - step * 0.5) / step))
+    const rows   = Math.ceil(list.length / perRow)
+    // Tighten rather than overflow when a room is crowded or short.
+    const band   = bottom - top
+    if (rows * step > band && rows > 0) step = Math.max(9 / scale, band / rows)
+
+    const perRowFinal = Math.max(1, Math.floor((room.w - step * 0.5) / step))
+    list.forEach((point, n) => {
+      visiblePins.push({
+        point,
+        x: room.x + step * 0.7 + (n % perRowFinal) * step,
+        // Filled from the bottom up, so the commonest case — one or two
+        // fixtures — sits clear of the text rather than right under it.
+        y: bottom - step * 0.6 - Math.floor(n / perRowFinal) * step,
+      })
+    })
+  }
 
   return (
     <div style={{ paddingBottom: 40 }}>
@@ -229,8 +293,109 @@ export default function PlantMap() {
                 </g>
               )
             })}
+
+            {/* Fixed points.
+                Most were captured on a walk with no coordinates, because
+                without a floor plan a tapped position would be false
+                precision — what's reliably true is which room they're in. So
+                an unpositioned point is laid out along the bottom of its room:
+                honest about "three drains in the cut room" without pretending
+                to know exactly where. One that HAS been placed draws where it
+                was put. */}
+            {visiblePins.map(({ point, x, y }) => {
+              const d = POINT_KIND[point.kind]
+              const r = 11 / scale
+              return (
+                <g
+                  key={point.id}
+                  onClick={e => { e.stopPropagation(); setTappedPoint(point) }}
+                  style={{ cursor: 'pointer' }}
+                  role="button"
+                  aria-label={`${d.label}: ${pointName(point)}`}
+                >
+                  <circle
+                    cx={x} cy={y} r={r}
+                    fill={C.dark} stroke={d.color}
+                    strokeWidth={tappedPoint?.id === point.id ? 3 / scale : 2 / scale}
+                  />
+                  <text
+                    x={x} y={y + r * 0.38}
+                    textAnchor="middle" fontSize={r * 1.1}
+                    style={{ pointerEvents: 'none' }}
+                  >
+                    {d.icon}
+                  </text>
+                </g>
+              )
+            })}
           </svg>
         </div>
+
+        {/* Layers. Off by default so cleaning status stays the headline. */}
+        {points.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
+            {LAYERS.map(l => {
+              const n = points.filter(p => POINT_KIND[p.kind].layer === l).length
+              if (n === 0) return null
+              const on = layersOn.has(l)
+              return (
+                <button
+                  key={l}
+                  onClick={() => setLayersOn(prev => {
+                    const next = new Set(prev)
+                    if (next.has(l)) next.delete(l); else next.add(l)
+                    return next
+                  })}
+                  style={{
+                    minHeight: 42, padding: '0 12px', borderRadius: 8,
+                    background: on ? C.medBrown : C.dark,
+                    border: `1px solid ${on ? C.amber : C.medBrown}`,
+                    color: on ? C.cream : C.tan,
+                    fontSize: 13, fontWeight: on ? 700 : 400, cursor: 'pointer',
+                  }}
+                >
+                  {on ? '☑' : '☐'} {LAYER_LABEL[l]} ({n})
+                </button>
+              )
+            })}
+          </div>
+        )}
+
+        {/* Tapped pin. The photo is the whole point — it's what lets someone
+            who has never been in the building find the thing. */}
+        {tappedPoint && (
+          <div style={{ ...cardStyle, marginTop: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ color: C.cream, fontSize: 16, fontWeight: 700 }}>
+                {POINT_KIND[tappedPoint.kind].icon} {pointName(tappedPoint)}
+              </span>
+              <button
+                onClick={() => setTappedPoint(null)}
+                style={{ background: 'none', border: 'none', color: C.tan, fontSize: 18, cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+            <div style={{ color: POINT_KIND[tappedPoint.kind].color, fontSize: 12, marginBottom: 10 }}>
+              {POINT_KIND[tappedPoint.kind].label}
+              {tappedPoint.swab_site && <span style={{ color: C.blue }}> · Listeria swab site</span>}
+            </div>
+            {tappedPoint.photo_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={tappedPoint.photo_url} alt=""
+                style={{ width: '100%', borderRadius: 8, border: `1px solid ${C.medBrown}` }}
+              />
+            ) : (
+              <div style={{ color: C.amber, fontSize: 13 }}>
+                No photo yet — add one on the plant walk so people can find it.
+              </div>
+            )}
+            {tappedPoint.notes && (
+              <div style={{ color: C.tan, fontSize: 13, marginTop: 10 }}>{tappedPoint.notes}</div>
+            )}
+          </div>
+        )}
 
         {/* Legend */}
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', margin: '14px 0 4px' }}>

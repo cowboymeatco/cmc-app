@@ -2,6 +2,10 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { CATEGORY_LABEL, ASSET_CATEGORIES, type Asset, type AssetCategory } from '@/lib/assets'
+import {
+  POINT_KIND, POINT_KINDS, pointName,
+  type PlantPoint, type PointKind,
+} from '@/lib/plantPoints'
 
 // The plant walk.
 //
@@ -44,6 +48,7 @@ interface AssetRow extends Asset { cleaning_areas?: { id: string; name: string }
 export default function PlantWalk() {
   const [areas,  setAreas]  = useState<Area[]>([])
   const [assets, setAssets] = useState<AssetRow[]>([])
+  const [points, setPoints] = useState<PlantPoint[]>([])
   const [areaId, setAreaId] = useState<string | null>(null)
   const [error,  setError]  = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
@@ -55,10 +60,12 @@ export default function PlantWalk() {
     Promise.all([
       fetch('/api/cleaning/areas').then(r => r.json()),
       fetch('/api/assets').then(r => r.json()),
+      fetch('/api/plant-points').then(r => r.json()),
     ])
-      .then(([aRes, asRes]) => {
+      .then(([aRes, asRes, pRes]) => {
         setAreas(Array.isArray(aRes) ? aRes.map((a: Area) => ({ id: a.id, name: a.name })) : [])
         setAssets(asRes?.assets ?? [])
+        setPoints(Array.isArray(pRes) ? pRes : [])
       })
       .catch(() => setError('Could not load. Check your signal.'))
       .finally(() => setLoaded(true))
@@ -92,6 +99,7 @@ export default function PlantWalk() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {areas.map(a => {
             const n = assets.filter(x => x.area_id === a.id).length
+            const p = points.filter(x => x.area_id === a.id).length
             return (
               <button
                 key={a.id}
@@ -99,13 +107,19 @@ export default function PlantWalk() {
                 style={{
                   minHeight: TAP, background: C.darkBrown, border: `2px solid ${C.medBrown}`,
                   borderRadius: 10, color: C.cream, fontSize: 17, fontWeight: 600,
-                  textAlign: 'left', padding: '0 18px', cursor: 'pointer',
+                  textAlign: 'left', padding: '10px 18px', cursor: 'pointer',
                   display: 'flex', alignItems: 'center', gap: 10,
                 }}
               >
                 <span style={{ flex: 1 }}>{a.name}</span>
-                <span style={{ color: n ? C.green : C.lightBrown, fontSize: 13 }}>
-                  {n ? `${n} captured` : 'none yet'}
+                <span style={{ fontSize: 13, textAlign: 'right', fontWeight: 400 }}>
+                  <span style={{ color: n ? C.green : C.lightBrown }}>
+                    {n} machine{n === 1 ? '' : 's'}
+                  </span>
+                  <br />
+                  <span style={{ color: p ? C.blue : C.lightBrown }}>
+                    {p} fixture{p === 1 ? '' : 's'}
+                  </span>
                 </span>
               </button>
             )
@@ -129,6 +143,7 @@ export default function PlantWalk() {
       area={area}
       inRoom={inRoom}
       unplaced={unplaced}
+      pointsHere={points.filter(p => p.area_id === areaId)}
       onChangeRoom={() => setAreaId(null)}
       onChanged={load}
       onError={setError}
@@ -139,15 +154,19 @@ export default function PlantWalk() {
 
 // ── Walking one room ────────────────────────────────────────────────────
 
-function RoomWalk({ area, inRoom, unplaced, onChangeRoom, onChanged, onError, error }: {
+function RoomWalk({ area, inRoom, unplaced, pointsHere, onChangeRoom, onChanged, onError, error }: {
   area: Area
   inRoom: AssetRow[]
   unplaced: AssetRow[]
+  pointsHere: PlantPoint[]
   onChangeRoom: () => void
   onChanged: () => void
   onError: (e: string | null) => void
   error: string | null
 }) {
+  // Machines and fixtures are captured on the same trip through the room, so
+  // they're a mode switch rather than two separate walks.
+  const [mode, setMode] = useState<'machines' | 'fixtures'>('machines')
   const [name,   setName]   = useState('')
   const [make,   setMake]   = useState('')
   const [model,  setModel]  = useState('')
@@ -238,6 +257,38 @@ function RoomWalk({ area, inRoom, unplaced, onChangeRoom, onChanged, onError, er
       </div>
 
       {justSaved && <Banner tone="ok">✓ Saved {justSaved}</Banner>}
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        {([
+          ['machines', `Machines (${inRoom.length})`],
+          ['fixtures', `Drains & fixtures (${pointsHere.length})`],
+        ] as const).map(([m, label]) => (
+          <button
+            key={m}
+            onClick={() => setMode(m)}
+            style={{
+              flex: 1, minHeight: 48, borderRadius: 8,
+              background: mode === m ? C.medBrown : C.dark,
+              border: `1px solid ${mode === m ? C.amber : C.medBrown}`,
+              color: mode === m ? C.cream : C.tan,
+              fontSize: 14, fontWeight: mode === m ? 700 : 400, cursor: 'pointer',
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {mode === 'fixtures' && (
+        <FixtureCapture
+          area={area}
+          points={pointsHere}
+          onChanged={onChanged}
+          onError={onError}
+        />
+      )}
+
+      {mode === 'machines' && <>
 
       {/* Claim anything QuickBooks already knows about */}
       {unplaced.length > 0 && (
@@ -355,7 +406,171 @@ function RoomWalk({ area, inRoom, unplaced, onChangeRoom, onChanged, onError, er
           </div>
         </>
       )}
+
+      </>}
     </Shell>
+  )
+}
+
+// ── Fixtures: drains, water, electrical ─────────────────────────────────
+
+function FixtureCapture({ area, points, onChanged, onError }: {
+  area: Area
+  points: PlantPoint[]
+  onChanged: () => void
+  onError: (e: string | null) => void
+}) {
+  const [kind,  setKind]  = useState<PointKind>('drain')
+  const [label, setLabel] = useState('')
+  const [photo, setPhoto] = useState<string | null>(null)
+  const [notes, setNotes] = useState('')
+  const [swab,  setSwab]  = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved]   = useState<string | null>(null)
+
+  const def = POINT_KIND[kind]
+
+  async function save() {
+    setSaving(true)
+    onError(null)
+    try {
+      const res = await fetch('/api/plant-points', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          area_id: area.id, kind,
+          label: label.trim() || undefined,
+          photo_url: photo, notes: notes.trim() || undefined,
+          // Only meaningful on a drain; sending it for an outlet would be noise.
+          swab_site: kind === 'drain' ? swab : false,
+        }),
+      })
+      const body = await res.json()
+      if (!res.ok) { onError(body?.error ?? "Couldn't save that."); return }
+      setSaved(pointName({ kind, label: label.trim() || null }))
+      setTimeout(() => setSaved(null), 2000)
+      setLabel(''); setPhoto(null); setNotes(''); setSwab(false)
+      onChanged()
+    } catch {
+      onError("Didn't save — check your signal.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <>
+      {saved && <Banner tone="ok">✓ Saved {saved}</Banner>}
+
+      <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ color: C.tan, fontSize: 13, lineHeight: 1.5 }}>
+          The photo is the point of this. Someone who has never been in here can find a
+          drain from a picture of it — not from a dot on a plan.
+        </div>
+
+        {/* Kind first: it changes what else is worth asking. */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {POINT_KINDS.map(k => {
+            const on = kind === k
+            const d  = POINT_KIND[k]
+            return (
+              <button
+                key={k}
+                onClick={() => setKind(k)}
+                style={{
+                  minHeight: 44, padding: '0 12px', borderRadius: 8,
+                  background: on ? C.medBrown : C.dark,
+                  border: `1px solid ${on ? d.color : C.medBrown}`,
+                  color: on ? C.cream : C.tan,
+                  fontSize: 14, fontWeight: on ? 700 : 400, cursor: 'pointer',
+                }}
+              >
+                {d.icon} {d.label}
+              </button>
+            )
+          })}
+        </div>
+
+        {def.hint && (
+          <div style={{ color: C.lightBrown, fontSize: 12, lineHeight: 1.5 }}>{def.hint}</div>
+        )}
+
+        <Camera label={`Photo of the ${def.label.toLowerCase()}`} got={!!photo} onUploaded={setPhoto} />
+
+        <input
+          value={label}
+          onChange={e => setLabel(e.target.value)}
+          placeholder={`What's it called? e.g. ${kind === 'drain' ? 'Drain 3' : 'North wall'}`}
+          style={input}
+        />
+
+        {kind === 'drain' && (
+          <button
+            onClick={() => setSwab(!swab)}
+            style={{
+              minHeight: 48, borderRadius: 8, cursor: 'pointer',
+              background: swab ? C.blue : C.dark,
+              border: `1px solid ${swab ? C.blue : C.medBrown}`,
+              color: C.cream, fontSize: 14, fontWeight: swab ? 700 : 400,
+            }}
+          >
+            {swab ? '✓ Listeria swab site' : 'Is this a Listeria swab site?'}
+          </button>
+        )}
+
+        <input
+          value={notes}
+          onChange={e => setNotes(e.target.value)}
+          placeholder="Anything worth knowing (optional)"
+          style={input}
+        />
+
+        <button
+          onClick={save}
+          disabled={saving}
+          style={{
+            width: '100%', minHeight: TAP, borderRadius: 10,
+            background: saving ? C.darkBrown : C.green,
+            border: `1px solid ${saving ? C.medBrown : C.green}`,
+            color: C.cream, fontSize: 17, fontWeight: 700,
+            cursor: saving ? 'default' : 'pointer',
+          }}
+        >
+          {saving ? 'Saving…' : `Save ${def.label.toLowerCase()} & next`}
+        </button>
+      </div>
+
+      {points.length > 0 && (
+        <>
+          <div style={{
+            color: C.tan, fontSize: 13, fontWeight: 700, textTransform: 'uppercase',
+            letterSpacing: 0.5, margin: '22px 0 10px',
+          }}>
+            In {area.name}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {points.map(p => (
+              <div key={p.id} style={{ ...card, padding: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+                {p.photo_url
+                  // eslint-disable-next-line @next/next/no-img-element
+                  ? <img src={p.photo_url} alt="" style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 6, flexShrink: 0 }} />
+                  : <div style={{
+                      width: 48, height: 48, borderRadius: 6, background: C.dark, flexShrink: 0,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22,
+                    }}>{POINT_KIND[p.kind].icon}</div>}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ color: C.cream, fontSize: 15, fontWeight: 600 }}>{pointName(p)}</div>
+                  <div style={{ color: POINT_KIND[p.kind].color, fontSize: 12 }}>
+                    {POINT_KIND[p.kind].label}
+                    {p.swab_site && <span style={{ color: C.blue }}> · swab site</span>}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </>
   )
 }
 
