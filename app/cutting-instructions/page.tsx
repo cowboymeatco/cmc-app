@@ -1159,8 +1159,8 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
   const sec = (title: string, rows: string): string => {
     if (!rows.trim()) return ''
     const c = PRIMAL_COLORS[title]
-    return `<div style="break-inside:avoid;margin-top:6px">
-           <div style="background:${c?.bar ?? '#351E0E'};color:${c?.text ?? '#F2E8D9'};padding:4px 10px;font-size:18px;letter-spacing:0.12em;text-transform:uppercase;font-weight:bold">${title}</div>
+    return `<div class="sec" style="break-inside:avoid;margin-top:6px">
+           <div class="sechdr" style="background:${c?.bar ?? '#351E0E'};color:${c?.text ?? '#F2E8D9'};padding:4px 10px;font-size:18px;letter-spacing:0.12em;text-transform:uppercase;font-weight:bold">${title}</div>
            <table style="width:100%;border-collapse:collapse;border:1px solid #e0d5c8;${c ? `background:${c.tint}` : ''}">${rows}</table>
          </div>`
   }
@@ -1662,7 +1662,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
       if (pr.sectionTitle) {
         rowCount = 0
         const c = PRIMAL_COLORS[pr.sectionTitle]
-        tbody += `<tr><td colspan="5" style="background:${c?.bar ?? '#351E0E'};color:${c?.text ?? '#F2E8D9'};padding:4px 8px;font-size:16px;letter-spacing:0.12em;text-transform:uppercase;font-weight:bold">${pr.sectionTitle}</td></tr>`
+        tbody += `<tr class="sechdr-row"><td colspan="5" style="background:${c?.bar ?? '#351E0E'};color:${c?.text ?? '#F2E8D9'};padding:4px 8px;font-size:16px;letter-spacing:0.12em;text-transform:uppercase;font-weight:bold">${pr.sectionTitle}</td></tr>`
         continue
       }
       const bg  = pr.isGrind ? '#fff8e6' : pr.isAddon ? '#fffbe8' : rowCount % 2 === 0 ? '#fff' : '#faf6f1'
@@ -1806,7 +1806,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
   ${unassignedBand(carcass)}
   ${grindBand}
   ${infoGrid(carcass)}
-  <div style="column-count:3;column-gap:14px">
+  <div class="cutcols" style="column-count:3;column-gap:14px">
     ${cutSections}
   </div>
 </div>
@@ -1823,8 +1823,8 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
     <span style="margin-left:14px">Hanging Wt: <span style="font-weight:bold">${carcass.hcw != null ? `${carcass.hcw} lbs` : wline(58)}</span></span>
     ${d.steakPack ? `<span style="margin-left:14px">Steaks: <span style="font-weight:bold">${esc(String(d.steakPack))} per pack</span></span>` : ''}
   </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
-    ${packCols.map(col => `<div>${col.length ? buildPackTable(col) : ''}</div>`).join('')}
+  <div class="packgrid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+    ${packCols.map(col => `<div class="packcol">${col.length ? buildPackTable(col) : ''}</div>`).join('')}
   </div>
   ${d.notes ? `<div style="margin-top:10px;border:1px solid #C9A882;padding:8px"><div style="font-size:12px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px">Special Notes</div><div style="font-size:18px">${d.notes}</div></div>` : ''}
   <div style="margin-top:auto;padding-top:18px;display:grid;grid-template-columns:1fr 1fr;gap:20px">
@@ -1889,28 +1889,255 @@ ${body}
 
 <script>
 (function () {
-  // A card that measures taller than the printable area spills onto a second
-  // sheet, which splits one animal's instructions across two pieces of paper on
-  // the cutting floor. Shrink it just enough to land on one.
-  //
-  // Only as far as FLOOR, though, and never by clipping: the type is sized to be
-  // read across the cutting room, and a card nobody can read from the rail is
-  // worse than a card that ran to two pages. Anything still over at the floor is
-  // left alone to paginate as before.
-  var LIMIT = 7.7 * 96
-  var FLOOR = 0.62
+  var LIMIT  = 7.7 * 96   // letter landscape less the 0.4in margins
+  var FLOOR  = 0.62
+  var NCOLS  = 3
+
+  // ── Deal the rows into the three columns by measured height ───────────────
+  // A section is atomic in a CSS column layout, so one long primal pins its
+  // column to its own height while the other two sit half empty and the card
+  // spills onto a second sheet with page left over (Charlie, 2026-08-18). The
+  // packaging sheet had the same problem from the other end: it split on row
+  // COUNT at build time, and rows are not the same height. So measure what
+  // actually rendered and re-deal it, splitting a long section across columns
+  // where it has to and repeating its header as "(cont.)".
+  function pack(groups, target, overhead, atomic) {
+    var cols = [[]], h = overhead
+    for (var gi = 0; gi < groups.length; gi++) {
+      var g = groups[gi], i = 0, first = true
+      while (true) {
+        // A header with nothing under it is a wasted line at the foot of a
+        // column — break before it, not after it.
+        var need = g.hdrH + (i < g.rows.length ? g.rows[i].h : 0)
+        if (atomic) for (var n = i + 1; n < g.rows.length; n++) need += g.rows[n].h
+        if (cols[cols.length - 1].length && h + need > target && cols.length < NCOLS) { cols.push([]); h = overhead }
+        var chunk = { g: g, rows: [], cont: !first }
+        h += g.hdrH
+        while (i < g.rows.length) {
+          var rh = g.rows[i].h
+          if (!atomic && chunk.rows.length && h + rh > target && cols.length < NCOLS) break
+          chunk.rows.push(g.rows[i]); h += rh; i++
+        }
+        cols[cols.length - 1].push(chunk)
+        first = false
+        if (i >= g.rows.length) break
+        cols.push([]); h = overhead     // section continues in the next column
+      }
+    }
+    return cols
+  }
+
+  function colHeights(cols, overhead) {
+    var out = []
+    for (var c = 0; c < cols.length; c++) {
+      var h = overhead
+      for (var k = 0; k < cols[c].length; k++) {
+        h += cols[c][k].g.hdrH
+        for (var r = 0; r < cols[c][k].rows.length; r++) h += cols[c][k].rows[r].h
+      }
+      out.push(h)
+    }
+    return out
+  }
+
+  // The shortest three columns the card will fit into — binary search on the
+  // column height, so a light card keeps its short columns instead of being
+  // stretched down the page to fill the budget.
+  function colMax(cols, overhead) { return Math.max.apply(null, colHeights(cols, overhead)) }
+  function search(groups, budget, overhead, total, atomic) {
+    var lo = 0, hi = total, best = null
+    for (var it = 0; it < 24; it++) {
+      var mid  = (lo + hi) / 2
+      var cols = pack(groups, mid, overhead, atomic)
+      var mx   = colMax(cols, overhead)
+      if (mx <= mid + 0.5 && mx <= budget) { best = cols; hi = mid } else lo = mid
+    }
+    return best
+  }
+  function bestPacking(groups, budget, overhead) {
+    var total = overhead
+    for (var i = 0; i < groups.length; i++) {
+      total += groups[i].hdrH
+      for (var j = 0; j < groups[i].rows.length; j++) total += groups[i].rows[j].h
+    }
+    // A primal the packer works down in one go would rather not be cut in
+    // half, so breaking one has to buy back real page — an inch of column, the
+    // difference between a sheet that fits and a sheet that gets shrunk to fit.
+    // Short of that the sections stay whole, even if a column ends up short.
+    var whole = search(groups, budget, overhead, total, true)
+    var split = search(groups, budget, overhead, total, false)
+    if (whole && (!split || colMax(whole, overhead) <= colMax(split, overhead) + 96)) return whole
+    // Genuinely more than one sheet holds: balance it anyway, then let the
+    // shrink pass below decide.
+    return split || pack(groups, total / NCOLS, overhead, false)
+  }
+
+  // "(cont.)" is added on the way out, never carried back in — so a second
+  // pass over an already-packed page cannot stack up "(cont.) (cont.)", and
+  // two halves of one section landing back in the same column merge into a
+  // single header again.
+  var CONT = ' (cont.)'
+  function baseTitle(t) {
+    var v = String(t == null ? '' : t).trim()
+    return v.slice(-CONT.length) === CONT ? v.slice(0, -CONT.length) : v
+  }
+  function pushGroup(groups, g) {
+    var prev = groups[groups.length - 1]
+    if (prev && prev.title && prev.title === g.title) { prev.rows = prev.rows.concat(g.rows); return }
+    groups.push(g)
+  }
+
+  // Page 1 — the cut card. Sections are div > header + table inside .cutcols.
+  function cutCardPass(page, box) {
+    var secs = box.querySelectorAll('.sec')
+    if (!secs.length) return
+    var groups = []
+    for (var i = 0; i < secs.length; i++) {
+      var sec = secs[i], tbl = sec.querySelector('table'), hdr = sec.querySelector('.sechdr')
+      if (!tbl || !hdr) continue
+      var rows = [], sum = 0
+      for (var j = 0; j < tbl.rows.length; j++) {
+        var rh = tbl.rows[j].getBoundingClientRect().height
+        rows.push({ el: tbl.rows[j], h: rh }); sum += rh
+      }
+      // Everything in the section that is not a row: header bar, borders, and
+      // the 6px gap above it.
+      pushGroup(groups, {
+        title: baseTitle(hdr.textContent), hdrH: sec.getBoundingClientRect().height - sum + 6,
+        rows: rows, sec: sec, tbl: tbl, hdr: hdr,
+      })
+    }
+    if (!groups.length) return
+    var budget = LIMIT - (box.getBoundingClientRect().top - page.getBoundingClientRect().top) - 2
+    var cols   = bestPacking(groups, budget, 0)
+    var wrap   = document.createElement('div')
+    wrap.style.cssText = 'display:grid;grid-template-columns:repeat(' + NCOLS + ',1fr);gap:0 14px;align-items:start'
+    for (var c = 0; c < cols.length; c++) {
+      var cd = document.createElement('div')
+      for (var k = 0; k < cols[c].length; k++) {
+        var ch  = cols[c][k]
+        var sc  = ch.g.sec.cloneNode(false)
+        var hd  = ch.g.hdr.cloneNode(false)
+        hd.textContent = ch.g.title + (ch.cont ? CONT : '')
+        var tb2 = ch.g.tbl.cloneNode(false)
+        var tb  = document.createElement('tbody')
+        for (var r = 0; r < ch.rows.length; r++) tb.appendChild(ch.rows[r].el)
+        tb2.appendChild(tb); sc.appendChild(hd); sc.appendChild(tb2); cd.appendChild(sc)
+      }
+      wrap.appendChild(cd)
+    }
+    box.textContent = ''
+    box.style.columnCount = 'auto'
+    box.appendChild(wrap)
+  }
+
+  // Page 2 — the packaging sheet. One table per column, section titles are
+  // full-width rows inside the body.
+  function packSheetPass(page, box) {
+    var cols0 = box.querySelectorAll('.packcol')
+    var groups = [], tpl = null, thead = null, overhead = 0
+    for (var c = 0; c < cols0.length; c++) {
+      var tbl = cols0[c].querySelector('table')
+      if (!tbl || !tbl.tBodies.length) continue
+      if (!tpl) {
+        tpl = tbl; thead = tbl.tHead
+        overhead = (thead ? thead.getBoundingClientRect().height : 0) + 2
+      }
+      var rows = tbl.tBodies[0].rows
+      for (var j = 0; j < rows.length; j++) {
+        var r = rows[j], h = r.getBoundingClientRect().height
+        if ((r.className || '').indexOf('sechdr-row') >= 0) {
+          pushGroup(groups, { title: baseTitle(r.cells[0].textContent), hdrH: h, hdrRow: r, rows: [] })
+        } else {
+          if (!groups.length) pushGroup(groups, { title: '', hdrH: 0, hdrRow: null, rows: [] })
+          groups[groups.length - 1].rows.push({ el: r, h: h })
+        }
+      }
+    }
+    if (!tpl || !groups.length) return
+    // The sheet stretches to the full page so its sign-off line sits at the
+    // bottom — drop that while measuring or every card looks full already.
+    var minH = page.style.minHeight
+    page.style.minHeight = '0'
+    var pr = page.getBoundingClientRect(), br = box.getBoundingClientRect()
+    var above  = br.top - pr.top
+    var below  = pr.height - above - br.height          // notes + sign-off footer
+    var budget = LIMIT - above - below - 2
+    var cols   = bestPacking(groups, budget, overhead)
+    var made   = []
+    for (var ci = 0; ci < cols.length; ci++) {
+      var cd = document.createElement('div')
+      cd.className = 'packcol'
+      if (cols[ci].length) {
+        var t = tpl.cloneNode(false)
+        if (thead) t.appendChild(thead.cloneNode(true))
+        var tb = document.createElement('tbody')
+        for (var k = 0; k < cols[ci].length; k++) {
+          var ch = cols[ci][k]
+          if (ch.g.hdrRow) {
+            var hr = ch.g.hdrRow.cloneNode(true)
+            hr.cells[0].textContent = ch.g.title + (ch.cont ? CONT : '')
+            tb.appendChild(hr)
+          }
+          for (var r2 = 0; r2 < ch.rows.length; r2++) tb.appendChild(ch.rows[r2].el)
+        }
+        t.appendChild(tb); cd.appendChild(t)
+      }
+      made.push(cd)
+    }
+    box.textContent = ''
+    box.style.gridTemplateColumns = 'repeat(' + NCOLS + ',1fr)'
+    for (var m = 0; m < made.length; m++) box.appendChild(made[m])
+    page.style.minHeight = minH
+  }
+
+  // Re-deal, then keep whichever layout actually measured shortest. A table
+  // sizes its own columns to the rows it happens to be holding, so the row
+  // heights measured in one layout are only an estimate of the next one — a
+  // re-deal can land taller than what it replaced, and this is what stops that
+  // from ever reaching the paper.
+  function repack(page) {
+    try {
+      var box = page.querySelector('.packgrid') || page.querySelector('.cutcols')
+      if (!box) return
+      var isPack = (box.className || '').indexOf('packgrid') >= 0
+      var best = { dom: box.cloneNode(true), cc: box.style.columnCount, h: box.getBoundingClientRect().height }
+      for (var pass = 0; pass < 3; pass++) {
+        if (isPack) packSheetPass(page, box); else cutCardPass(page, box)
+        var h = box.getBoundingClientRect().height
+        if (h >= best.h - 0.5) break
+        best = { dom: box.cloneNode(true), cc: box.style.columnCount, h: h }
+      }
+      if (box.getBoundingClientRect().height > best.h + 0.5) {
+        box.textContent = ''
+        box.style.columnCount = best.cc
+        while (best.dom.firstChild) box.appendChild(best.dom.firstChild)
+      }
+    } catch (e) {
+      // A card that prints its old, taller layout beats one that prints
+      // nothing, so any failure in here leaves the page as it was built.
+    }
+  }
+
+  // ── Then shrink, only if it still does not fit ────────────────────────────
+  // Only as far as FLOOR, and never by clipping: the type is sized to be read
+  // across the cutting room, and a card nobody can read from the rail is worse
+  // than a card that ran to two pages.
   var pages = document.querySelectorAll('.page')
-  for (var i = 0; i < pages.length; i++) {
-    var page = pages[i]
+  for (var p = 0; p < pages.length; p++) {
+    var page = pages[p]
     var scale = 1
+    repack(page)
     // Zoom reflows the columns rather than just scaling pixels, so the height
-    // after shrinking isn't a straight multiple of the height before it —
-    // converge instead of computing one factor.
+    // after shrinking is not a straight multiple of the height before it —
+    // converge instead of computing one factor, re-dealing the rows each time
+    // because smaller type takes fewer lines.
     for (var pass = 0; pass < 6; pass++) {
       var h = page.getBoundingClientRect().height
       if (h <= LIMIT || scale <= FLOOR) break
       scale = Math.max(FLOOR, scale * (LIMIT / h) * 0.995)
       page.style.zoom = scale
+      repack(page)
     }
     if (scale < 1) page.setAttribute('data-fit', scale.toFixed(3))
   }
