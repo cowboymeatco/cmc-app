@@ -2240,6 +2240,7 @@ export default function CuttingInstructionsPage() {
   const [carcassStates, setCarcassStates] = useState<Record<string, CarcassInfo[]>>({})
   const [assigning, setAssigning]       = useState('')
   const [assignError, setAssignError]   = useState('')
+  const [unlinking, setUnlinking]       = useState('')
   // Cards ticked for a batch print. Separate from `selected`, which drives the
   // detail panel — clicking a row to read it shouldn't add it to the batch.
   const [picked, setPicked]             = useState<Set<string>>(new Set())
@@ -2338,6 +2339,42 @@ export default function CuttingInstructionsPage() {
       await loadCarcassStates(instructions, appointments)
     } finally {
       setAssigning('')
+    }
+  }
+
+  // Take this card back off one animal. "Link to another animal" ADDS a link
+  // rather than moving it, so before this the only way to undo a mis-link was
+  // to delete the card — which throws away the customer's answers
+  // (Charlie, 2026-08-18).
+  async function unlinkFromAppointment(apptId: string) {
+    if (!selected) return
+    const appt = appointments.find(a => a.id === apptId)
+    const slot = appt?.customers?.find(c => c.linked_cutting_instruction_id === selected.id)
+    const who  = slot?.customer_name || selected.data?.customerName || 'This card'
+    if (!window.confirm(
+      `Take ${who}'s cut card off this ${appt?.species ?? 'animal'}?
+
+` +
+      `The card is kept — it goes back to the unlinked list so you can put it on the right animal. The carcass assignment for this slot is cleared too.`
+    )) return
+    setUnlinking(apptId)
+    try {
+      const res = await fetch('/api/cutting-instructions/unlink', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: selected.id, appointment_id: apptId }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setAssignError(body.error || 'Could not unlink that card.')
+        return
+      }
+      setAssignError('')
+      // The route rolls the card back to pending once no animal holds it.
+      if (body.status) setSelected(prev => prev ? { ...prev, status: body.status } : null)
+      await load()
+    } finally {
+      setUnlinking('')
     }
   }
 
@@ -2906,6 +2943,14 @@ export default function CuttingInstructionsPage() {
                             ? <> · <strong>{state.hcw} lbs</strong> hanging</>
                             : null}
                         </div>
+
+                        <button
+                          onClick={() => unlinkFromAppointment(appt.id)}
+                          disabled={unlinking === appt.id}
+                          title="Take this card off this animal. The card is kept and goes back to the unlinked list — use this to undo a mis-link instead of deleting the card."
+                          style={{ background: 'none', border: 'none', color: 'var(--tan)', textDecoration: 'underline', cursor: 'pointer', fontSize: '0.74rem', padding: '0.1rem 0' }}>
+                          {unlinking === appt.id ? 'Unlinking…' : '🔓 Unlink from this animal'}
+                        </button>
 
                         {state?.state === 'unharvested' && (
                           <div style={{ color: 'var(--tan)', fontSize: '0.76rem', marginTop: '0.15rem' }}>

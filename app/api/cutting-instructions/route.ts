@@ -1,6 +1,7 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { unlinkInstruction } from '@/lib/cuttingLinks'
 
 export const dynamic = 'force-dynamic'
 
@@ -76,40 +77,6 @@ export async function PATCH(req: NextRequest) {
   return NextResponse.json({ ok: true })
 }
 
-// Detach a card from everything that points at it: the appointment customer
-// slot that owns the link, and the carcass-assignment snapshot that copies it.
-// Deleting a card used to leave both behind, so the animal stayed "has
-// instructions" and never came back to the link-to-appointment picker — the
-// portion was stranded with no way to re-link it (Jill, 2026-07-28).
-async function unlinkInstruction(id: string): Promise<string | null> {
-  const { data: appts, error: findErr } = await supabase
-    .from('harvest_appointments')
-    .select('id, customers')
-    .contains('customers', [{ linked_cutting_instruction_id: id }])
-  if (findErr) return findErr.message
-
-  for (const appt of appts ?? []) {
-    // Blank, not null: a fresh customer slot carries '' and every "needs
-    // instructions" check in the app is a falsy test, so '' is the shape that
-    // already means unlinked.
-    const customers = (appt.customers as Array<Record<string, unknown>> ?? []).map(c =>
-      c?.linked_cutting_instruction_id === id ? { ...c, linked_cutting_instruction_id: '' } : c
-    )
-    const { error } = await supabase
-      .from('harvest_appointments')
-      .update({ customers })
-      .eq('id', appt.id)
-    if (error) return error.message
-  }
-
-  const { error: caErr } = await supabase
-    .from('carcass_assignments')
-    .update({ linked_cutting_instruction_id: null })
-    .eq('linked_cutting_instruction_id', id)
-  if (caErr) return caErr.message
-
-  return null
-}
 
 // DELETE /api/cutting-instructions?id=... â€” permanently remove one instruction.
 // Hard delete for junk (test cards); real cards should be archived via PATCH instead.
@@ -121,7 +88,7 @@ export async function DELETE(req: NextRequest) {
   // Unlink before deleting. If this fails we stop: a card that's merely
   // unlinked can be re-linked, but a deleted card with live references leaves
   // the animal pointing at nothing.
-  const unlinkErr = await unlinkInstruction(id)
+  const { error: unlinkErr } = await unlinkInstruction(id)
   if (unlinkErr) return NextResponse.json({ error: unlinkErr }, { status: 500 })
 
   const { error } = await supabase
