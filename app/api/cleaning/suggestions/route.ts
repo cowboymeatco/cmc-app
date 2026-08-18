@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
 
   let q = supabase
     .from('cleaning_step_suggestions')
-    .select('*, cleaning_equipment(id, name), cleaning_steps(step_no, phase, instruction)')
+    .select('*, assets(id, name), cleaning_steps(step_no, phase, instruction)')
     .order('created_at', { ascending: false })
   if (status !== 'all') q = q.eq('status', status)
 
@@ -25,10 +25,10 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await req.json()
-  const { equipment_id, step_id, suggestion, suggested_by, photo_url } = body as Record<string, string | undefined>
+  const { asset_id, step_id, suggestion, suggested_by, photo_url } = body as Record<string, string | undefined>
 
-  if (!equipment_id || !suggestion?.trim()) {
-    return NextResponse.json({ error: 'equipment_id and suggestion required' }, { status: 400 })
+  if (!asset_id || !suggestion?.trim()) {
+    return NextResponse.json({ error: 'asset_id and suggestion required' }, { status: 400 })
   }
   if (!suggested_by?.trim()) {
     return NextResponse.json({ error: 'Add your name so we can ask you about it.' }, { status: 400 })
@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
   const { data, error } = await supabase
     .from('cleaning_step_suggestions')
     .insert([{
-      equipment_id,
+      asset_id,
       // Null when the note is about the procedure as a whole rather than one
       // step — "there's a step missing here" is the most useful kind.
       step_id:      step_id ?? null,

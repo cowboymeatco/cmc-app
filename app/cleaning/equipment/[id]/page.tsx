@@ -233,7 +233,7 @@ function SuggestBox({ equipmentId, stepId, by, onDone }: {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        equipment_id: equipmentId,
+        asset_id: equipmentId,
         step_id:      stepId,
         suggestion:   text,
         suggested_by: name,

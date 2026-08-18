@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
 
   let q = supabase
     .from('cleaning_tasks')
-    .select('*, cleaning_areas(id, name, sort_order), cleaning_equipment(id, name)')
+    .select('*, cleaning_areas(id, name, sort_order), assets(id, name)')
     .order('sort_order', { ascending: true })
   if (!all)    q = q.eq('active', true)
   if (areaId)  q = q.eq('area_id', areaId)
@@ -86,7 +86,7 @@ export async function POST(req: NextRequest) {
     .from('cleaning_tasks')
     .insert([{
       area_id:      body.area_id,
-      equipment_id: body.equipment_id ?? null,
+      asset_id: body.asset_id ?? null,
       title:        body.title.trim(),
       detail:       body.detail?.trim() || null,
       sort_order:   body.sort_order ?? 100,
