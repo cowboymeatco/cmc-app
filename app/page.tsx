@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { isoDate } from '@/lib/dates'
+import { isoDate, dateLabel } from '@/lib/dates'
 
 const C = {
   dark:       '#1A0A04',
@@ -26,8 +26,12 @@ interface ModuleDef {
 }
 
 export default function Dashboard() {
-  const today    = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
   const todayISO = isoDate()
+  // Off the shop clock, not the raw browser clock. This is a client component,
+  // so a bare new Date() is formatted in UTC on the server and in Mountain in
+  // the browser — past 6pm those disagree about what day it is, and the two
+  // versions of this string threw a hydration error every evening.
+  const today    = dateLabel(todayISO, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
 
   const [schedule,   setSchedule]   = useState<number | null>(null)
   const [receiving,  setReceiving]  = useState<number | null>(null)
