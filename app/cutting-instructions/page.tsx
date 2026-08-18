@@ -183,16 +183,19 @@ function smokehouseTotalLbs(sm: any): number {
   return sum(sm.sticks) + sum(sm.brats) + sum(sm.summer) + sum(sm.jerky) + (Number(sm.hotDogs?.lbs) || 0)
 }
 
-// Everything we charge to MAKE — curing (bacon, cured hams) and sausage work.
-// Billing is on the raw weight going in, which nothing captured, so each of
-// these gets a blank to write on. Driven off the order, so a customer who
-// didn't buy bacon never gets a bacon line.
-function rawWeighInRows(d: any, f: (s: string) => string): Array<[string, string]> {
+// Everything weighed as it goes in — curing (bacon, cured hams), sausage work,
+// and plain grinding. Billing is on the raw weight, which nothing captured, so
+// each of these gets a blank to write on. Driven off the order, so a customer
+// who didn't buy bacon never gets a bacon line, and the heading names only the
+// work that's actually on the sheet.
+function rawWeighIn(d: any, f: (s: string) => string): { rows: Array<[string, string]>; title: string } {
   const rows: Array<[string, string]> = []
+  const scope = new Set<string>()
   const belly = d?.belly
   if (belly?.cut === 'bacon' || belly?.cut2 === 'bacon') {
     const both = belly.cut === 'bacon' && belly.cut2 === 'bacon'
     rows.push(['Bacon', both ? 'Both bellies · cure & smoke' : 'Cure & smoke'])
+    scope.add('Curing')
   }
   // Shoulder bacon is a cured add-on chosen on the shoulder step (data.shoulder
   // .addons, or shoulder2.addons for a split whole hog). Like belly bacon it's
@@ -203,6 +206,7 @@ function rawWeighInRows(d: any, f: (s: string) => string): Array<[string, string
   if (shoulderBacon || shoulderBacon2) {
     const both = shoulderBacon && shoulderBacon2
     rows.push(['Shoulder Bacon', both ? 'Both shoulders · cure & smoke' : 'Cure & smoke'])
+    scope.add('Curing')
   }
   const ham = d?.ham
   const curedHams = [ham?.style, ham?.style2].filter(s => s === 'cured-smoked').length
@@ -217,18 +221,31 @@ function rawWeighInRows(d: any, f: (s: string) => string): Array<[string, string
       ? curedCuts.join(' / ')
       : curedCuts[0] ?? ''
     rows.push(['Ham — Cure & Smoke', [curedHams > 1 ? 'Both hams' : '', cutLabel].filter(Boolean).join(' · ')])
+    scope.add('Curing')
   }
-  // Plain ground pork is just grinding, not sausage making — no making charge,
-  // so it gets no weigh-in line.
+  // Every trim destination gets a weigh-in line, plain ground pork included.
+  // Grinding carries no making charge, which is why it used to be left off —
+  // but this blank is also the only place the trim's weight gets written down,
+  // and without one the ground pork went out unweighed and its poundage landed
+  // on whatever else was on the sheet (Charlie, 2026-08-18). Bagged trim never
+  // goes through a grinder, so it has nothing to weigh in.
   const t = d?.trim
-  const billable = (flavor?: string | null) => !!flavor && flavor !== 'ground-pork'
-  if (billable(t?.flavor1)) rows.push([f(t.flavor1), f(t.format1 ?? '')])
-  if (t?.split === 'yes' && billable(t?.flavor2)) rows.push([f(t.flavor2), f(t.format2 ?? '')])
+  const weighTrim = (flavor?: string | null, format?: string | null) => {
+    if (!flavor || trimIsBagged(t)) return
+    scope.add(flavor === 'ground-pork' ? 'Grinding' : 'Sausage')
+    rows.push([f(flavor), f(format ?? '')])
+  }
+  weighTrim(t?.flavor1, t?.format1)
+  if (t?.split === 'yes') weighTrim(t?.flavor2, t?.format2)
   // Smokehouse products used to be repeated down here for their weigh-in
   // blank, which put a "Curing & Sausage" heading on beef cards that have
   // neither (Jill, 2026-07-27). They're weighed on their own Smokehouse rows
   // now, so a beef card with no cure work prints no section at all.
-  return rows
+  const parts = ['Curing', 'Sausage', 'Grinding'].filter(p => scope.has(p))
+  const scopeLabel = parts.length > 2
+    ? `${parts.slice(0, -1).join(', ')} & ${parts[parts.length - 1]}`
+    : parts.join(' & ')
+  return { rows, title: `Raw Weight In${scopeLabel ? ` — ${scopeLabel}` : ''}` }
 }
 
 // ── Cut card field definitions by species ─────────────────────────────────────
@@ -1588,12 +1605,13 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
     }
   }
 
-  // Raw weight in, for billing curing and sausage work. Blank by design — the
-  // Wt (lbs) column is where it gets written as each batch goes in.
-  const weighIn = rawWeighInRows(d, fmt)
-  if (weighIn.length) {
-    filteredPrs.push({ sectionTitle: 'Raw Weight In — Curing & Sausage' })
-    weighIn.forEach(([l, v]) => filteredPrs.push({ cut: l, spec: v, writeIn: true }))
+  // Raw weight in, for billing the cure and sausage work and for allocating the
+  // grind. Blank by design — the Wt (lbs) column is where it gets written as
+  // each batch goes in.
+  const weighIn = rawWeighIn(d, fmt)
+  if (weighIn.rows.length) {
+    filteredPrs.push({ sectionTitle: weighIn.title })
+    weighIn.rows.forEach(([l, v]) => filteredPrs.push({ cut: l, spec: v, writeIn: true }))
   }
 
   // ── Split packaging rows into balanced columns (at section boundaries) ────
