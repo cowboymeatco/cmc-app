@@ -6,31 +6,42 @@ import { supabase } from '@/lib/supabase'
 // with no way to re-link it (Jill, 2026-07-28) — the animal still read as
 // "has instructions" while the card was gone.
 //
-// `remaining` is how many OTHER animals still hold this card, so the caller can
-// decide whether the card is fully unlinked. A customer taking a whole plus a
-// half is linked once per animal; dropping one of those two is not the same as
-// putting the card back in the unlinked pile.
+// `remaining` counts the SLOTS still holding this card, not appointments: one
+// cut spec can sit on five hog slots of a single check-in, so "no appointments
+// left" and "nothing points here any more" are different questions.
 export type UnlinkResult = { error: string | null; remaining: number }
 
-// appointmentId scopes the detach to one animal. Omit it to detach from every
-// animal — which is what deleting a card has to do.
-export async function unlinkInstruction(id: string, appointmentId?: string): Promise<UnlinkResult> {
+// appointmentId narrows the detach to one check-in; slotId narrows it further to
+// one customer slot on that check-in. Omit both to detach from everything —
+// which is what deleting a card has to do.
+export async function unlinkInstruction(
+  id: string,
+  appointmentId?: string,
+  slotId?: string,
+): Promise<UnlinkResult> {
   const { data: appts, error: findErr } = await supabase
     .from('harvest_appointments')
     .select('id, customers')
     .contains('customers', [{ linked_cutting_instruction_id: id }])
   if (findErr) return { error: findErr.message, remaining: -1 }
 
-  const all     = appts ?? []
+  const all = appts ?? []
+  const linkedSlots = (a: { customers: unknown }) =>
+    (a.customers as Array<Record<string, unknown>> ?? []).filter(c => c?.linked_cutting_instruction_id === id)
+  const total = all.reduce((n, a) => n + linkedSlots(a).length, 0)
+
   const targets = appointmentId ? all.filter(a => a.id === appointmentId) : all
+  let cleared = 0
 
   for (const appt of targets) {
     // Blank, not null: a fresh customer slot carries '' and every "needs
     // instructions" check in the app is a falsy test, so '' is the shape that
     // already means unlinked.
-    const customers = (appt.customers as Array<Record<string, unknown>> ?? []).map(c =>
-      c?.linked_cutting_instruction_id === id ? { ...c, linked_cutting_instruction_id: '' } : c
-    )
+    const customers = (appt.customers as Array<Record<string, unknown>> ?? []).map(c => {
+      const hit = c?.linked_cutting_instruction_id === id && (!slotId || c?.id === slotId)
+      if (hit) cleared++
+      return hit ? { ...c, linked_cutting_instruction_id: '' } : c
+    })
     const { error } = await supabase
       .from('harvest_appointments')
       .update({ customers })
@@ -38,16 +49,18 @@ export async function unlinkInstruction(id: string, appointmentId?: string): Pro
     if (error) return { error: error.message, remaining: -1 }
   }
 
-  // Scoped the same way. An unscoped clear here would strip the card off the
-  // customer's OTHER animal too, which is the bug this whole helper exists to
-  // avoid on the appointment side.
+  // Scoped the same way, and by slot when we have one. An unscoped clear would
+  // strip the card off the producer's OTHER animals too — the bug this helper
+  // exists to avoid on the appointment side. The assignment ROW stays: the
+  // carcass is still that slot's animal, it just no longer carries this card.
   let clear = supabase
     .from('carcass_assignments')
     .update({ linked_cutting_instruction_id: null })
     .eq('linked_cutting_instruction_id', id)
-  if (appointmentId) clear = clear.eq('appointment_id', appointmentId)
+  if (slotId) clear = clear.eq('appointment_customer_id', slotId)
+  else if (appointmentId) clear = clear.eq('appointment_id', appointmentId)
   const { error: caErr } = await clear
   if (caErr) return { error: caErr.message, remaining: -1 }
 
-  return { error: null, remaining: all.length - targets.length }
+  return { error: null, remaining: Math.max(0, total - cleared) }
 }

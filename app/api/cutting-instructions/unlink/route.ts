@@ -5,7 +5,7 @@ import { unlinkInstruction } from '@/lib/cuttingLinks'
 
 export const dynamic = 'force-dynamic'
 
-// POST /api/cutting-instructions/unlink  { id, appointment_id? }
+// POST /api/cutting-instructions/unlink  { id, appointment_id?, appointment_customer_id? }
 //
 // Take a cut card back off an animal without destroying it. Deleting the card
 // was the only thing that unlinked anything, which meant a mis-link could only
@@ -16,9 +16,12 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null)
   const id             = body?.id as string | undefined
   const appointment_id = (body?.appointment_id as string | undefined) || undefined
+  // The slot, when the caller knows it. One card can sit on several slots of
+  // the same check-in, and unlinking one animal must not drop the others.
+  const slot_id = (body?.appointment_customer_id as string | undefined) || undefined
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
 
-  const { error, remaining } = await unlinkInstruction(id, appointment_id)
+  const { error, remaining } = await unlinkInstruction(id, appointment_id, slot_id)
   if (error) return NextResponse.json({ error }, { status: 500 })
 
   // With no animals left the card is back where it started, so it returns to

@@ -162,11 +162,15 @@ type CarcassInfo = {
   over30: boolean | null    // null = unknown, so the card stays quiet rather than guessing
   state: CarcassState
   apptId: string
+  // The customer slot this line belongs to. One card can sit on several slots
+  // of the SAME check-in — a producer bringing five hogs against one cut spec —
+  // and each of those slots is a separate animal with its own carcass.
+  slotId: string
   candidates: Candidate[]   // the animals on this check-in, for the picker
 }
 const EMPTY_CARCASS: CarcassInfo = {
   tag: '', lot: '', producer: '', hcw: null, killType: '', over30: null,
-  state: 'unharvested', apptId: '', candidates: [],
+  state: 'unharvested', apptId: '', slotId: '', candidates: [],
 }
 
 // USDA vs Custom Exempt decides whether the meat can ever be sold, so it has to
@@ -205,13 +209,23 @@ async function freshAppointments(current: HarvestAppointment[]): Promise<Harvest
 // Every carcass this card is linked to. A customer taking more than one
 // animal's worth is linked on several appointments, and each gets its own card.
 async function carcassInfosFor(ci: RawInstruction, appointments: HarvestAppointment[]): Promise<CarcassInfo[]> {
-  const appts = appointments.filter(a => a.customers?.some(c => c.linked_cutting_instruction_id === ci.id))
-  if (!appts.length) return [EMPTY_CARCASS]
-  const infos = await Promise.all(appts.map(a => carcassInfoForAppt(ci, a)))
+  // One entry per linked SLOT. A producer running five hogs against a single
+  // cut spec links that card five times on one check-in, and each of those is
+  // its own animal that has to print its own tag and weight.
+  const pairs = appointments.flatMap(a =>
+    (a.customers ?? [])
+      .filter(c => c.linked_cutting_instruction_id === ci.id)
+      .map(c => ({ appt: a, slotId: c.id }))
+  )
+  if (!pairs.length) return [EMPTY_CARCASS]
+  const infos = await Promise.all(pairs.map(x => carcassInfoForAppt(ci, x.appt, x.slotId)))
   // Drop duplicates so two links onto the same animal don't print twice.
   const seen = new Set<string>()
   const out = infos.filter(i => {
-    const key = `${i.lot}|${i.tag}|${i.producer}`
+    // Only a REAL tag identifies an animal. Keying unassigned lines (blank tag)
+    // by lot|producer collapsed every still-unpicked slot into one, so a
+    // five-hog spec printed a single card.
+    const key = i.tag ? `${i.lot}|${i.tag}|${i.producer}` : `slot:${i.apptId}:${i.slotId}`
     if (seen.has(key)) return false
     seen.add(key); return true
   })
@@ -230,6 +244,10 @@ function resolveCarcass(
   // moved onto the animal booked under a sibling appointment, and the card still
   // has to print that animal's tag and weight (Jill, 2026-07-28).
   allLogs?: any[],
+  // Which slot this line is for. Without it a card sitting on several slots of
+  // one check-in resolves to the FIRST slot every time, so the other animals
+  // were invisible and every carcass pick overwrote the last (Jill, 2026-08-18).
+  slotId?: string,
 ): CarcassInfo {
   const animals = Array.isArray(logs) ? logs : []
   const rows    = Array.isArray(asgs) ? asgs : []
@@ -238,13 +256,20 @@ function resolveCarcass(
   // harvest, before the cut sheet has even arrived, so the assignment row's
   // own linked_cutting_instruction_id is empty on exactly the rows that matter
   // most — matching only on it reported assigned animals as unassigned.
-  const slot = appt.customers?.find(c => c.linked_cutting_instruction_id === ciId)
-  const asg  = rows.find((a: any) =>
-    (slot && a.appointment_customer_id === slot.id) || a.linked_cutting_instruction_id === ciId) ?? null
+  const slot = slotId
+    ? appt.customers?.find(c => c.id === slotId)
+    : appt.customers?.find(c => c.linked_cutting_instruction_id === ciId)
+  // The card-id fallback only holds when this card sits on a single slot here.
+  // With several, every slot claims the same row and they all report the same
+  // animal.
+  const shared = (appt.customers ?? []).filter(c => c.linked_cutting_instruction_id === ciId).length > 1
+  const asg  = (slot ? rows.find((a: any) => a.appointment_customer_id === slot.id) : null)
+    ?? (shared ? null : rows.find((a: any) => a.linked_cutting_instruction_id === ciId))
+    ?? null
 
   const log = animals.length === 0 ? null
     : asg ? pool.find((l: any) => l.id === asg.harvest_log_id) ?? null
-    : animals.length === 1 ? animals[0] : null
+    : (animals.length === 1 && !shared) ? animals[0] : null
 
   const state: CarcassState =
     animals.length === 0 ? 'unharvested'
@@ -286,6 +311,7 @@ function resolveCarcass(
     killType,
     state,
     apptId: appt.id,
+    slotId: slot?.id ?? '',
     candidates: animals.map((l: any) => ({
       id:  l.id,
       tag: l.carcass_tag ?? '',
@@ -295,7 +321,7 @@ function resolveCarcass(
   }
 }
 
-async function carcassInfoForAppt(ci: RawInstruction, appt: HarvestAppointment): Promise<CarcassInfo> {
+async function carcassInfoForAppt(ci: RawInstruction, appt: HarvestAppointment, slotId?: string): Promise<CarcassInfo> {
   try {
     const [logsRes, asgRes] = await Promise.all([
       fetch(`/api/harvest?appointment_id=${encodeURIComponent(appt.id)}`),
@@ -314,7 +340,7 @@ async function carcassInfoForAppt(ci: RawInstruction, appt: HarvestAppointment):
       ? await fetch(`/api/harvest?ids=${encodeURIComponent(away.join(','))}`)
           .then(r => r.json()).then(d => (Array.isArray(d) ? d : [])).catch(() => [])
       : []
-    return resolveCarcass(ci.id, appt, own, rows, [...own, ...extra])
+    return resolveCarcass(ci.id, appt, own, rows, [...own, ...extra], slotId)
   } catch {
     return EMPTY_CARCASS
   }
@@ -1573,12 +1599,17 @@ export default function CuttingInstructionsPage() {
       for (const ciRow of cis) {
         const mine = appts.filter(a => a.customers?.some(c => c.linked_cutting_instruction_id === ciRow.id))
         if (!mine.length) continue
-        next[ciRow.id] = mine.map(a => resolveCarcass(
-          ciRow.id, a,
-          logList.filter((l: any) => l.appointment_id === a.id),
-          asgList.filter((x: any) => x.appointment_id === a.id),
-          logList,
-        ))
+        next[ciRow.id] = mine.flatMap(a =>
+          (a.customers ?? [])
+            .filter(c => c.linked_cutting_instruction_id === ciRow.id)
+            .map(c => resolveCarcass(
+              ciRow.id, a,
+              logList.filter((l: any) => l.appointment_id === a.id),
+              asgList.filter((x: any) => x.appointment_id === a.id),
+              logList,
+              c.id,
+            ))
+        )
       }
       setCarcassStates(next)
     } catch {
@@ -1589,12 +1620,20 @@ export default function CuttingInstructionsPage() {
   // Put this card on a specific animal. The assignments API rewrites a whole
   // check-in at once, so keep everyone else's exactly as-is and swap only the
   // rows belonging to this card's customer slot.
-  async function assignCarcass(apptId: string, harvestLogId: string) {
+  // slotId names WHICH of the check-in's customer slots this carcass is for.
+  // Resolving it by card id instead picked the first linked slot every time, so
+  // a card on five hog slots wrote all five picks against slot one — and since
+  // `others` drops the existing row for that same slot, each pick silently
+  // deleted the one before it. Jill assigned 187#, 186# and 180# and kept only
+  // 180# (Jill, 2026-08-18).
+  async function assignCarcass(apptId: string, harvestLogId: string, slotId?: string) {
     if (!selected) return
-    setAssigning(harvestLogId)
+    setAssigning(`${slotId ?? ''}|${harvestLogId}`)
     try {
       const appt = appointments.find(a => a.id === apptId)
-      const slot = appt?.customers?.find(c => c.linked_cutting_instruction_id === selected.id)
+      const slot = slotId
+        ? appt?.customers?.find(c => c.id === slotId)
+        : appt?.customers?.find(c => c.linked_cutting_instruction_id === selected.id)
       if (!appt || !slot) return
       const existing = await (await fetch(`/api/carcass-assignments?appointment_id=${encodeURIComponent(apptId)}`)).json()
       const others = (Array.isArray(existing) ? existing : [])
@@ -1636,21 +1675,23 @@ export default function CuttingInstructionsPage() {
   // rather than moving it, so before this the only way to undo a mis-link was
   // to delete the card — which throws away the customer's answers
   // (Charlie, 2026-08-18).
-  async function unlinkFromAppointment(apptId: string) {
+  async function unlinkFromAppointment(apptId: string, slotId?: string) {
     if (!selected) return
     const appt = appointments.find(a => a.id === apptId)
-    const slot = appt?.customers?.find(c => c.linked_cutting_instruction_id === selected.id)
+    const slot = slotId
+      ? appt?.customers?.find(c => c.id === slotId)
+      : appt?.customers?.find(c => c.linked_cutting_instruction_id === selected.id)
     const who  = slot?.customer_name || selected.data?.customerName || 'This card'
     if (!window.confirm(
       `Take ${who}'s cut card off this ${appt?.species ?? 'animal'}?\n\n` +
       `The card is kept — it goes back to the unlinked list so you can put it on the right animal. The carcass assignment for this slot is cleared too.`
     )) return
-    setUnlinking(apptId)
+    setUnlinking(slotId ?? apptId)
     try {
       const res = await fetch('/api/cutting-instructions/unlink', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: selected.id, appointment_id: apptId }),
+        body: JSON.stringify({ id: selected.id, appointment_id: apptId, appointment_customer_id: slotId }),
       })
       const body = await res.json().catch(() => ({}))
       if (!res.ok) {
@@ -2203,7 +2244,14 @@ export default function CuttingInstructionsPage() {
             {selected.status === 'linked' && (() => {
               // Every animal this card is linked to — one line each, so a hog
               // and a half shows both instead of just whichever came first.
-              const linkedAppts = appointments.filter(a => a.customers?.some(c => c.linked_cutting_instruction_id === selected.id))
+              // Keyed on the SLOT: a producer running several head against one
+              // cut spec links the same card once per animal on a single
+              // check-in, and one line per check-in hid all but the first.
+              const linkedAppts = appointments.flatMap(a =>
+                (a.customers ?? [])
+                  .filter(c => c.linked_cutting_instruction_id === selected.id)
+                  .map(c => ({ appt: a, cust: c }))
+              )
               const states = carcassStates[selected.id] ?? []
               // Linking attaches the card to a slot on a check-in, not to an
               // animal. Green here used to mean "linked" and read as "done",
@@ -2216,28 +2264,27 @@ export default function CuttingInstructionsPage() {
                 : { bg: 'rgba(100,180,100,0.1)', border: 'rgba(100,180,100,0.2)', fg: '#6dbf6d' }
               return linkedAppts.length ? (
                 <div style={{ padding: '0.6rem 1.25rem', background: tone.bg, borderBottom: `1px solid ${tone.border}`, fontSize: '0.82rem', color: tone.fg }}>
-                  {linkedAppts.map(appt => {
-                    const cust  = appt.customers?.find(c => c.linked_cutting_instruction_id === selected.id)
-                    const state = states.find(s => s.apptId === appt.id)
+                  {linkedAppts.map(({ appt, cust }) => {
+                    const state = states.find(s => s.slotId === cust.id) ?? states.find(s => s.apptId === appt.id && !s.slotId)
                     const when  = new Date(appt.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
                     return (
-                      <div key={appt.id} style={{ marginBottom: '0.2rem' }}>
+                      <div key={`${appt.id}:${cust.id}`} style={{ marginBottom: '0.2rem' }}>
                         <div>
                           {state?.state === 'ambiguous' ? '⚠' : '✅'} Linked to: <strong>{appt.species}</strong>
                           {state && state.state !== 'ambiguous' && state.tag ? <> <strong>#{state.tag}</strong></> : null}
                           {appt.source ? <> from <strong>{appt.source}</strong></> : null} on <strong>{when}</strong>
-                          {cust ? ` — ${cust.customer_name} (${cust.portion})` : ''}
+                          {` — ${cust.customer_name || 'unnamed slot'} (${cust.portion})`}
                           {state && state.state !== 'ambiguous' && state.hcw != null
                             ? <> · <strong>{state.hcw} lbs</strong> hanging</>
                             : null}
                         </div>
 
                         <button
-                          onClick={() => unlinkFromAppointment(appt.id)}
-                          disabled={unlinking === appt.id}
+                          onClick={() => unlinkFromAppointment(appt.id, cust.id)}
+                          disabled={unlinking === cust.id}
                           title="Take this card off this animal. The card is kept and goes back to the unlinked list — use this to undo a mis-link instead of deleting the card."
                           style={{ background: 'none', border: 'none', color: 'var(--tan)', textDecoration: 'underline', cursor: 'pointer', fontSize: '0.74rem', padding: '0.1rem 0' }}>
-                          {unlinking === appt.id ? 'Unlinking…' : '🔓 Unlink from this animal'}
+                          {unlinking === cust.id ? 'Unlinking…' : '🔓 Unlink from this animal'}
                         </button>
 
                         {state?.state === 'unharvested' && (
@@ -2252,14 +2299,14 @@ export default function CuttingInstructionsPage() {
                         {state?.state === 'ambiguous' && (
                           <div style={{ marginTop: '0.4rem' }}>
                             <div style={{ color: 'var(--cream)', fontSize: '0.78rem', marginBottom: '0.35rem' }}>
-                              {state.candidates.length} animals came in on this check-in — which one is {cust?.customer_name || 'this customer'}&apos;s?
+                              {state.candidates.length} animals came in on this check-in — which one is {cust.customer_name || 'this customer'}&apos;s?
                               <span style={{ color: 'var(--tan)' }}> Until you pick, the card prints with no tag, no hanging weight and no inspection marking.</span>
                             </div>
                             <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
                               {state.candidates.map(c => {
                                 const taken = c.heldBy.length > 0
                                 return (
-                                  <button key={c.id} onClick={() => assignCarcass(appt.id, c.id)} disabled={!!assigning}
+                                  <button key={c.id} onClick={() => assignCarcass(appt.id, c.id, cust.id)} disabled={!!assigning}
                                     title={taken ? `Already assigned to ${c.heldBy.join(', ')}` : 'Assign this carcass to this card'}
                                     style={{
                                       background: taken ? 'rgba(0,0,0,0.25)' : 'rgba(245,158,11,0.16)',
@@ -2267,7 +2314,7 @@ export default function CuttingInstructionsPage() {
                                       borderRadius: 3, padding: '0.3rem 0.6rem', cursor: assigning ? 'wait' : 'pointer',
                                       color: taken ? 'var(--tan)' : '#f0b429', fontSize: '0.78rem', textAlign: 'left',
                                     }}>
-                                    {assigning === c.id ? 'Assigning…' : <>
+                                    {assigning === `${cust.id}|${c.id}` ? 'Assigning…' : <>
                                       <strong>#{c.tag || '—'}</strong>{c.hcw != null ? ` · ${c.hcw} lb` : ''}
                                       <span style={{ color: 'var(--tan)' }}>{taken ? ` · ${c.heldBy.join(', ')}` : ' · open'}</span>
                                     </>}
