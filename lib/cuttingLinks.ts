@@ -19,10 +19,15 @@ export async function unlinkInstruction(
   appointmentId?: string,
   slotId?: string,
 ): Promise<UnlinkResult> {
+  // supabase-js stringifies a raw array/object value with String() before
+  // sending it, which for a jsonb column produces the literal text
+  // "{[object Object]}" instead of JSON — Postgres then rejects it with
+  // "invalid input syntax for type json". Pre-serializing sidesteps that
+  // (Charlie, 2026-08-18 — surfaced as a raw Postgres error in the UI).
   const { data: appts, error: findErr } = await supabase
     .from('harvest_appointments')
     .select('id, customers')
-    .contains('customers', [{ linked_cutting_instruction_id: id }])
+    .contains('customers', JSON.stringify([{ linked_cutting_instruction_id: id }]))
   if (findErr) return { error: findErr.message, remaining: -1 }
 
   const all = appts ?? []
