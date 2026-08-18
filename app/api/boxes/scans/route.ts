@@ -5,6 +5,29 @@ import { supabase } from '@/lib/supabase'
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const box_id = searchParams.get('box_id')
+
+  // Whole session at once, for the scanner's still-to-pack list — it has to
+  // count what went into boxes that were closed hours ago, not just the one
+  // open on the bench.
+  const customer_name = searchParams.get('customer_name')
+  const date          = searchParams.get('date')
+  if (!box_id && customer_name && date) {
+    const boxes = await supabase
+      .from('boxes')
+      .select('id, box_number')
+      .eq('customer_name', customer_name)
+      .eq('pack_date', date)
+    const ids = (boxes.data ?? []).map(b => b.id)
+    if (!ids.length) return NextResponse.json([])
+    const { data, error } = await supabase
+      .from('box_scans')
+      .select('*')
+      .in('box_id', ids)
+      .order('created_at', { ascending: true })
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json(data)
+  }
+
   if (!box_id) return NextResponse.json({ error: 'box_id required' }, { status: 400 })
 
   const { data, error } = await supabase

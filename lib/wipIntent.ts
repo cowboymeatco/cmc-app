@@ -71,7 +71,7 @@ export function parseSmokehouseOrders(data: Record<string, unknown> | null | und
   return orders
 }
 
-export interface CICard { data: Record<string, unknown>; customerId: string | null }
+export interface CICard { data: Record<string, unknown>; customerId: string | null; species?: string | null }
 
 const cardEmail = (c: CICard) => String(c.data.customerEmail ?? '').trim().toLowerCase()
 

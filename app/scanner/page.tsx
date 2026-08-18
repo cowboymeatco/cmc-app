@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { isCureTagNumber, type ProcessingInput, type CureTag } from '@/lib/types'
 import { isoDate } from '@/lib/dates'
@@ -103,6 +103,28 @@ interface RetailOrderLite {
   id: string; customer_name: string; due_date: string; status: string
   fulfillment_type?: string; notes?: string | null
   retail_order_items?: RetailOrderItem[]
+}
+
+// A line on the customer's packaging sheet, and what the scale has been told
+// answers it.
+interface ExpectedLine {
+  key:     string
+  section: string
+  cut:     string
+  spec:    string
+  isGrind: boolean
+  writeIn: boolean
+  card:    number
+}
+interface PluLink { species: string; cut_key: string; plu_number: string; item_name: string | null }
+interface ExpectedCard {
+  found:   boolean
+  via:     string
+  name:    string
+  cards:   number
+  species: string[]
+  lines:   ExpectedLine[]
+  links:   PluLink[]
 }
 
 interface ScanLine {
@@ -484,6 +506,9 @@ export default function ScannerPage() {
   const [sessionQuery,     setSessionQuery]     = useState('')
   const [statusFilter,     setStatusFilter]     = useState<SessionStatus | 'all'>('all')
   const [sharedYield,      setSharedYield]      = useState<SharedYield | null>(null)
+  const [expected,     setExpected]     = useState<ExpectedCard | null>(null)
+  const [sessionScans, setSessionScans] = useState<ScanLine[]>([])
+  const [linkingPlu,   setLinkingPlu]   = useState<{ plu: string; name: string } | null>(null)
   const [mergeSource,      setMergeSource]      = useState<SessionWithStats | null>(null)
   const [mergeBusy,        setMergeBusy]        = useState(false)
 
@@ -596,6 +621,116 @@ export default function ScannerPage() {
       setSharedYield(d?.shared ? d as SharedYield : null)
     } catch { setSharedYield(null) }
   }, [])
+
+  // ── Still to pack ─────────────────────────────────────────────────────────
+  // The cutting instruction says what this animal owes; the scale says what has
+  // been packed. The two only meet through a PLU that somebody has linked to a
+  // line on the card — a guess here would tick off a cut that never got packed,
+  // which is the one thing this list exists to catch (Charlie, 2026-08-18).
+  const loadExpected = useCallback(async (cust: string, dt: string) => {
+    try {
+      const res = await fetch(`/api/processing/expected?customer_name=${encodeURIComponent(cust)}&date=${dt}`)
+      const d   = await res.json()
+      setExpected(d?.found ? d as ExpectedCard : null)
+    } catch { setExpected(null) }
+  }, [])
+
+  // Every scan in the session, not just the open box — half of what the card
+  // owes is usually sitting in boxes that were closed and taped an hour ago.
+  const loadSessionScans = useCallback(async (cust: string, dt: string) => {
+    try {
+      const res = await fetch(`/api/boxes/scans?customer_name=${encodeURIComponent(cust)}&date=${dt}`)
+      const d   = await res.json()
+      setSessionScans(Array.isArray(d) ? d as ScanLine[] : [])
+    } catch { setSessionScans([]) }
+  }, [])
+
+  useEffect(() => {
+    if (!started || !customer || !date) { setExpected(null); setLinkingPlu(null); return }
+    loadExpected(customer, date)
+  }, [started, customer, date, loadExpected])
+
+  // Single scans keep the tally up to date as they land; anything that moves a
+  // whole box — closing one, deleting one, repacking one — re-reads it. The
+  // slow poll is for the other bench: two stations pack one animal, and a list
+  // of what is still missing is worth nothing if it only knows about this
+  // screen's own scans.
+  useEffect(() => {
+    if (!started || !customer || !date) { setSessionScans([]); return }
+    loadSessionScans(customer, date)
+    const iv = setInterval(() => {
+      if (document.visibilityState === 'visible') loadSessionScans(customer, date)
+    }, 20000)
+    return () => clearInterval(iv)
+  }, [started, customer, date, boxes.length, activeBox?.id, loadSessionScans])
+
+  // PLU → the cut lines it has been linked to. A PLU can serve more than one
+  // line (one "GROUND BEEF 1LB" answers both halves of a split order) and a
+  // line can be served by more than one PLU (1 lb and 2 lb packs of the same
+  // thing), so this is a list either way.
+  const keysForPlu = useMemo(() => {
+    const m = new Map<string, string[]>()
+    for (const l of expected?.links ?? []) {
+      const arr = m.get(l.plu_number) ?? []
+      arr.push(l.cut_key)
+      m.set(l.plu_number, arr)
+    }
+    return m
+  }, [expected])
+
+  const packedByKey = useMemo(() => {
+    const m = new Map<string, { pkgs: number; lbs: number }>()
+    for (const sc of sessionScans) {
+      for (const key of keysForPlu.get(sc.plu_number) ?? []) {
+        const cur = m.get(key) ?? { pkgs: 0, lbs: 0 }
+        cur.pkgs += 1
+        cur.lbs  += Number(sc.weight_lbs) || 0
+        m.set(key, cur)
+      }
+    }
+    return m
+  }, [sessionScans, keysForPlu])
+
+  // Everything that has come over the scale this session, by product. The ones
+  // no line has claimed sort to the top, because those are the ones asking a
+  // question — but a PLU stays tappable after it is linked, since one product
+  // can answer two lines (the same cubed steak comes off the top round and the
+  // bottom round both).
+  const scanTally = useMemo(() => {
+    const m = new Map<string, { plu: string; name: string; pkgs: number; lbs: number; keys: string[] }>()
+    for (const sc of sessionScans) {
+      const cur = m.get(sc.plu_number)
+        ?? { plu: sc.plu_number, name: sc.item_name, pkgs: 0, lbs: 0, keys: keysForPlu.get(sc.plu_number) ?? [] }
+      cur.pkgs += 1
+      cur.lbs  += Number(sc.weight_lbs) || 0
+      m.set(sc.plu_number, cur)
+    }
+    return [...m.values()].sort((a, b) =>
+      (a.keys.length ? 1 : 0) - (b.keys.length ? 1 : 0) || b.pkgs - a.pkgs)
+  }, [sessionScans, keysForPlu])
+  const unclaimedCount = scanTally.filter(t => !t.keys.length).length
+
+  const expectedKeys   = useMemo(() => [...new Set((expected?.lines ?? []).map(l => l.key))], [expected])
+  const packedKeyCount = expectedKeys.filter(k => (packedByKey.get(k)?.pkgs ?? 0) > 0).length
+
+  // Linking is the one moment a person tells the system something it could not
+  // work out for itself, so it happens on the bench, in two taps: the PLU, then
+  // the line it belongs to.
+  async function linkPluToCut(plu: string, itemName: string, cutKey: string, species: string) {
+    setLinkingPlu(null)
+    await fetch('/api/processing/expected', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ species, cut_key: cutKey, plu_number: plu, item_name: itemName }),
+    }).catch(() => {})
+    if (customer && date) loadExpected(customer, date)
+  }
+
+  async function unlinkPlu(plu: string, cutKey: string, species: string) {
+    await fetch(`/api/processing/expected?species=${encodeURIComponent(species)}&cut_key=${encodeURIComponent(cutKey)}&plu_number=${encodeURIComponent(plu)}`,
+      { method: 'DELETE' }).catch(() => {})
+    if (customer && date) loadExpected(customer, date)
+  }
 
   useEffect(() => {
     fetch('/api/processing')
@@ -729,6 +864,7 @@ export default function ScannerPage() {
       if (!res.ok) throw new Error(await res.text())
       const scan: ScanLine = await res.json()
       setScans(prev => [scan, ...prev])
+      setSessionScans(prev => [...prev, scan])
       if (retiredName || !pluMapRef.current[plu]) {
         // Scan is saved (the meat is in the box), but this PLU was deleted from
         // the app — the scale should no longer have it.
@@ -1292,6 +1428,7 @@ export default function ScannerPage() {
   async function removeScan(id: string) {
     await fetch(`/api/boxes/scans?id=${id}`, { method: 'DELETE' })
     setScans(prev => prev.filter(s => s.id !== id))
+    setSessionScans(prev => prev.filter(s => s.id !== id))
   }
 
   // ── Delete a box (and all its scans) ─────────────────────────────────────────
@@ -1490,6 +1627,7 @@ export default function ScannerPage() {
       if (!res.ok) throw new Error(await res.text())
       const scan: ScanLine = await res.json()
       setScans(prev => [scan, ...prev])
+      setSessionScans(prev => [...prev, scan])
       if (!pluMapRef.current[plu]) {
         setLastKind('warn')
         setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb  —  DELETED PLU ${plu}: remove it from the scale`)
@@ -2418,7 +2556,11 @@ export default function ScannerPage() {
       </div>
 
       {/* ── Main content ── */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '1rem 1.5rem', gap: '0.85rem', overflow: 'hidden', minHeight: 0 }}>
+      {/* The scan feed no longer runs the full width of the monitor: the
+          weights land near the middle and the customer's outstanding cuts
+          take the right-hand side (Charlie, 2026-08-18). */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '1rem 1.5rem', gap: '0.85rem', overflow: 'hidden', minHeight: 0, minWidth: 0 }}>
 
         {/* Scan input */}
         <div
@@ -2865,6 +3007,148 @@ export default function ScannerPage() {
           </span>
         </div>
 
+      </div>
+      {/* ── Still to pack ─────────────────────────────────────────────────
+          The customer's packaging sheet, live. A line only crosses itself off
+          when a PLU that has been linked to it comes over the scale, so what
+          is left standing is genuinely what is left to pack. */}
+      {expected && (
+        <div style={{
+          width: 400, flexShrink: 0, display: 'flex', flexDirection: 'column',
+          borderLeft: '1px solid rgba(166,120,90,0.25)', background: 'rgba(0,0,0,0.18)',
+          padding: '1rem 1rem 0.75rem', gap: '0.6rem', minHeight: 0,
+        }}>
+          <div style={{ flexShrink: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+              <span style={{ color: C.tan, fontSize: '0.78rem', fontWeight: 700, letterSpacing: '0.12em' }}>
+                STILL TO PACK
+              </span>
+              <span style={{ color: packedKeyCount === expectedKeys.length ? C.green : C.cream, fontSize: '0.9rem', fontWeight: 700, fontFamily: 'monospace' }}>
+                {packedKeyCount}/{expectedKeys.length}
+              </span>
+            </div>
+            {/* A name match is a guess the crew should be able to see, the same
+                way the WIP tag prints how it matched. */}
+            <div style={{ color: C.lightBrown, fontSize: '0.68rem', marginTop: '0.15rem' }}>
+              {expected.name}{expected.cards > 1 ? ` · ${expected.cards} cards` : ''} · matched on {expected.via}
+            </div>
+          </div>
+
+          {linkingPlu && (
+            <div style={{ flexShrink: 0, background: 'rgba(201,168,130,0.14)', border: '1px solid rgba(201,168,130,0.5)', borderRadius: 4, padding: '0.5rem 0.6rem' }}>
+              <div style={{ color: C.tan, fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.06em' }}>
+                TAP THE LINE {linkingPlu.name} BELONGS TO
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.25rem' }}>
+                <span style={{ color: C.lightBrown, fontSize: '0.72rem' }}>PLU {linkingPlu.plu} — remembered for every card after this one</span>
+                <button onClick={() => setLinkingPlu(null)}
+                  style={{ background: 'transparent', border: '1px solid rgba(166,120,90,0.4)', borderRadius: 3, color: C.lightBrown, fontSize: '0.7rem', padding: '0.15rem 0.5rem', cursor: 'pointer' }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+            {(() => {
+              const species = expected.species[0] ?? 'beef'
+              let section = ''
+              return expected.lines.map((l, i) => {
+                const packed = packedByKey.get(l.key)
+                const done   = (packed?.pkgs ?? 0) > 0
+                const head   = l.section !== section ? (section = l.section) : null
+                return (
+                  <div key={`${l.card}-${l.key}-${i}`}>
+                    {head && (
+                      <div style={{ color: C.tan, fontSize: '0.64rem', fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', margin: '0.7rem 0 0.25rem', borderBottom: '1px solid rgba(166,120,90,0.2)', paddingBottom: '0.15rem' }}>
+                        {head}
+                      </div>
+                    )}
+                    <div
+                      onClick={() => { if (linkingPlu) linkPluToCut(linkingPlu.plu, linkingPlu.name, l.key, species) }}
+                      style={{
+                        display: 'flex', alignItems: 'baseline', gap: '0.4rem', padding: '0.22rem 0.35rem',
+                        borderRadius: 3, cursor: linkingPlu ? 'pointer' : 'default',
+                        background: linkingPlu ? 'rgba(201,168,130,0.08)' : 'transparent',
+                        opacity: done && !linkingPlu ? 0.45 : 1,
+                      }}
+                    >
+                      <span style={{ width: 14, flexShrink: 0, color: done ? C.green : C.lightBrown, fontSize: '0.8rem' }}>
+                        {done ? '✓' : '☐'}
+                      </span>
+                      <span style={{
+                        color: C.cream, fontSize: '0.86rem', fontWeight: 600,
+                        textDecoration: done && !linkingPlu ? 'line-through' : 'none',
+                      }}>
+                        {l.cut}
+                      </span>
+                      <span style={{ color: C.lightBrown, fontSize: '0.72rem', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {l.spec}
+                      </span>
+                      {done && (
+                        <span style={{ color: C.green, fontSize: '0.72rem', fontFamily: 'monospace', flexShrink: 0 }}>
+                          {packed!.pkgs}×{packed!.lbs.toFixed(1)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )
+              })
+            })()}
+
+            {/* What the scale has actually seen. Tap one to put it on a line —
+                two taps, once, and every card after this checks itself off. */}
+            {scanTally.length > 0 && (
+              <>
+                <div style={{ color: unclaimedCount ? C.yellow : C.lightBrown, fontSize: '0.64rem', fontWeight: 700, letterSpacing: '0.14em', margin: '0.9rem 0 0.25rem', borderBottom: `1px solid ${unclaimedCount ? 'rgba(217,119,6,0.3)' : 'rgba(166,120,90,0.2)'}`, paddingBottom: '0.15rem' }}>
+                  SCANNED{unclaimedCount ? ` · ${unclaimedCount} NOT ON THE LIST` : ''}
+                </div>
+                {scanTally.map(u => (
+                  <div key={u.plu}
+                    onClick={() => setLinkingPlu(linkingPlu?.plu === u.plu ? null : { plu: u.plu, name: u.name })}
+                    title={u.keys.length ? `Linked to ${u.keys.join(', ')} — tap to link it to another line too` : 'Tap, then tap the cut this is'}
+                    style={{
+                      display: 'flex', alignItems: 'baseline', gap: '0.4rem', padding: '0.22rem 0.35rem',
+                      borderRadius: 3, cursor: 'pointer',
+                      background: linkingPlu?.plu === u.plu ? 'rgba(201,168,130,0.2)' : 'transparent',
+                      opacity: u.keys.length ? 0.55 : 1,
+                    }}>
+                    <span style={{ width: 14, flexShrink: 0, color: u.keys.length ? C.green : C.yellow, fontSize: '0.8rem' }}>
+                      {u.keys.length ? '✓' : '⚯'}
+                    </span>
+                    <span style={{ color: C.cream, fontSize: '0.82rem', fontWeight: 600, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {u.name}
+                    </span>
+                    <span style={{ color: C.lightBrown, fontSize: '0.7rem', fontFamily: 'monospace', flexShrink: 0 }}>
+                      {u.pkgs}×{u.lbs.toFixed(1)}
+                    </span>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+
+          {/* Undo a link made on the wrong line, without leaving the bench. */}
+          {(expected.links ?? []).length > 0 && (
+            <details style={{ flexShrink: 0 }}>
+              <summary style={{ color: C.lightBrown, fontSize: '0.68rem', cursor: 'pointer', listStyle: 'none' }}>
+                ⚯ {expected.links.length} PLU link{expected.links.length === 1 ? '' : 's'} learned
+              </summary>
+              <div style={{ maxHeight: 150, overflowY: 'auto', marginTop: '0.35rem' }}>
+                {expected.links.map(l => (
+                  <div key={`${l.species}-${l.cut_key}-${l.plu_number}`} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.7rem', color: C.lightBrown, padding: '0.12rem 0' }}>
+                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {l.item_name ?? `PLU ${l.plu_number}`} → {l.cut_key}
+                    </span>
+                    <button onClick={() => unlinkPlu(l.plu_number, l.cut_key, l.species)}
+                      style={{ background: 'transparent', border: 'none', color: '#e05555', fontSize: '0.72rem', cursor: 'pointer' }}>×</button>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
+      )}
       </div>
 
       {/* ── Box right-click menu ── */}
