@@ -3052,11 +3052,13 @@ export default function ScannerPage() {
           <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
             {(() => {
               const species = expected.species[0] ?? 'beef'
+              // Packed lines drop off the list entirely rather than just
+              // greying out — what's left standing is what's still owed, with
+              // nothing to read past to find it (Charlie, 2026-08-18).
+              const remaining = expected.lines.filter(l => (packedByKey.get(l.key)?.pkgs ?? 0) === 0)
               let section = ''
-              return expected.lines.map((l, i) => {
-                const packed = packedByKey.get(l.key)
-                const done   = (packed?.pkgs ?? 0) > 0
-                const head   = l.section !== section ? (section = l.section) : null
+              return remaining.map((l, i) => {
+                const head = l.section !== section ? (section = l.section) : null
                 return (
                   <div key={`${l.card}-${l.key}-${i}`}>
                     {head && (
@@ -3070,26 +3072,17 @@ export default function ScannerPage() {
                         display: 'flex', alignItems: 'baseline', gap: '0.4rem', padding: '0.22rem 0.35rem',
                         borderRadius: 3, cursor: linkingPlu ? 'pointer' : 'default',
                         background: linkingPlu ? 'rgba(201,168,130,0.08)' : 'transparent',
-                        opacity: done && !linkingPlu ? 0.45 : 1,
                       }}
                     >
-                      <span style={{ width: 14, flexShrink: 0, color: done ? C.green : C.lightBrown, fontSize: '0.8rem' }}>
-                        {done ? '✓' : '☐'}
+                      <span style={{ width: 14, flexShrink: 0, color: C.lightBrown, fontSize: '0.8rem' }}>
+                        ☐
                       </span>
-                      <span style={{
-                        color: C.cream, fontSize: '0.86rem', fontWeight: 600,
-                        textDecoration: done && !linkingPlu ? 'line-through' : 'none',
-                      }}>
+                      <span style={{ color: C.cream, fontSize: '0.86rem', fontWeight: 600 }}>
                         {l.cut}
                       </span>
                       <span style={{ color: C.lightBrown, fontSize: '0.72rem', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {l.spec}
                       </span>
-                      {done && (
-                        <span style={{ color: C.green, fontSize: '0.72rem', fontFamily: 'monospace', flexShrink: 0 }}>
-                          {packed!.pkgs}×{packed!.lbs.toFixed(1)}
-                        </span>
-                      )}
                     </div>
                   </div>
                 )
