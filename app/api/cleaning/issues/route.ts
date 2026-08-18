@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const body = await req.json()
   const {
-    description, reported_by, intent, area_id, equipment_id,
+    description, reported_by, intent, area_id, asset_id,
     severity, photo_url, page_url,
   } = body as Record<string, string | undefined>
 
@@ -53,10 +53,10 @@ export async function POST(req: NextRequest) {
     const { data } = await supabase.from('cleaning_areas').select('name').eq('id', area_id).single()
     areaName = (data?.name as string) ?? null
   }
-  if (equipment_id) {
+  if (asset_id) {
     const { data } = await supabase
-      .from('cleaning_equipment').select('name, area_id, cleaning_areas(name)')
-      .eq('id', equipment_id).single()
+      .from('assets').select('name, area_id, cleaning_areas(name)')
+      .eq('id', asset_id).single()
     equipName = (data?.name as string) ?? null
     if (!areaName && data?.cleaning_areas) {
       const a = data.cleaning_areas as { name: string } | { name: string }[]
@@ -72,7 +72,7 @@ export async function POST(req: NextRequest) {
       intent:         intent === 'miss' ? 'miss' : 'heads_up',
       severity:       severity === 'urgent' ? 'urgent' : 'normal',
       area_id:        area_id ?? null,
-      equipment_id:   equipment_id ?? null,
+      asset_id:   asset_id ?? null,
       area_name:      areaName,
       equipment_name: equipName,
       photo_url:      photo_url ?? null,
@@ -136,7 +136,7 @@ export async function PATCH(req: NextRequest) {
       .from('cleaning_shift_items')
       .insert([{
         shift_id:       shift.id,
-        equipment_id:   issue.equipment_id,
+        asset_id:   issue.asset_id,
         title:          issue.description,
         detail:         `Reported by ${issue.reported_by}`,
         area_name:      issue.area_name || 'Reported',

@@ -92,9 +92,9 @@ export async function PATCH(req: NextRequest) {
 // Something that needs doing tonight but isn't on the template.
 export async function POST(req: NextRequest) {
   const body = await req.json()
-  const { shift_id, title, detail, area_name, equipment_id, equipment_name, by } = body as {
+  const { shift_id, title, detail, area_name, asset_id, equipment_name, by } = body as {
     shift_id?: string; title?: string; detail?: string; area_name?: string
-    equipment_id?: string; equipment_name?: string; by?: string
+    asset_id?: string; equipment_name?: string; by?: string
   }
 
   if (!shift_id || !title?.trim()) {
@@ -115,7 +115,7 @@ export async function POST(req: NextRequest) {
       title:          title.trim(),
       detail:         detail?.trim() || (by?.trim() ? `Added by ${by.trim()}` : null),
       area_name:      area_name?.trim() || 'Added tonight',
-      equipment_id:   equipment_id ?? null,
+      asset_id:   asset_id ?? null,
       equipment_name: equipment_name ?? null,
       source:         'manual',
       sort_order:     ((last?.[0]?.sort_order as number) ?? 0) + 10,

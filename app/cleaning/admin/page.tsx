@@ -19,7 +19,7 @@ type Tab = 'tasks' | 'equipment' | 'map' | 'crew' | 'supplies' | 'suggestions'
 interface Area  { id: string; name: string; sort_order: number; cleaning_equipment: Equip[] }
 interface Equip { id: string; name: string; make_model: string | null; area_id?: string }
 interface Task {
-  id: string; area_id: string; equipment_id: string | null
+  id: string; area_id: string; asset_id: string | null
   title: string; detail: string | null; frequency: Frequency
   weekday: number | null; day_of_month: number | null
   production_triggers: string[] | null; requires_photo: boolean
@@ -239,7 +239,7 @@ function TaskEditor({ task, areas, onSave, onCancel }: {
       <Field label="Area">
         <select
           value={t.area_id ?? ''}
-          onChange={e => set({ area_id: e.target.value, equipment_id: null })}
+          onChange={e => set({ area_id: e.target.value, asset_id: null })}
           style={inputStyle}
         >
           <option value="">— pick an area —</option>
@@ -250,8 +250,8 @@ function TaskEditor({ task, areas, onSave, onCancel }: {
       {equipInArea.length > 0 && (
         <Field label="Equipment (optional — links to its procedure)">
           <select
-            value={t.equipment_id ?? ''}
-            onChange={e => set({ equipment_id: e.target.value || null })}
+            value={t.asset_id ?? ''}
+            onChange={e => set({ asset_id: e.target.value || null })}
             style={inputStyle}
           >
             <option value="">— none, this is an area job —</option>
@@ -553,7 +553,7 @@ function ProcedureEditor({ equipmentId, onBack, onError }: {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        equipment_id: equipmentId, phase,
+        asset_id: equipmentId, phase,
         instruction: text, caution: caution || undefined, photo_url: photo,
       }),
     })

@@ -69,7 +69,7 @@ async function buildFor(dateISO: string): Promise<{ items: BuiltItem[]; signals:
   const [tasksRes, areasRes, equipRes, signals, lastDone] = await Promise.all([
     supabase.from('cleaning_tasks').select('*').eq('active', true),
     supabase.from('cleaning_areas').select('id, name, sort_order').eq('active', true),
-    supabase.from('cleaning_equipment').select('id, name').eq('active', true),
+    supabase.from('assets').select('id, name').eq('active', true),
     getProductionSignals(dateISO),
     getLastDone(dateISO),
   ])

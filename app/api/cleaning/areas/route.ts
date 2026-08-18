@@ -3,29 +3,56 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
 // Areas — the rooms the crew walks, in the order they walk them.
-// GET returns each area with its equipment nested, because every screen that
+// GET returns each area with its machines nested, because every screen that
 // wants one wants the other.
+//
+// The machines come from `assets`, not the old cleaning_equipment table: a
+// machine is one record carrying its cleaning procedure, its service history
+// AND its cost, so the plant walk and the cleaning module have to be looking
+// at the same row. Filtered to cleanable, since a truck and a leasehold
+// improvement are assets but are not on anyone's nightly list.
+//
+// Still returned under the key `cleaning_equipment` so existing callers keep
+// working — the shape is what they depend on, not the table behind it.
 
 export async function GET(req: NextRequest) {
   const includeInactive = new URL(req.url).searchParams.get('all') === '1'
 
   let q = supabase
     .from('cleaning_areas')
-    .select('*, cleaning_equipment(id, name, make_model, sort_order, active, notes)')
+    .select('*, assets(id, name, make, model, status, active, cleanable, notes)')
     .order('sort_order', { ascending: true })
   if (!includeInactive) q = q.eq('active', true)
 
   const { data, error } = await q
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  // Nested rows come back unordered; sort here so every caller doesn't have to.
-  type Equip = { sort_order: number; name: string; active: boolean }
-  const rows = (data ?? []).map(a => ({
-    ...a,
-    cleaning_equipment: ((a.cleaning_equipment ?? []) as Equip[])
+  type AssetRow = {
+    id: string; name: string; make: string | null; model: string | null
+    status: string; active: boolean; cleanable: boolean; notes: string | null
+  }
+  const rows = (data ?? []).map(a => {
+    const machines = ((a.assets ?? []) as AssetRow[])
+      // Filtered here rather than in the query: an inner join on cleanable
+      // would drop every room that has no machines yet, and an empty room
+      // still has to appear on the list.
+      .filter(e => e.cleanable)
       .filter(e => includeInactive || e.active)
-      .sort((x, y) => x.sort_order - y.sort_order || x.name.localeCompare(y.name)),
-  }))
+      .sort((x, y) => x.name.localeCompare(y.name))
+      .map(e => ({
+        id: e.id,
+        name: e.name,
+        // Collapsed to the single field the cleaning screens display.
+        make_model: [e.make, e.model].filter(Boolean).join(' ') || null,
+        status: e.status,
+        active: e.active,
+        notes: e.notes,
+      }))
+    // Drop the raw nested key; callers get the shaped `cleaning_equipment`.
+    const area = { ...(a as Record<string, unknown>) }
+    delete area.assets
+    return { ...area, cleaning_equipment: machines }
+  })
 
   return NextResponse.json(rows)
 }

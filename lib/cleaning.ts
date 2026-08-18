@@ -86,7 +86,7 @@ export interface CleaningEquipment {
 
 export interface CleaningStep {
   id: string
-  equipment_id: string
+  asset_id: string
   phase: Phase
   step_no: number
   instruction: string
@@ -98,7 +98,7 @@ export interface CleaningStep {
 export interface CleaningTask {
   id: string
   area_id: string
-  equipment_id: string | null
+  asset_id: string | null
   title: string
   detail: string | null
   sort_order: number
@@ -119,7 +119,7 @@ export interface CleaningShiftItem {
   id: string
   shift_id: string
   task_id: string | null
-  equipment_id: string | null
+  asset_id: string | null
   title: string
   detail: string | null
   area_name: string
@@ -276,11 +276,11 @@ export function buildShiftItems(input: BuildInput): BuiltItem[] {
 
   return due.map((t, i) => ({
     task_id:        t.id,
-    equipment_id:   t.equipment_id,
+    asset_id:       t.asset_id,
     title:          t.title,
     detail:         t.detail,
     area_name:      areaById.get(t.area_id)?.name ?? 'Unassigned',
-    equipment_name: t.equipment_id ? equipById.get(t.equipment_id)?.name ?? null : null,
+    equipment_name: t.asset_id ? equipById.get(t.asset_id)?.name ?? null : null,
     requires_photo: t.requires_photo,
     input_type:     t.input_type,
     input_label:    t.input_label,
