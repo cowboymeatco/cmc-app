@@ -353,3 +353,87 @@ export function shiftDateFor(now: Date, todayISO: string): string {
 }
 
 export const CLEANING_PHOTO_BUCKET = 'cleaning-photos'
+
+// ── Plant map ───────────────────────────────────────────────────────────
+
+export interface AreaGeometry {
+  map_x: number | null
+  map_y: number | null
+  map_w: number | null
+  map_h: number | null
+  map_color: string | null
+}
+
+export interface MapSettings {
+  background_url: string | null
+  background_alpha: number
+  canvas_w: number
+  canvas_h: number
+}
+
+/**
+ * What a room is doing right now, in one word.
+ *
+ * Ordered by what should pull the eye first: a flagged problem beats an
+ * unfinished room, which beats a finished one. `untracked` is an honest fourth
+ * state — an area with nothing on tonight's list is not "clean", it's simply
+ * not being asked about, and colouring it green would be a lie.
+ */
+export type AreaState = 'flagged' | 'pending' | 'partial' | 'done' | 'untracked'
+
+export const AREA_STATE_LABEL: Record<AreaState, string> = {
+  flagged:   'Problem flagged',
+  pending:   'Not started',
+  partial:   'In progress',
+  done:      'Done',
+  untracked: 'Nothing scheduled',
+}
+
+/**
+ * Map colours. Deliberately not red/green alone — roughly one man in twelve
+ * can't separate those, and this is a wall-glance tool. Each state also differs
+ * in lightness, and the map pairs every colour with a text label and an icon,
+ * so colour is never the only carrier of meaning.
+ */
+export const AREA_STATE_COLOR: Record<AreaState, string> = {
+  flagged:   '#F59E0B',
+  // Pending is the state the map exists to surface — "work still to do here" —
+  // so it gets the lighter tan rather than the dark brown that reads as
+  // background on a dark page. The first draft used #75471B and an untouched
+  // room was nearly invisible, which is exactly backwards.
+  pending:   '#A6785A',
+  partial:   '#60A5FA',
+  done:      '#4CAF50',
+  untracked: '#3A2415',
+}
+
+export function areaState(items: Pick<CleaningShiftItem, 'status'>[]): AreaState {
+  if (items.length === 0) return 'untracked'
+  if (items.some(i => i.status === 'issue')) return 'flagged'
+  const answered = items.filter(i => i.status !== 'pending').length
+  if (answered === 0)            return 'pending'
+  if (answered < items.length)   return 'partial'
+  return 'done'
+}
+
+/**
+ * Which areas saw production today.
+ *
+ * Derived from the checklist rather than a hardcoded signal→room table: an
+ * area counts as used if any of its own tasks names a trigger that fired. That
+ * way adding a smokehouse task with a `smoke` trigger lights the smokehouse on
+ * the map with no code change, and the map can't drift out of step with the
+ * list the way a second mapping would.
+ */
+export function areasInUse(
+  tasks: Pick<CleaningTask, 'area_id' | 'production_triggers'>[],
+  signals: ProductionSignal[],
+): Set<string> {
+  const used = new Set<string>()
+  for (const t of tasks) {
+    if (t.production_triggers?.some(s => signals.includes(s as ProductionSignal))) {
+      used.add(t.area_id)
+    }
+  }
+  return used
+}

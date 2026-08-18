@@ -5,6 +5,7 @@ import {
   type Frequency, type ProductionSignal, type Phase, type CleaningStep,
 } from '@/lib/cleaning'
 import { C, TAP, CleaningHeader, Banner, BigButton, PhotoButton, inputStyle, cardStyle } from '../ui'
+import MapEditor from './MapEditor'
 
 // Where the checklist and the procedures get written.
 //
@@ -13,7 +14,7 @@ import { C, TAP, CleaningHeader, Banner, BigButton, PhotoButton, inputStyle, car
 // front of a machine with the parts in pieces, which is the only time the steps
 // are actually fresh in someone's mind.
 
-type Tab = 'tasks' | 'equipment' | 'crew' | 'supplies' | 'suggestions'
+type Tab = 'tasks' | 'equipment' | 'map' | 'crew' | 'supplies' | 'suggestions'
 
 interface Area  { id: string; name: string; sort_order: number; cleaning_equipment: Equip[] }
 interface Equip { id: string; name: string; make_model: string | null; area_id?: string }
@@ -54,7 +55,7 @@ export default function AdminPage() {
   useEffect(() => { loadAreas() }, [loadAreas])
 
   const TABS: [Tab, string][] = [
-    ['tasks', 'Checklist'], ['equipment', 'Equipment'],
+    ['tasks', 'Checklist'], ['equipment', 'Equipment'], ['map', 'Map'],
     ['crew', 'Crew'], ['supplies', 'Supplies'], ['suggestions', 'Notes'],
   ]
 
@@ -85,6 +86,7 @@ export default function AdminPage() {
 
         {tab === 'tasks'       && <TasksTab areas={areas} onError={setError} />}
         {tab === 'equipment'   && <EquipmentTab areas={areas} reload={loadAreas} onError={setError} />}
+        {tab === 'map'         && <MapEditor onError={setError} />}
         {tab === 'crew'        && <CrewTab onError={setError} />}
         {tab === 'supplies'    && <SuppliesTab onError={setError} />}
         {tab === 'suggestions' && <SuggestionsTab onError={setError} />}

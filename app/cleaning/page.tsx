@@ -131,6 +131,12 @@ export default function CleaningHub() {
         {/* The rest */}
         <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr 1fr' }}>
           <HubTile
+            href="/cleaning/map"
+            icon="🗺️"
+            title="Plant map"
+            sub="Where the work is"
+          />
+          <HubTile
             href="/cleaning/equipment"
             icon="🔧"
             title="Equipment"
