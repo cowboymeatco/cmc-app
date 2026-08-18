@@ -15,15 +15,29 @@ const C = {
   amber:      '#F59E0B',
 }
 
+// Three destinations behind one button.
+//
+// 'bug' and 'idea' are about the software and go to Charlie's punch list.
+// 'cleaning' is about the plant — buildup on a machine, something the night
+// crew missed — and goes to the cleaning issue inbox instead. Same button
+// because the day crew spots these while they're on /processing or the
+// scanner, not while browsing a cleaning menu, and a second floating button
+// would be clutter competing with this one.
+type ReportType = 'bug' | 'idea' | 'cleaning'
+
 export default function FeedbackButton() {
   const pathname = usePathname()
   const [open, setOpen]             = useState(false)
-  const [type, setType]             = useState<'bug' | 'idea'>('bug')
+  const [type, setType]             = useState<ReportType>('bug')
   const [description, setDescription] = useState('')
   const [submitter, setSubmitter]   = useState('')
   const [sending, setSending]       = useState(false)
   const [sent, setSent]             = useState(false)
   const [error, setError]           = useState<string | null>(null)
+  // Only meaningful for a cleaning report: is this a heads-up for tonight, or
+  // something last night's crew missed?
+  const [intent, setIntent]         = useState<'heads_up' | 'miss'>('heads_up')
+  const [urgent, setUrgent]         = useState(false)
 
   // Install client telemetry once (console errors, click/fetch/nav breadcrumbs).
   useEffect(() => { installTelemetry() }, [])
@@ -42,6 +56,46 @@ export default function FeedbackButton() {
     if (!ready) return
     setSending(true)
     setError(null)
+
+    // A plant problem is not an app bug. It goes to the crew who can actually
+    // fix it, and carries none of the browser telemetry — that's diagnostic
+    // context for software, and noise on a report about a dirty grinder.
+    if (type === 'cleaning') {
+      try {
+        const res = await fetch('/api/cleaning/issues', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            description: description.trim(),
+            reported_by: submitter.trim(),
+            intent,
+            severity:    urgent ? 'urgent' : 'normal',
+            page_url:    pathname,
+          }),
+        })
+        if (!res.ok) {
+          const body = await res.json().catch(() => null)
+          setError(body?.error ?? `Didn't send (error ${res.status}) — try again.`)
+          return
+        }
+        setSent(true)
+        setTimeout(() => {
+          setOpen(false)
+          setSent(false)
+          setDescription('')
+          setSubmitter('')
+          setType('bug')
+          setIntent('heads_up')
+          setUrgent(false)
+        }, 1500)
+      } catch {
+        setError("Didn't send — check your connection and try again.")
+      } finally {
+        setSending(false)
+      }
+      return
+    }
+
     try {
       const telemetry = getTelemetry()
       const res = await fetch('/api/feedback', {
@@ -137,7 +191,9 @@ export default function FeedbackButton() {
             } as React.CSSProperties}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ color: C.cream, fontWeight: 700, fontSize: 15 }}>Send Feedback</span>
+              <span style={{ color: C.cream, fontWeight: 700, fontSize: 15 }}>
+                {type === 'cleaning' ? 'Report a Cleaning Issue' : 'Send Feedback'}
+              </span>
               <button
                 onClick={() => setOpen(false)}
                 style={{ background: 'none', border: 'none', color: C.tan, cursor: 'pointer', fontSize: 18 }}
@@ -146,8 +202,8 @@ export default function FeedbackButton() {
               </button>
             </div>
 
-            <div style={{ display: 'flex', gap: 8 }}>
-              {(['bug', 'idea'] as const).map(t => (
+            <div style={{ display: 'flex', gap: 6 }}>
+              {(['bug', 'idea', 'cleaning'] as const).map(t => (
                 <button
                   key={t}
                   onClick={() => setType(t)}
@@ -159,19 +215,71 @@ export default function FeedbackButton() {
                     background: type === t ? C.medBrown : 'transparent',
                     color:      type === t ? C.cream : C.tan,
                     cursor:     'pointer',
-                    fontSize:   13,
+                    fontSize:   12,
                     fontWeight: type === t ? 700 : 400,
                   } as React.CSSProperties}
                 >
-                  {t === 'bug' ? '🐛 Bug' : '💡 Idea'}
+                  {t === 'bug' ? '🐛 Bug' : t === 'idea' ? '💡 Idea' : '🧽 Cleaning'}
                 </button>
               ))}
             </div>
 
+            {type === 'cleaning' && (
+              <>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {([
+                    ['heads_up', 'For tonight'],
+                    ['miss',     'Missed last night'],
+                  ] as const).map(([val, label]) => (
+                    <button
+                      key={val}
+                      onClick={() => setIntent(val)}
+                      style={{
+                        flex:       1,
+                        padding:    '6px 0',
+                        borderRadius: 6,
+                        border:     `1px solid ${intent === val ? C.amber : C.medBrown}`,
+                        background: intent === val ? C.medBrown : 'transparent',
+                        color:      intent === val ? C.cream : C.tan,
+                        cursor:     'pointer',
+                        fontSize:   12,
+                        fontWeight: intent === val ? 700 : 400,
+                      } as React.CSSProperties}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Urgent texts someone immediately, so it's a deliberate
+                    toggle rather than a default anyone can leave switched on. */}
+                <button
+                  onClick={() => setUrgent(!urgent)}
+                  style={{
+                    padding:      '8px 0',
+                    borderRadius: 6,
+                    border:       `1px solid ${urgent ? C.red : C.medBrown}`,
+                    background:   urgent ? `${C.red}33` : 'transparent',
+                    color:        urgent ? C.cream : C.tan,
+                    cursor:       'pointer',
+                    fontSize:     12,
+                    fontWeight:   urgent ? 700 : 400,
+                  } as React.CSSProperties}
+                >
+                  {urgent ? '🚨 Urgent — texts right away' : 'Mark urgent'}
+                </button>
+              </>
+            )}
+
             <textarea
               value={description}
               onChange={e => setDescription(e.target.value)}
-              placeholder={type === 'bug' ? 'What went wrong?' : 'What would make this better?'}
+              placeholder={
+                type === 'bug'      ? 'What went wrong?' :
+                type === 'idea'     ? 'What would make this better?' :
+                intent === 'miss'   ? "What wasn't clean?" :
+                                      'What needs cleaning or fixing tonight?'
+              }
               rows={4}
               style={{
                 background:  C.dark,
@@ -233,7 +341,9 @@ export default function FeedbackButton() {
             )}
 
             <div style={{ fontSize: 11, color: C.lightBrown, textAlign: 'center' }}>
-              page: {pathname}
+              {type === 'cleaning'
+                ? 'Goes to the cleaning crew’s inbox'
+                : `page: ${pathname}`}
             </div>
           </div>
         </div>
