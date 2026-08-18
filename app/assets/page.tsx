@@ -93,8 +93,21 @@ export default function AssetRegister() {
             }}>
               {money(cov.unaccounted)}{' '}of fixed assets sits in pooled QuickBooks accounts
               with no individual item behind it. QuickBooks can say what it&apos;s worth in
-              total but not what it <em>is</em> — that only closes by walking the plant and
-              adding the machines here.
+              total but not what it <em>is</em>.
+              {/* Said plainly, because the bar does not move during a walk and
+                  that would otherwise read as the walk having achieved
+                  nothing. */}
+              <div style={{ marginTop: 8 }}>
+                Closing it is two jobs: <strong style={{ color: C.cream }}>walk the plant</strong> to
+                get the list of what exists, then <strong style={{ color: C.cream }}>assign value</strong> out
+                of the pooled accounts. Only the second moves this bar.
+              </div>
+              {cov.awaitingCost > 0 && (
+                <div style={{ marginTop: 8, color: C.amber }}>
+                  {cov.awaitingCost} captured{' '}
+                  {cov.awaitingCost === 1 ? 'asset is' : 'assets are'} waiting for a value.
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -106,6 +119,18 @@ export default function AssetRegister() {
           tell you what it&apos;s missing right now.
         </Banner>
       )}
+
+      {/* The walk is the way the gap above actually closes, so it's the
+          primary action on this page rather than a link in a menu. */}
+      <Link href="/assets/walk" style={{ textDecoration: 'none' }}>
+        <div style={{
+          marginTop: 16, minHeight: 56, borderRadius: 10, background: C.medBrown,
+          color: C.cream, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          gap: 8, fontSize: 16, fontWeight: 700,
+        }}>
+          🚶 Start a plant walk
+        </div>
+      </Link>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', margin: '22px 0 10px' }}>
         <span style={{ color: C.cream, fontSize: 16, fontWeight: 700 }}>

@@ -105,6 +105,19 @@ export interface Coverage {
   /** Value sitting in pooled accounts with no individual asset behind it. */
   unaccounted: number
   pct: number
+  /** Assets carrying a cost — the ones contributing to `registerNamed`. */
+  withCost: number
+  /**
+   * Assets that exist in the register but carry no cost yet.
+   *
+   * This number exists because closing the gap is two jobs, not one. The plant
+   * walk produces the inventory; assigning value out of the pooled accounts is
+   * a separate pass at a desk with the books. Without this figure the bar looks
+   * stuck after a full day's walking — every machine captured, none of them
+   * costed, coverage unmoved — which would read as the walk having achieved
+   * nothing.
+   */
+  awaitingCost: number
 }
 
 /**
@@ -126,16 +139,19 @@ export function coverage(
     .filter(a => a.balance > 0)
     .reduce((n, a) => n + a.balance, 0)
 
-  const registerNamed = assets
-    .filter(a => a.active && a.purchase_cost != null)
-    .reduce((n, a) => n + (a.purchase_cost ?? 0), 0)
+  const live   = assets.filter(a => a.active)
+  const costed = live.filter(a => a.purchase_cost != null)
 
-  const unaccounted = Math.max(0, booksGross - registerNamed)
+  const registerNamed = costed.reduce((n, a) => n + (a.purchase_cost ?? 0), 0)
+  const unaccounted   = Math.max(0, booksGross - registerNamed)
+
   return {
     booksGross,
     registerNamed,
     unaccounted,
     pct: booksGross === 0 ? 0 : Math.round((registerNamed / booksGross) * 100),
+    withCost:     costed.length,
+    awaitingCost: live.length - costed.length,
   }
 }
 
