@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { HarvestAppointment, HarvestLog, CarcassAssignment } from '@/lib/types'
 import AssignCarcassesModal from './AssignCarcassesModal'
 import {
-  type PriorityWeights, type ScheduleEntry, type BreakItem, type ListItem,
+  type PriorityWeights, type ScheduleEntry, type BreakItem, type ListItem, type FutureBooking,
   DEFAULT_WEIGHTS, WEIGHT_LABELS, buildEntries, loadScheduleData, uniqueCarcasses as uniqueOf,
   calcScore, speciesColor, speciesIcon, portionBadge, cutDateByKey, hangAtCut, hangColor,
   carcassTotals,
@@ -42,6 +42,9 @@ export default function CutScheduleTab() {
   const [appts,       setAppts]       = useState<HarvestAppointment[]>([])
   const [assignments, setAssignments] = useState<CarcassAssignment[]>([])
   const [assignModal, setAssignModal] = useState<{ appointments: HarvestAppointment[]; carcasses: HarvestLog[] } | null>(null)
+  // Booked animals not harvested yet — a heads-up rail, not part of the
+  // schedule itself. See lib/cutSchedule FutureBooking.
+  const [futureBookings, setFutureBookings] = useState<FutureBooking[]>([])
 
   const todayISO = isoDate()
 
@@ -49,10 +52,11 @@ export default function CutScheduleTab() {
   const loadAll = useCallback(async () => {
     setLoading(true)
     try {
-      const { logs, apptMap, instrIds, saved, assignments } = await loadScheduleData(todayISO)
+      const { logs, apptMap, instrIds, saved, assignments, futureBookings } = await loadScheduleData(todayISO)
       setLogs(logs)
       setAppts([...apptMap.values()])
       setAssignments(assignments)
+      setFutureBookings(futureBookings)
       setEntries(buildEntries(logs, apptMap, instrIds, saved, assignments, weights))
       setLoadError(false)
     } catch {
@@ -916,7 +920,7 @@ export default function CutScheduleTab() {
         whatever the last day break happened to be (Charlie, 2026-08-05). Drag
         one onto a row to slot it into that day; drag a scheduled row back here
         to take its day away again. */}
-    {!loading && carcasses.length > 0 && (
+    {!loading && (carcasses.length > 0 || futureBookings.length > 0) && (
       <aside
         onDragOver={e => { e.preventDefault(); setDragOver('__rail__') }}
         onDrop={handleDropToRail}
@@ -1009,6 +1013,56 @@ export default function CutScheduleTab() {
               ))}
             </div>
           </>
+        )}
+
+        {/* ── Upcoming bookings — booked, not harvested yet ──────────────────────
+            A staging view so the crew can see what's coming before it's even on
+            the rail. NOT draggable onto a cut day — there's no real carcass to
+            schedule yet. The moment Harvest logs the animal in, its appointment
+            drops off this list on its own (status moves off 'Booked') and the
+            real carcass appears in No Cut Day above — nothing to swap by hand. */}
+        {futureBookings.length > 0 && (
+          <div style={{ marginTop: '1rem', paddingTop: '0.85rem', borderTop: '1px solid rgba(166,120,90,0.2)' }}>
+            <div style={{
+              fontSize: '0.66rem', fontWeight: 700, letterSpacing: '0.09em', textTransform: 'uppercase',
+              color: C.lightBrown, marginBottom: '0.5rem',
+            }}>
+              🔮 Upcoming Bookings
+            </div>
+            <p style={{ fontSize: '0.68rem', color: C.lightBrown, lineHeight: 1.45, margin: '0 0 0.6rem' }}>
+              Booked, not harvested yet — shows up above for real once it&apos;s in the cooler.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+              {futureBookings.map(fb => (
+                <div
+                  key={fb.id}
+                  title="Not yet harvested — can't be scheduled to a cut day until it's in the cooler"
+                  style={{
+                    background: 'rgba(0,0,0,0.15)',
+                    border: `1px dashed ${speciesColor(fb.species)}66`,
+                    borderRadius: 4, padding: '0.45rem 0.55rem',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', minWidth: 0 }}>
+                    <span style={{
+                      fontWeight: 600, fontSize: '0.78rem', color: C.tan, minWidth: 0,
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                    }}>
+                      {fb.source || 'Booked'}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem', marginTop: 3, fontSize: '0.66rem', flexWrap: 'wrap' }}>
+                    <span style={{ color: speciesColor(fb.species), fontWeight: 700 }}>
+                      {speciesIcon(fb.species)} {fb.head_count} {fb.species}
+                    </span>
+                    <span style={{ color: C.lightBrown }}>
+                      {dateLabel(fb.harvest_date, { month: 'short', day: 'numeric' })}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         )}
       </aside>
     )}

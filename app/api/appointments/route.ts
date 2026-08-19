@@ -11,10 +11,13 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin'
 //   ?date=YYYY-MM-DD  â€” only that harvest date
 //   ?ids=a,b,c        â€” only those appointment ids (the cut schedule fetches
 //                       just the appointments its cooler carcasses reference)
+//   ?status=Booked    â€” only that status (the cut schedule's Upcoming
+//                       Bookings rail uses this for "not yet harvested")
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const date = searchParams.get('date')
   const idsParam = searchParams.get('ids')
+  const status = searchParams.get('status')
 
   let query = supabase
     .from('harvest_appointments')
@@ -28,6 +31,9 @@ export async function GET(req: NextRequest) {
     const ids = idsParam.split(',').map(s => s.trim()).filter(Boolean)
     if (ids.length === 0) return NextResponse.json([])
     query = query.in('id', ids)
+  }
+  if (status) {
+    query = query.eq('status', status)
   }
 
   const { data, error } = await query

@@ -252,16 +252,37 @@ export function portionBadge(p: string): { label: string; color: string } {
 // so nothing is serialized behind unrelated requests. Throws on a malformed
 // core response so callers show an error state instead of a falsely empty
 // cooler.
-export interface ScheduleData {
-  logs:        HarvestLog[]
-  apptMap:     Map<string, HarvestAppointment>
-  instrIds:    Set<string>
-  saved:       SavedItem[]   // already filtered to the live plan (planIsLive)
-  assignments: CarcassAssignment[]
+// A booked animal that hasn't been harvested yet — no carcass, no tag, no
+// weight, just what the appointment itself carries. Shown in the planner's
+// rail so the crew can see it coming; never draggable onto a cut day, because
+// there's no real carcass yet to schedule. It disappears from here (and the
+// real thing appears in the No Cut Day rail above) the moment Harvest logs it
+// in and its status moves off 'Booked' — the "exchange" happens for free,
+// nothing to reconcile (Charlie, 2026-08-19).
+export interface FutureBooking {
+  id:           string   // harvest_appointments.id
+  source:       string
+  species:      string
+  head_count:   number
+  harvest_date: string
 }
 
+export interface ScheduleData {
+  logs:            HarvestLog[]
+  apptMap:         Map<string, HarvestAppointment>
+  instrIds:        Set<string>
+  saved:           SavedItem[]   // already filtered to the live plan (planIsLive)
+  assignments:     CarcassAssignment[]
+  futureBookings:  FutureBooking[]
+}
+
+// How far out the Upcoming Bookings rail looks. Wide enough to plan around,
+// narrow enough to stay a near-term heads-up rather than the whole order book
+// (119 Booked appointments exist at any time; most are months out).
+const FUTURE_BOOKING_WINDOW_DAYS = 30
+
 export async function loadScheduleData(todayISO: string): Promise<ScheduleData> {
-  const [harvest, instrData, savedData] = await Promise.all([
+  const [harvest, instrData, savedData, futureApptData] = await Promise.all([
     fetch('/api/harvest?status=chilling').then(r => r.json()).then(async data => {
       if (!Array.isArray(data)) throw new Error('unexpected /api/harvest response')
       const logs    = data as HarvestLog[]
@@ -285,17 +306,31 @@ export async function loadScheduleData(todayISO: string): Promise<ScheduleData> 
     }),
     fetch('/api/cutting-instructions?ids_only=1').then(r => r.json()),
     fetch('/api/cut-schedule?latest=1').then(r => r.json()).catch(() => []),
+    fetch('/api/appointments?status=Booked').then(r => r.json()).catch(() => []),
   ])
   if (!Array.isArray(instrData)) {
     throw new Error('unexpected API response')
   }
   const savedAll = Array.isArray(savedData) ? (savedData as SavedItem[]) : []
+
+  const windowEnd = addDaysISO(todayISO, FUTURE_BOOKING_WINDOW_DAYS)
+  const futureBookings: FutureBooking[] = (Array.isArray(futureApptData) ? futureApptData as HarvestAppointment[] : [])
+    .filter(a => a.harvest_date >= todayISO && a.harvest_date <= windowEnd)
+    .map(a => ({
+      id:           a.id,
+      source:       a.source ?? '',
+      species:      a.species,
+      head_count:   a.head_count ?? 1,
+      harvest_date: a.harvest_date,
+    }))
+
   return {
     logs:        harvest.logs,
     assignments: harvest.assignments,
     apptMap:     new Map(harvest.appointments.map(a => [a.id, a])),
     instrIds:    new Set<string>((instrData as { id: string }[]).map(i => i.id)),
     saved:       planIsLive(savedAll, todayISO) ? savedAll : [],
+    futureBookings,
   }
 }
 
