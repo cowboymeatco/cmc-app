@@ -1,6 +1,7 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { projectedCutDate } from '@/lib/cutSchedule'
 
 export const dynamic = 'force-dynamic'
 
@@ -74,8 +75,9 @@ export async function GET(req: NextRequest) {
   if (!from || !to) return NextResponse.json({ error: 'from and to required' }, { status: 400 })
 
   const events: CalEvent[] = []
+  const todayISO = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Denver' })
 
-  const [recvAppts, boxes, appts, sessions, cooks, retail, planned, pickups, cutPlan] = await Promise.all([
+  const [recvAppts, boxes, appts, sessions, cooks, retail, planned, pickups, cutPlan, chillingLogs, futureAppts] = await Promise.all([
     // Receiving — animals scheduled to arrive, off the receiving calendar
     // (appointment.receive_date, default the day before harvest). Charlie:
     // "Receiving should come off of the receiving calendar."
@@ -121,6 +123,19 @@ export async function GET(req: NextRequest) {
       .order('schedule_date', { ascending: false })
       .order('manual_rank', { ascending: true })
       .limit(500),
+    // Projected cuts, source 1 — carcasses already in the cooler that the crew
+    // hasn't placed on a day yet. No date filter: the cooler is a small, bounded
+    // set and the projected date (not harvest_date) is what has to land in-window.
+    supabase.from('harvest_log')
+      .select('id, harvest_date, species, carcass_tag, producer, appointment_id, status')
+      .eq('status', 'chilling'),
+    // Projected cuts, source 2 — booked harvests that haven't happened yet, off
+    // the harvest calendar itself (Charlie: schedule future cuts off the harvest
+    // calendar). Only ones that could still project a cut day inside the window.
+    supabase.from('harvest_appointments')
+      .select('id, harvest_date, species, head_count, source, status')
+      .gt('harvest_date', todayISO)
+      .lte('harvest_date', to),
   ])
 
   // Recipe names for tagged cooks (small table — one fetch, mapped by key).
@@ -278,86 +293,129 @@ export async function GET(req: NextRequest) {
   const planDate = allPlan[0]?.schedule_date as string | undefined
   const plan = planDate ? allPlan.filter(r => r.schedule_date === planDate) : []
 
-  if (plan.length > 0) {
-    // Same rule the planner and crew view use (lib/cutSchedule planIsLive): a
-    // plan is live through the last day it describes. Past that it's a stale
-    // sequence, not a schedule, and must not be drawn on the calendar.
-    let lastDay = planDate ?? ''
+  // Same rule the planner and crew view use (lib/cutSchedule planIsLive): a
+  // plan is live through the last day it describes. Past that it's a stale
+  // sequence, not a schedule, and must not be drawn on the calendar — and its
+  // carcasses fall back to being un-placed, eligible for projection below.
+  let planLastDay = planDate ?? ''
+  for (const r of plan) {
+    const bd = day(r.break_date as string)
+    if (r.kind === 'break' && bd > planLastDay) planLastDay = bd
+  }
+  const planIsLiveNow = plan.length > 0 && planLastDay >= todayISO
+
+  // Carcasses the live plan has already placed on a day — excluded from the
+  // projection layer below so nothing shows twice.
+  const plannedLogIds = new Set<string>(
+    planIsLiveNow
+      ? plan.filter(r => r.kind !== 'break' && r.appointment_id).map(r => r.appointment_id as string)
+      : []
+  )
+
+  if (planIsLiveNow) {
+    // Carcass rows key on harvest_log_id (the column is named appointment_id
+    // for back-compat — see lib/cutSchedule ScheduleEntry).
+    const logIds = Array.from(new Set(
+      plan.filter(r => r.kind !== 'break' && r.appointment_id).map(r => r.appointment_id as string)
+    ))
+    const { data: planLogs } = logIds.length
+      ? await supabase.from('harvest_log')
+          .select('id, producer, species, carcass_tag, appointment_id')
+          .in('id', logIds)
+      : { data: [] }
+    const logById = new Map((planLogs ?? []).map(l => [l.id as string, l]))
+
+    // Buyer names live on the appointment's customers JSON, keyed by the
+    // customer slot id the plan row carries.
+    const planApptIds = Array.from(new Set(
+      (planLogs ?? []).map(l => l.appointment_id as string).filter(Boolean)
+    ))
+    const { data: planAppts } = planApptIds.length
+      ? await supabase.from('harvest_appointments').select('id, customers').in('id', planApptIds)
+      : { data: [] }
+    const custName = new Map<string, string>()
+    for (const a of planAppts ?? []) {
+      for (const c of (a.customers as { id?: string; customer_name?: string }[] | null) ?? []) {
+        if (c?.id) custName.set(c.id, (c.customer_name ?? '').trim())
+      }
+    }
+
+    // A split carcass is ONE plan row carrying one buyer's slot id, so
+    // naming the event off that id alone would drop the other half's buyer.
+    // The assignments know every portion — use them when there's more than
+    // one, so the calendar says what the schedule says.
+    const { data: planAssigns } = logIds.length
+      ? await supabase.from('carcass_assignments')
+          .select('harvest_log_id, customer_name')
+          .in('harvest_log_id', logIds)
+      : { data: [] }
+    const assignedNames = new Map<string, string[]>()
+    for (const a of planAssigns ?? []) {
+      const key = a.harvest_log_id as string
+      const nm  = ((a.customer_name as string) ?? '').trim()
+      if (!key || !nm) continue
+      const bucket = assignedNames.get(key)
+      if (bucket) { if (!bucket.includes(nm)) bucket.push(nm) }
+      else assignedNames.set(key, [nm])
+    }
+
+    let cutDay = planDate ?? ''
     for (const r of plan) {
-      const bd = day(r.break_date as string)
-      if (r.kind === 'break' && bd > lastDay) lastDay = bd
+      if (r.kind === 'break') {
+        const bd = day(r.break_date as string)
+        if (bd) cutDay = bd
+        continue
+      }
+      if (!cutDay || cutDay < from || cutDay > to) continue
+      const log    = logById.get(r.appointment_id as string)
+      const shared = assignedNames.get(r.appointment_id as string) ?? []
+      const name   = shared.length > 1
+        ? [...shared].sort((a, b) => a.localeCompare(b)).join(' + ')
+        : custName.get(r.appointment_customer_id as string) || (log?.producer as string) || ''
+      events.push({
+        id: `cut-${r.id}`, lane: 'processing', date: cutDay, planned: true,
+        title: `📋 ${name || 'Planned cut'}`,
+        subtitle: [log?.species, log?.carcass_tag ? `#${log.carcass_tag}` : '', 'planned']
+          .filter(Boolean).join(' · '),
+        href: '/processing',
+      })
     }
-    const todayISO = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Denver' })
+  }
 
-    if (lastDay >= todayISO) {
-      // Carcass rows key on harvest_log_id (the column is named appointment_id
-      // for back-compat — see lib/cutSchedule ScheduleEntry).
-      const logIds = Array.from(new Set(
-        plan.filter(r => r.kind !== 'break' && r.appointment_id).map(r => r.appointment_id as string)
-      ))
-      const { data: planLogs } = logIds.length
-        ? await supabase.from('harvest_log')
-            .select('id, producer, species, carcass_tag, appointment_id')
-            .in('id', logIds)
-        : { data: [] }
-      const logById = new Map((planLogs ?? []).map(l => [l.id as string, l]))
+  // ── Projected cuts — no crew plan yet, or not even harvested yet ───────────
+  // Charlie: schedule future cuts on the processing schedule off the harvest
+  // calendar. Everything above is either already scanned (processing_sessions)
+  // or already placed on a day by the crew (cut_schedule_items). This layer
+  // fills the gap so a "future cut" isn't invisible until someone opens the
+  // planner: a projected day = harvest_date + the species' typical hang
+  // (lib/cutSchedule DEFAULT_HANG_DAYS, off a year of real pack dates). It
+  // never overrides a manually placed day — plannedLogIds excludes those.
+  for (const log of chillingLogs.data ?? []) {
+    const logId = log.id as string
+    if (plannedLogIds.has(logId)) continue
+    const species = (log.species as string) || ''
+    const cutDay  = projectedCutDate(log.harvest_date as string, species)
+    if (cutDay < from || cutDay > to) continue
+    events.push({
+      id: `proj-${logId}`, lane: 'processing', date: cutDay, planned: true,
+      title: `🔮 ${log.producer || species || 'Projected cut'}`,
+      subtitle: [species, log.carcass_tag ? `#${log.carcass_tag}` : '', 'projected']
+        .filter(Boolean).join(' · '),
+      href: '/processing',
+    })
+  }
 
-      // Buyer names live on the appointment's customers JSON, keyed by the
-      // customer slot id the plan row carries.
-      const planApptIds = Array.from(new Set(
-        (planLogs ?? []).map(l => l.appointment_id as string).filter(Boolean)
-      ))
-      const { data: planAppts } = planApptIds.length
-        ? await supabase.from('harvest_appointments').select('id, customers').in('id', planApptIds)
-        : { data: [] }
-      const custName = new Map<string, string>()
-      for (const a of planAppts ?? []) {
-        for (const c of (a.customers as { id?: string; customer_name?: string }[] | null) ?? []) {
-          if (c?.id) custName.set(c.id, (c.customer_name ?? '').trim())
-        }
-      }
-
-      // A split carcass is ONE plan row carrying one buyer's slot id, so
-      // naming the event off that id alone would drop the other half's buyer.
-      // The assignments know every portion — use them when there's more than
-      // one, so the calendar says what the schedule says.
-      const { data: planAssigns } = logIds.length
-        ? await supabase.from('carcass_assignments')
-            .select('harvest_log_id, customer_name')
-            .in('harvest_log_id', logIds)
-        : { data: [] }
-      const assignedNames = new Map<string, string[]>()
-      for (const a of planAssigns ?? []) {
-        const key = a.harvest_log_id as string
-        const nm  = ((a.customer_name as string) ?? '').trim()
-        if (!key || !nm) continue
-        const bucket = assignedNames.get(key)
-        if (bucket) { if (!bucket.includes(nm)) bucket.push(nm) }
-        else assignedNames.set(key, [nm])
-      }
-
-      let cutDay = planDate ?? ''
-      for (const r of plan) {
-        if (r.kind === 'break') {
-          const bd = day(r.break_date as string)
-          if (bd) cutDay = bd
-          continue
-        }
-        if (!cutDay || cutDay < from || cutDay > to) continue
-        const log    = logById.get(r.appointment_id as string)
-        const shared = assignedNames.get(r.appointment_id as string) ?? []
-        const name   = shared.length > 1
-          ? [...shared].sort((a, b) => a.localeCompare(b)).join(' + ')
-          : custName.get(r.appointment_customer_id as string) || (log?.producer as string) || ''
-        events.push({
-          id: `cut-${r.id}`, lane: 'processing', date: cutDay, planned: true,
-          title: `📋 ${name || 'Planned cut'}`,
-          subtitle: [log?.species, log?.carcass_tag ? `#${log.carcass_tag}` : '', 'planned']
-            .filter(Boolean).join(' · '),
-          href: '/processing',
-        })
-      }
-    }
+  for (const r of futureAppts.data ?? []) {
+    const species = (r.species as string) || ''
+    const cutDay  = projectedCutDate(r.harvest_date as string, species)
+    if (cutDay < from || cutDay > to) continue
+    const head = r.head_count ? `${r.head_count} ` : ''
+    events.push({
+      id: `proj-appt-${r.id}`, lane: 'processing', date: cutDay, planned: true,
+      title: `🔮 ${r.source || species || 'Projected cut'}`,
+      subtitle: [`${head}${species}`.trim(), 'not yet harvested', 'projected'].filter(Boolean).join(' · '),
+      href: LANE_HREF.harvest,
+    })
   }
 
   events.sort((a, b) => a.date.localeCompare(b.date) || a.lane.localeCompare(b.lane))

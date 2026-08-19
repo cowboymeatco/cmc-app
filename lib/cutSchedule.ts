@@ -3,7 +3,7 @@
 // (app/processing/CutScheduleTab) and the read-only mobile crew view
 // (app/cut-schedule) so the two can never drift apart.
 import { HarvestAppointment, HarvestLog, CarcassAssignment } from '@/lib/types'
-import { isoDate, daysBetweenISO } from '@/lib/dates'
+import { isoDate, daysBetweenISO, addDaysISO } from '@/lib/dates'
 
 export interface PriorityWeights {
   days_hanging:     number
@@ -108,6 +108,26 @@ export function planIsLive(savedItems: SavedItem[], todayISO: string): boolean {
 
 export function calcDaysHanging(harvestDate: string): number {
   return Math.max(0, daysBetweenISO(harvestDate, isoDate()))
+}
+
+// ── Projected cut day ──────────────────────────────────────────────────────────
+// Before the crew places a carcass on a day (or before the animal is even
+// harvested), the calendar still needs SOME cut date to show so "future cuts"
+// aren't invisible until someone manually schedules them. These are the median
+// days from harvest_date to first pack scan (processing_inputs.pack_date) over
+// the trailing year of real activity — Beef hangs far longer than the rest, so
+// one shared number would either starve beef or over-hang everything else.
+// A projection, not a rule: it never overrides a manually placed cut day.
+export const DEFAULT_HANG_DAYS: Record<string, number> = {
+  Beef: 16, Hog: 3, Lamb: 2, Goat: 3,
+}
+
+export function projectedHangDays(species: string): number {
+  return DEFAULT_HANG_DAYS[species] ?? 7
+}
+
+export function projectedCutDate(harvestDate: string, species: string): string {
+  return addDaysISO(harvestDate, projectedHangDays(species))
 }
 
 // ── Hang projection ───────────────────────────────────────────────────────────
