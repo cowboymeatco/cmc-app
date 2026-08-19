@@ -42,13 +42,17 @@ export async function POST(req: NextRequest) {
   const { schedule_date, items } = body as {
     schedule_date: string
     items: Array<{
-      kind?: 'carcass' | 'break'
+      kind?: 'carcass' | 'break' | 'future'
       appointment_id: string | null
       appointment_customer_id: string | null
       manual_rank: number
       locked: boolean
       notes: string
       break_date?: string | null
+      // Only on 'future' rows (a booking not yet harvested). Kept apart from
+      // appointment_id, which on a carcass row holds a harvest_log id.
+      future_appointment_id?: string | null
+      future_seq?: number | null
     }>
   }
 
@@ -66,16 +70,24 @@ export async function POST(req: NextRequest) {
 
   if (items.length === 0) return NextResponse.json({ ok: true })
 
-  const rows = items.map(item => ({
-    schedule_date,
-    kind: item.kind ?? 'carcass',
-    appointment_id: item.appointment_id ?? null,
-    appointment_customer_id: item.appointment_customer_id ?? null,
-    manual_rank: item.manual_rank,
-    locked: item.locked,
-    notes: item.notes ?? '',
-    break_date: item.break_date ?? null,
-  }))
+  const rows = items.map(item => {
+    const kind = item.kind ?? 'carcass'
+    const isFuture = kind === 'future'
+    return {
+      schedule_date,
+      kind,
+      appointment_id: item.appointment_id ?? null,
+      appointment_customer_id: item.appointment_customer_id ?? null,
+      manual_rank: item.manual_rank,
+      locked: item.locked,
+      notes: item.notes ?? '',
+      break_date: item.break_date ?? null,
+      // The table's future-shape CHECK requires both together on a future row
+      // and neither on any other, so don't let a stray field through.
+      future_appointment_id: isFuture ? (item.future_appointment_id ?? null) : null,
+      future_seq:            isFuture ? (item.future_seq ?? null)            : null,
+    }
+  })
 
   const { error: insError } = await supabase
     .from('cut_schedule_items')

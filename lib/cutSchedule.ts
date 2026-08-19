@@ -66,7 +66,30 @@ export interface BreakItem {
   break_date: string  // ISO 'YYYY-MM-DD', or '' when not yet chosen
 }
 
-export type ListItem = ScheduleEntry | BreakItem
+// ONE animal of a booking that hasn't been harvested yet. A booking of 6 head
+// becomes 6 of these, because a big producer rarely gets cut in a single day
+// (Charlie, 2026-08-19: "I don't think I can do Laurie in one day") — the crew
+// splits them across cutting days before the animals ever arrive.
+//
+// Deliberately thin: no tag, no weight, no cut sheet, because none of that
+// exists yet. It holds a place in the running order and nothing more, and it
+// contributes HEAD COUNT but no weight to its day's subtotal (Charlie: "we do
+// not need to apply a weight to the day break, let's just do a head count").
+export interface FutureItem {
+  type:           'future'
+  key:            string
+  rank:           number
+  appointment_id: string   // harvest_appointments.id — NOT a harvest_log id
+  seq:            number   // which animal of the booking, 1..head_count
+  source:         string   // producer / booking name
+  species:        string
+  harvest_date:   string
+  head_count:     number   // of the whole booking, for the "2 of 6" label
+}
+
+export type ListItem = ScheduleEntry | BreakItem | FutureItem
+
+export const futureKey = (apptId: string, seq: number) => `future_${apptId}_${seq}`
 
 export const DEFAULT_WEIGHTS: PriorityWeights = {
   days_hanging:     5,
@@ -82,7 +105,7 @@ export const WEIGHT_LABELS: Record<keyof PriorityWeights, string> = {
 
 export type SavedItem = {
   id?:                     string
-  kind?:                   'carcass' | 'break'
+  kind?:                   'carcass' | 'break' | 'future'
   schedule_date?:          string
   appointment_id:          string | null
   appointment_customer_id: string | null
@@ -90,6 +113,8 @@ export type SavedItem = {
   locked:                  boolean
   notes:                   string
   break_date?:             string | null
+  future_appointment_id?:  string | null
+  future_seq?:             number | null
 }
 
 // A saved plan stays live through the last day it describes — the day it was
@@ -341,7 +366,8 @@ export function buildEntries(
   instructionIds: Set<string>,
   savedItems:     SavedItem[],
   assignments:    CarcassAssignment[],
-  w:              PriorityWeights
+  w:              PriorityWeights,
+  futureBookings: FutureBooking[] = []
 ): ListItem[] {
   const raw: Omit<ScheduleEntry, 'type' | 'priority_score' | 'rank'>[] = []
 
@@ -522,7 +548,38 @@ export function buildEntries(
     score: e.priority_score,
   }))
 
-  const combined = [...carcassWraps, ...breakWraps]
+  // One placeholder per head of every upcoming booking. Rebuilt from the
+  // bookings each load, NOT from saved rows — a booking that gets cancelled,
+  // harvested, or re-counted must stop producing placeholders on its own. The
+  // saved row only supplies where a placeholder was dragged to.
+  const savedFuture = new Map(
+    savedItems
+      .filter(s => s.kind === 'future' && s.future_appointment_id && s.future_seq != null)
+      .map(s => [futureKey(s.future_appointment_id as string, s.future_seq as number), s.manual_rank])
+  )
+  const futureWraps: { item: ListItem; saved: number | undefined; score: number }[] = []
+  for (const fb of futureBookings) {
+    for (let seq = 1; seq <= Math.max(1, fb.head_count); seq++) {
+      const key = futureKey(fb.id, seq)
+      futureWraps.push({
+        item: {
+          type: 'future', key, rank: 0,
+          appointment_id: fb.id, seq,
+          source:         fb.source,
+          species:        fb.species,
+          harvest_date:   fb.harvest_date,
+          head_count:     Math.max(1, fb.head_count),
+        },
+        saved: savedFuture.get(key),
+        // Below every real carcass in the unplaced pile: meat in the cooler is
+        // the more urgent thing to look at, and these have no score to earn a
+        // place among them.
+        score: Number.NEGATIVE_INFINITY,
+      })
+    }
+  }
+
+  const combined = [...carcassWraps, ...breakWraps, ...futureWraps]
   const useSaved = savedItems.length > 0
 
   // A carcass the saved plan has never seen — hung since the last save — sorts

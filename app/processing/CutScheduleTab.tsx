@@ -5,6 +5,7 @@ import { HarvestAppointment, HarvestLog, CarcassAssignment } from '@/lib/types'
 import AssignCarcassesModal from './AssignCarcassesModal'
 import {
   type PriorityWeights, type ScheduleEntry, type BreakItem, type ListItem, type FutureBooking,
+  type FutureItem,
   DEFAULT_WEIGHTS, WEIGHT_LABELS, buildEntries, loadScheduleData, uniqueCarcasses as uniqueOf,
   calcScore, speciesColor, speciesIcon, portionBadge, cutDateByKey, hangAtCut, hangColor,
   carcassTotals,
@@ -57,7 +58,7 @@ export default function CutScheduleTab() {
       setAppts([...apptMap.values()])
       setAssignments(assignments)
       setFutureBookings(futureBookings)
-      setEntries(buildEntries(logs, apptMap, instrIds, saved, assignments, weights))
+      setEntries(buildEntries(logs, apptMap, instrIds, saved, assignments, weights, futureBookings))
       setLoadError(false)
     } catch {
       setLoadError(true)
@@ -103,9 +104,12 @@ export default function CutScheduleTab() {
       // shuffled the undated pile into the schedule — and since fresh carcasses
       // score low, it dealt them straight to the bottom, back under the last
       // day break. Nothing leaves the rail except by hand.
+      // Anything that isn't a scoreable carcass keeps its slot outright —
+      // breaks, and the not-yet-harvested placeholders, which have no score to
+      // sort by and were put where they are by hand.
       const dates   = cutDateByKey(prev)
       const waiting = (e: ListItem) => e.type === 'carcass' && !dates.get(e.key)
-      const anchors = rescored.filter(e => e.type === 'break' || e.locked || waiting(e))
+      const anchors = rescored.filter(e => e.type !== 'carcass' || e.locked || waiting(e))
       const movable = rescored.filter(
         (e): e is ScheduleEntry => e.type === 'carcass' && !e.locked && !waiting(e)
       )
@@ -249,6 +253,18 @@ export default function CutScheduleTab() {
                 notes:                   '',
                 break_date:              e.break_date || null,
               }
+            : e.type === 'future'
+            ? {
+                kind:                    'future' as const,
+                appointment_id:          null,
+                appointment_customer_id: null,
+                manual_rank:             e.rank,
+                locked:                  false,
+                notes:                   '',
+                break_date:              null,
+                future_appointment_id:   e.appointment_id,
+                future_seq:              e.seq,
+              }
             : {
                 kind:                    'carcass' as const,
                 appointment_id:          e.appointment_id,
@@ -289,8 +305,24 @@ export default function CutScheduleTab() {
   // break and has one. This is the tally Charlie works off to push the next
   // day's list to the crew (2026-08-05).
   const noDay       = carcasses.filter(e => !cutDates.get(e.key))
-  const noDayKeys   = new Set(noDay.map(e => e.key))
   const noDayTotals = carcassTotals(noDay)
+
+  // Same rule for the not-yet-harvested placeholders: one with nothing dated
+  // above it is still sitting in the rail waiting to be dragged onto a day.
+  const futures       = entries.filter((e): e is FutureItem => e.type === 'future')
+  const unplacedFuture = futures.filter(e => !cutDates.get(e.key))
+  const noDayKeys     = new Set([...noDay, ...unplacedFuture].map(e => e.key))
+
+  // The rail lists them by booking, so 6 head of one producer read as one
+  // block you pull animals off, not six identical loose cards.
+  const futureGroups = futureBookings
+    .map(fb => ({
+      booking: fb,
+      pending: unplacedFuture
+        .filter(f => f.appointment_id === fb.id)
+        .sort((a, b) => a.seq - b.seq),
+    }))
+    .filter(g => g.pending.length > 0)
 
   // Dates carrying more than one break. handleBreakDate stops new ones, but
   // plans saved before that rule went in can still hold a pair (the live plan
@@ -510,16 +542,24 @@ export default function CutScheduleTab() {
             // Walk bottom-up, accumulating carcasses; each break claims whatever
             // has piled up beneath it, then resets. Deduped by carcass so a split
             // animal counts its hanging weight once, not once per customer portion.
-            const dayTotals = new Map<string, { lbs: number; count: number }>()
+            // Not-yet-harvested placeholders count as head but carry NO weight —
+            // there is no hanging weight until the animal is on the rail, and
+            // guessing one would quietly corrupt the day's lb total (Charlie,
+            // 2026-08-19: "just do a head count on those").
+            const dayTotals = new Map<string, { lbs: number; count: number; future: number }>()
             {
               let lbs = 0
+              let future = 0
               let ids = new Set<string>()
               for (let i = entries.length - 1; i >= 0; i--) {
                 const e = entries[i]
                 if (e.type === 'break') {
-                  dayTotals.set(e.key, { lbs, count: ids.size })
+                  dayTotals.set(e.key, { lbs, count: ids.size + future, future })
                   lbs = 0
+                  future = 0
                   ids = new Set<string>()
+                } else if (e.type === 'future') {
+                  future++
                 } else if (!ids.has(e.harvest_log_id)) {
                   ids.add(e.harvest_log_id)
                   if (e.hot_carcass_weight_lbs != null) lbs += e.hot_carcass_weight_lbs
@@ -535,7 +575,7 @@ export default function CutScheduleTab() {
 
               // ── Day break divider ──────────────────────────────────────────────
               if (entry.type === 'break') {
-                const day = dayTotals.get(entry.key) ?? { lbs: 0, count: 0 }
+                const day = dayTotals.get(entry.key) ?? { lbs: 0, count: 0, future: 0 }
                 return (
                   <div
                     key={entry.key}
@@ -603,6 +643,14 @@ export default function CutScheduleTab() {
                       <span style={{ color: C.lightBrown, fontSize: '0.64rem' }}>
                         · {day.count} {day.count === 1 ? 'carcass' : 'carcasses'} this day
                       </span>
+                      {day.future > 0 && (
+                        <span
+                          title={`${day.future} of these ${day.future === 1 ? 'is' : 'are'} booked but not harvested yet — counted as head, no hanging weight`}
+                          style={{ color: C.lightBrown, fontSize: '0.64rem', fontStyle: 'italic' }}
+                        >
+                          ({day.future} upcoming)
+                        </span>
+                      )}
                     </span>
                     <button
                       title="Remove day break"
@@ -616,6 +664,91 @@ export default function CutScheduleTab() {
                     >
                       ✕
                     </button>
+                  </div>
+                )
+              }
+
+              // ── Placed future booking ──────────────────────────────────────────
+              // Given a cutting day before the animal exists. Takes a number in
+              // the running order like any other head, but every column that
+              // depends on a real carcass (weight, hang, sheet, score) is empty
+              // because there is nothing to read yet.
+              if (entry.type === 'future') {
+                carcassNo++
+                // You can't cut an animal before it's killed. Easy to do by
+                // accident when dragging onto a day break that sits earlier in
+                // the list than the booking's harvest date.
+                const fCutDate = cutDates.get(entry.key)
+                const tooEarly = !!fCutDate && fCutDate < entry.harvest_date
+                return (
+                  <div
+                    key={entry.key}
+                    draggable
+                    onDragStart={() => handleDragStart(entry.key)}
+                    onDragOver={e  => handleDragOver(e, entry.key)}
+                    onDrop={() => handleDrop(entry.key)}
+                    onDragEnd={handleDragEnd}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '24px 30px 1fr 80px 56px 64px 84px 52px 44px 30px 58px',
+                      gap: '0.5rem', alignItems: 'center',
+                      background: 'rgba(0,0,0,0.18)',
+                      border: `1px dashed ${isOver ? C.amber : tooEarly ? 'rgba(239,68,68,0.55)' : 'rgba(166,120,90,0.35)'}`,
+                      borderLeft: `4px dashed ${speciesColor(entry.species)}`,
+                      borderRadius: 4, padding: '0.5rem 0.75rem',
+                      opacity: isDragging ? 0.4 : 1, cursor: 'grab',
+                      transition: 'border-color 0.1s, opacity 0.15s',
+                      boxShadow: isOver ? `0 0 0 2px ${C.amber}44` : 'none',
+                    }}
+                  >
+                    <span style={{ color: C.medBrown, fontSize: '1rem', userSelect: 'none', textAlign: 'center' }}>⠿</span>
+                    <span style={{
+                      fontFamily: 'Georgia, serif', fontSize: '0.95rem', fontWeight: 700,
+                      textAlign: 'center', color: C.medBrown,
+                    }}>
+                      {carcassNo}
+                    </span>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.45rem', minWidth: 0 }}>
+                        <span style={{
+                          fontWeight: 600, fontSize: '0.87rem', color: C.tan, fontStyle: 'italic',
+                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                        }}>
+                          {entry.source || 'Booked'}
+                        </span>
+                        {entry.head_count > 1 && (
+                          <span style={{
+                            fontSize: '0.62rem', color: C.lightBrown, fontFamily: 'monospace',
+                            background: 'rgba(0,0,0,0.3)', borderRadius: 2, padding: '0 4px', flexShrink: 0,
+                          }}>
+                            {entry.seq} of {entry.head_count}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: '0.68rem', color: tooEarly ? C.red : C.lightBrown }}>
+                        {tooEarly ? '⚠ cut day is before harvest ' : '🔮 Booked — harvest '}
+                        {dateLabel(entry.harvest_date, { month: 'short', day: 'numeric' })}
+                      </div>
+                    </div>
+                    <div>
+                      <span style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 4,
+                        background: 'transparent',
+                        border: `1px dashed ${speciesColor(entry.species)}66`,
+                        color: speciesColor(entry.species), borderRadius: 3,
+                        padding: '2px 7px', fontSize: '0.75rem', fontWeight: 700, whiteSpace: 'nowrap',
+                      }}>
+                        {speciesIcon(entry.species)} {entry.species}
+                      </span>
+                    </div>
+                    {/* Cut, hang weight, hanging, sheet, score — nothing exists yet */}
+                    <div style={{ textAlign: 'center', color: C.medBrown, fontSize: '0.85rem' }}>—</div>
+                    <div style={{ textAlign: 'center', color: C.medBrown, fontSize: '0.85rem' }}>—</div>
+                    <div style={{ textAlign: 'center', color: C.medBrown, fontSize: '0.85rem' }}>—</div>
+                    <div style={{ textAlign: 'center', color: C.medBrown, fontSize: '0.85rem' }}>—</div>
+                    <div style={{ textAlign: 'center', color: C.medBrown, fontSize: '0.85rem' }}>—</div>
+                    <div />
+                    <div />
                   </div>
                 )
               }
@@ -1021,7 +1154,7 @@ export default function CutScheduleTab() {
             schedule yet. The moment Harvest logs the animal in, its appointment
             drops off this list on its own (status moves off 'Booked') and the
             real carcass appears in No Cut Day above — nothing to swap by hand. */}
-        {futureBookings.length > 0 && (
+        {futureGroups.length > 0 && (
           <div style={{ marginTop: '1rem', paddingTop: '0.85rem', borderTop: '1px solid rgba(166,120,90,0.2)' }}>
             <div style={{
               fontSize: '0.66rem', fontWeight: 700, letterSpacing: '0.09em', textTransform: 'uppercase',
@@ -1030,34 +1163,65 @@ export default function CutScheduleTab() {
               🔮 Upcoming Bookings
             </div>
             <p style={{ fontSize: '0.68rem', color: C.lightBrown, lineHeight: 1.45, margin: '0 0 0.6rem' }}>
-              Booked, not harvested yet — shows up above for real once it&apos;s in the cooler.
+              Booked, not harvested yet. Drag a head onto the day you plan to cut it — a big
+              booking can be spread over several days. They turn into the real carcasses once
+              they&apos;re in the cooler.
             </p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-              {futureBookings.map(fb => (
-                <div
-                  key={fb.id}
-                  title="Not yet harvested — can't be scheduled to a cut day until it's in the cooler"
-                  style={{
-                    background: 'rgba(0,0,0,0.15)',
-                    border: `1px dashed ${speciesColor(fb.species)}66`,
-                    borderRadius: 4, padding: '0.45rem 0.55rem',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', minWidth: 0 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+              {futureGroups.map(({ booking, pending }) => (
+                <div key={booking.id}>
+                  <div style={{
+                    display: 'flex', alignItems: 'baseline', gap: '0.35rem',
+                    marginBottom: '0.3rem', minWidth: 0,
+                  }}>
                     <span style={{
-                      fontWeight: 600, fontSize: '0.78rem', color: C.tan, minWidth: 0,
+                      fontWeight: 600, fontSize: '0.75rem', color: C.tan, minWidth: 0,
                       whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                     }}>
-                      {fb.source || 'Booked'}
+                      {booking.source || 'Booked'}
                     </span>
+                    <span style={{ color: C.lightBrown, fontSize: '0.64rem', flexShrink: 0 }}>
+                      {dateLabel(booking.harvest_date, { month: 'short', day: 'numeric' })}
+                    </span>
+                    {/* Only meaningful once part of the booking has been placed. */}
+                    {pending.length < booking.head_count && (
+                      <span
+                        title={`${booking.head_count - pending.length} of ${booking.head_count} already given a cut day`}
+                        style={{ color: C.green, fontSize: '0.62rem', fontWeight: 700, flexShrink: 0 }}
+                      >
+                        {booking.head_count - pending.length}/{booking.head_count} placed
+                      </span>
+                    )}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem', marginTop: 3, fontSize: '0.66rem', flexWrap: 'wrap' }}>
-                    <span style={{ color: speciesColor(fb.species), fontWeight: 700 }}>
-                      {speciesIcon(fb.species)} {fb.head_count} {fb.species}
-                    </span>
-                    <span style={{ color: C.lightBrown }}>
-                      {dateLabel(fb.harvest_date, { month: 'short', day: 'numeric' })}
-                    </span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                    {pending.map(f => (
+                      <div
+                        key={f.key}
+                        draggable
+                        onDragStart={() => handleDragStart(f.key)}
+                        onDragEnd={handleDragEnd}
+                        title="Drag onto the day you plan to cut this one"
+                        style={{
+                          background: 'rgba(0,0,0,0.15)',
+                          border: `1px dashed ${speciesColor(f.species)}66`,
+                          borderLeft: `4px dashed ${speciesColor(f.species)}`,
+                          borderRadius: 4, padding: '0.35rem 0.5rem',
+                          display: 'flex', alignItems: 'baseline', gap: '0.4rem',
+                          cursor: 'grab', opacity: dragging === f.key ? 0.4 : 1,
+                          fontSize: '0.68rem',
+                        }}
+                      >
+                        <span style={{ color: C.medBrown, fontSize: '0.8rem', userSelect: 'none' }}>⠿</span>
+                        <span style={{ color: speciesColor(f.species), fontWeight: 700 }}>
+                          {speciesIcon(f.species)} {f.species}
+                        </span>
+                        {f.head_count > 1 && (
+                          <span style={{ color: C.lightBrown, fontFamily: 'monospace' }}>
+                            {f.seq} of {f.head_count}
+                          </span>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 </div>
               ))}

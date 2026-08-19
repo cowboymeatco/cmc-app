@@ -57,9 +57,12 @@ export default function CrewCutSchedulePage() {
         if (item.type === 'break') {
           rawSecs.push(current)
           current = { key: item.key, date: item.break_date || null, entries: [] }
-        } else {
+        } else if (item.type === 'carcass') {
           current.entries.push(item)
         }
+        // 'future' placeholders are planning intent for animals that aren't in
+        // the building yet — never work the crew can pick up. The planner owns
+        // them; this page only ever shows real carcasses.
       }
       rawSecs.push(current)
 

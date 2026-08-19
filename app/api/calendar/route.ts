@@ -308,15 +308,21 @@ export async function GET(req: NextRequest) {
   // projection layer below so nothing shows twice.
   const plannedLogIds = new Set<string>(
     planIsLiveNow
-      ? plan.filter(r => r.kind !== 'break' && r.appointment_id).map(r => r.appointment_id as string)
+      ? plan.filter(r => r.kind === 'carcass' && r.appointment_id).map(r => r.appointment_id as string)
       : []
   )
+
+  // Bookings the planner has explicitly given a cutting day, per head. A
+  // 6-head booking split across two days has entries on both, so the naive
+  // harvest+hang projection must stand aside for it entirely — a hand-placed
+  // day beats a guess.
+  const placedFutureDays = new Map<string, string[]>()
 
   if (planIsLiveNow) {
     // Carcass rows key on harvest_log_id (the column is named appointment_id
     // for back-compat — see lib/cutSchedule ScheduleEntry).
     const logIds = Array.from(new Set(
-      plan.filter(r => r.kind !== 'break' && r.appointment_id).map(r => r.appointment_id as string)
+      plan.filter(r => r.kind === 'carcass' && r.appointment_id).map(r => r.appointment_id as string)
     ))
     const { data: planLogs } = logIds.length
       ? await supabase.from('harvest_log')
@@ -366,6 +372,16 @@ export async function GET(req: NextRequest) {
         if (bd) cutDay = bd
         continue
       }
+      // A booking placed by hand before it's harvested. Recorded even when it
+      // falls outside this window, so the projection below stays suppressed.
+      if (r.kind === 'future') {
+        const apptId = r.future_appointment_id as string
+        if (!cutDay || !apptId) continue
+        const bucket = placedFutureDays.get(apptId)
+        if (bucket) bucket.push(cutDay)
+        else placedFutureDays.set(apptId, [cutDay])
+        continue
+      }
       if (!cutDay || cutDay < from || cutDay > to) continue
       const log    = logById.get(r.appointment_id as string)
       const shared = assignedNames.get(r.appointment_id as string) ?? []
@@ -407,11 +423,31 @@ export async function GET(req: NextRequest) {
 
   for (const r of futureAppts.data ?? []) {
     const species = (r.species as string) || ''
-    const cutDay  = projectedCutDate(r.harvest_date as string, species)
+    const apptId  = r.id as string
+    const placed  = placedFutureDays.get(apptId)
+
+    // Placed by hand in the planner: show it on the day(s) chosen, one entry
+    // per day with the head count that landed there, instead of projecting.
+    if (placed?.length) {
+      const headByDay = new Map<string, number>()
+      for (const d of placed) headByDay.set(d, (headByDay.get(d) ?? 0) + 1)
+      for (const [d, head] of headByDay) {
+        if (d < from || d > to) continue
+        events.push({
+          id: `cutfut-${apptId}-${d}`, lane: 'processing', date: d, planned: true,
+          title: `📋 ${r.source || species || 'Planned cut'}`,
+          subtitle: [`${head} ${species}`.trim(), 'not yet harvested', 'planned'].filter(Boolean).join(' · '),
+          href: '/processing',
+        })
+      }
+      continue
+    }
+
+    const cutDay = projectedCutDate(r.harvest_date as string, species)
     if (cutDay < from || cutDay > to) continue
     const head = r.head_count ? `${r.head_count} ` : ''
     events.push({
-      id: `proj-appt-${r.id}`, lane: 'processing', date: cutDay, planned: true,
+      id: `proj-appt-${apptId}`, lane: 'processing', date: cutDay, planned: true,
       title: `🔮 ${r.source || species || 'Projected cut'}`,
       subtitle: [`${head}${species}`.trim(), 'not yet harvested', 'projected'].filter(Boolean).join(' · '),
       href: LANE_HREF.harvest,
