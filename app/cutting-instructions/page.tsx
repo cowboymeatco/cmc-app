@@ -686,10 +686,13 @@ function renderV2Detail(ci: RawInstruction) {
 //
 // isLastCard suppresses the trailing page break so a batch doesn't end on a
 // blank sheet.
-function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[] = EMPTY_CARCASS, isLastCard = true): string {
+function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], carcassArg: CarcassInfo | CarcassInfo[] = EMPTY_CARCASS, isLastCard = true): string {
   const carcassList = (Array.isArray(carcassArg) ? carcassArg : [carcassArg])
   const carcasses   = carcassList.length ? carcassList : [EMPTY_CARCASS]
   const d = ci.data ?? {}
+  // Prefer the plant's own harvest date over whatever the customer typed on
+  // the intake form — see slaughterDateFor for why the two disagree.
+  const harvestDate = slaughterDateFor(ci, appointments).date ?? d.killDate ?? '—'
   const species = ci.data?.species ?? ci.species ?? 'Beef'
   const name = d.customerName ?? '—'
   const sp = species.toLowerCase()
@@ -1062,7 +1065,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
        <div style="padding:6px 11px;border-right:1px solid #C9A882">
          <div style="font-size:12px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Animal</div>
          <div style="font-size:24px;font-weight:bold">${species}${d.portion ? ' · ' + fmt(d.portion) : ''}</div>
-         <div style="font-size:16px;color:#555;margin-top:1px">Harvest Date: ${d.killDate ?? '—'}</div>
+         <div style="font-size:16px;color:#555;margin-top:1px">Harvest Date: ${harvestDate}</div>
          ${/* One answer for the whole order, so it rides in the header where it
               governs every steak below rather than repeating on each row. */
            d.steakPack ? `<div style="font-size:18px;margin-top:3px">Steaks: <span style="font-weight:bold">${esc(String(d.steakPack))} per pack</span></div>` : ''}
@@ -1133,7 +1136,7 @@ function v2CardPages(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[]
   ${unassignedBand(carcass)}
   ${grindBand}
   <div style="font-size:16px;color:#555;margin-bottom:8px">
-    <strong>${d.customerName ?? '—'}</strong>${d.portion ? ' · ' + fmt(d.portion) : ''} · Harvest Date: ${d.killDate ?? '—'}
+    <strong>${d.customerName ?? '—'}</strong>${d.portion ? ' · ' + fmt(d.portion) : ''} · Harvest Date: ${harvestDate}
     <span style="margin-left:14px">Producer: <span style="font-weight:bold">${carcass.producer || wline(110)}</span></span>
     <span style="margin-left:14px">Lot # <span style="font-weight:bold">${carcass.lot || wline(46)}</span> · Tag # <span style="font-weight:bold">${carcass.tag || wline(38)}</span></span>
     <span style="margin-left:14px">Hanging Wt: <span style="font-weight:bold">${carcass.hcw != null ? `${carcass.hcw} lbs` : wline(58)}</span></span>
@@ -1470,17 +1473,17 @@ function openPrintable(html: string) {
   if (win) { win.onload = () => { URL.revokeObjectURL(url) } }
 }
 
-function printV2CutCard(ci: RawInstruction, carcassArg: CarcassInfo | CarcassInfo[] = EMPTY_CARCASS) {
+function printV2CutCard(ci: RawInstruction, appointments: HarvestAppointment[], carcassArg: CarcassInfo | CarcassInfo[] = EMPTY_CARCASS) {
   const name = ci.data?.customerName ?? '—'
-  openPrintable(cardDocument(`Cut Card — ${name}`, v2CardPages(ci, carcassArg)))
+  openPrintable(cardDocument(`Cut Card — ${name}`, v2CardPages(ci, appointments, carcassArg)))
 }
 
 // A whole batch in one document, so the crew gets a single print job instead of
 // opening every card in turn (Jill, 2026-07-21).
-function printV2CutCards(items: { ci: RawInstruction; carcasses: CarcassInfo[] }[]) {
+function printV2CutCards(items: { ci: RawInstruction; carcasses: CarcassInfo[] }[], appointments: HarvestAppointment[]) {
   if (!items.length) return
   const body = items
-    .map((it, i) => v2CardPages(it.ci, it.carcasses, i === items.length - 1))
+    .map((it, i) => v2CardPages(it.ci, appointments, it.carcasses, i === items.length - 1))
     .join('\n')
   openPrintable(cardDocument(`Cut Cards — ${items.length} card${items.length === 1 ? '' : 's'}`, body))
 }
@@ -1896,11 +1899,15 @@ export default function CuttingInstructionsPage() {
 
   const selectedSpecies = selected ? speciesOf(selected) : 'Beef'
 
-  // Upcoming appointments that have at least one customer without a linked
+  // Appointments that have at least one customer without a linked
   // instruction — and that are the same animal. A hog's instructions on a beef
   // appointment sends the wrong cut card to the rail (Charlie, 2026-07-22).
+  // Completed appointments still belong here: a card can come in after the
+  // animal is already processed (e.g. a grinder bull), so only NoShow/Declined
+  // — appointments with no real animal behind them — get excluded (Jill,
+  // 2026-08-19: couldn't find a bull killed two weeks earlier).
   const linkableAppts = appointments.filter(a =>
-    a.status !== 'Complete' &&
+    a.status !== 'NoShow' && a.status !== 'Declined' &&
     a.customers?.some(c => !c.linked_cutting_instruction_id) &&
     sameSpecies(a.species, selectedSpecies)
   ).sort((a, b) => a.harvest_date.localeCompare(b.harvest_date))
@@ -1989,7 +1996,7 @@ export default function CuttingInstructionsPage() {
     try {
       const appts = await freshAppointments(appointments)
       const items = await Promise.all(v2.map(async ci => ({ ci, carcasses: await carcassInfosFor(ci, appts) })))
-      printV2CutCards(items)
+      printV2CutCards(items, appts)
       if (legacy) {
         alert(`Printed ${v2.length} card${v2.length === 1 ? '' : 's'}. ${legacy} older-format card${legacy === 1 ? ' was' : 's were'} skipped — open those individually.`)
       }
@@ -2037,7 +2044,7 @@ export default function CuttingInstructionsPage() {
             ✏️ New Cutting Card →
           </a>
           <button
-            onClick={() => printV2CutCard(FAKE_CI, { ...EMPTY_CARCASS, lot: '26153', tag: '02', producer: 'Test Producer', hcw: 645, killType: 'USDA', state: 'assigned' })}
+            onClick={() => printV2CutCard(FAKE_CI, [], { ...EMPTY_CARCASS, lot: '26153', tag: '02', producer: 'Test Producer', hcw: 645, killType: 'USDA', state: 'assigned' })}
             style={{ background: 'transparent', color: 'var(--tan)', border: '1px solid rgba(166,120,90,0.4)', borderRadius: '6px', padding: '0.4rem 0.9rem', fontWeight: 600, fontSize: '0.8rem', cursor: 'pointer', whiteSpace: 'nowrap' }}
           >
             🧪 Test Card
@@ -2251,7 +2258,7 @@ export default function CuttingInstructionsPage() {
                     ✏️ Edit
                   </a>
                 )}
-                <button onClick={async () => isV2 ? printV2CutCard(selected, await carcassInfosFor(selected, await freshAppointments(appointments))) : printCutCard(selected)} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>🖨 Print Cut Card</button>
+                <button onClick={async () => { const appts = await freshAppointments(appointments); return isV2 ? printV2CutCard(selected, appts, await carcassInfosFor(selected, appts)) : printCutCard(selected) }} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>🖨 Print Cut Card</button>
                 {selected.status === 'archived' ? (
                   <button onClick={() => markStatus([selected.id], 'pending')} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>↩ Restore</button>
                 ) : (
@@ -2417,7 +2424,7 @@ export default function CuttingInstructionsPage() {
             </p>
 
             {linkableAppts.length === 0 ? (
-              <p style={{ color: 'var(--tan)', textAlign: 'center', padding: '2rem' }}>No upcoming {selectedSpecies.toLowerCase()} appointments need instructions yet.</p>
+              <p style={{ color: 'var(--tan)', textAlign: 'center', padding: '2rem' }}>No {selectedSpecies.toLowerCase()} appointments need instructions yet.</p>
             ) : (
               linkableAppts.map(a => (
                 <div key={a.id} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: '4px', padding: '0.85rem 1rem', marginBottom: '0.75rem' }}>

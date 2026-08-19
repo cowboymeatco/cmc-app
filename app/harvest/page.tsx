@@ -1180,7 +1180,7 @@ function HarvestLogTab() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.83rem' }}>
               <thead>
                 <tr style={{ borderBottom: '2px solid rgba(166,120,90,0.3)' }}>
-                  {['#', 'Tag', 'ET', 'Owner', 'Species', 'Type', 'Sex', 'Breed', 'LW (lbs)', 'L Half', 'R Half', 'HCW (lbs)', 'Yield', 'ZT', 'HW °F', 'Cooler °F', 'Inspector', 'By', ''].map(h => (
+                  {['#', 'Tag', 'ET', 'Owner', 'Species', 'Type', 'Sex', 'Breed', 'Age', 'LW (lbs)', 'L Half', 'R Half', 'HCW (lbs)', 'Yield', 'ZT', 'HW °F', 'Cooler °F', 'Inspector', 'By', ''].map(h => (
                     <th key={h} style={{ padding: '0.6rem 0.75rem', color: C.lightBrown, fontWeight: 600, textAlign: 'left', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
@@ -1196,6 +1196,15 @@ function HarvestLogTab() {
                     <td style={{ padding: '0.5rem 0.75rem' }}>{l.kill_type ? <KillTypeBadge killType={l.kill_type} /> : <span style={{ color: C.lightBrown }}>—</span>}</td>
                     <td style={{ padding: '0.5rem 0.75rem', color: C.cream }}>{l.sex || '—'}</td>
                     <td style={{ padding: '0.5rem 0.75rem', color: C.lightBrown }}>{l.breed || '—'}</td>
+                    <td style={{ padding: '0.5rem 0.75rem' }}>
+                      {/* Age verification (SRM removal) only applies to Beef — other
+                          species never capture it, so a blank default would misread
+                          as "confirmed under 30 months" (Jill, 2026-08-19). */}
+                      {l.species !== 'Beef' ? <span style={{ color: C.lightBrown }}>—</span>
+                        : l.over_30_months
+                          ? <span style={{ color: C.red, fontSize: '0.72rem', fontWeight: 700 }}>Over 30mo</span>
+                          : <span style={{ color: C.green, fontSize: '0.72rem' }}>Under 30mo</span>}
+                    </td>
                     <td style={{ padding: '0.5rem 0.75rem', color: C.cream }}>{l.live_weight_lbs ?? '—'}</td>
                     <td style={{ padding: '0.5rem 0.75rem', color: C.cream }}>{l.half_1_weight_lbs ?? '—'}</td>
                     <td style={{ padding: '0.5rem 0.75rem', color: C.cream }}>{l.half_2_weight_lbs ?? '—'}</td>

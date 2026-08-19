@@ -1093,26 +1093,37 @@ export default function ScannerPage() {
     setCurrentStatus(existingStatus)
     setBoxType(existingType)
     setLabelFlags(flagsForType(existingType, DEFAULT_FLAGS))
-    const sid = await upsertSession(cust, dt, existingStatus)
-    setCurrentSessionId(sid)
-    const res = await fetch(`/api/boxes?customer_name=${encodeURIComponent(cust)}&date=${dt}`)
-    const loadedBoxes: BoxRecord[] = await res.json().catch(() => [])
-    const sorted = [...loadedBoxes].sort((a, b) => a.box_number - b.box_number)
-    setBoxes(sorted)
-    const openBox = sorted.find(b => !b.is_closed) ?? sorted[sorted.length - 1] ?? null
-    setActiveBox(openBox)
-    if (openBox) {
-      const scanRes  = await fetch(`/api/boxes/scans?box_id=${openBox.id}`)
-      const scanData = await scanRes.json().catch(() => [])
-      setScans(Array.isArray(scanData) ? ([...scanData] as ScanLine[]).reverse() : [])
+    // A hung or failing box/scan fetch here used to leave the session screen up
+    // with no boxes and nothing to scan into — dead in the water with no error
+    // shown (Jill, 2026-08-19: "screen will freeze" after opening a session).
+    // Time-box the loads and bail back to the session list on any failure.
+    try {
+      const sid = await upsertSession(cust, dt, existingStatus)
+      setCurrentSessionId(sid)
+      const res = await fetch(`/api/boxes?customer_name=${encodeURIComponent(cust)}&date=${dt}`, { signal: AbortSignal.timeout(15000) })
+      const loadedBoxes: BoxRecord[] = await res.json().catch(() => [])
+      const sorted = [...loadedBoxes].sort((a, b) => a.box_number - b.box_number)
+      setBoxes(sorted)
+      const openBox = sorted.find(b => !b.is_closed) ?? sorted[sorted.length - 1] ?? null
+      setActiveBox(openBox)
+      if (openBox) {
+        const scanRes  = await fetch(`/api/boxes/scans?box_id=${openBox.id}`, { signal: AbortSignal.timeout(15000) })
+        const scanData = await scanRes.json().catch(() => [])
+        setScans(Array.isArray(scanData) ? ([...scanData] as ScanLine[]).reverse() : [])
+      }
+      setSharedYield(null)
+      fetch(`/api/processing/inputs?customer_name=${encodeURIComponent(cust)}&session_date=${dt}`)
+        .then(r => r.json())
+        .then((d: unknown) => { if (Array.isArray(d)) setInputs(d as ProcessingInput[]) })
+        .catch(() => {})
+      loadSharedYield(cust, dt)
+      return sorted
+    } catch {
+      window.alert(`Couldn't open ${cust}'s session — check the connection and try again.`)
+      restoreList.current = true
+      setStarted(false)
+      return []
     }
-    setSharedYield(null)
-    fetch(`/api/processing/inputs?customer_name=${encodeURIComponent(cust)}&session_date=${dt}`)
-      .then(r => r.json())
-      .then((d: unknown) => { if (Array.isArray(d)) setInputs(d as ProcessingInput[]) })
-      .catch(() => {})
-    loadSharedYield(cust, dt)
-    return sorted
   }
 
   // ── Cure packaging: a tray seal scanned with no open box jumps to its owner ──
