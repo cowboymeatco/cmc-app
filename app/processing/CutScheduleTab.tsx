@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { HarvestAppointment, HarvestLog, CarcassAssignment } from '@/lib/types'
 import AssignCarcassesModal from './AssignCarcassesModal'
+import GrindAllModal from './GrindAllModal'
 import {
   type PriorityWeights, type ScheduleEntry, type BreakItem, type ListItem, type FutureBooking,
   type FutureItem,
@@ -11,6 +12,18 @@ import {
   carcassTotals,
 } from '@/lib/cutSchedule'
 import { isoDate, dateLabel } from '@/lib/dates'
+
+// Everything GrindAllModal needs about the slot the card is being written for.
+type GrindTarget = {
+  appointmentId:         string
+  appointmentCustomerId: string
+  species:               string
+  portion:               string
+  producer:              string
+  carcassTag:            string
+  customerName:          string
+  carcassCount:          number
+}
 
 const C = {
   dark:       '#1A0A04',
@@ -43,6 +56,7 @@ export default function CutScheduleTab() {
   const [appts,       setAppts]       = useState<HarvestAppointment[]>([])
   const [assignments, setAssignments] = useState<CarcassAssignment[]>([])
   const [assignModal, setAssignModal] = useState<{ appointments: HarvestAppointment[]; carcasses: HarvestLog[] } | null>(null)
+  const [grindModal,  setGrindModal]  = useState<GrindTarget | null>(null)
   // Booked animals not harvested yet — a heads-up rail, not part of the
   // schedule itself. See lib/cutSchedule FutureBooking.
   const [futureBookings, setFutureBookings] = useState<FutureBooking[]>([])
@@ -91,6 +105,39 @@ export default function CutScheduleTab() {
     const apptIds = new Set<string>([appt.id, ...carcasses.map(l => l.appointment_id).filter(Boolean)])
     const appointments = appts.filter(a => apptIds.has(a.id))
     setAssignModal({ appointments, carcasses })
+  }
+
+  // The one slot on this row that has no cut sheet, or null when that question
+  // has more than one answer. A split carcass waiting on two sheets, or an
+  // unassigned booking whose buyers haven't been placed, has no single slot to
+  // write a card for — those get assigned first, which is the button next door.
+  const grindSlot = (entry: ScheduleEntry): { id: string; name: string } | null => {
+    if (entry.has_instructions || !entry.source_appointment_id) return null
+    if (entry.cut_customers.length) {
+      const open = entry.cut_customers.filter(c => !c.has_instructions)
+      return open.length === 1 ? { id: open[0].appointment_customer_id, name: open[0].name } : null
+    }
+    // Unassigned: buildEntries resolves a lone unplaced customer onto the row
+    // and files everything else under 'standalone', which names nobody.
+    if (entry.appointment_customer_id === 'standalone') return null
+    return { id: entry.appointment_customer_id, name: entry.customer_name }
+  }
+
+  const openGrindAll = (entry: ScheduleEntry) => {
+    const slot = grindSlot(entry)
+    const appt = appts.find(a => a.id === entry.source_appointment_id)
+    if (!slot || !appt) return
+    setGrindModal({
+      appointmentId:         appt.id,
+      appointmentCustomerId: slot.id,
+      species:               appt.species || entry.species,
+      portion:               entry.portion,
+      producer:              entry.producer || appt.source || '',
+      carcassTag:            entry.carcass_tag,
+      // Blank on a house booking; the modal falls back to the producer.
+      customerName:          slot.name === entry.producer ? '' : slot.name,
+      carcassCount:          logs.filter(l => l.appointment_id === appt.id).length,
+    })
   }
 
   // ── Recalculate ───────────────────────────────────────────────────────────────
@@ -964,7 +1011,29 @@ export default function CutScheduleTab() {
                   <div style={{ textAlign: 'center' }}>
                     {entry.has_instructions
                       ? <span style={{ color: C.green, fontSize: '1rem' }} title="Cut sheet on file">✓</span>
-                      : <span style={{ color: C.red, fontSize: '0.76rem', fontWeight: 700 }} title="No cut sheet">⚠ Missing</span>
+                      : (<>
+                          <span style={{ color: C.red, fontSize: '0.76rem', fontWeight: 700 }} title="No cut sheet">⚠ Missing</span>
+                          {/* A house animal never gets a sheet off the customer
+                              form — CMC's own grinder cows had no way to one at
+                              all (Charlie, 2026-08-19). Only shown where a single
+                              sheet-less slot can be named; anything more tangled
+                              gets assigned first. */}
+                          {grindSlot(entry) && (
+                            <button
+                              onClick={e => { e.stopPropagation(); openGrindAll(entry) }}
+                              onDragStart={e => e.stopPropagation()}
+                              title="Write an all-grind cut card for this animal — no steaks, chops or roasts"
+                              style={{
+                                display: 'block', margin: '3px auto 0', padding: '0 5px', height: 16, lineHeight: '14px',
+                                background: 'rgba(245,158,11,0.16)', border: '1px solid rgba(245,158,11,0.5)',
+                                borderRadius: 3, cursor: 'pointer', color: C.amber,
+                                fontSize: '0.6rem', fontWeight: 700, whiteSpace: 'nowrap',
+                              }}
+                            >
+                              Grind all
+                            </button>
+                          )}
+                        </>)
                     }
                   </div>
 
@@ -1043,6 +1112,16 @@ export default function CutScheduleTab() {
           )}
           onClose={() => setAssignModal(null)}
           onSaved={() => { setAssignModal(null); loadAll() }}
+        />
+      )}
+
+      {/* Write an all-grind cut card for an animal that will never get one from
+          a customer */}
+      {grindModal && (
+        <GrindAllModal
+          {...grindModal}
+          onClose={() => setGrindModal(null)}
+          onSaved={() => { setGrindModal(null); loadAll() }}
         />
       )}
     </div>
