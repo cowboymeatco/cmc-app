@@ -654,9 +654,9 @@ function renderV2Detail(ci: RawInstruction) {
         </V2Section>
       )}
 
-      {smokehouseRows(d.smokehouse, v2fmt).length > 0 && (
+      {smokehouseRows(d.smokehouse, v2fmt, d).length > 0 && (
         <V2Section title="Smokehouse">
-          {smokehouseRows(d.smokehouse, v2fmt).map(([label, value], i) => (
+          {smokehouseRows(d.smokehouse, v2fmt, d).map(([label, value], i) => (
             <V2Field key={i} label={label} value={value} />
           ))}
           {smokehouseTotalLbs(d.smokehouse) > 0 && (
@@ -908,7 +908,7 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
   // Smokehouse on the CUTTER's page too — they're the ones deciding what goes
   // to the grind bucket, so they need the trim total before it's all ground.
   {
-    const smokeCardRows = smokehouseRows(d.smokehouse, fmt)
+    const smokeCardRows = smokehouseRows(d.smokehouse, fmt, d)
     if (smokeCardRows.length) {
       const totalLbs = smokehouseTotalLbs(d.smokehouse)
       cutSections += sec('Smokehouse', [
@@ -1906,8 +1906,22 @@ export default function CuttingInstructionsPage() {
   // animal is already processed (e.g. a grinder bull), so only NoShow/Declined
   // — appointments with no real animal behind them — get excluded (Jill,
   // 2026-08-19: couldn't find a bull killed two weeks earlier).
+  // Nothing booked before we started linking cut cards will ever get one, and
+  // those bookings buried the live ones in the picker (Jill, 2026-08-20: "can we
+  // remove the appointments before we started linking cut cards"). The cutoff is
+  // READ FROM THE DATA rather than hardcoded — the oldest booking that actually
+  // carries a link — so it can't hide an appointment anyone has ever linked, and
+  // it moves on its own instead of rotting into a stale constant.
+  const linkingEraStart = appointments.reduce((earliest, a) => {
+    if (!a.harvest_date) return earliest
+    if (!a.customers?.some(c => c.linked_cutting_instruction_id)) return earliest
+    return !earliest || a.harvest_date < earliest ? a.harvest_date : earliest
+  }, '')
+
   const linkableAppts = appointments.filter(a =>
     a.status !== 'NoShow' && a.status !== 'Declined' &&
+    // No link has ever been made yet — don't filter anything out on day one.
+    (!linkingEraStart || a.harvest_date >= linkingEraStart) &&
     a.customers?.some(c => !c.linked_cutting_instruction_id) &&
     sameSpecies(a.species, selectedSpecies)
   ).sort((a, b) => a.harvest_date.localeCompare(b.harvest_date))

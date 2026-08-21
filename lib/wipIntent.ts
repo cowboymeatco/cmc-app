@@ -100,17 +100,29 @@ export function isSameParty(cards: CICard[]): boolean {
 // Rounds are their own decision — the customer picks jerky per round on the cut
 // card, so a box of rounds never competes for the trim orders.
 export function roundJerkyLabel(data: Record<string, unknown> | null | undefined): string | null {
+  return roundJerkyOrders(data)[0] ?? null
+}
+
+// EVERY round sent to jerky, in order. Jerky ordered on the round step lives on
+// the primal, not in the smokehouse block, so anything reading `smokehouse.*`
+// alone never sees it — which is how it stayed off the packaging sheet's
+// smokehouse section entirely (Jill, 2026-08-20). Both rounds can go to jerky,
+// and each can be split, so this returns the list; roundJerkyLabel takes the
+// first because a box serves one order.
+export function roundJerkyOrders(data: Record<string, unknown> | null | undefined): string[] {
+  const out: string[] = []
   for (const side of ['topRound', 'bottomRound']) {
     const r = (data?.[side] ?? null) as Record<string, unknown> | null
     if (!r) continue
     for (const cut of [r, (r.round2 ?? null) as Record<string, unknown> | null]) {
       if (cut && cut.cut === 'jerky') {
         const f = titleCase(String(cut.jerkyFlavor ?? ''))
-        return f ? `Jerky — ${f}` : 'Jerky'
+        const label = f ? `Jerky — ${f}` : 'Jerky'
+        if (!out.includes(label)) out.push(label)
       }
     }
   }
-  return null
+  return out
 }
 
 // What's actually in the box decides which pool it draws from.

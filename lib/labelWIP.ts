@@ -165,12 +165,27 @@ export function generateWIPLabel(data: WIPTagData, flags: LabelFlags = DEFAULT_F
   // Multiple orders share the big bordered INTENT box, each as its own bold
   // line — same weight as a single intent, not a fine-print list (Charlie,
   // 2026-07-30). The arrow marks the order this box starts.
-  const multiOrders = (data.orders?.length ?? 0) > 1
+  const orders   = data.orders ?? []
+  // Is one of these orders the one THIS box starts? When nothing could decide,
+  // the intent box keeps the crew's own words and the orders print below as
+  // scope instead — a guessed intent gets the wrong thing made.
+  const assigned = orders.some(o => o.current)
+  const multiOrders = orders.length > 1 && assigned
   const intentHTML = multiOrders
-    ? `<div class="intent multi">${(data.orders ?? []).map(o =>
+    ? `<div class="intent multi">${orders.map(o =>
         `<div class="iline">${o.current ? '&#9656; ' : ''}${esc(o.label).toUpperCase()}${o.lbs != null ? ` &middot; ${o.lbs} LB` : ''}</div>`
       ).join('')}</div>`
     : `<div class="intent">${esc(data.intent).toUpperCase()}</div>`
+
+  // Everything this animal owes value add, when this box hasn't been tied to one
+  // of them. Without it a tub of round or a mixed box printed no value-add at
+  // all and the smokehouse never heard about the order (Jill, 2026-08-20).
+  const scopeHTML = !assigned && orders.length
+    ? `<div class="scope-k">THIS ANIMAL&rsquo;S VALUE ADD</div>
+       <div class="scope">${orders.map(o =>
+         `<div class="sline">${esc(o.label).toUpperCase()}${o.lbs != null ? ` &middot; ${o.lbs} LB` : ''}</div>`
+       ).join('')}</div>`
+    : ''
 
   const itemRows = data.items.length > 0
     ? `<hr><div class="items">${data.items.map(i =>
@@ -195,6 +210,11 @@ export function generateWIPLabel(data: WIPTagData, flags: LabelFlags = DEFAULT_F
              border: 1.5px solid #000; padding: 1px 0; margin: 2px 0; }
   .producer{ font-family: 'Arial Narrow', Arial, sans-serif; font-size: 10pt; text-align: center; }
   .intent-k{ font-size: 8.5pt; font-weight: bold; letter-spacing: 0.14em; text-align: center; margin-top: 2px; }
+  /* Scope block — what the animal owes value add when this tub isn't tied to
+     one order. Quieter than INTENT so it never reads as the instruction. */
+  .scope-k { font-size: 8pt; font-weight: bold; letter-spacing: 0.12em; text-align: center; margin-top: 1px; }
+  .scope   { border: 1.5px dashed #000; border-radius: 3px; padding: 2px 4px; margin-bottom: 3px; }
+  .sline   { font-size: 12pt; font-weight: bold; text-align: center; line-height: 1.15; }
   .intent  { font-size: 19pt; font-weight: bold; text-align: center; line-height: 1.1;
              border: 2px solid #000; border-radius: 3px; padding: 3px 4px; margin-bottom: 3px; }
   /* Inspection band — the level this came out of the processing room under. */
@@ -240,6 +260,7 @@ export function generateWIPLabel(data: WIPTagData, flags: LabelFlags = DEFAULT_F
 
   <div class="intent-k">INTENT</div>
   ${intentHTML}
+  ${scopeHTML}
   ${data.intentSource === 'name'
     ? `<div class="srcnote">from cut card matched by name — check it's the right customer</div>`
     : data.intentSource === 'name-multi'

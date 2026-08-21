@@ -98,7 +98,10 @@ function agreedAssignment(
 }
 
 type WIPIntentHit = {
-  label:  string
+  // null when the cut card has value-add on it but nothing can say which order
+  // THIS box serves — the tag then keeps the crew's own intent and shows the
+  // orders as scope.
+  label:  string | null
   source: string
   // Full order list off the cut card, for the tag's scope block. The assigned
   // order is flagged so the crew can see where this box lands in the whole.
@@ -115,13 +118,14 @@ async function resolveWIPIntent(box: BoxRecord, items: { name: string; weight?: 
   // The order list still resolves fresh — it's scope, not assignment, and a
   // two-flavor order must show both flavors even on a reprint.
   if (box.wip_intent_label) {
+    // Scope resolves for every box, not just trim ones — a round or shoulder
+    // tub still belongs to an animal that owes a smokehouse order, and the crew
+    // reads that list to know what else is coming (Jill, 2026-08-20).
     let orders: WIPIntentHit['orders'] = []
-    if (product === 'trim') {
-      const match = await resolveCuttingInstruction(box.customer_name, box.pack_date)
-      if (match) {
-        orders = ordersAcross(match.cards)
-          .map(o => ({ label: o.label, lbs: o.lbs, current: o.key === box.wip_intent_key }))
-      }
+    const match = await resolveCuttingInstruction(box.customer_name, box.pack_date)
+    if (match) {
+      orders = ordersAcross(match.cards)
+        .map(o => ({ label: o.label, lbs: o.lbs, current: o.key === box.wip_intent_key }))
     }
     return { label: box.wip_intent_label, source: '', orders }
   }
@@ -131,7 +135,14 @@ async function resolveWIPIntent(box: BoxRecord, items: { name: string; weight?: 
   const cards = match.cards
 
   let assignment: { key: string; label: string } | null = null
-  let allOrders: ReturnType<typeof ordersAcross> = []
+  // The customer's WHOLE value-add order, resolved for every box — not just the
+  // trim ones. This used to be filled in only on the trim path, so a tub of
+  // round or shoulder printed a bare intent with no scope, and a box we
+  // couldn't classify printed nothing at all: "not pulling the value add on to
+  // the WIP label" (Jill, 2026-08-20). Scope is not assignment — the crew needs
+  // to see what the animal owes even when nothing here can say which order this
+  // particular tub starts.
+  let allOrders: ReturnType<typeof ordersAcross> = ordersAcross(cards)
 
   if (product === 'round') {
     assignment = agreedAssignment(cards, d => {
@@ -144,8 +155,7 @@ async function resolveWIPIntent(box: BoxRecord, items: { name: string; weight?: 
   // — which happens whenever a whole session is moved to the Value Add queue —
   // must not consume the customer's brat order.
   if (!assignment && product === 'trim') {
-    const orders = ordersAcross(cards)
-    allOrders = orders
+    const orders = allOrders
     if (orders.length) {
       // What the customer's other boxes have already committed to each order.
       const siblings = await supabase
@@ -171,7 +181,20 @@ async function resolveWIPIntent(box: BoxRecord, items: { name: string; weight?: 
   // never competes for the brat pounds and never needs allocating.
   if (!assignment) assignment = agreedAssignment(cards, d => primalValueAdd(d, product))
 
-  if (!assignment) return null
+  // Nothing here can say which order this tub starts — a mixed box, or a card
+  // whose only value-add is on a primal this box isn't holding. Print the scope
+  // anyway and leave the intent as whatever the crew wrote on the box: a
+  // GUESSED intent on a WIP tag is how the wrong thing gets made, but printing
+  // nothing is how the smokehouse never hears about the order at all.
+  if (!assignment) {
+    return allOrders.length
+      ? {
+          label:  null,
+          source: match.via,
+          orders: allOrders.map(o => ({ label: o.label, lbs: o.lbs, current: false })),
+        }
+      : null
+  }
 
   // Only remember the assignment once the box is closed. An open box is still
   // being filled, so its weight — and therefore what it can cover — is not
@@ -263,7 +286,7 @@ export async function GET(req: NextRequest) {
     const base = wipDataFromBox(box, scans, animal)
     const hit  = await resolveWIPIntent(box, base.items, base.weightLbs ?? 0)
     html = generateWIPLabel(
-      hit ? { ...base, intent: hit.label, intentSource: hit.source, orders: hit.orders } : base,
+      hit ? { ...base, intent: hit.label ?? base.intent, intentSource: hit.source, orders: hit.orders } : base,
       flags)
   } else if (useCMB) {
     html = generateCMBLabel(box, scans, { productGtin: searchParams.get('product'), lot: searchParams.get('lot') })

@@ -142,13 +142,85 @@ function porkValueAdd(d: Json): ValueAddItem[] {
   return out
 }
 
-// Beef primal-specific value-add (brisket beef bacon, corned beef, smoked &
-// pulled, seasoned roasts) is not yet parsed — only the shared smokehouse and
-// ground-trim sausage come through for beef/lamb/goat for now.
+// Beef primal value-add. Only the options the wizard itself marks as add-ons
+// count — the ones the customer read as a value-add choice, not ordinary cut
+// styles. Jill asked for Beef Bacon and Philly by name (2026-08-20); the rest
+// of the beef add-ons come through the same traversal, and leaving them out
+// would just be the next report.
+//
+// A beef card records paired primals once when both sides are cut the same, so
+// the pork qty rules don't apply here: brisket, plate and chuck roll are single
+// primals on a carcass and each split side is its own entry.
+const BEEF_CUT_VALUE_ADD: Record<string, { product: string; category: string }> = {
+  'beef-bacon':    { product: 'Beef Bacon',              category: 'Bacon' },
+  'smoked-sliced': { product: 'Smoked & Sliced Brisket', category: 'Smoked' },
+  'corned-beef':   { product: 'Corned Beef',             category: 'Cured' },
+  'philly':        { product: 'Philly Style Sliced',     category: 'Specialty' },
+  'smoked-pulled': { product: 'Smoked & Pulled Beef',    category: 'Smoked' },
+  'seasoned':      { product: 'Seasoned Short Ribs',     category: 'Specialty' },
+  'flanken':       { product: 'Flanken Short Ribs',      category: 'Specialty' },
+}
+
+function beefValueAdd(d: Json): ValueAddItem[] {
+  const out: ValueAddItem[] = []
+
+  // Primal cut choices that ARE the value-add. cut2 is the other side of a
+  // split primal and votes separately.
+  const cutHit = (primal: unknown, keys: string[] = ['cut', 'cut2']) => {
+    const p = asObj(primal)
+    for (const k of keys) {
+      const hit = BEEF_CUT_VALUE_ADD[str(p[k])]
+      if (hit) out.push({ ...hit, qty: 1 })
+    }
+  }
+  cutHit(d.brisket)
+  cutHit(d.plate)
+  cutHit(d.chuckRoll)
+  cutHit(d.shortRibs, ['cut'])
+
+  // Seasoned roasts — an add-on ticked alongside a roast, on any primal that
+  // offers it. One line however many primals carry it; the report answers "did
+  // they order seasoned roasts", not which muscle.
+  // Each primal names its split side differently — chuckRoll carries addons2
+  // inline, the arm and the rounds nest theirs under arm2 / round2.
+  const seasonedOn = ['chuckRoll', 'armRoast', 'topRound', 'bottomRound', 'topSirloin', 'triTip']
+    .some(k => {
+      const p = asObj(d[k])
+      return [p, asObj(p.arm2), asObj(p.round2)].some(side => arrOfStr(side.addons).includes('seasoned'))
+        || arrOfStr(p.addons2).includes('seasoned')
+    })
+  if (seasonedOn) out.push({ product: 'Seasoned Roasts', category: 'Specialty' })
+
+  const ribeye = asObj(d.ribeye)
+  if (ribeye.seasoned || asObj(ribeye.ribeye2).seasoned) {
+    out.push({ product: 'Seasoned Ribeye', category: 'Specialty' })
+  }
+  if (arrOfStr(asObj(d.shank).addons).includes('canoe-marrow')) {
+    out.push({ product: 'Canoed Marrow Bones', category: 'Specialty' })
+  }
+
+  // Jerky ordered on the round is a smokehouse product recorded on the primal,
+  // so it never reached this report through the smokehouse block.
+  for (const side of ['topRound', 'bottomRound']) {
+    const r = asObj(d[side])
+    for (const cut of [r, asObj(r.round2)]) {
+      if (str(cut.cut) === 'jerky') {
+        const f = str(cut.jerkyFlavor)
+        out.push({ product: 'Jerky', category: 'Smokehouse', detail: f ? humanize(f) : undefined })
+      }
+    }
+  }
+
+  out.push(...sharedValueAdd(d))
+  return out
+}
+
 export function extractValueAdd(species: string | null | undefined, data: unknown): ValueAddItem[] {
   const d = asObj(data)
   const sp = (species ?? str(d.species)).toLowerCase()
-  const items = sp === 'pork' || sp === 'hog' ? porkValueAdd(d) : sharedValueAdd(d)
+  const items = sp === 'pork' || sp === 'hog' ? porkValueAdd(d)
+    : sp === 'beef' ? beefValueAdd(d)
+    : sharedValueAdd(d)
   // Roll up identical lines (same product + detail) into a count. A whole hog
   // has two bellies and two hams, so "bacon" or "cured ham" legitimately lands
   // twice — Charlie wants that shown as a quantity (2 bacon, 2 ham), not

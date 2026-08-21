@@ -4,6 +4,7 @@
 // Printed on page 2 of the cut card and checked off live on the scanner as
 // packages come over the scale, so both read from this one list rather than
 // each having its own idea of what the customer is owed.
+import { roundJerkyOrders } from './wipIntent'
 
 export type PackRow = {
   sectionTitle?: string
@@ -142,9 +143,23 @@ export function lgTrimLabel(style?: string | null, species?: string | null, bagS
 // Smokehouse orders — what the customer wants built out of their trim. These
 // never reached any printed sheet, so the floor had no way to know how much
 // trim to hold back before the rest went to grind (Charlie, 2026-07-21).
-export function smokehouseRows(sm: any, f: (s: string) => string): Array<[string, string]> {
-  if (!sm) return []
+// `data` is the whole cut sheet, not just the smokehouse block: jerky ordered on
+// the round step is recorded on the PRIMAL, so a reader looking only at
+// `smokehouse.*` never sees it and the smokehouse crew was never told to make it
+// (Jill, 2026-08-20). Optional so the block alone still works where that is all
+// a caller has.
+export function smokehouseRows(sm: any, f: (s: string) => string, data?: any): Array<[string, string]> {
+  const jerkyFromRound = roundJerkyOrders(data ?? null)
+  if (!sm && !jerkyFromRound.length) return []
+  // Round jerky can be the only smokehouse work on a sheet, so the block below
+  // has to survive an absent smokehouse object rather than reaching into null.
+  sm = sm ?? {}
   const rows: Array<[string, string]> = []
+  // Printed first: it's a whole primal committed before any trim is weighed out,
+  // so the crew needs it in hand before they start allocating.
+  for (const label of jerkyFromRound) {
+    rows.push([label, 'From the round — whole primal, no set weight'])
+  }
   const add = (label: string, items: any) => {
     if (!Array.isArray(items)) return
     for (const it of items) {
@@ -811,7 +826,7 @@ export function buildPackList(d: any, species: string): PackRow[] {
 
   // Smokehouse: what to build from this animal's trim, and the total to hold
   // back before the rest is ground.
-  const smokeRows = smokehouseRows(d.smokehouse, fmt)
+  const smokeRows = smokehouseRows(d.smokehouse, fmt, d)
   if (smokeRows.length) {
     filteredPrs.push({ sectionTitle: 'Smokehouse' })
     // Each product gets a ruled blank for the raw trim weight going in — the
