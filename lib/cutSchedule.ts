@@ -301,10 +301,20 @@ export interface ScheduleData {
   futureBookings:  FutureBooking[]
 }
 
-// How far out the Upcoming Bookings rail looks. Wide enough to plan around,
-// narrow enough to stay a near-term heads-up rather than the whole order book
-// (119 Booked appointments exist at any time; most are months out).
-const FUTURE_BOOKING_WINDOW_DAYS = 30
+// How far out the Upcoming Bookings rail looks by default. The crew picks the
+// window in the planner; this is only the starting point (Charlie, 2026-08-19:
+// "we will start with 30 but I want to be 13 weeks out if I can").
+//
+// NOTE this bounds only what the RAIL OFFERS to drag. Every booking is loaded
+// and turned into placeholders regardless, because a head already dropped on a
+// cutting day has to keep existing no matter how the window is set — filtering
+// it out of the model would erase that placement on the next save.
+export const FUTURE_WINDOW_DEFAULT_DAYS = 30
+export const FUTURE_WINDOW_CHOICES: { label: string; days: number }[] = [
+  { label: '30d',  days: 30 },
+  { label: '8wk',  days: 56 },
+  { label: '13wk', days: 91 },
+]
 
 export async function loadScheduleData(todayISO: string): Promise<ScheduleData> {
   const [harvest, instrData, savedData, futureApptData] = await Promise.all([
@@ -338,9 +348,9 @@ export async function loadScheduleData(todayISO: string): Promise<ScheduleData> 
   }
   const savedAll = Array.isArray(savedData) ? (savedData as SavedItem[]) : []
 
-  const windowEnd = addDaysISO(todayISO, FUTURE_BOOKING_WINDOW_DAYS)
+  // Everything still ahead of us, unwindowed — see FUTURE_WINDOW_DEFAULT_DAYS.
   const futureBookings: FutureBooking[] = (Array.isArray(futureApptData) ? futureApptData as HarvestAppointment[] : [])
-    .filter(a => a.harvest_date >= todayISO && a.harvest_date <= windowEnd)
+    .filter(a => a.harvest_date >= todayISO)
     .map(a => ({
       id:           a.id,
       source:       a.source ?? '',

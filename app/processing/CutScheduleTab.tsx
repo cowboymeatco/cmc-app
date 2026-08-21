@@ -9,9 +9,13 @@ import {
   type FutureItem,
   DEFAULT_WEIGHTS, WEIGHT_LABELS, buildEntries, loadScheduleData, uniqueCarcasses as uniqueOf,
   calcScore, speciesColor, speciesIcon, portionBadge, cutDateByKey, hangAtCut, hangColor,
-  carcassTotals,
+  carcassTotals, FUTURE_WINDOW_DEFAULT_DAYS, FUTURE_WINDOW_CHOICES,
 } from '@/lib/cutSchedule'
-import { isoDate, dateLabel } from '@/lib/dates'
+import { isoDate, dateLabel, addDaysISO, mondayOfISO } from '@/lib/dates'
+
+// How far out the bookings rail looks. Remembered per machine so the planner
+// doesn't reset to 30 days every morning.
+const WINDOW_STORAGE_KEY = 'cmc.cutSchedule.futureWindowDays'
 
 // Everything GrindAllModal needs about the slot the card is being written for.
 type GrindTarget = {
@@ -60,8 +64,23 @@ export default function CutScheduleTab() {
   // Booked animals not harvested yet — a heads-up rail, not part of the
   // schedule itself. See lib/cutSchedule FutureBooking.
   const [futureBookings, setFutureBookings] = useState<FutureBooking[]>([])
+  const [futureWindow,   setFutureWindow]   = useState<number>(FUTURE_WINDOW_DEFAULT_DAYS)
+  // Weeks the planner has explicitly opened or closed; anything untouched
+  // follows the default below.
+  const [weekOverride,   setWeekOverride]   = useState<Map<string, boolean>>(new Map())
 
   const todayISO = isoDate()
+
+  // localStorage isn't there during SSR, so read it after mount.
+  useEffect(() => {
+    const saved = Number(window.localStorage.getItem(WINDOW_STORAGE_KEY))
+    if (FUTURE_WINDOW_CHOICES.some(c => c.days === saved)) setFutureWindow(saved)
+  }, [])
+
+  const changeWindow = (days: number) => {
+    setFutureWindow(days)
+    try { window.localStorage.setItem(WINDOW_STORAGE_KEY, String(days)) } catch { /* private mode */ }
+  }
 
   // ── Load from cooler inventory ────────────────────────────────────────────────
   const loadAll = useCallback(async () => {
@@ -285,12 +304,18 @@ export default function CutScheduleTab() {
   const handleSave = async () => {
     setSaving(true)
     try {
+      // Placeholders are rebuilt from the bookings on every load, so only the
+      // ones actually dropped on a cutting day carry information worth saving.
+      // Writing the unplaced ones too would put a few hundred dead rows in the
+      // table on every save and tell us nothing we can't re-derive.
+      const placedDates = cutDateByKey(entries)
+      const toSave = entries.filter(e => e.type !== 'future' || placedDates.get(e.key))
       const res = await fetch('/api/cut-schedule', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
           schedule_date: todayISO,
-          items: entries.map(e => e.type === 'break'
+          items: toSave.map(e => e.type === 'break'
             ? {
                 kind:                    'break' as const,
                 appointment_id:          null,
@@ -361,8 +386,12 @@ export default function CutScheduleTab() {
   const noDayKeys     = new Set([...noDay, ...unplacedFuture].map(e => e.key))
 
   // The rail lists them by booking, so 6 head of one producer read as one
-  // block you pull animals off, not six identical loose cards.
+  // block you pull animals off, not six identical loose cards. Only bookings
+  // inside the chosen window are offered — a head already placed still renders
+  // in the schedule above no matter how narrow the window gets.
+  const windowEnd = addDaysISO(todayISO, futureWindow)
   const futureGroups = futureBookings
+    .filter(fb => fb.harvest_date <= windowEnd)
     .map(fb => ({
       booking: fb,
       pending: unplacedFuture
@@ -370,6 +399,30 @@ export default function CutScheduleTab() {
         .sort((a, b) => a.seq - b.seq),
     }))
     .filter(g => g.pending.length > 0)
+
+  // At 13 weeks the rail runs to a couple hundred head, so bookings stack into
+  // the week they're killed in. The next two weeks are open by default —
+  // that's the part anyone is actually cutting soon — and the rest sit folded
+  // with their totals showing until someone needs them.
+  const futureWeeks: {
+    key: string; monday: string; groups: typeof futureGroups; head: number; open: boolean
+  }[] = []
+  for (const g of futureGroups) {
+    const monday = mondayOfISO(g.booking.harvest_date)
+    let wk = futureWeeks.find(w => w.key === monday)
+    if (!wk) {
+      wk = { key: monday, monday, groups: [], head: 0, open: true }
+      futureWeeks.push(wk)
+    }
+    wk.groups.push(g)
+    wk.head += g.pending.length
+  }
+  futureWeeks.sort((a, b) => a.monday.localeCompare(b.monday))
+  for (const [i, wk] of futureWeeks.entries()) {
+    wk.open = weekOverride.get(wk.key) ?? i < 2
+  }
+  const toggleWeek = (key: string, open: boolean) =>
+    setWeekOverride(prev => new Map(prev).set(key, open))
 
   // Dates carrying more than one break. handleBreakDate stops new ones, but
   // plans saved before that rule went in can still hold a pair (the live plan
@@ -1233,75 +1286,129 @@ export default function CutScheduleTab() {
             schedule yet. The moment Harvest logs the animal in, its appointment
             drops off this list on its own (status moves off 'Booked') and the
             real carcass appears in No Cut Day above — nothing to swap by hand. */}
-        {futureGroups.length > 0 && (
+        {futureBookings.length > 0 && (
           <div style={{ marginTop: '1rem', paddingTop: '0.85rem', borderTop: '1px solid rgba(166,120,90,0.2)' }}>
             <div style={{
-              fontSize: '0.66rem', fontWeight: 700, letterSpacing: '0.09em', textTransform: 'uppercase',
-              color: C.lightBrown, marginBottom: '0.5rem',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              gap: '0.4rem', marginBottom: '0.5rem',
             }}>
-              🔮 Upcoming Bookings
+              <span style={{
+                fontSize: '0.66rem', fontWeight: 700, letterSpacing: '0.09em',
+                textTransform: 'uppercase', color: C.lightBrown,
+              }}>
+                🔮 Upcoming
+              </span>
+              <div style={{ display: 'flex', gap: 2 }}>
+                {FUTURE_WINDOW_CHOICES.map(c => (
+                  <button
+                    key={c.days}
+                    onClick={() => changeWindow(c.days)}
+                    title={`Show bookings up to ${c.label} out`}
+                    style={{
+                      background: futureWindow === c.days ? 'rgba(245,158,11,0.16)' : 'transparent',
+                      border: `1px solid ${futureWindow === c.days ? 'rgba(245,158,11,0.5)' : 'rgba(166,120,90,0.25)'}`,
+                      color: futureWindow === c.days ? C.amber : C.lightBrown,
+                      borderRadius: 3, padding: '1px 5px', fontSize: '0.6rem',
+                      fontWeight: 700, cursor: 'pointer',
+                    }}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
             </div>
             <p style={{ fontSize: '0.68rem', color: C.lightBrown, lineHeight: 1.45, margin: '0 0 0.6rem' }}>
               Booked, not harvested yet. Drag a head onto the day you plan to cut it — a big
               booking can be spread over several days. They turn into the real carcasses once
               they&apos;re in the cooler.
             </p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-              {futureGroups.map(({ booking, pending }) => (
-                <div key={booking.id}>
-                  <div style={{
-                    display: 'flex', alignItems: 'baseline', gap: '0.35rem',
-                    marginBottom: '0.3rem', minWidth: 0,
-                  }}>
-                    <span style={{
-                      fontWeight: 600, fontSize: '0.75rem', color: C.tan, minWidth: 0,
-                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                    }}>
-                      {booking.source || 'Booked'}
+
+            {futureGroups.length === 0 && (
+              <p style={{ fontSize: '0.7rem', color: C.lightBrown, margin: 0 }}>
+                Nothing booked in the next {futureWindow} days — try a wider window.
+              </p>
+            )}
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {futureWeeks.map(wk => (
+                <div key={wk.key}>
+                  <button
+                    onClick={() => toggleWeek(wk.key, !wk.open)}
+                    style={{
+                      width: '100%', display: 'flex', alignItems: 'baseline', gap: '0.35rem',
+                      background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(166,120,90,0.18)',
+                      borderRadius: 3, padding: '0.25rem 0.4rem', cursor: 'pointer',
+                      color: C.tan, fontSize: '0.66rem', fontWeight: 700, textAlign: 'left',
+                    }}
+                  >
+                    <span style={{ color: C.lightBrown }}>{wk.open ? '▾' : '▸'}</span>
+                    <span>Wk of {dateLabel(wk.monday, { month: 'short', day: 'numeric' })}</span>
+                    <span style={{ marginLeft: 'auto', color: C.lightBrown, fontWeight: 400 }}>
+                      {wk.head} head
                     </span>
-                    <span style={{ color: C.lightBrown, fontSize: '0.64rem', flexShrink: 0 }}>
-                      {dateLabel(booking.harvest_date, { month: 'short', day: 'numeric' })}
-                    </span>
-                    {/* Only meaningful once part of the booking has been placed. */}
-                    {pending.length < booking.head_count && (
-                      <span
-                        title={`${booking.head_count - pending.length} of ${booking.head_count} already given a cut day`}
-                        style={{ color: C.green, fontSize: '0.62rem', fontWeight: 700, flexShrink: 0 }}
-                      >
-                        {booking.head_count - pending.length}/{booking.head_count} placed
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-                    {pending.map(f => (
-                      <div
-                        key={f.key}
-                        draggable
-                        onDragStart={() => handleDragStart(f.key)}
-                        onDragEnd={handleDragEnd}
-                        title="Drag onto the day you plan to cut this one"
-                        style={{
-                          background: 'rgba(0,0,0,0.15)',
-                          border: `1px dashed ${speciesColor(f.species)}66`,
-                          borderLeft: `4px dashed ${speciesColor(f.species)}`,
-                          borderRadius: 4, padding: '0.35rem 0.5rem',
-                          display: 'flex', alignItems: 'baseline', gap: '0.4rem',
-                          cursor: 'grab', opacity: dragging === f.key ? 0.4 : 1,
-                          fontSize: '0.68rem',
-                        }}
-                      >
-                        <span style={{ color: C.medBrown, fontSize: '0.8rem', userSelect: 'none' }}>⠿</span>
-                        <span style={{ color: speciesColor(f.species), fontWeight: 700 }}>
-                          {speciesIcon(f.species)} {f.species}
-                        </span>
-                        {f.head_count > 1 && (
-                          <span style={{ color: C.lightBrown, fontFamily: 'monospace' }}>
-                            {f.seq} of {f.head_count}
-                          </span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
+                  </button>
+
+                  {wk.open && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', marginTop: '0.4rem' }}>
+                      {wk.groups.map(({ booking, pending }) => (
+                        <div key={booking.id}>
+                          <div style={{
+                            display: 'flex', alignItems: 'baseline', gap: '0.35rem',
+                            marginBottom: '0.3rem', minWidth: 0,
+                          }}>
+                            <span style={{
+                              fontWeight: 600, fontSize: '0.75rem', color: C.tan, minWidth: 0,
+                              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                            }}>
+                              {booking.source || 'Booked'}
+                            </span>
+                            <span style={{ color: C.lightBrown, fontSize: '0.64rem', flexShrink: 0 }}>
+                              {dateLabel(booking.harvest_date, { month: 'short', day: 'numeric' })}
+                            </span>
+                            {/* Only meaningful once part of the booking has been placed. */}
+                            {pending.length < booking.head_count && (
+                              <span
+                                title={`${booking.head_count - pending.length} of ${booking.head_count} already given a cut day`}
+                                style={{ color: C.green, fontSize: '0.62rem', fontWeight: 700, flexShrink: 0 }}
+                              >
+                                {booking.head_count - pending.length}/{booking.head_count} placed
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                            {pending.map(f => (
+                              <div
+                                key={f.key}
+                                draggable
+                                onDragStart={() => handleDragStart(f.key)}
+                                onDragEnd={handleDragEnd}
+                                title="Drag onto the day you plan to cut this one"
+                                style={{
+                                  background: 'rgba(0,0,0,0.15)',
+                                  border: `1px dashed ${speciesColor(f.species)}66`,
+                                  borderLeft: `4px dashed ${speciesColor(f.species)}`,
+                                  borderRadius: 4, padding: '0.35rem 0.5rem',
+                                  display: 'flex', alignItems: 'baseline', gap: '0.4rem',
+                                  cursor: 'grab', opacity: dragging === f.key ? 0.4 : 1,
+                                  fontSize: '0.68rem',
+                                }}
+                              >
+                                <span style={{ color: C.medBrown, fontSize: '0.8rem', userSelect: 'none' }}>⠿</span>
+                                <span style={{ color: speciesColor(f.species), fontWeight: 700 }}>
+                                  {speciesIcon(f.species)} {f.species}
+                                </span>
+                                {f.head_count > 1 && (
+                                  <span style={{ color: C.lightBrown, fontFamily: 'monospace' }}>
+                                    {f.seq} of {f.head_count}
+                                  </span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
