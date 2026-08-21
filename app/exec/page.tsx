@@ -126,6 +126,8 @@ interface ReceivablesData {
 interface WarData {
   today: string; week_since: string
   recv_in_d: number; recv_in_w: number; harv_out_d: number; harv_out_w: number
+  // Distinct carcasses scanned onto the rail — see exec_war_metrics().
+  cut_out_d: number; cut_out_w: number
   livelb_d: number; livelb_w: number; hot_d: number; hot_w: number
   pin_d: number; pin_w: number; pout_d: number; pout_w: number
   rate_d: number | null; cooks_d: number; cooks_w: number
@@ -657,8 +659,15 @@ export default function ExecPage() {
             <div style={{ color: C.lightBrown, fontSize: '0.85rem' }}>Loading ops…</div>
           ) : (
             <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-              <WarTile label="Carcasses in" day={war.recv_in_d} week={war.recv_in_w} unit="hd" />
-              <WarTile label="Carcasses out" day={war.harv_out_d} week={war.harv_out_w} unit="hd" />
+              {/* Named for what they COUNT, not for a direction. "Carcasses in /
+                  out" read as product arriving and leaving the plant, so a
+                  Friday with no kill on it looked like nothing was going out
+                  while the floor was packing beef all day (Charlie,
+                  2026-08-21). These three are the animal's journey in order:
+                  received live, killed, then broken. */}
+              <WarTile label="Animals received" day={war.recv_in_d} week={war.recv_in_w} unit="hd" />
+              <WarTile label="Harvested" day={war.harv_out_d} week={war.harv_out_w} unit="hd" />
+              <WarTile label="Carcasses cut" day={war.cut_out_d} week={war.cut_out_w} unit="hd" />
               <WarTile label="Live weight" day={war.livelb_d} week={war.livelb_w} unit="lb" />
               <WarTile label="Hot carcass" day={war.hot_d} week={war.hot_w} unit="lb" />
               <WarTile label="Processing in" day={war.pin_d} week={war.pin_w} unit="lb" />
