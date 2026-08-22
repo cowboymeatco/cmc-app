@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({}))
     const since = typeof body.since === 'string' && body.since ? body.since : '2026-07-11'
 
-    const [{ data: harvests, error: hErr }, { data: links, error: lErr }] = await Promise.all([
+    const [{ data: harvests, error: hErr }, { data: links, error: lErr }, { data: custLinks, error: cErr }] = await Promise.all([
       supabase
         .from('harvest_log')
         .select('id, appointment_id, harvest_date, species, carcass_tag, hot_carcass_weight_lbs, status, producer')
@@ -74,11 +74,22 @@ export async function POST(req: NextRequest) {
         .not('producer', 'is', null)
         .neq('producer', ''),
       supabaseAdmin.from('producer_qbo_links').select('producer_name, qbo_customer_id'),
-    ])
+      supabaseAdmin.from('customer_qbo_links').select('customer_name, qbo_customer_id'),
+    ]) as [
+      { data: HarvestRow[] | null; error: { message: string } | null },
+      { data: { producer_name: string; qbo_customer_id: string }[] | null; error: { message: string } | null },
+      { data: { customer_name: string; qbo_customer_id: string }[] | null; error: { message: string } | null },
+    ]
     if (hErr) throw new Error(hErr.message)
     if (lErr) throw new Error(lErr.message)
+    if (cErr) throw new Error(cErr.message)
     const rows = (harvests ?? []) as HarvestRow[]
     const linkByName = new Map((links ?? []).map(l => [l.producer_name, l.qbo_customer_id]))
+    // The cut customer's own QuickBooks identity. Before this table existed the
+    // customer side of every split carried an empty id, so a charge billed to
+    // the person who actually bought the animal could never reach QuickBooks
+    // (Charlie, 2026-08-22). Linked on /billing -> Cut customers.
+    const custLinkByName = new Map((custLinks ?? []).map(l => [l.customer_name, l.qbo_customer_id]))
 
     // Appointments for split/payer info + cut dates for service_date
     const apptIds = [...new Set(rows.map(r => r.appointment_id).filter(Boolean))] as string[]
@@ -122,7 +133,7 @@ export async function POST(req: NextRequest) {
           source_table: 'harvest_log',
           source_id: h.id,
           customer_name: payer.name,
-          qbo_customer_id: payer.isProducer ? linkByName.get(payer.name) ?? '' : '',
+          qbo_customer_id: (payer.isProducer ? linkByName.get(payer.name) : custLinkByName.get(payer.name)) ?? '',
           qbo_item_id: charge.qboItemId,
           description: charge.description,
           qty: charge.qty,

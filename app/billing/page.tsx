@@ -36,7 +36,12 @@ const TD: React.CSSProperties = {
   borderBottom: '1px solid rgba(166,120,90,0.12)',
 }
 
-interface Producer { name: string; harvestCount: number }
+interface QboCandidate { qbo_id: string; display_name: string; sim: number }
+// `candidates` only ever rides on an UNMATCHED row — a trigram guess at what
+// the name drifted from. Never applied automatically; see the route.
+interface Producer { name: string; harvestCount: number; candidates?: QboCandidate[] }
+type LinkScope = 'producers' | 'customers'
+const scopeWord = (s: LinkScope) => (s === 'producers' ? 'Producer' : 'Cut customer')
 interface BillableEvent {
   id: string
   service_date: string
@@ -123,6 +128,10 @@ export default function BillingPage() {
   const [syncMsg, setSyncMsg] = useState<string | null>(null)
 
   // manual picker
+  // Producers and cut customers are the two payers on a split and both need a
+  // QuickBooks identity before anything can be invoiced. Same screen, same
+  // machinery — only the source of names and the link table differ.
+  const [scope, setScope] = useState<LinkScope>('producers')
   const [pickerFor, setPickerFor] = useState<Producer | null>(null)
   const [pickerSearch, setPickerSearch] = useState('')
   const [pickerResults, setPickerResults] = useState<QboCust[]>([])
@@ -158,7 +167,7 @@ export default function BillingPage() {
     setError(null)
     try {
       const [custRes, evRes, ringRes, sweepRes] = await Promise.all([
-        fetch('/api/qbo/customers'),
+        fetch(`/api/qbo/customers?scope=${scope}`),
         fetch('/api/billing/events'),
         fetch('/api/clover/ring-up'),
         fetch('/api/clover/reconcile'),
@@ -175,7 +184,7 @@ export default function BillingPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
-  }, [])
+  }, [scope])
 
   async function syncNow() {
     setSweeping(true)
@@ -669,6 +678,33 @@ export default function BillingPage() {
           )}
         </div>
 
+        {/* ── Who we're linking ──────────────────────────────────────────
+            Both payers on a split need a QuickBooks identity: the producer who
+            dropped the animal off, and the customer who bought a share of it.
+            Only the customer side was ever missing (Charlie, 2026-08-22). */}
+        <div style={{ ...CARD, display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+          <span style={{ color: C.lightBrown, fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            Linking
+          </span>
+          {([['producers', 'Producers'], ['customers', 'Cut customers']] as [LinkScope, string][]).map(([k, label]) => (
+            <button key={k} onClick={() => { if (k !== scope) { setScope(k); setData(null); setPickerFor(null) } }}
+              style={{
+                background: scope === k ? C.tan : 'transparent',
+                color: scope === k ? C.dark : C.lightBrown,
+                border: `1px solid ${scope === k ? C.tan : 'rgba(166,120,90,0.35)'}`,
+                borderRadius: 3, padding: '0.3rem 0.85rem', fontSize: '0.82rem',
+                fontWeight: scope === k ? 700 : 500, cursor: 'pointer',
+              }}>
+              {label}
+            </button>
+          ))}
+          <span style={{ color: C.lightBrown, fontSize: '0.75rem', marginLeft: 'auto' }}>
+            {scope === 'producers'
+              ? 'Who dropped the animal off — billed for the whole carcass unless a share says otherwise.'
+              : 'Who bought a share — billed for their own portion. Until linked, their charges cannot reach QuickBooks.'}
+          </span>
+        </div>
+
         {/* ── Suggestions ────────────────────────────────────────────── */}
         {data && data.suggestions.length > 0 && (
           <div style={CARD}>
@@ -677,7 +713,7 @@ export default function BillingPage() {
             </div>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr>
-                <th style={TH}>Producer</th><th style={TH}>Harvests</th><th style={TH}>QuickBooks Customer</th><th style={TH}></th>
+                <th style={TH}>{scopeWord(scope)}</th><th style={TH}>Carcasses</th><th style={TH}>QuickBooks Customer</th><th style={TH}></th>
               </tr></thead>
               <tbody>
                 {data.suggestions.map(({ producer, qbo }) => (
@@ -686,7 +722,7 @@ export default function BillingPage() {
                     <td style={{ ...TD, color: C.lightBrown }}>{producer.harvestCount}</td>
                     <td style={TD}>{qbo.display_name}</td>
                     <td style={{ ...TD, textAlign: 'right' }}>
-                      <button onClick={() => act('link', { producerName: producer.name, qboId: qbo.qbo_id }, producer.name)}
+                      <button onClick={() => act('link', { scope, name: producer.name, qboId: qbo.qbo_id }, producer.name)}
                         disabled={busy === producer.name}
                         style={{ ...BTN(C.green), padding: '0.3rem 0.8rem', fontSize: '0.76rem' }}>
                         {busy === producer.name ? '…' : 'Link'}
@@ -710,7 +746,7 @@ export default function BillingPage() {
             ) : (
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead><tr>
-                  <th style={TH}>Producer</th><th style={TH}>Harvests</th><th style={TH}>QuickBooks Customer</th><th style={TH}></th>
+                  <th style={TH}>{scopeWord(scope)}</th><th style={TH}>Carcasses</th><th style={TH}>QuickBooks Customer</th><th style={TH}></th>
                 </tr></thead>
                 <tbody>
                   {data.linked.map(({ producer, qbo }) => (
@@ -719,7 +755,7 @@ export default function BillingPage() {
                       <td style={{ ...TD, color: C.lightBrown }}>{producer.harvestCount}</td>
                       <td style={TD}>{qbo.display_name}</td>
                       <td style={{ ...TD, textAlign: 'right' }}>
-                        <button onClick={() => { if (confirm(`Unlink ${producer.name}?`)) act('unlink', { producerName: producer.name }, producer.name) }}
+                        <button onClick={() => { if (confirm(`Unlink ${producer.name}?`)) act('unlink', { scope, name: producer.name }, producer.name) }}
                           disabled={busy === producer.name}
                           style={{ ...BTN('transparent', C.red), border: `1px solid ${C.red}`, padding: '0.25rem 0.7rem', fontSize: '0.74rem', opacity: 0.75 }}>
                           Unlink
@@ -737,7 +773,7 @@ export default function BillingPage() {
         {data && data.unmatched.length > 0 && (
           <div style={CARD}>
             <div style={{ color: C.tan, fontWeight: 700, fontSize: '0.95rem', marginBottom: '0.5rem' }}>
-              No Match Yet <span style={{ color: C.lightBrown, fontWeight: 400 }}>({data.unmatched.length} producers — search their QuickBooks name)</span>
+              No Match Yet <span style={{ color: C.lightBrown, fontWeight: 400 }}>({data.unmatched.length} {scopeWord(scope).toLowerCase()}{data.unmatched.length === 1 ? '' : 's'} — pick from the closest names, or search)</span>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
               {data.unmatched.map(p => (
@@ -758,6 +794,35 @@ export default function BillingPage() {
                   Link <strong>{pickerFor.name}</strong> to:
                   <button onClick={() => setPickerFor(null)} style={{ background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', marginLeft: '0.6rem' }}>cancel</button>
                 </div>
+                {/* Closest names in QuickBooks, worked out by spelling rather
+                    than by an exact match — that is where the real drift shows
+                    up ("TEINI, JOE" for "Joe Teini Resale"). The score is shown
+                    because a weak one deserves to look weak: the best guess for
+                    "Wendy Racki" is a different Racki. */}
+                {(pickerFor.candidates?.length ?? 0) > 0 && (
+                  <div style={{ marginBottom: '0.6rem' }}>
+                    <div style={{ color: C.lightBrown, fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '0.3rem' }}>
+                      Closest in QuickBooks — check before you pick
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', maxWidth: 560 }}>
+                      {pickerFor.candidates!.map(c => (
+                        <button key={c.qbo_id}
+                          onClick={() => act('link', { scope, name: pickerFor.name, qboId: c.qbo_id }, pickerFor.name)}
+                          disabled={busy === pickerFor.name}
+                          style={{
+                            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                            background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.25)',
+                            borderRadius: 3, color: C.cream, padding: '0.4rem 0.7rem', fontSize: '0.8rem', cursor: 'pointer',
+                          }}>
+                          <span>{c.display_name}</span>
+                          <span style={{ color: c.sim >= 0.7 ? C.tan : C.lightBrown, fontFamily: 'monospace', fontSize: '0.72rem' }}>
+                            {Math.round(c.sim * 100)}% alike
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <input
                   autoFocus
                   value={pickerSearch}
@@ -771,7 +836,7 @@ export default function BillingPage() {
                 />
                 <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.25rem', maxWidth: 560 }}>
                   {pickerResults.map(q => (
-                    <button key={q.qbo_id} onClick={() => act('link', { producerName: pickerFor.name, qboId: q.qbo_id }, pickerFor.name)}
+                    <button key={q.qbo_id} onClick={() => act('link', { scope, name: pickerFor.name, qboId: q.qbo_id }, pickerFor.name)}
                       disabled={busy === pickerFor.name}
                       style={{
                         display: 'flex', justifyContent: 'space-between', alignItems: 'center',

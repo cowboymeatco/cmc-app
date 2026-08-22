@@ -8,13 +8,51 @@ import { supabase } from '@/lib/supabase'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { qboFetch } from '@/lib/qbo'
 
-// Producer -> QuickBooks customer recognition. Billing keys off
-// harvest_log.producer names; links live in producer_qbo_links. The QBO
-// customer cache (qbo_customers, ~8.8k rows) refreshes over the app's live
-// QuickBooks connection and is only ever queried narrowly (norm match or
-// search) — never listed wholesale.
+// Floor name -> QuickBooks customer recognition, for BOTH sides of a split.
+//
+//   scope=producers  harvest_log.producer          -> producer_qbo_links
+//   scope=customers  the appointment's customer    -> customer_qbo_links
+//
+// Billing resolves a QBO id for producers already; the cut customer — the
+// person who actually bought the animal — always got an empty string, so no
+// charge billed to one could reach QuickBooks (Charlie, 2026-08-22). Same
+// machinery serves both: only the source of names and the link table differ.
+//
+// The QBO customer cache (qbo_customers, ~8.9k rows) refreshes over the app's
+// live QuickBooks connection and is only ever queried narrowly (norm match,
+// trigram candidates, or search) — never listed wholesale.
 
 const norm = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim()
+
+type Scope = 'producers' | 'customers'
+const SCOPES = {
+  producers: { table: 'producer_qbo_links', col: 'producer_name' },
+  customers: { table: 'customer_qbo_links', col: 'customer_name' },
+} as const
+const scopeOf = (v: string | null): Scope => (v === 'customers' ? 'customers' : 'producers')
+
+// Every distinct name the chosen scope bills, with how many carcasses sit
+// behind it — the count is what tells someone whether a name is worth chasing.
+async function namesForScope(scope: Scope): Promise<{ name: string; harvestCount: number }[]> {
+  const counts = new Map<string, number>()
+  if (scope === 'producers') {
+    const { data, error } = await supabase
+      .from('harvest_log').select('producer').not('producer', 'is', null).neq('producer', '')
+    if (error) throw new Error(error.message)
+    for (const h of data ?? []) counts.set(h.producer, (counts.get(h.producer) ?? 0) + 1)
+  } else {
+    // One row per carcass per customer slot on its appointment. A split animal
+    // legitimately counts for each buyer on it.
+    const { data, error } = await supabase.rpc('cut_customer_carcass_counts')
+    if (error) throw new Error(error.message)
+    for (const r of (data ?? []) as { customer_name: string; carcasses: number }[]) {
+      if (r.customer_name) counts.set(r.customer_name, r.carcasses)
+    }
+  }
+  return [...counts.entries()]
+    .map(([name, harvestCount]) => ({ name, harvestCount }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+}
 
 interface QboCustomer {
   Id: string
@@ -43,20 +81,17 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ results: data })
     }
 
-    const [{ data: harvests, error: hErr }, { data: links, error: lErr }] = await Promise.all([
-      supabase.from('harvest_log').select('producer').not('producer', 'is', null).neq('producer', ''),
-      supabaseAdmin.from('producer_qbo_links').select('producer_name, qbo_customer_id'),
+    const scope = scopeOf(req.nextUrl.searchParams.get('scope'))
+    const { table, col } = SCOPES[scope]
+
+    const [producers, { data: links, error: lErr }] = await Promise.all([
+      namesForScope(scope),
+      supabaseAdmin.from(table).select(`${col}, qbo_customer_id`),
     ])
-    if (hErr) throw new Error(hErr.message)
     if (lErr) throw new Error(lErr.message)
 
-    // Distinct producers with harvest counts
-    const counts = new Map<string, number>()
-    for (const h of harvests ?? []) counts.set(h.producer, (counts.get(h.producer) ?? 0) + 1)
-    const producers = [...counts.entries()].map(([name, harvestCount]) => ({ name, harvestCount }))
-      .sort((a, b) => a.name.localeCompare(b.name))
-
-    const linkByName = new Map((links ?? []).map(l => [l.producer_name, l.qbo_customer_id]))
+    const linkByName = new Map(
+      (links ?? []).map(l => [(l as Record<string, string>)[col], l.qbo_customer_id]))
     const linkedQboIds = [...linkByName.values()]
 
     // Narrow cache queries: exact norm matches for suggestions + linked rows for display
@@ -96,8 +131,25 @@ export async function GET(req: NextRequest) {
       else unmatched.push(p)
     }
 
+    // Trigram candidates for whatever the exact key missed — the real failure
+    // mode is drift, not absence ("Wendi" vs "Wendy", "BELLS" vs "Belles",
+    // "TEINI, JOE" vs "Joe Teini Resale"). These are NEVER auto-applied and are
+    // returned with their score so a weak one looks weak: the top candidate for
+    // "Wendy Racki" is a different Racki entirely.
+    if (unmatched.length) {
+      const { data: cands, error: cErr } = await supabase.rpc('qbo_customer_candidates', {
+        names: unmatched.map(u => u.name),
+      })
+      if (cErr) throw new Error(cErr.message)
+      const byName = new Map<string, { qbo_id: string; display_name: string; sim: number }[]>()
+      for (const c of (cands ?? []) as { our_name: string; qbo_id: string; display_name: string; sim: number }[]) {
+        byName.set(c.our_name, [...(byName.get(c.our_name) ?? []), c])
+      }
+      for (const u of unmatched) (u as Record<string, unknown>).candidates = byName.get(u.name) ?? []
+    }
+
     const { data: syncRow } = await supabase.from('qbo_customers').select('synced_at').order('synced_at', { ascending: false }).limit(1)
-    return NextResponse.json({ linked, suggestions, unmatched, syncedAt: syncRow?.[0]?.synced_at ?? null })
+    return NextResponse.json({ scope, linked, suggestions, unmatched, syncedAt: syncRow?.[0]?.synced_at ?? null })
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 })
   }
@@ -137,20 +189,24 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, count: rows.length, active: rows.filter(r => r.active).length })
     }
 
-    if (body.action === 'link') {
-      const { producerName, qboId } = body
-      if (!producerName || !qboId) return NextResponse.json({ error: 'producerName and qboId required' }, { status: 400 })
-      const { error } = await supabaseAdmin
-        .from('producer_qbo_links')
-        .upsert({ producer_name: producerName, qbo_customer_id: String(qboId) }, { onConflict: 'producer_name' })
-      if (error) throw new Error(error.message)
-      return NextResponse.json({ ok: true })
-    }
+    // `name` is the scope-aware field; producerName stays accepted so an older
+    // client (or a bookmarked call) keeps linking producers exactly as before.
+    if (body.action === 'link' || body.action === 'unlink') {
+      const scope = scopeOf(body.scope ?? null)
+      const { table, col } = SCOPES[scope]
+      const name = body.name ?? body.producerName
+      if (!name) return NextResponse.json({ error: 'name required' }, { status: 400 })
 
-    if (body.action === 'unlink') {
-      const { producerName } = body
-      if (!producerName) return NextResponse.json({ error: 'producerName required' }, { status: 400 })
-      const { error } = await supabaseAdmin.from('producer_qbo_links').delete().eq('producer_name', producerName)
+      if (body.action === 'unlink') {
+        const { error } = await supabaseAdmin.from(table).delete().eq(col, name)
+        if (error) throw new Error(error.message)
+        return NextResponse.json({ ok: true })
+      }
+
+      if (!body.qboId) return NextResponse.json({ error: 'qboId required' }, { status: 400 })
+      const { error } = await supabaseAdmin
+        .from(table)
+        .upsert({ [col]: name, qbo_customer_id: String(body.qboId) }, { onConflict: col })
       if (error) throw new Error(error.message)
       return NextResponse.json({ ok: true })
     }
