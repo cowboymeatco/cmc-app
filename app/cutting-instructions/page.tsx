@@ -39,6 +39,53 @@ function speciesEmblem(s?: string | null): string {
   return SPECIES_EMBLEM[speciesKey(s)] ?? '🥩'
 }
 
+// ── Multi-head drop-offs ─────────────────────────────────────────────────────
+// A cutting card covers ONE animal. Kristin at VML brought three lambs and sent
+// one card meaning it to cover all three — and nothing in the app could tell
+// that apart from one lamb, one card (2026-08-21). The public form now asks how
+// many head and writes the answer to data.headCount, so the office can see the
+// shortfall instead of finding out at the saw.
+//
+// Cards for the same drop-off are separate rows that share the customer, the
+// species and the kill date — cards 2..N are started from card 1, so all three
+// carry the same answers. Grouping on that and counting against headCount is
+// what surfaces "3 declared, 1 on file".
+function dropOffKey(ci: RawInstruction): string {
+  const d = ci.data ?? {}
+  return [
+    String(d.customerName ?? '').trim().toLowerCase(),
+    speciesKey(ci.data?.species ?? ci.species),
+    String(d.killDate ?? ''),
+  ].join('|')
+}
+
+// Which of the declared head this card is. Cards written before the question
+// existed, or where the index somehow outran the count, read as the first —
+// never as a number that contradicts the total printed beside it.
+function headIndexOf(ci: RawInstruction): number {
+  const n = Number(ci.data?.headIndex)
+  const total = declaredHead(ci)
+  return Number.isFinite(n) && n >= 1 && n <= total ? Math.floor(n) : 1
+}
+
+function declaredHead(ci: RawInstruction): number {
+  const n = Number(ci.data?.headCount)
+  // Every card written before the question existed is a single animal.
+  return Number.isFinite(n) && n >= 1 && n <= 99 ? Math.floor(n) : 1
+}
+
+// Smokehouse orders the customer pinned to a single animal. These must NOT be
+// repeated when one card gets linked to several head — that is the whole point
+// of the scope question, and the floor can't know it from the card alone.
+function singleHeadSmokehouse(ci: RawInstruction): string[] {
+  const sh = ci.data?.smokehouse ?? {}
+  const LABELS: Record<string, string> = {
+    sticks: 'Snack Sticks', brats: 'Brots', summer: 'Summer / Salami',
+    jerky: 'Jerky', hotDogs: 'Hot Dogs',
+  }
+  return Object.keys(LABELS).filter(k => sh[`${k}Scope`] === 'one').map(k => LABELS[k])
+}
+
 const BEEF_SECTIONS = [
   { label: 'Customer Info', fields: [
     ['customerName','Customer'],['mailingAddress','Mailing Address'],
@@ -1066,6 +1113,13 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
          <div style="font-size:12px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Animal</div>
          <div style="font-size:24px;font-weight:bold">${species}${d.portion ? ' · ' + fmt(d.portion) : ''}</div>
          <div style="font-size:16px;color:#555;margin-top:1px">Harvest Date: ${harvestDate}</div>
+         ${/* This card is ONE animal out of several the customer dropped off.
+              It prints because a smokehouse order can be pinned to a single
+              head, and the crew has to know this is a multi-head job before
+              they read a "one animal only" line further down. */
+           declaredHead(ci) > 1
+             ? `<div style="font-size:16px;margin-top:2px;font-weight:bold">Animal ${headIndexOf(ci)} of ${declaredHead(ci)} this drop-off</div>`
+             : ''}
          ${/* One answer for the whole order, so it rides in the header where it
               governs every steak below rather than repeating on each row. */
            d.steakPack ? `<div style="font-size:18px;margin-top:3px">Steaks: <span style="font-weight:bold">${esc(String(d.steakPack))} per pack</span></div>` : ''}
@@ -1743,6 +1797,23 @@ export default function CuttingInstructionsPage() {
   // Every word has to match, so "pinkerton hog" narrows rather than widens.
   const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean)
 
+  // How many cards are on file for each drop-off, counted over every loaded
+  // card rather than the filtered view — a species or status chip that hides
+  // card 2 must not make card 1 look like a shortfall.
+  const cardsPerDropOff = new Map<string, number>()
+  for (const i of instructions) {
+    if (i.status === 'archived') continue
+    const k = dropOffKey(i)
+    cardsPerDropOff.set(k, (cardsPerDropOff.get(k) ?? 0) + 1)
+  }
+  // null when the count is satisfied — the common case is one head, one card.
+  const headShortfall = (ci: RawInstruction): { declared: number; onFile: number } | null => {
+    const declared = declaredHead(ci)
+    if (declared <= 1) return null
+    const onFile = cardsPerDropOff.get(dropOffKey(ci)) ?? 1
+    return onFile < declared ? { declared, onFile } : null
+  }
+
   const filtered = instructions.filter(i => {
     const species = speciesOf(i)
     if (terms.length) {
@@ -2207,7 +2278,20 @@ export default function CuttingInstructionsPage() {
                         title="Include in batch print"
                         style={{ width: 15, height: 15, accentColor: 'var(--tan)', cursor: 'pointer' }}
                       />
-                      <div style={{ fontWeight: 600, color: 'var(--cream)', fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
+                      <div style={{ fontWeight: 600, color: 'var(--cream)', fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {name}
+                        {(() => {
+                          const short = headShortfall(ci)
+                          if (!short) return null
+                          return (
+                            <span
+                              title={`This customer said they were bringing ${short.declared} head, and only ${short.onFile} cutting card${short.onFile === 1 ? ' is' : 's are'} on file. One card covers one animal — check whether the rest are coming before this is cut.`}
+                              style={{ marginLeft: '0.4rem', fontSize: '0.68rem', fontWeight: 700, padding: '0.05rem 0.35rem', borderRadius: 4, background: 'rgba(200,120,20,0.28)', color: '#f0b866', whiteSpace: 'nowrap' }}>
+                              ⚠ {short.onFile}/{short.declared} head
+                            </span>
+                          )
+                        })()}
+                      </div>
                       <div style={{ fontSize: '0.78rem', color: 'var(--tan)' }}>{species}</div>
                       <div style={{ fontSize: '0.78rem', color: 'var(--tan)', whiteSpace: 'nowrap' }}>{fmtShortDate(ci.created_at)}</div>
                       {/* An unconfirmed date is dimmed and prefixed "~" so it
@@ -2282,6 +2366,36 @@ export default function CuttingInstructionsPage() {
                 <button onClick={() => setSelected(null)} style={btnStyle('transparent', 'var(--tan)')}>✕</button>
               </div>
             </div>
+
+            {/* Multi-head warnings. These sit above everything else in the
+                detail panel because both of them change what the floor should
+                do, and both are invisible on the printed card. */}
+            {(() => {
+              const short = headShortfall(selected)
+              const pinned = singleHeadSmokehouse(selected)
+              const declared = declaredHead(selected)
+              if (!short && !pinned.length) return null
+              return (
+                <div style={{ padding: '0.75rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.15)', background: 'rgba(200,120,20,0.12)', display: 'flex', flexDirection: 'column', gap: '0.45rem', flexShrink: 0 }}>
+                  {short && (
+                    <div style={{ fontSize: '0.82rem', color: '#f0b866' }}>
+                      ⚠ <strong>{short.declared} head declared, {short.onFile} card{short.onFile === 1 ? '' : 's'} on file.</strong>{' '}
+                      A cutting card covers one animal. Check whether the rest are
+                      coming before anything gets cut &mdash; or copy this one for
+                      each remaining animal.
+                    </div>
+                  )}
+                  {pinned.length > 0 && (
+                    <div style={{ fontSize: '0.82rem', color: '#f0b866' }}>
+                      🔒 <strong>{pinned.join(', ')} {pinned.length === 1 ? 'is' : 'are'} for ONE animal only</strong>{' '}
+                      out of {declared}. If you link this card to more than one head,
+                      do not repeat that order &mdash; the customer asked for it off a
+                      single animal.
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
 
             {/* Linked badge */}
             {selected.status === 'linked' && (() => {

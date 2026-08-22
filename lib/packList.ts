@@ -166,20 +166,33 @@ export function smokehouseRows(sm: any, f: (s: string) => string, data?: any): A
   for (const label of jerkyFromRound) {
     rows.push([label, 'From the round — whole primal, no set weight'])
   }
-  const add = (label: string, items: any) => {
+  // A smokehouse order on a multi-head drop-off either repeats on every animal
+  // or belongs to a single one. The floor cannot infer that from the card, and
+  // getting it wrong is three lambs' worth of brots instead of one — which is
+  // exactly what happened to Kristin at VML (2026-08-21). The poundage itself
+  // is per animal either way, so only the scope needs saying.
+  const heads = Number(data?.headCount) > 1 ? Math.floor(Number(data.headCount)) : 1
+  const scopeNote = (key: string): string => {
+    if (heads <= 1) return ''
+    const sc = sm[`${key}Scope`]
+    if (sc === 'one') return 'ONE ANIMAL ONLY — not on every head'
+    if (sc === 'all') return `each of ${heads} head`
+    return ''
+  }
+  const add = (label: string, items: any, key: string) => {
     if (!Array.isArray(items)) return
     for (const it of items) {
-      const spec = [it?.lbs ? `${it.lbs} lbs` : '', f(it?.flavor ?? ''), it?.cheese ? f(it.cheese) : '']
+      const spec = [it?.lbs ? `${it.lbs} lbs` : '', f(it?.flavor ?? ''), it?.cheese ? f(it.cheese) : '', scopeNote(key)]
         .filter(Boolean).join(' · ')
       if (spec) rows.push([label, spec])
     }
   }
-  add('Snack Sticks',   sm.sticks)
+  add('Snack Sticks',   sm.sticks, 'sticks')
   // "Brots" — brotwurst is the FSIS name for what we make; the JSON key stays
   // `brats` because that's what every stored order already carries.
-  add('Brots',          sm.brats)
-  add('Summer Sausage', sm.summer)
-  add('Jerky',          sm.jerky)
+  add('Brots',          sm.brats, 'brats')
+  add('Summer Sausage', sm.summer, 'summer')
+  add('Jerky',          sm.jerky, 'jerky')
   // Jerky comes off the bottom round, which only yields so much. This is the
   // customer's written answer on topping the order up out of our own cooler —
   // the office bills off it, so it prints right under the jerky lines.
@@ -189,7 +202,7 @@ export function smokehouseRows(sm: any, f: (s: string) => string, data?: any): A
       : 'DO NOT supplement — only their own animal'])
   }
   if (sm.hotDogs) {
-    const spec = [sm.hotDogs.lbs ? `${sm.hotDogs.lbs} lbs` : '', sm.hotDogs.cheese ? f(sm.hotDogs.cheese) : '']
+    const spec = [sm.hotDogs.lbs ? `${sm.hotDogs.lbs} lbs` : '', sm.hotDogs.cheese ? f(sm.hotDogs.cheese) : '', scopeNote('hotDogs')]
       .filter(Boolean).join(' · ')
     if (spec) rows.push(['Hot Dogs', spec])
   }
