@@ -44,18 +44,24 @@ export function beefTrimPackRows(t: any): Array<[string, string]> {
   if (trimIsBagged(t)) return baggedTrimPackRows(t)
   const rows: Array<[string, string]> = []
   const pattyPct = Number(t.pattyPct ?? 0)
-  if (pattyPct < 100) {
+  // Patties can be ordered as a share of the trim or as a flat weight; the two
+  // are never both set (Jill, 2026-08-21). A weight always leaves a remainder,
+  // so the loose line is never suppressed on that side.
+  const pattyLbs = Number(t.pattyLbs ?? 0)
+  const byWeight = pattyLbs > 0
+
+  if (byWeight || pattyPct < 100) {
     const parts = [
       t.loose?.packSize ? `${t.loose.packSize} lb ${t.loose?.rollstock ? 'rollstock' : 'packs'}` : '',
-      pattyPct > 0 ? `${100 - pattyPct}% of trim` : '',
+      byWeight ? 'whatever is left after the patties' : pattyPct > 0 ? `${100 - pattyPct}% of trim` : '',
     ].filter(Boolean)
     if (parts.length) rows.push(['Loose Grind', parts.join(' · ')])
   }
-  if (pattyPct > 0) {
+  if (byWeight || pattyPct > 0) {
     const parts = [
       t.patties?.size ?? '',
       t.patties?.pkg === '1lb' ? '1 lb pkgs' : t.patties?.pkg === '10lb' ? '10 lb box' : '',
-      pattyPct < 100 ? `${pattyPct}% of trim` : 'all trim',
+      byWeight ? `${pattyLbs} lb` : pattyPct < 100 ? `${pattyPct}% of trim` : 'all trim',
     ].filter(Boolean)
     rows.push(['Patties', parts.join(' · ')])
   }

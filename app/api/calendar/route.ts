@@ -1,7 +1,7 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
-import { projectedCutDate } from '@/lib/cutSchedule'
+import { projectedCutDate, speciesIcon } from '@/lib/cutSchedule'
 
 export const dynamic = 'force-dynamic'
 
@@ -149,7 +149,9 @@ export async function GET(req: NextRequest) {
     const head = r.head_count ? `${r.head_count} ` : ''
     events.push({
       id: `recv-${r.id}`, lane: 'receiving', date: d,
-      title: `🐄 ${r.source || r.species || 'Arrival'}`,
+      // speciesIcon, not a hardcoded cow: the scanner made exactly this
+      // mistake and painted a 🐄 on hog sessions (Charlie, 2026-08-09).
+      title: `${speciesIcon(String(r.species ?? ''))} ${r.source || r.species || 'Arrival'}`,
       subtitle: `${head}${r.species || ''}`.trim() || undefined,
       status: (r.status as string) ?? undefined, href: LANE_HREF.receiving,
     })
@@ -174,7 +176,7 @@ export async function GET(req: NextRequest) {
     const head = r.head_count ? `${r.head_count} ` : ''
     events.push({
       id: `appt-${r.id}`, lane: 'harvest', date: d,
-      title: (r.source as string) || (r.species as string) || 'Harvest',
+      title: `${speciesIcon(String(r.species ?? ''))} ${(r.source as string) || (r.species as string) || 'Harvest'}`,
       subtitle: `${head}${r.species || ''}`.trim() || undefined,
       status: (r.status as string) ?? undefined, href: LANE_HREF.harvest,
     })
@@ -185,7 +187,9 @@ export async function GET(req: NextRequest) {
     if (!d) continue
     events.push({
       id: `sess-${r.id}`, lane: 'processing', date: d,
-      title: (r.customer_name as string) || 'Processing',
+      // A packing session carries no species column, so it takes the lane's
+      // own mark rather than a guessed animal.
+      title: `🔪 ${(r.customer_name as string) || 'Processing'}`,
       status: (r.status as string) ?? undefined, href: LANE_HREF.processing,
     })
   }

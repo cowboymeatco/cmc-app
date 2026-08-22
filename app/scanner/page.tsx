@@ -437,6 +437,11 @@ export default function ScannerPage() {
 
   // ── Session ──────────────────────────────────────────────────────────────────
   const [customer, setCustomer] = useState('')
+  // Opening an existing session overwrites this with THAT session's date, and
+  // the New Session form's Pack Date reads the same value — so starting a new
+  // session after looking at an old one silently inherited the old date. Three
+  // CMC beef sessions cut on 8/20–8/21 were filed under 8/13 that way (Jill,
+  // 2026-08-21). openNewSession() below puts it back to today.
   const [date,     setDate]     = useState(isoDate())
   const [started,  setStarted]  = useState(false)
   // Inline rename of the open session's customer (header)
@@ -1051,6 +1056,17 @@ export default function ScannerPage() {
   }
 
   // ── Start session + auto-create Box 1 ────────────────────────────────────────
+  // Every route into the New Session form goes through here, so the Pack Date
+  // can only ever start at today. Backdating stays possible — the field is
+  // still editable, and a session genuinely packed yesterday needs it — but it
+  // now has to be chosen rather than inherited.
+  function openNewSession() {
+    setCustomer('')
+    setBoxType('USDA')
+    setDate(isoDate())
+    setShowNewForm(true)
+  }
+
   async function startSession() {
     const cust = customer.trim()
     if (!cust || !pluLoaded) return
@@ -2160,7 +2176,7 @@ export default function ScannerPage() {
           {/* New Session — split button, because a repack starts from a box
               serial instead of a typed customer name. */}
           <div style={{ position: 'relative', display: 'flex' }}>
-            <button onClick={() => { setCustomer(''); setBoxType('USDA'); setShowNewForm(true) }} style={{ background: C.tan, color: C.dark, border: 'none', borderRadius: '4px 0 0 4px', padding: '0.5rem 1.1rem', fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer', letterSpacing: '0.04em' }}>
+            <button onClick={openNewSession} style={{ background: C.tan, color: C.dark, border: 'none', borderRadius: '4px 0 0 4px', padding: '0.5rem 1.1rem', fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer', letterSpacing: '0.04em' }}>
               + New Session
             </button>
             <button
@@ -2294,7 +2310,7 @@ export default function ScannerPage() {
             <div style={{ textAlign: 'center', color: C.lightBrown, padding: '4rem 2rem' }}>
               <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🔍</div>
               <div style={{ fontSize: '0.95rem', marginBottom: '1.25rem' }}>No sessions yet</div>
-              <button onClick={() => { setCustomer(''); setBoxType('USDA'); setShowNewForm(true) }} style={{ background: C.tan, color: C.dark, border: 'none', borderRadius: 4, padding: '0.65rem 1.5rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer' }}>
+              <button onClick={openNewSession} style={{ background: C.tan, color: C.dark, border: 'none', borderRadius: 4, padding: '0.65rem 1.5rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer' }}>
                 Start First Session
               </button>
             </div>
@@ -2405,6 +2421,15 @@ export default function ScannerPage() {
               <div style={{ marginBottom: '1.5rem' }}>
                 <label style={LBL}>Pack Date</label>
                 <input type="date" style={{ ...INPUT, fontSize: '1rem' }} value={date} onChange={e => setDate(e.target.value)} />
+                {/* Says so out loud rather than letting a wrong date ride: the
+                    date decides which day's yield, boxes and labels this work
+                    lands on, and nobody re-reads a field that looks filled in. */}
+                {date !== isoDate() && (
+                  <div style={{ marginTop: '0.4rem', color: C.yellow, fontSize: '0.78rem', fontWeight: 600 }}>
+                    ⚠ Not today — this session will be filed under{' '}
+                    {new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}.
+                  </div>
+                )}
               </div>
               <div style={{ display: 'flex', gap: '0.6rem' }}>
                 <button onClick={() => setShowNewForm(false)} style={{ flex: 1, background: 'transparent', border: '1px solid rgba(166,120,90,0.3)', color: C.lightBrown, borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', cursor: 'pointer' }}>
