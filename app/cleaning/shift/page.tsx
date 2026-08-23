@@ -68,14 +68,27 @@ export default function ShiftPage() {
 
   useEffect(() => { load() }, [load])
 
-  // Group into the walking order the builder already sorted them into.
+  // Room > Equipment > Process, in the walking order the builder already sorted
+  // them into (Charlie, 2026-08-23). A room's own chores — floors, drains,
+  // walls — carry no equipment and stay loose at the top of the room rather
+  // than being filed under an invented machine; the night crew reads them as
+  // "the room itself", which is how the paper checklist has always run.
   const areas = useMemo(() => {
     const map = new Map<string, CleaningShiftItem[]>()
     for (const it of items) {
       if (!map.has(it.area_name)) map.set(it.area_name, [])
       map.get(it.area_name)!.push(it)
     }
-    return [...map.entries()]
+    return [...map.entries()].map(([area, list]) => {
+      const loose: CleaningShiftItem[] = []
+      const byEquip = new Map<string, CleaningShiftItem[]>()
+      for (const it of list) {
+        if (!it.equipment_name) { loose.push(it); continue }
+        if (!byEquip.has(it.equipment_name)) byEquip.set(it.equipment_name, [])
+        byEquip.get(it.equipment_name)!.push(it)
+      }
+      return { area, list, loose, equipment: [...byEquip.entries()] }
+    })
   }, [items])
 
   // Open the first area with work left in it, so the crew lands on something
@@ -83,8 +96,8 @@ export default function ShiftPage() {
   // until somebody actually opens or closes one.
   const visibleAreas = useMemo(() => {
     if (openAreas) return openAreas
-    const first = areas.find(([, list]) => list.some(i => i.status === 'pending'))
-    return new Set(first ? [first[0]] : [])
+    const first = areas.find(g => g.list.some(i => i.status === 'pending'))
+    return new Set(first ? [first.area] : [])
   }, [openAreas, areas])
 
   const progress = shiftProgress(items)
@@ -208,7 +221,7 @@ export default function ShiftPage() {
         )}
 
         {/* Areas */}
-        {areas.map(([area, list]) => {
+        {areas.map(({ area, list, loose, equipment }) => {
           const open = visibleAreas.has(area)
           const p    = shiftProgress(list)
           return (
@@ -237,24 +250,50 @@ export default function ShiftPage() {
                 </span>
               </button>
 
-              {open && (
-                <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {list.map(item => (
-                    <ItemRow
-                      key={item.id}
-                      item={item}
-                      photos={photosFor(item.id)}
-                      shiftId={shift!.id}
-                      memberName={member.name}
-                      disabled={closed}
-                      expanded={expanded === item.id}
-                      onToggleExpand={() => setExpanded(expanded === item.id ? null : item.id)}
-                      onMark={mark}
-                      onPhoto={p => setPhotos(prev => [...prev, p])}
-                    />
-                  ))}
-                </div>
-              )}
+              {open && (() => {
+                const row = (item: CleaningShiftItem) => (
+                  <ItemRow
+                    key={item.id}
+                    item={item}
+                    photos={photosFor(item.id)}
+                    shiftId={shift!.id}
+                    memberName={member.name}
+                    disabled={closed}
+                    expanded={expanded === item.id}
+                    onToggleExpand={() => setExpanded(expanded === item.id ? null : item.id)}
+                    onMark={mark}
+                    onPhoto={p => setPhotos(prev => [...prev, p])}
+                  />
+                )
+                return (
+                  <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {loose.map(row)}
+
+                    {/* One block per machine, with its own count — a stuffer is
+                        stripped, washed and put back as one job, and the crew
+                        needs to see whether the whole machine is done, not
+                        whether six unrelated lines happen to be ticked. */}
+                    {equipment.map(([name, list]) => {
+                      const ep = shiftProgress(list)
+                      return (
+                        <div key={name} style={{
+                          border: `1px solid ${C.medBrown}`, borderRadius: 10,
+                          padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 8,
+                        }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontSize: 14 }}>🔧</span>
+                            <span style={{ flex: 1, fontSize: 14, fontWeight: 700, color: C.tan }}>{name}</span>
+                            <span style={{ fontSize: 12, color: ep.complete ? C.green : C.tan, whiteSpace: 'nowrap' }}>
+                              {ep.complete ? '✓ done' : `${ep.pending} left`}
+                            </span>
+                          </div>
+                          {list.map(row)}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
             </div>
           )
         })}
