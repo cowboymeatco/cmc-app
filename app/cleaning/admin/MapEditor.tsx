@@ -30,6 +30,19 @@ type Placed = Room & { x: number; y: number; w: number; h: number }
 
 const GRID = 10
 
+/** Break a name into two lines as evenly as the words allow. */
+function splitLines(words: string[]): string[] {
+  const total = words.join(' ').length
+  let best = 1
+  let bestGap = Infinity
+  for (let i = 1; i < words.length; i++) {
+    const head = words.slice(0, i).join(' ').length
+    const gap  = Math.abs(head - (total - head - 1))
+    if (gap < bestGap) { bestGap = gap; best = i }
+  }
+  return [words.slice(0, best).join(' '), words.slice(best).join(' ')]
+}
+
 export default function MapEditor({ onError }: { onError: (e: string) => void }) {
   const [rooms,    setRooms]    = useState<Placed[]>([])
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -39,6 +52,12 @@ export default function MapEditor({ onError }: { onError: (e: string) => void })
   const [saved,    setSaved]    = useState(false)
 
   const svgRef  = useRef<SVGSVGElement | null>(null)
+  // The plan is drawn in canvas units and squeezed to whatever width the panel
+  // gets, so a label written in canvas units is a different size on every
+  // screen. Measure the squeeze and divide by it, the way the crew map does,
+  // so what's laid out here reads the same as what the crew ends up looking at.
+  const boxRef  = useRef<HTMLDivElement | null>(null)
+  const [scale, setScale] = useState(1)
   // Where in the room the finger landed, so a drag doesn't snap the room's
   // corner to the fingertip.
   const dragRef = useRef<{ id: string; dx: number; dy: number; mode: 'move' | 'resize' } | null>(null)
@@ -63,6 +82,19 @@ export default function MapEditor({ onError }: { onError: (e: string) => void })
   }, [onError])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    const el = boxRef.current
+    if (!el || !settings) return
+    const measure = () => {
+      const w = el.clientWidth - 16   // padding
+      if (w > 0) setScale(w / settings.canvas_w)
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [settings])
 
   /** Pointer position in SVG user units, which is what the geometry is in. */
   function toSvg(e: React.PointerEvent): { x: number; y: number } {
@@ -161,7 +193,7 @@ export default function MapEditor({ onError }: { onError: (e: string) => void })
         plan and the rooms sit on top of it, so the map can match the real building.
       </div>
 
-      <div style={{
+      <div ref={boxRef} style={{
         background: C.dark, border: `1px solid ${C.medBrown}`,
         borderRadius: 12, padding: 8, marginBottom: 12,
       }}>
@@ -201,6 +233,33 @@ export default function MapEditor({ onError }: { onError: (e: string) => void })
 
           {rooms.map(r => {
             const on = selected === r.id
+            // A name written at one fixed size ran clean out of a narrow room
+            // and across its neighbour's title — the showroom coolers are 75
+            // units wide and "Showroom Freezer" is nearly twice that (Charlie,
+            // 2026-08-23). Long names now break at a space and shrink until
+            // they fit the room they belong to, with a clip as the guarantee.
+            const px    = (n: number) => n / scale
+            // A closet can't spare the same margin a kill floor can.
+            const pad   = Math.min(px(10), r.w * 0.12)
+            const inner = Math.max(px(14), r.w - pad * 2)
+            const fit   = (text: string) =>
+              Math.max(px(6), Math.min(px(15), inner / (0.58 * Math.max(text.length, 1))))
+            // Two lines only when one line genuinely doesn't fit the width and
+            // the room is tall enough to hold both — a name that already fits
+            // stays on one line rather than being broken for no reason.
+            const wide    = (text: string, size: number) => 0.58 * text.length * size
+            const words   = r.name.split(' ')
+            const oneLine = fit(r.name)
+            let   lines   = [r.name]
+            let   size    = oneLine
+            if (words.length > 1 && wide(r.name, oneLine) > inner) {
+              const cand     = splitLines(words)
+              const candSize = Math.min(...cand.map(fit))
+              if (candSize >= oneLine && pad + candSize * 2 <= r.h) {
+                lines = cand
+                size  = candSize
+              }
+            }
             return (
               <g key={r.id}>
                 <rect
@@ -210,12 +269,23 @@ export default function MapEditor({ onError }: { onError: (e: string) => void })
                   onPointerDown={e => onDown(e, r, 'move')}
                   style={{ cursor: 'move' }}
                 />
-                <text
-                  x={r.x + 12} y={r.y + 26} fill={C.cream}
-                  fontSize={15} fontWeight={700} style={{ pointerEvents: 'none' }}
-                >
-                  {r.name}
-                </text>
+                <clipPath id={`edit-clip-${r.id}`}>
+                  <rect x={r.x} y={r.y} width={r.w} height={r.h} rx={10} />
+                </clipPath>
+                {/* Rooms too small to spell out still answer on hover, and the
+                    readout under the map names whichever one is selected. */}
+                <title>{r.name}</title>
+                <g clipPath={`url(#edit-clip-${r.id})`} style={{ pointerEvents: 'none' }}>
+                  {lines.map((line, i) => (
+                    <text
+                      key={i}
+                      x={r.x + pad} y={r.y + pad + size * (i + 1)}
+                      fill={C.cream} fontSize={size} fontWeight={700}
+                    >
+                      {line}
+                    </text>
+                  ))}
+                </g>
                 {/* Resize grip, sized for a fingertip rather than a mouse */}
                 <rect
                   x={r.x + r.w - 22} y={r.y + r.h - 22} width={22} height={22} rx={5}
