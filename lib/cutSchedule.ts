@@ -24,6 +24,14 @@ export interface CutCustomer {
   cutting_instruction_id:  string | null
 }
 
+// Why a row has no cut sheet. "Waiting" is a customer to chase; "no buyer" is
+// an appointment with an empty customer slot, where there is nobody to chase
+// until the office puts a name on it. Both used to read as the same red
+// "⚠ Missing", which made a booking nobody had filled in look like a customer
+// sitting on their homework (Charlie, 2026-08-24: "why are there so many no
+// cut sheet found?").
+export type SheetState = 'have' | 'waiting' | 'no-buyer'
+
 export interface ScheduleEntry {
   type:                      'carcass'
   key:                       string
@@ -50,6 +58,8 @@ export interface ScheduleEntry {
    *  has been assigned yet. `customer_name` and `portion` above are display
    *  summaries of this list. */
   cut_customers:             CutCustomer[]
+  /** have / waiting on the customer / no buyer named on the booking at all. */
+  sheet_state:               SheetState
   customer_count:            number   // # of cut customers on the appointment (>1 & unassigned = collapsed, see buildEntries)
   assigned:                  boolean  // true = this row is a real carcass→customer assignment (one cut job per portion)
   appt_assigned_carcasses:   number   // # of this appointment's carcasses fully assigned (portions sum to a whole)
@@ -303,6 +313,9 @@ export interface ScheduleData {
   logs:            HarvestLog[]
   apptMap:         Map<string, HarvestAppointment>
   instrIds:        Set<string>
+  /** `${appointment_id}|${customer_id}` → sheet id, for sheets whose back-link
+   *  into the appointment's customer list was never written. */
+  instrByBuyer:    Map<string, string>
   saved:           SavedItem[]   // already filtered to the live plan (planIsLive)
   assignments:     CarcassAssignment[]
   futureBookings:  FutureBooking[]
@@ -355,6 +368,24 @@ export async function loadScheduleData(todayISO: string): Promise<ScheduleData> 
   if (!Array.isArray(instrData)) {
     throw new Error('unexpected API response')
   }
+
+  // A sheet knows which booking and which buyer it was written for. The
+  // appointment is supposed to hold the matching back-link, but a slot can end
+  // up without one — and then a sheet that plainly exists reads as missing.
+  // Indexed here so buildEntries can find it either way round.
+  // Only an UNAMBIGUOUS answer is used. A buyer taking two animals off one
+  // booking has two sheets under the same key, and picking either would open
+  // the wrong one — those keep waiting on a real link rather than a guess.
+  interface InstrRow { id: string; customer_id: string | null; appointment_id: string | null }
+  const instrRows = instrData as InstrRow[]
+  const buyerHits = new Map<string, string[]>()
+  for (const r of instrRows) {
+    if (!r.appointment_id || !r.customer_id) continue
+    const k = `${r.appointment_id}|${r.customer_id}`
+    buyerHits.set(k, [...(buyerHits.get(k) ?? []), r.id])
+  }
+  const instrByBuyer = new Map<string, string>()
+  for (const [k, ids] of buyerHits) if (ids.length === 1) instrByBuyer.set(k, ids[0])
   const savedAll = Array.isArray(savedData) ? (savedData as SavedItem[]) : []
 
   // Everything still ahead of us, unwindowed — see FUTURE_WINDOW_DEFAULT_DAYS.
@@ -386,7 +417,8 @@ export async function loadScheduleData(todayISO: string): Promise<ScheduleData> 
     logs:        harvest.logs,
     assignments: harvest.assignments,
     apptMap:     new Map(harvest.appointments.map(a => [a.id, a])),
-    instrIds:    new Set<string>((instrData as { id: string }[]).map(i => i.id)),
+    instrIds:    new Set<string>(instrRows.map(i => i.id)),
+    instrByBuyer,
     saved:       planIsLive(savedAll, todayISO) ? savedAll : [],
     futureBookings,
     harvestDays: [...killDays.values()].sort((a, b) => a.date.localeCompare(b.date)),
@@ -394,6 +426,11 @@ export async function loadScheduleData(todayISO: string): Promise<ScheduleData> 
 }
 
 // ── Build ranked list from cooler inventory ───────────────────────────────────
+/** A buyer slot that actually names somebody. Blank slots are placeholders. */
+function namedBuyer(name: string | null | undefined): boolean {
+  return !!(name && name.trim() && name.trim().toLowerCase() !== 'unknown')
+}
+
 export function buildEntries(
   harvestLogs:    HarvestLog[],
   apptMap:        Map<string, HarvestAppointment>,
@@ -401,8 +438,13 @@ export function buildEntries(
   savedItems:     SavedItem[],
   assignments:    CarcassAssignment[],
   w:              PriorityWeights,
-  futureBookings: FutureBooking[] = []
+  futureBookings: FutureBooking[] = [],
+  instrByBuyer:   Map<string, string> = new Map()
 ): ListItem[] {
+  /** The sheet written for this buyer on this booking, back-link or not. */
+  const sheetFor = (apptId: string | null | undefined, customerId: string | null | undefined) =>
+    (apptId && customerId) ? (instrByBuyer.get(`${apptId}|${customerId}`) ?? null) : null
+
   const raw: Omit<ScheduleEntry, 'type' | 'priority_score' | 'rank'>[] = []
 
   // Saved rows keyed the same way entry keys are built, so the per-row lookups
@@ -460,7 +502,12 @@ export function buildEntries(
       const cutCustomers: CutCustomer[] = logAssigns
         .map(asg => {
           const cust    = customers.find(c => c.id === asg.appointment_customer_id)
-          const instrId = cust?.linked_cutting_instruction_id || asg.linked_cutting_instruction_id || null
+          const instrId =
+            cust?.linked_cutting_instruction_id
+            || asg.linked_cutting_instruction_id
+            // Back-link never written — ask the sheets who they were written for.
+            || sheetFor(appt?.id ?? log.appointment_id, cust?.customer_id)
+            || null
           return {
             appointment_customer_id: asg.appointment_customer_id,
             name:                    cust?.customer_name || asg.customer_name || 'Unknown',
@@ -499,6 +546,11 @@ export function buildEntries(
         // still stops the carcass, so the flag follows the weakest portion.
         has_instructions:        cutCustomers.every(c => c.has_instructions),
         cutting_instruction_id:  cutCustomers.length === 1 ? cutCustomers[0].cutting_instruction_id : null,
+        sheet_state:             cutCustomers.every(c => c.has_instructions)
+                                   ? 'have'
+                                   : cutCustomers.some(c => !c.has_instructions && !namedBuyer(c.name))
+                                     ? 'no-buyer'
+                                     : 'waiting',
         days_hanging:            daysHanging,
         locked:                  saved?.locked ?? false,
         entry_notes:             saved?.notes  ?? '',
@@ -522,9 +574,15 @@ export function buildEntries(
     const single = lone && !placedCustomers.has(lone.id) ? lone : null
     const custId = single ? single.id : 'standalone'
     const open = customers.filter(c => !placedCustomers.has(c.id))
-    const hasInstructions = single
-      ? !!(single.linked_cutting_instruction_id && instructionIds.has(single.linked_cutting_instruction_id))
-      : open.some(c => c.linked_cutting_instruction_id && instructionIds.has(c.linked_cutting_instruction_id))
+    // A slot's own link first, then the sheets themselves — one written for this
+    // buyer on this booking counts even if nothing wrote the link back.
+    const apptKey  = appt?.id ?? log.appointment_id
+    const sheetOf  = (c: { linked_cutting_instruction_id?: string | null; customer_id?: string | null }) =>
+      (c.linked_cutting_instruction_id && instructionIds.has(c.linked_cutting_instruction_id))
+        ? c.linked_cutting_instruction_id
+        : sheetFor(apptKey, c.customer_id)
+    const singleSheet     = single ? sheetOf(single) : null
+    const hasInstructions = single ? !!singleSheet : open.some(c => !!sheetOf(c))
     const saved = savedByKey.get(`${log.id}__${custId}`)
     raw.push({
       key:                     `${log.id}__${custId}`,
@@ -540,7 +598,14 @@ export function buildEntries(
       carcass_tag:             log.carcass_tag,
       hot_carcass_weight_lbs:  log.hot_carcass_weight_lbs,
       has_instructions:        hasInstructions,
-      cutting_instruction_id:  single?.linked_cutting_instruction_id || null,
+      cutting_instruction_id:  singleSheet || single?.linked_cutting_instruction_id || null,
+      // Nobody has been written down as buying this animal yet, so there is no
+      // sheet to be waiting on — the booking needs a name before anything else.
+      sheet_state:             hasInstructions
+                                 ? 'have'
+                                 : (open.length === 0 || !open.some(c => namedBuyer(c.customer_name)))
+                                   ? 'no-buyer'
+                                   : 'waiting',
       days_hanging:            daysHanging,
       locked:                  saved?.locked ?? false,
       entry_notes:             saved?.notes  ?? '',

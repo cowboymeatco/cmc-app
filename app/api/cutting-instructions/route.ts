@@ -6,9 +6,11 @@ import { unlinkInstruction } from '@/lib/cuttingLinks'
 export const dynamic = 'force-dynamic'
 
 // GET /api/cutting-instructions
-//   ?ids_only=1 â€” return just [{ id }] rows. The cut schedule only needs an
-//   existence check per id, and the full rows carry the whole form payload,
-//   so this keeps the phone-facing response small as the table grows.
+//   ?ids_only=1 â€” return just [{ id, customer_id, appointment_id }] rows. The
+//   cut schedule needs an existence check per id, plus enough to find a sheet
+//   whose back-link into the appointment was never written; the full rows carry
+//   the whole form payload, so this keeps the phone-facing response small as
+//   the table grows.
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const idsOnly  = searchParams.get('ids_only')
@@ -27,7 +29,7 @@ export async function GET(req: NextRequest) {
 
   const { data, error } = await supabase
     .from('cutting_instructions')
-    .select(idsOnly ? 'id' : '*')
+    .select(idsOnly ? 'id, customer_id, appointment_id' : '*')
     .order('created_at', { ascending: false })
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

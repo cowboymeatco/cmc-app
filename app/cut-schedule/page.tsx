@@ -51,8 +51,8 @@ export default function CrewCutSchedulePage() {
     setRefreshing(true)
     try {
       const today = isoDate()
-      const { logs, apptMap, instrIds, saved, assignments, harvestDays } = await loadScheduleData(today)
-      const list = buildEntries(logs, apptMap, instrIds, saved, assignments, DEFAULT_WEIGHTS)
+      const { logs, apptMap, instrIds, instrByBuyer, saved, assignments, harvestDays } = await loadScheduleData(today)
+      const list = buildEntries(logs, apptMap, instrIds, saved, assignments, DEFAULT_WEIGHTS, [], instrByBuyer)
 
       // Split the ordered list into day sections: a break heads the day below
       // it, carcasses before the first break are simply "up first".
@@ -366,11 +366,17 @@ export default function CrewCutSchedulePage() {
                           <div style={{ fontSize: '0.78rem', marginTop: 3 }}>
                             {entry.has_instructions
                               ? <span style={{ color: C.green }}>✓ Cut sheet ready</span>
-                              : <span style={{
-                                  color: C.red, fontWeight: 700,
-                                  background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.4)',
-                                  borderRadius: 4, padding: '1px 7px',
-                                }}>⚠ NO CUT SHEET</span>
+                              : entry.sheet_state === 'no-buyer'
+                                ? <span style={{
+                                    color: C.amber, fontWeight: 700,
+                                    background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.4)',
+                                    borderRadius: 4, padding: '1px 7px',
+                                  }}>⚠ NO BUYER ON THIS ONE</span>
+                                : <span style={{
+                                    color: C.red, fontWeight: 700,
+                                    background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.4)',
+                                    borderRadius: 4, padding: '1px 7px',
+                                  }}>⚠ NO CUT SHEET</span>
                             }
                           </div>
                         )}

@@ -134,13 +134,13 @@ export default function CutScheduleTab() {
   const loadAll = useCallback(async () => {
     setLoading(true)
     try {
-      const { logs, apptMap, instrIds, saved, assignments, futureBookings, harvestDays } = await loadScheduleData(todayISO)
+      const { logs, apptMap, instrIds, instrByBuyer, saved, assignments, futureBookings, harvestDays } = await loadScheduleData(todayISO)
       setLogs(logs)
       setAppts([...apptMap.values()])
       setAssignments(assignments)
       setFutureBookings(futureBookings)
       setHarvestDays(harvestDays)
-      setEntries(buildEntries(logs, apptMap, instrIds, saved, assignments, weights, futureBookings))
+      setEntries(buildEntries(logs, apptMap, instrIds, saved, assignments, weights, futureBookings, instrByBuyer))
       setLoadError(false)
     } catch {
       setLoadError(true)
@@ -425,6 +425,10 @@ export default function CutScheduleTab() {
   // nobody has decided when they get cut. Everything else is under a dated day
   // break and has one. This is the tally Charlie works off to push the next
   // day's list to the crew (2026-08-05).
+  // Two different problems used to share one red "Missing" count, which is why
+  // a screen full of warnings looked worse than it was (Charlie, 2026-08-24).
+  const noBuyerCount = carcasses.filter(e => e.sheet_state === 'no-buyer').length
+
   const noDay       = carcasses.filter(e => !cutDates.get(e.key))
   const noDayTotals = carcassTotals(noDay)
 
@@ -543,7 +547,13 @@ export default function CutScheduleTab() {
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
           {!loading && carcasses.length > 0 && [
             { label: 'In Cooler',      value: uniqueCarcasses.length,                                 color: C.tan,   title: 'Carcasses chilling right now' },
-            { label: 'Missing Sheet',  value: carcasses.filter(e => !e.has_instructions).length,      color: C.red,   title: 'Cut jobs with no cut sheet on file' },
+            { label: 'Waiting on Sheet', value: carcasses.filter(e => e.sheet_state === 'waiting').length, color: C.red,   title: 'A named customer who hasn’t sent their cut sheet — somebody to chase' },
+            ...(noBuyerCount > 0 ? [{
+              label: 'No Buyer Yet',
+              value: noBuyerCount,
+              color: C.amber,
+              title: 'Nobody is written down as buying this animal, so there is no sheet to be waiting on — the booking needs a name first',
+            }] : []),
             { label: 'Locked',         value: carcasses.filter(e => e.locked).length,                 color: C.amber, title: 'Rows pinned in place when you recalculate' },
             { label: 'Avg Hang',       value: uniqueCarcasses.length ? avgHang.toFixed(1) + 'd' : '—', color: C.lightBrown, title: 'Average days hung as of today' },
             ...(scheduledAhead ? [{
@@ -1157,7 +1167,12 @@ export default function CutScheduleTab() {
                     {entry.has_instructions
                       ? <span style={{ color: C.green, fontSize: '1rem' }} title="Cut sheet on file">✓</span>
                       : (<>
-                          <span style={{ color: C.red, fontSize: '0.76rem', fontWeight: 700 }} title="No cut sheet">⚠ Missing</span>
+                          {entry.sheet_state === 'no-buyer'
+                            ? <span
+                                style={{ color: C.amber, fontSize: '0.76rem', fontWeight: 700 }}
+                                title="Nobody is written down as buying this animal — put a name on the booking before chasing a cut sheet"
+                              >⚠ No buyer</span>
+                            : <span style={{ color: C.red, fontSize: '0.76rem', fontWeight: 700 }} title="Named customer, no cut sheet in yet">⚠ Missing</span>}
                           {/* A house animal never gets a sheet off the customer
                               form — CMC's own grinder cows had no way to one at
                               all (Charlie, 2026-08-19). Only shown where a single
@@ -1237,7 +1252,8 @@ export default function CutScheduleTab() {
             <span style={{ color: C.tan }}>🔪 Harvest day = booked on the kill floor, nothing cut that day (from the harvest calendar — not editable here)</span>
             <span>→ = days hung by the day it&apos;s scheduled to be cut</span>
             <span>🔒 Lock = pin when recalculating</span>
-            <span style={{ color: C.red }}>⚠ Missing = no cut sheet linked</span>
+            <span style={{ color: C.red }}>⚠ Missing = named customer, cut sheet not in yet</span>
+            <span style={{ color: C.amber }}>⚠ No buyer = nobody recorded as buying this animal — the booking needs a name, not a chase</span>
             <span>
               Hanging: <span style={{ color: C.green }}>0–5d</span>
               {' · '}<span style={{ color: C.amber }}>6–9d</span>
