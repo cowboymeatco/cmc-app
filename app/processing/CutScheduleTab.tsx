@@ -1,12 +1,12 @@
 'use client'
-import { useEffect, useState, useCallback } from 'react'
+import { Fragment, useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { HarvestAppointment, HarvestLog, CarcassAssignment } from '@/lib/types'
 import AssignCarcassesModal from './AssignCarcassesModal'
 import GrindAllModal from './GrindAllModal'
 import {
   type PriorityWeights, type ScheduleEntry, type BreakItem, type ListItem, type FutureBooking,
-  type FutureItem,
+  type FutureItem, type HarvestDay,
   DEFAULT_WEIGHTS, WEIGHT_LABELS, buildEntries, loadScheduleData, uniqueCarcasses as uniqueOf,
   calcScore, speciesColor, speciesIcon, portionBadge, cutDateByKey, hangAtCut, hangColor,
   carcassTotals, FUTURE_WINDOW_DEFAULT_DAYS, FUTURE_WINDOW_CHOICES,
@@ -41,6 +41,52 @@ const C = {
   amber:      '#F59E0B',
 }
 
+// A kill day, drawn into the cutting plan where it falls.
+//
+// Not something you can drag, date or delete — it isn't part of the plan, it's
+// the reason the plan skips a day. Deliberately quieter than a day break so
+// the cutting days still read as the structure of the list.
+function HarvestDayRow({ day }: { day: HarvestDay }) {
+  const breakdown = [...day.species.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([sp, n]) => `${speciesIcon(sp)} ${n}`)
+    .join('   ')
+  return (
+    <div
+      title="Booked on the harvest calendar — no cutting planned for this day"
+      style={{
+        display: 'flex', alignItems: 'center', gap: '0.6rem',
+        background: 'rgba(166,120,90,0.09)',
+        border: '1px solid rgba(166,120,90,0.3)',
+        borderRadius: 4, padding: '0.4rem 0.75rem',
+      }}
+    >
+      <span style={{ fontSize: '0.9rem', userSelect: 'none' }}>🔪</span>
+      <span style={{
+        color: C.tan, fontSize: '0.68rem', fontWeight: 700,
+        letterSpacing: '0.12em', textTransform: 'uppercase', whiteSpace: 'nowrap',
+      }}>
+        Harvest day
+      </span>
+      <span style={{ color: C.lightBrown, fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
+        {dateLabel(day.date, { weekday: 'long', month: 'short', day: 'numeric' })}
+      </span>
+      <span style={{ flex: 1, height: 1, background: 'rgba(166,120,90,0.2)' }} />
+      <span style={{ color: C.tan, fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
+        {day.head} head
+      </span>
+      {breakdown && (
+        <span style={{ color: C.lightBrown, fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
+          {breakdown}
+        </span>
+      )}
+      <span style={{ color: C.lightBrown, fontSize: '0.64rem', fontStyle: 'italic', whiteSpace: 'nowrap' }}>
+        no cutting — crew is on the kill floor
+      </span>
+    </div>
+  )
+}
+
 export default function CutScheduleTab() {
   const [entries,     setEntries]     = useState<ListItem[]>([])
   const [weights,     setWeights]     = useState<PriorityWeights>(DEFAULT_WEIGHTS)
@@ -64,6 +110,8 @@ export default function CutScheduleTab() {
   // Booked animals not harvested yet — a heads-up rail, not part of the
   // schedule itself. See lib/cutSchedule FutureBooking.
   const [futureBookings, setFutureBookings] = useState<FutureBooking[]>([])
+  // Kill days off the harvest calendar — read-only context, not part of the plan.
+  const [harvestDays,    setHarvestDays]    = useState<HarvestDay[]>([])
   const [futureWindow,   setFutureWindow]   = useState<number>(FUTURE_WINDOW_DEFAULT_DAYS)
   // Weeks the planner has explicitly opened or closed; anything untouched
   // follows the default below.
@@ -86,11 +134,12 @@ export default function CutScheduleTab() {
   const loadAll = useCallback(async () => {
     setLoading(true)
     try {
-      const { logs, apptMap, instrIds, saved, assignments, futureBookings } = await loadScheduleData(todayISO)
+      const { logs, apptMap, instrIds, saved, assignments, futureBookings, harvestDays } = await loadScheduleData(todayISO)
       setLogs(logs)
       setAppts([...apptMap.values()])
       setAssignments(assignments)
       setFutureBookings(futureBookings)
+      setHarvestDays(harvestDays)
       setEntries(buildEntries(logs, apptMap, instrIds, saved, assignments, weights, futureBookings))
       setLoadError(false)
     } catch {
@@ -385,6 +434,36 @@ export default function CutScheduleTab() {
   const unplacedFuture = futures.filter(e => !cutDates.get(e.key))
   const noDayKeys     = new Set([...noDay, ...unplacedFuture].map(e => e.key))
 
+  // ── Harvest days ──────────────────────────────────────────────────────────────
+  // The plan lists cutting days, so the days it skips read as idle when they're
+  // usually kill days — the crew is on the harvest floor, not the saw (Charlie,
+  // 2026-08-24: "so folks can see why we aren't cutting on somedays"). Kill days
+  // come off the harvest calendar and sit in the running order where they fall,
+  // which puts the reason for a gap next to the gap.
+  //
+  // A kill day hangs above the next cutting day after it, and only inside the
+  // span the plan actually covers — one past the last cutting day isn't
+  // explaining a gap yet, it's just calendar noise. Breaks are matched in DATE
+  // order rather than list order, so a plan whose days got dragged out of
+  // sequence still files each kill day against the right one.
+  const datedBreaks = entries
+    .filter((e): e is BreakItem => e.type === 'break' && !!e.break_date)
+    .sort((a, b) => a.break_date.localeCompare(b.break_date))
+  const planEnd = datedBreaks.length ? datedBreaks[datedBreaks.length - 1].break_date : ''
+  const harvestBefore  = new Map<string, HarvestDay[]>()   // break key → kill days above it
+  const alsoHarvesting = new Map<string, number>()         // break date → head killed that day
+  for (const hd of harvestDays) {
+    if (!planEnd || hd.date > planEnd) continue
+    const host = datedBreaks.find(b => b.break_date >= hd.date)
+    if (!host) continue
+    // Cutting and killing on the same day is normal and worth saying on the
+    // day break itself — it explains a short cut list rather than a missing one.
+    if (host.break_date === hd.date) { alsoHarvesting.set(hd.date, hd.head); continue }
+    const list = harvestBefore.get(host.key) ?? []
+    list.push(hd)
+    harvestBefore.set(host.key, list)
+  }
+
   // The rail lists them by booking, so 6 head of one producer read as one
   // block you pull animals off, not six identical loose cards. Only bookings
   // inside the chosen window are offered — a head already placed still renders
@@ -676,9 +755,13 @@ export default function CutScheduleTab() {
               // ── Day break divider ──────────────────────────────────────────────
               if (entry.type === 'break') {
                 const day = dayTotals.get(entry.key) ?? { lbs: 0, count: 0, future: 0 }
+                const killedToday = entry.break_date ? alsoHarvesting.get(entry.break_date) : undefined
                 return (
+                  <Fragment key={entry.key}>
+                  {(harvestBefore.get(entry.key) ?? []).map(hd => (
+                    <HarvestDayRow key={hd.date} day={hd} />
+                  ))}
                   <div
-                    key={entry.key}
                     draggable
                     onDragStart={() => handleDragStart(entry.key)}
                     onDragOver={e  => handleDragOver(e, entry.key)}
@@ -717,6 +800,14 @@ export default function CutScheduleTab() {
                     {entry.break_date && (
                       <span style={{ color: C.tan, fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
                         {dateLabel(entry.break_date, { weekday: 'long' })}
+                      </span>
+                    )}
+                    {killedToday != null && (
+                      <span
+                        title="Booked on the harvest calendar for the same day — expect a shorter cut list"
+                        style={{ color: C.lightBrown, fontSize: '0.68rem', whiteSpace: 'nowrap' }}
+                      >
+                        🔪 also killing {killedToday} head
                       </span>
                     )}
                     {(() => {
@@ -765,6 +856,7 @@ export default function CutScheduleTab() {
                       ✕
                     </button>
                   </div>
+                  </Fragment>
                 )
               }
 
@@ -1142,6 +1234,7 @@ export default function CutScheduleTab() {
             <span>⠿ Drag to reorder</span>
             <span style={{ color: C.red }}>→ Drag a row onto the No Cut Day box to take its day off</span>
             <span style={{ color: C.amber }}>➕ Day Break = start of a cutting day; totals the carcasses below it (drag to move) · one per date</span>
+            <span style={{ color: C.tan }}>🔪 Harvest day = booked on the kill floor, nothing cut that day (from the harvest calendar — not editable here)</span>
             <span>→ = days hung by the day it&apos;s scheduled to be cut</span>
             <span>🔒 Lock = pin when recalculating</span>
             <span style={{ color: C.red }}>⚠ Missing = no cut sheet linked</span>

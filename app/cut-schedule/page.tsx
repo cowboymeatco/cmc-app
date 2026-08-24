@@ -8,7 +8,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import {
   type ScheduleEntry,
-  DEFAULT_WEIGHTS, buildEntries, loadScheduleData, carcassTotals,
+  DEFAULT_WEIGHTS, buildEntries, loadScheduleData, carcassTotals, type HarvestDay,
   speciesColor, speciesIcon, portionBadge, hangAtCut, hangColor,
 } from '@/lib/cutSchedule'
 import { isoDate, dateLabel } from '@/lib/dates'
@@ -29,6 +29,11 @@ interface Section {
   key:     string
   date:    string | null       // break date heading this day, null = list before the first break
   entries: ScheduleEntry[]
+  // Kill days that fall between the previous cutting day and this one. Not work
+  // — the reason there's no work on those dates (Charlie, 2026-08-24).
+  harvest: HarvestDay[]
+  // Head killed on this cutting day itself, when there's a harvest booked too.
+  alsoKilling: number | null
 }
 
 export default function CrewCutSchedulePage() {
@@ -46,17 +51,17 @@ export default function CrewCutSchedulePage() {
     setRefreshing(true)
     try {
       const today = isoDate()
-      const { logs, apptMap, instrIds, saved, assignments } = await loadScheduleData(today)
+      const { logs, apptMap, instrIds, saved, assignments, harvestDays } = await loadScheduleData(today)
       const list = buildEntries(logs, apptMap, instrIds, saved, assignments, DEFAULT_WEIGHTS)
 
       // Split the ordered list into day sections: a break heads the day below
       // it, carcasses before the first break are simply "up first".
       const rawSecs: Section[] = []
-      let current: Section = { key: 'first', date: null, entries: [] }
+      let current: Section = { key: 'first', date: null, entries: [], harvest: [], alsoKilling: null }
       for (const item of list) {
         if (item.type === 'break') {
           rawSecs.push(current)
-          current = { key: item.key, date: item.break_date || null, entries: [] }
+          current = { key: item.key, date: item.break_date || null, entries: [], harvest: [], alsoKilling: null }
         } else if (item.type === 'carcass') {
           current.entries.push(item)
         }
@@ -77,7 +82,7 @@ export default function CrewCutSchedulePage() {
 
       // Fold days already behind us into the leading section — anything still
       // hanging from a past day is overdue and cuts first.
-      const lead: Section = { key: 'first', date: null, entries: [] }
+      const lead: Section = { key: 'first', date: null, entries: [], harvest: [], alsoKilling: null }
       const rest: Section[] = []
       for (const sec of rawSecs) {
         if (anyDated && sec.date === null) continue
@@ -85,6 +90,20 @@ export default function CrewCutSchedulePage() {
         else rest.push(sec)
       }
       const secs = [lead, ...rest].filter(s => s.entries.length > 0)
+
+      // Hang each kill day above the next cutting day after it, so a jump from
+      // Wednesday to the following Tuesday says why instead of just looking
+      // like a week off. Only within the span the plan covers — a kill day past
+      // the last cutting day isn't explaining a gap the crew can see.
+      const dated  = secs.filter(s => s.date !== null)
+      const planEnd = dated.length ? dated[dated.length - 1].date! : ''
+      for (const hd of harvestDays) {
+        if (!planEnd || hd.date > planEnd || hd.date < today) continue
+        const host = dated.find(s => s.date! >= hd.date)
+        if (!host) continue
+        if (host.date === hd.date) host.alsoKilling = hd.head
+        else host.harvest.push(hd)
+      }
 
       setSections(secs)
       setPlanDate(saved[0]?.schedule_date ?? null)
@@ -235,6 +254,24 @@ export default function CrewCutSchedulePage() {
           const secTotals = carcassTotals(sec.entries)
           return (
             <section key={sec.key} style={{ marginBottom: '1.1rem' }}>
+              {/* Kill days ahead of this cutting day. Quieter than a day
+                  heading, because they're context, not a list to work. */}
+              {sec.harvest.map(hd => (
+                <div key={hd.date} style={{
+                  display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+                  gap: '0.5rem', flexWrap: 'wrap',
+                  padding: '0.45rem 0.6rem', marginBottom: '0.45rem',
+                  background: 'rgba(166,120,90,0.1)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 6,
+                }}>
+                  <span style={{ color: C.tan, fontWeight: 700, fontSize: '0.78rem' }}>
+                    🔪 {dateLabel(hd.date)} — harvest day
+                  </span>
+                  <span style={{ color: C.lightBrown, fontSize: '0.72rem' }}>
+                    {hd.head} head in · nothing cut
+                  </span>
+                </div>
+              ))}
+
               <div style={{
                 display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '0.5rem',
                 padding: '0.45rem 0.6rem', marginBottom: '0.45rem',
@@ -245,6 +282,14 @@ export default function CrewCutSchedulePage() {
                   textTransform: 'uppercase', letterSpacing: '0.08em',
                 }}>
                   ▸ {dayLabel(sec.date, sec.key === 'first')}
+                  {sec.alsoKilling != null && (
+                    <span style={{
+                      color: C.tan, fontWeight: 400, textTransform: 'none', letterSpacing: 0,
+                      fontSize: '0.74rem', marginLeft: '0.5rem',
+                    }}>
+                      🔪 killing {sec.alsoKilling} head too
+                    </span>
+                  )}
                 </span>
                 <span style={{ color: C.lightBrown, fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
                   {secTotals.head} head · {Math.round(secTotals.lbs).toLocaleString()} lb

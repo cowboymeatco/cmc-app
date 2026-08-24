@@ -13,9 +13,14 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin'
 //                       just the appointments its cooler carcasses reference)
 //   ?status=Booked    â€” only that status (the cut schedule's Upcoming
 //                       Bookings rail uses this for "not yet harvested")
+//   ?from=YYYY-MM-DD  â€” that harvest date onward, whatever the status. The cut
+//                       schedule draws kill days from this: a day the plant is
+//                       killing is a day it isn't cutting, whether the animals
+//                       are still booked or already on the rail.
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const date = searchParams.get('date')
+  const from = searchParams.get('from')
   const idsParam = searchParams.get('ids')
   const status = searchParams.get('status')
 
@@ -26,6 +31,9 @@ export async function GET(req: NextRequest) {
 
   if (date) {
     query = query.eq('harvest_date', date)
+  }
+  if (from) {
+    query = query.gte('harvest_date', from)
   }
   if (idsParam !== null) {
     const ids = idsParam.split(',').map(s => s.trim()).filter(Boolean)

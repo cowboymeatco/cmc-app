@@ -292,6 +292,13 @@ export interface FutureBooking {
   harvest_date: string
 }
 
+/** A day the plant is killing — head booked on it, broken out by species. */
+export interface HarvestDay {
+  date:    string
+  head:    number
+  species: Map<string, number>
+}
+
 export interface ScheduleData {
   logs:            HarvestLog[]
   apptMap:         Map<string, HarvestAppointment>
@@ -299,6 +306,7 @@ export interface ScheduleData {
   saved:           SavedItem[]   // already filtered to the live plan (planIsLive)
   assignments:     CarcassAssignment[]
   futureBookings:  FutureBooking[]
+  harvestDays:     HarvestDay[]
 }
 
 // How far out the Upcoming Bookings rail looks by default. The crew picks the
@@ -317,7 +325,7 @@ export const FUTURE_WINDOW_CHOICES: { label: string; days: number }[] = [
 ]
 
 export async function loadScheduleData(todayISO: string): Promise<ScheduleData> {
-  const [harvest, instrData, savedData, futureApptData] = await Promise.all([
+  const [harvest, instrData, savedData, futureApptData, killDayData] = await Promise.all([
     fetch('/api/harvest?status=chilling').then(r => r.json()).then(async data => {
       if (!Array.isArray(data)) throw new Error('unexpected /api/harvest response')
       const logs    = data as HarvestLog[]
@@ -342,6 +350,7 @@ export async function loadScheduleData(todayISO: string): Promise<ScheduleData> 
     fetch('/api/cutting-instructions?ids_only=1').then(r => r.json()),
     fetch('/api/cut-schedule?latest=1').then(r => r.json()).catch(() => []),
     fetch('/api/appointments?status=Booked').then(r => r.json()).catch(() => []),
+    fetch(`/api/appointments?from=${todayISO}`).then(r => r.json()).catch(() => []),
   ])
   if (!Array.isArray(instrData)) {
     throw new Error('unexpected API response')
@@ -359,6 +368,20 @@ export async function loadScheduleData(todayISO: string): Promise<ScheduleData> 
       harvest_date: a.harvest_date,
     }))
 
+  // Kill days, from every appointment on the books from today on — not just the
+  // ones still Booked. An animal already on the rail took the same day off the
+  // saw as one that arrives tomorrow, so filtering by status would drop the kill
+  // day the crew is standing in.
+  const killDays = new Map<string, HarvestDay>()
+  for (const a of (Array.isArray(killDayData) ? killDayData as HarvestAppointment[] : [])) {
+    if (!a.harvest_date || a.harvest_date < todayISO) continue
+    let d = killDays.get(a.harvest_date)
+    if (!d) { d = { date: a.harvest_date, head: 0, species: new Map() }; killDays.set(a.harvest_date, d) }
+    const head = a.head_count ?? 1
+    d.head += head
+    d.species.set(a.species, (d.species.get(a.species) ?? 0) + head)
+  }
+
   return {
     logs:        harvest.logs,
     assignments: harvest.assignments,
@@ -366,6 +389,7 @@ export async function loadScheduleData(todayISO: string): Promise<ScheduleData> 
     instrIds:    new Set<string>((instrData as { id: string }[]).map(i => i.id)),
     saved:       planIsLive(savedAll, todayISO) ? savedAll : [],
     futureBookings,
+    harvestDays: [...killDays.values()].sort((a, b) => a.date.localeCompare(b.date)),
   }
 }
 
