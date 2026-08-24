@@ -30,7 +30,7 @@ interface Task {
   cleaning_equipment?: { name: string } | null
 }
 interface Crew   { id: string; name: string; role: 'crew' | 'lead' }
-interface Supply { id: string; name: string; unit: string | null; vendor: string | null }
+interface Supply { id: string; name: string; unit: string | null; vendor: string | null; active: boolean }
 interface Suggestion {
   id: string; suggestion: string; suggested_by: string; created_at: string
   photo_url: string | null
@@ -909,8 +909,11 @@ function SuppliesTab({ onError }: { onError: (e: string) => void }) {
   const [unit, setUnit]     = useState('')
   const [vendor, setVendor] = useState('')
 
+  // Retired supplies are asked for too. Taking one off the list only sets
+  // active=false, so hiding them here made a removed item look deleted while
+  // still holding its name against anyone re-adding it (Charlie, 2026-08-23).
   const load = useCallback(() => {
-    fetch('/api/cleaning/supplies').then(r => r.json())
+    fetch('/api/cleaning/supplies?all=1').then(r => r.json())
       .then(d => setSupplies(Array.isArray(d) ? d : []))
       .catch(() => onError('Could not load supplies.'))
   }, [onError])
@@ -927,6 +930,21 @@ function SuppliesTab({ onError }: { onError: (e: string) => void }) {
     setName(''); setUnit(''); setVendor(''); load()
   }
 
+  async function setActive(id: string, active: boolean) {
+    if (active) {
+      await fetch('/api/cleaning/supplies', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, active: true }),
+      })
+    } else {
+      await fetch(`/api/cleaning/supplies?id=${id}`, { method: 'DELETE' })
+    }
+    load()
+  }
+
+  const live    = supplies.filter(s => s.active)
+  const retired = supplies.filter(s => !s.active)
+
   return (
     <>
       <div style={{ ...cardStyle, marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -941,7 +959,7 @@ function SuppliesTab({ onError }: { onError: (e: string) => void }) {
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {supplies.map(s => (
+        {live.map(s => (
           <div key={s.id} style={{ ...cardStyle, display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ flex: 1 }}>
               <div style={{ color: C.cream, fontSize: 15 }}>{s.name}</div>
@@ -949,18 +967,36 @@ function SuppliesTab({ onError }: { onError: (e: string) => void }) {
                 {[s.unit, s.vendor].filter(Boolean).join(' · ')}
               </div>
             </div>
-            <button
-              onClick={async () => {
-                await fetch(`/api/cleaning/supplies?id=${s.id}`, { method: 'DELETE' })
-                load()
-              }}
-              style={miniBtn(C.red)}
-            >
+            <button title="Take off the list" onClick={() => setActive(s.id, false)} style={miniBtn(C.red)}>
               ✕
             </button>
           </div>
         ))}
       </div>
+
+      {retired.length > 0 && (
+        <div style={{ marginTop: 20 }}>
+          <div style={{ color: C.lightBrown, fontSize: 12, lineHeight: 1.5, marginBottom: 8 }}>
+            Off the list. The crew can&apos;t pick these, but the names are still
+            spoken for — bring one back rather than re-typing it.
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {retired.map(s => (
+              <div key={s.id} style={{ ...cardStyle, display: 'flex', alignItems: 'center', gap: 10, opacity: 0.55 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ color: C.cream, fontSize: 15 }}>{s.name}</div>
+                  <div style={{ color: C.tan, fontSize: 12 }}>
+                    {[s.unit, s.vendor].filter(Boolean).join(' · ')}
+                  </div>
+                </div>
+                <button title="Put it back on the list" onClick={() => setActive(s.id, true)} style={miniBtn(C.green)}>
+                  ↩
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </>
   )
 }

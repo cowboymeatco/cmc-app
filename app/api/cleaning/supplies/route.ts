@@ -24,25 +24,53 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await req.json()
-  if (!body.name?.trim()) return NextResponse.json({ error: 'name required' }, { status: 400 })
+  const name = body.name?.trim()
+  if (!name) return NextResponse.json({ error: 'name required' }, { status: 400 })
+
+  const fields = {
+    unit:       body.unit?.trim()   || null,
+    vendor:     body.vendor?.trim() || null,
+    sku:        body.sku?.trim()    || null,
+    par_level:  body.par_level ?? null,
+    sort_order: body.sort_order ?? 100,
+    notes:      body.notes?.trim()  || null,
+  }
 
   const { data, error } = await supabase
     .from('cleaning_supplies')
-    .insert([{
-      name:       body.name.trim(),
-      unit:       body.unit?.trim()   || null,
-      vendor:     body.vendor?.trim() || null,
-      sku:        body.sku?.trim()    || null,
-      par_level:  body.par_level ?? null,
-      sort_order: body.sort_order ?? 100,
-      notes:      body.notes?.trim()  || null,
-    }])
+    .insert([{ name, ...fields }])
     .select().single()
+
   if (error) {
-    if (error.code === '23505') {
+    if (error.code !== '23505') {
+      return NextResponse.json({ error: error.message }, { status: 500 })
+    }
+    // The name is taken — but taking it off the list only sets active=false, so
+    // the row blocking this insert may be one nobody can see. Retiring a supply
+    // and then adding it back is an ordinary thing to do, and it used to dead-end
+    // on "already in the list" against an item that wasn't on the list (Charlie,
+    // 2026-08-23). A retired name is brought back with whatever was just typed.
+    const { data: existing } = await supabase
+      .from('cleaning_supplies').select('*').eq('name', name).maybeSingle()
+    if (!existing) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (existing.active) {
       return NextResponse.json({ error: 'That supply is already in the list.' }, { status: 409 })
     }
-    return NextResponse.json({ error: error.message }, { status: 500 })
+
+    // Blank boxes shouldn't wipe what the retired row already knew — and the
+    // default sort_order isn't something the form asked for, so it doesn't
+    // get to reset a position someone set on purpose.
+    const revived = Object.fromEntries(
+      Object.entries(fields).filter(([k, v]) =>
+        v !== null && v !== undefined && (k !== 'sort_order' || body.sort_order != null)),
+    )
+    const { data: back, error: reviveErr } = await supabase
+      .from('cleaning_supplies')
+      .update({ ...revived, active: true })
+      .eq('id', existing.id)
+      .select().single()
+    if (reviveErr) return NextResponse.json({ error: reviveErr.message }, { status: 500 })
+    return NextResponse.json({ ...back, revived: true })
   }
   return NextResponse.json(data)
 }
