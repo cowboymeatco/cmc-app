@@ -362,7 +362,7 @@ export default function BookPage() {
       <footer style={{ textAlign: 'center', color: C.lightBrown, fontSize: '0.78rem', padding: '2rem 1rem 1rem' }}>
         Cowboy Meat Company · 1109 Front St, Forsyth MT 59337 ·{' '}
         <a href="tel:4063467660" style={{ color: C.tan }}>( 406) 346-7660</a> ·{' '}
-        <a href="mailto:info@cowboymeats.com" style={{ color: C.tan }}>info@cowboymeats.com</a>
+        <a href="mailto:jill@cowboymeats.com" style={{ color: C.tan }}>jill@cowboymeats.com</a>
       </footer>
     </div>
   )

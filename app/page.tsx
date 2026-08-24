@@ -43,6 +43,7 @@ export default function Dashboard() {
   const [orders,     setOrders]     = useState<number | null>(null)
   const [valueAdd,   setValueAdd]   = useState<number | null>(null)
   const [cleaning,   setCleaning]   = useState<number | null>(null)
+  const [game,       setGame]       = useState<number | null>(null)
 
   // Red bubble: cutting instructions submitted since the last time the
   // Cutting Instructions page was opened on this device. First visit just
@@ -69,7 +70,8 @@ export default function Dashboard() {
       fetch('/api/value-add').then(r => r.json()),
       // peek=1 — reading the dashboard must not open tonight's cleaning shift.
       fetch('/api/cleaning/shift?peek=1').then(r => r.json()),
-    ]).then(([apptRes, procRes, delivRes, ordersRes, vaRes, cleanRes]) => {
+      fetch('/api/game?count=1').then(r => r.json()),
+    ]).then(([apptRes, procRes, delivRes, ordersRes, vaRes, cleanRes, gameRes]) => {
       const appts  = apptRes.status    === 'fulfilled' && Array.isArray(apptRes.value)    ? apptRes.value    : []
       const procs  = procRes.status    === 'fulfilled' && Array.isArray(procRes.value)    ? procRes.value    : []
       const deliv  = delivRes.status   === 'fulfilled' && Array.isArray(delivRes.value)   ? delivRes.value   : []
@@ -94,6 +96,10 @@ export default function Dashboard() {
       setCutInstr(missingCut)
       setOrders(ords.filter((o: Order) => o.status !== 'fulfilled').length)
       setValueAdd(vaJobs.filter((j: VAJob) => j.status !== 'complete').length)
+
+      // Animals still in the building. Zero is worth showing here — out of
+      // season that IS the answer, and it means the board was checked.
+      setGame(gameRes.status === 'fulfilled' && typeof gameRes.value?.count === 'number' ? gameRes.value.count : null)
 
       // Null until a shift exists for the night, so the tile shows nothing
       // rather than a misleading zero on a day nobody has started cleaning.
@@ -159,6 +165,13 @@ export default function Dashboard() {
       desc:  'Smokehouse · Patties · Sausage',
       when:  'Custom processing or shelf stock jobs',
       count: valueAdd,
+    },
+    {
+      href: '/game',      icon: '🦌', color: '#8B6F47',
+      title: 'Wild Game',
+      desc:  'Hunter drop-off · Cut · Smokehouse',
+      when:  'Hunting season — a hunter at the door',
+      count: game,
     },
     {
       href: '/delivery',  icon: '🚚', color: '#E879A0',
@@ -323,7 +336,7 @@ export default function Dashboard() {
         padding: '0.5rem 2rem', textAlign: 'center',
         fontSize: '0.72rem', color: 'var(--light-brown)',
       }}>
-        Cowboy Meat Company · 1109 Front St, Forsyth MT · (406) 346-7660 · info@cowboymeats.com
+        Cowboy Meat Company · 1109 Front St, Forsyth MT · (406) 346-7660 · jill@cowboymeats.com
       </footer>
     </div>
   )

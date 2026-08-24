@@ -591,7 +591,7 @@ export default function HACCPPage() {
         padding: '0.5rem 2rem', textAlign: 'center',
         fontSize: '0.72rem', color: 'var(--light-brown)',
       }}>
-        Cowboy Meat Company · 1109 Front St, Forsyth MT · (406) 346-7660 · info@cowboymeats.com
+        Cowboy Meat Company · 1109 Front St, Forsyth MT · (406) 346-7660 · jill@cowboymeats.com
       </footer>
     </div>
   )
