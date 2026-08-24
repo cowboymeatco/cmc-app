@@ -139,10 +139,19 @@ interface TurnoverSpecies {
   medianDays: number | null
   fastest: number | null
   slowest: number | null
+  paidCount: number
+  openCount: number
+  medianPaidDays: number | null
+  medianCollectDays: number | null
+  paidFastest: number | null
+  paidSlowest: number | null
 }
 interface TurnoverData {
   asOf: string; since: string; months: number; windowDays: number
-  overall: { medianDays: number | null; invoicesRead: number } | null
+  overall: {
+    medianDays: number | null; medianPaidDays: number | null; medianCollectDays: number | null
+    paidCount: number; openCount: number; invoicesRead: number; paymentsRead: number
+  } | null
   coverage: { carcasses: number; withCustomer: number; matched: number; ambiguous: number; unmatched: number }
   species: TurnoverSpecies[]
 }
@@ -705,10 +714,10 @@ export default function ExecPage() {
             </div>
           )}
 
-          {/* Kill to invoice. How long the plant's money sits inside an animal
-              before anyone asks for it back — the number under profit per head
-              (Charlie, 2026-08-22). */}
-          <SectionLabel>Turnover — slaughter to invoice{turnover ? `, last ${turnover.months} months` : ''}</SectionLabel>
+          {/* Kill to invoice to cash. How long the plant's money sits inside an
+              animal before anyone asks for it back, and then how long before it
+              actually arrives (Charlie, 2026-08-22 and 2026-08-24). */}
+          <SectionLabel>Turnover — slaughter to invoice to paid{turnover ? `, last ${turnover.months} months` : ''}</SectionLabel>
           {errors.turnover ? <ErrorBox msg={errors.turnover} /> : !turnover ? (
             <div style={{ color: C.lightBrown, fontSize: '0.85rem' }}>Reading invoices…</div>
           ) : turnover.coverage.matched === 0 ? (
@@ -717,31 +726,99 @@ export default function ExecPage() {
             </div>
           ) : (
             <>
-              <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-                {turnover.species.filter(sp => sp.matched > 0).map(sp => (
+              <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+                {turnover.overall?.medianPaidDays != null && (
                   <StatTile
-                    key={sp.species}
-                    label={sp.species}
-                    value={String(sp.medianDays)}
+                    hero
+                    label="Kill to money in the door"
+                    value={String(turnover.overall.medianPaidDays)}
                     unit="days"
-                    sub={`median of ${sp.matched} of ${sp.head} head · ${sp.fastest}–${sp.slowest} d`}
+                    sub={`median across ${turnover.overall.paidCount} paid-off carcasses`}
                     accent={INCOME_COLOR}
                   />
-                ))}
+                )}
                 {turnover.overall?.medianDays != null && (
                   <StatTile
-                    label="All species"
+                    label="Kill to invoice"
                     value={String(turnover.overall.medianDays)}
                     unit="days"
                     sub={`${turnover.coverage.matched} carcasses matched`}
                   />
                 )}
+                {turnover.overall?.medianCollectDays != null && (
+                  <StatTile
+                    label="Invoice to payment"
+                    value={String(turnover.overall.medianCollectDays)}
+                    unit="days"
+                    sub="how long the ask sits before it clears"
+                  />
+                )}
+                {turnover.overall && turnover.overall.openCount > 0 && (
+                  <StatTile
+                    label="Still unpaid"
+                    value={String(turnover.overall.openCount)}
+                    unit={turnover.overall.openCount === 1 ? 'carcass' : 'carcasses'}
+                    sub="invoiced, money not in yet"
+                    accent={COST_COLOR}
+                  />
+                )}
+              </div>
+
+              <div style={{
+                background: C.dark, border: '1px solid rgba(166,120,90,0.18)',
+                borderRadius: 4, padding: '0.75rem 1.25rem', overflowX: 'auto',
+              }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', color: C.tan }}>
+                  <thead>
+                    <tr style={{ color: C.lightBrown, textTransform: 'uppercase', fontSize: '0.65rem', letterSpacing: '0.08em' }}>
+                      <th style={{ textAlign: 'left',  padding: '0.35rem 0.5rem' }}>Species</th>
+                      <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Head</th>
+                      <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Matched</th>
+                      <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>To invoice</th>
+                      <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>To paid</th>
+                      <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Invoice &rarr; paid</th>
+                      <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Unpaid</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {turnover.species.filter(sp => sp.matched > 0).map(sp => (
+                      <tr key={sp.species} style={{ borderTop: '1px solid rgba(166,120,90,0.12)' }}>
+                        <td style={{ padding: '0.35rem 0.5rem', color: C.cream }}>{sp.species}</td>
+                        <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>{sp.head}</td>
+                        <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>{sp.matched}</td>
+                        <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>
+                          {sp.medianDays} d
+                          <span style={{ color: C.lightBrown, fontSize: '0.7rem' }}> ({sp.fastest}&ndash;{sp.slowest})</span>
+                        </td>
+                        <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', color: INCOME_COLOR, fontWeight: 600 }}>
+                          {sp.medianPaidDays != null ? `${sp.medianPaidDays} d` : '—'}
+                          {sp.medianPaidDays != null && (
+                            <span style={{ color: C.lightBrown, fontWeight: 400, fontSize: '0.7rem' }}>
+                              {' '}({sp.paidFastest}&ndash;{sp.paidSlowest}, n={sp.paidCount})
+                            </span>
+                          )}
+                        </td>
+                        <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>
+                          {sp.medianCollectDays != null ? `${sp.medianCollectDays} d` : '—'}
+                        </td>
+                        <td style={{
+                          textAlign: 'right', padding: '0.35rem 0.5rem',
+                          color: sp.openCount > 0 ? COST_COLOR : C.lightBrown,
+                        }}>
+                          {sp.openCount || '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
               {/* Say what the number rests on. A median over 59% of the
                   billable animals is worth having; a median presented as if it
                   covered all of them is not. */}
               <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.6rem', lineHeight: 1.6 }}>
-                Days from kill to the first invoice to that animal&apos;s buyer.
+                Days from kill to the first invoice to that animal&apos;s buyer, and on to the day
+                that invoice finished being paid. An invoice still carrying a balance counts as
+                unpaid rather than being averaged in as though the money had landed.
                 Matched {turnover.coverage.matched} of the {turnover.coverage.withCustomer} carcasses
                 that had a named cut customer
                 {turnover.coverage.carcasses > turnover.coverage.withCustomer && (

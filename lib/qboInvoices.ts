@@ -147,6 +147,7 @@ export interface DatedInvoice {
   customerName: string
   txnDate:      string
   total:        number
+  balance:      number   // 0 = settled
 }
 
 export async function getInvoicesSince(sinceISO: string): Promise<DatedInvoice[]> {
@@ -164,8 +165,49 @@ export async function getInvoicesSince(sinceISO: string): Promise<DatedInvoice[]
       customerName: inv.CustomerRef?.name ?? '',
       txnDate:      inv.TxnDate,
       total:        inv.TotalAmt ?? 0,
+      balance:      inv.Balance ?? 0,
     })))
     if (batch.length < page) break
   }
   return out
+}
+
+// When each invoice was actually paid.
+//
+// QuickBooks doesn't stamp a paid date on the invoice — a zero balance is all
+// it says. The date lives on the Payment that cleared it, so payments are read
+// separately and matched back through their linked transactions. An invoice
+// settled by several payments is dated by the LAST one: that's the day the
+// money finished arriving, which is the question being asked.
+interface QboPayment {
+  Id: string
+  TxnDate: string
+  Line?: { LinkedTxn?: { TxnId: string; TxnType: string }[] }[]
+}
+
+interface PaymentQueryResponse {
+  QueryResponse: { Payment?: QboPayment[] }
+}
+
+/** invoice id → date the last payment against it landed. */
+export async function getInvoicePaidDates(sinceISO: string): Promise<Map<string, string>> {
+  const page = 1000
+  const paid = new Map<string, string>()
+
+  for (let start = 1; ; start += page) {
+    const q = `select * from Payment where TxnDate >= '${sinceISO}' orderby TxnDate asc startposition ${start} maxresults ${page}`
+    const res = await qboFetch<PaymentQueryResponse>(`query?query=${encodeURIComponent(q)}`)
+    const batch = res.QueryResponse.Payment ?? []
+    for (const p of batch) {
+      for (const line of p.Line ?? []) {
+        for (const link of line.LinkedTxn ?? []) {
+          if (link.TxnType !== 'Invoice') continue
+          const prev = paid.get(link.TxnId)
+          if (!prev || p.TxnDate > prev) paid.set(link.TxnId, p.TxnDate)
+        }
+      }
+    }
+    if (batch.length < page) break
+  }
+  return paid
 }

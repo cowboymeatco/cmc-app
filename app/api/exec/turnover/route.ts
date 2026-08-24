@@ -3,13 +3,21 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { requireExec } from '@/lib/execGate'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
-import { getInvoicesSince } from '@/lib/qboInvoices'
+import { getInvoicesSince, getInvoicePaidDates } from '@/lib/qboInvoices'
 
-// GET /api/exec/turnover — how long a carcass takes to turn into a bill.
+// GET /api/exec/turnover — how long a carcass takes to turn into a bill, and
+// then into money.
 //
 // Charlie's question (2026-08-22): "days from slaughter (first labor) to
 // invoice (asking for money) … per species". That's how long the plant's
 // money sits in an animal, which is the denominator under profit per head.
+// Then (2026-08-24) "can we add a slaughter til invoice paid? That way we know
+// when we are getting paid?" — so each animal is followed one step further, to
+// the day the invoice that covers it finished being paid.
+//
+// QuickBooks puts no paid date on an invoice; a zero balance is all it says.
+// The date belongs to the Payment that cleared it, read separately and matched
+// back through its linked transactions.
 //
 // The two ends come from different systems with no shared id: the kill date is
 // ours, the invoice date is QuickBooks'. They're joined on the payer's NAME,
@@ -76,15 +84,16 @@ export async function GET(req: NextRequest) {
     .toISOString().slice(0, 10)
 
   try {
-    const [logsRes, invoices] = await Promise.all([
+    const [logsRes, invoices, paidDates] = await Promise.all([
       supabaseAdmin
         .from('harvest_log')
         .select('id, harvest_date, species, appointment_id, producer')
         .gte('harvest_date', since)
         .order('harvest_date'),
-      // Invoices can only be written after the kill, so the invoice window
-      // opens with the harvest window and runs to now.
+      // Invoices can only be written after the kill, and paid no earlier than
+      // they were written, so one window covers both.
       getInvoicesSince(since),
+      getInvoicePaidDates(since),
     ])
     if (logsRes.error) throw new Error(logsRes.error.message)
 
@@ -136,29 +145,31 @@ export async function GET(req: NextRequest) {
       if (names.length) apptCustomers.set(a.id, names)
     }
 
-    // Invoice dates by payer, in date order, so the first one after a kill is
-    // a scan rather than a sort per carcass. Two indexes: the exact one, on
+    // Invoices by payer, in date order, so the first one after a kill is a scan
+    // rather than a sort per carcass. Two indexes: the exact one, on
     // QuickBooks' own customer id, and the name-key one for everyone unlinked.
-    const byId   = new Map<string, string[]>()
-    const byName = new Map<string, string[]>()
+    interface PayerInvoice { id: string; date: string; balance: number }
+    const byId   = new Map<string, PayerInvoice[]>()
+    const byName = new Map<string, PayerInvoice[]>()
     for (const inv of invoices) {
+      const rec: PayerInvoice = { id: inv.id, date: inv.txnDate, balance: inv.balance }
       if (inv.customerId) {
         const l = byId.get(inv.customerId) ?? []
-        l.push(inv.txnDate)
+        l.push(rec)
         byId.set(inv.customerId, l)
       }
       const k = nameKey(inv.customerName)
       if (k) {
         const l = byName.get(k) ?? []
-        l.push(inv.txnDate)
+        l.push(rec)
         byName.set(k, l)
       }
     }
-    for (const list of byId.values())   list.sort()
-    for (const list of byName.values()) list.sort()
+    for (const list of byId.values())   list.sort((a, b) => a.date.localeCompare(b.date))
+    for (const list of byName.values()) list.sort((a, b) => a.date.localeCompare(b.date))
 
-    /** Every invoice date we can attribute to this payer, linked id first. */
-    const datesFor = (name: string): string[] | undefined => {
+    /** Every invoice we can attribute to this payer, linked id first. */
+    const invoicesFor = (name: string): PayerInvoice[] | undefined => {
       const k = nameKey(name)
       const id = linkedId.get(k)
       const byLink = id ? byId.get(id) : undefined
@@ -166,7 +177,10 @@ export async function GET(req: NextRequest) {
     }
 
     type Outcome = 'matched' | 'ambiguous' | 'unmatched'
-    interface Hit { species: string; days: number }
+    // paidDays is null when the invoice hasn't been settled yet — an animal
+    // still waiting on money is not a fast one, and averaging it in as though
+    // it had been paid today would flatter the number every time it's read.
+    interface Hit { species: string; days: number; paidDays: number | null; open: boolean }
     const hits: Hit[] = []
     const tally: Record<Outcome, number> = { matched: 0, ambiguous: 0, unmatched: 0 }
     const unmatchedBySpecies = new Map<string, number>()
@@ -186,35 +200,54 @@ export async function GET(req: NextRequest) {
       const windowEnd = new Date(Date.parse(log.harvest_date) + WINDOW_DAYS * 86_400_000)
         .toISOString().slice(0, 10)
 
-      let best: number | null = null
+      let best: { days: number; inv: PayerInvoice } | null = null
       let busy = false
       for (const name of names) {
-        const dates = datesFor(name)
-        if (!dates) continue
-        const inWindow = dates.filter(d => d >= log.harvest_date && d <= windowEnd)
+        const list = invoicesFor(name)
+        if (!list) continue
+        const inWindow = list.filter(i => i.date >= log.harvest_date && i.date <= windowEnd)
         if (!inWindow.length) continue
         if (inWindow.length > BUSY_PAYER) { busy = true; continue }
-        const days = daysBetween(log.harvest_date, inWindow[0])
-        if (best === null || days < best) best = days
+        const days = daysBetween(log.harvest_date, inWindow[0].date)
+        if (best === null || days < best.days) best = { days, inv: inWindow[0] }
       }
 
       const outcome: Outcome = best !== null ? 'matched' : busy ? 'ambiguous' : 'unmatched'
       tally[outcome]++
-      if (best !== null) hits.push({ species: log.species, days: best })
-      else {
+      if (best !== null) {
+        // A paid date is only claimed for an invoice that is actually settled.
+        // A part-payment means money arrived but the animal isn't paid for, and
+        // a zero balance with no payment behind it — a credit memo, a
+        // write-off, a journal entry — is closed with no day money landed. Both
+        // are left out of the paid median rather than given a date.
+        const open   = best.inv.balance > 0
+        const paidOn = open ? undefined : paidDates.get(best.inv.id)
+        hits.push({
+          species:  log.species,
+          days:     best.days,
+          paidDays: paidOn ? daysBetween(log.harvest_date, paidOn) : null,
+          open,
+        })
+      } else {
         unmatchedBySpecies.set(log.species, (unmatchedBySpecies.get(log.species) ?? 0) + 1)
         if (debug) misses.push({
           date: log.harvest_date, species: log.species, names,
-          knownPayer: names.some(n => !!datesFor(n)),
+          knownPayer: names.some(n => !!invoicesFor(n)),
         })
       }
     }
 
     const speciesNames = [...new Set(logs.map(l => l.species))].sort()
     const species = speciesNames.map(sp => {
-      const days = hits.filter(h => h.species === sp).map(h => h.days)
+      const mine = hits.filter(h => h.species === sp)
+      const days = mine.map(h => h.days)
+      const paid = mine.map(h => h.paidDays).filter((d): d is number => d !== null)
+      // Per carcass, not medianPaid minus medianDays — a difference of medians
+      // isn't the median of the differences.
+      const collect = mine.filter(h => h.paidDays !== null).map(h => h.paidDays! - h.days)
       const head = logs.filter(l => l.species === sp).length
       const sorted = [...days].sort((a, b) => a - b)
+      const sortedPaid = [...paid].sort((a, b) => a - b)
       return {
         species:  sp,
         head,                              // carcasses killed in the window
@@ -222,6 +255,13 @@ export async function GET(req: NextRequest) {
         medianDays: median(days),
         fastest:  sorted[0] ?? null,
         slowest:  sorted[sorted.length - 1] ?? null,
+        // …and of THOSE, the ones whose invoice has since been paid off.
+        paidCount:  paid.length,
+        openCount:  mine.filter(h => h.open).length,
+        medianPaidDays: median(paid),
+        medianCollectDays: median(collect),
+        paidFastest: sortedPaid[0] ?? null,
+        paidSlowest: sortedPaid[sortedPaid.length - 1] ?? null,
       }
     }).filter(s => s.head > 0)
 
@@ -231,8 +271,13 @@ export async function GET(req: NextRequest) {
       months,
       windowDays: WINDOW_DAYS,
       overall: {
-        medianDays: median(hits.map(h => h.days)),
-        invoicesRead: invoices.length,
+        medianDays:     median(hits.map(h => h.days)),
+        medianPaidDays: median(hits.map(h => h.paidDays).filter((d): d is number => d !== null)),
+        medianCollectDays: median(hits.filter(h => h.paidDays !== null).map(h => h.paidDays! - h.days)),
+        paidCount:      hits.filter(h => h.paidDays !== null).length,
+        openCount:      hits.filter(h => h.open).length,
+        invoicesRead:   invoices.length,
+        paymentsRead:   paidDates.size,
       },
       coverage: {
         carcasses:    logs.length,
