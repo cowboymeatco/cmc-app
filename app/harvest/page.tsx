@@ -266,6 +266,9 @@ function CARModal({ type, harvestLogId, harvestDate, onClose, onSaved }: {
 interface PartARow {
   animal:       AnimalReceivingLog
   logId:        string | null
+  /** The tag on the paired harvest row, which can differ from the animal's when
+   *  the pair was recovered by position. null = no harvest row yet. */
+  logEarTag:    string | null
   earTag:       string
   knockTime:    string
   liveWeight:   string
@@ -332,20 +335,50 @@ function PartATab({ date, appt }: { date: string; appt: HarvestAppointment | nul
       if (bucket) bucket.push(l); else logsByTag.set(key, [l])
     })
     const tagCursor = new Map<string, number>()
+    const claimed   = new Set<string>()
+
+    const byTag: (HarvestLog | null)[] = receiving.map(animal => {
+      const key    = animal.ear_tag || ''
+      const cursor = tagCursor.get(key) ?? 0
+      const log    = logsByTag.get(key)?.[cursor] ?? null
+      tagCursor.set(key, cursor + 1)
+      if (log) claimed.add(log.id)
+      return log
+    })
+
+    // Second pass: an animal whose tag matched nothing takes the next harvest row
+    // on this appointment that no other animal claimed.
+    //
+    // The tag is the pairing key, so the two records have to move together — but
+    // they can come apart. A tag typed onto the check-in record anywhere other
+    // than Part A's own tag editor leaves the harvest row on the old tag, the
+    // pairing misses, and the next save writes a SECOND carcass for an animal
+    // that already has one. That's how Brandon Heberle's single steer ended up
+    // logged on both the 24th and the 25th (Charlie, 2026-08-24). A row already
+    // sitting on this appointment with nothing else pointing at it belongs to
+    // the animal that has no row, whatever the tag says.
+    const spare = apptLogs.filter(l => !claimed.has(l.id))
+    let spareAt = 0
+    const paired = byTag.map(log => {
+      if (log) return log
+      const take = spare[spareAt]
+      if (!take) return null
+      spareAt++
+      claimed.add(take.id)
+      return take
+    })
 
     // Suggest next available harvest order
     const maxOrder = apptLogs.reduce((m, l) => Math.max(m, l.harvest_order ?? 0), 0)
     let nextOrder  = maxOrder + 1
 
-    const built: PartARow[] = receiving.map(animal => {
-      const key    = animal.ear_tag || ''
-      const cursor = tagCursor.get(key) ?? 0
-      const log    = logsByTag.get(key)?.[cursor] ?? null
-      tagCursor.set(key, cursor + 1)
+    const built: PartARow[] = receiving.map((animal, i) => {
+      const log = paired[i]
       const ord = log?.harvest_order ?? nextOrder++
       return {
         animal,
         logId:        log?.id ?? null,
+        logEarTag:    log?.ear_tag ?? null,
         earTag:       animal.ear_tag || '',
         knockTime:    log?.knock_time ?? '',
         liveWeight:   log?.live_weight_lbs != null ? String(log.live_weight_lbs) : '',
@@ -391,6 +424,11 @@ function PartATab({ date, appt }: { date: string; appt: HarvestAppointment | nul
       part_a_complete:   true,
       inspector_initials: inspInitials,
       performed_by:      performedBy,
+      // Recovered a pair whose tags had drifted apart — put them back in step,
+      // so the next load matches on the tag again instead of on position.
+      ...(a.logEarTag !== null && a.logEarTag !== (a.animal.ear_tag || '')
+        ? { ear_tag: a.animal.ear_tag || '' }
+        : {}),
     }
 
     if (a.logId) {
@@ -454,7 +492,12 @@ function PartATab({ date, appt }: { date: string; appt: HarvestAppointment | nul
     }
 
     // Both records moved together → local pairing stays valid, no reload needed.
-    upd(i, { saving: false, animal: { ...a.animal, ear_tag: newTag }, earTag: newTag })
+    upd(i, {
+      saving: false,
+      animal: { ...a.animal, ear_tag: newTag },
+      earTag: newTag,
+      ...(a.logId ? { logEarTag: newTag } : {}),
+    })
   }
 
   // Remove a whole animal (e.g. a mis-counted / phantom check-in): deletes its
