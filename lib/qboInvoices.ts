@@ -135,3 +135,37 @@ export async function getInvoice(id: string): Promise<OpenInvoice | null> {
   const inv = (res.QueryResponse.Invoice ?? [])[0]
   return inv ? toOpenInvoice(inv) : null
 }
+
+
+// Every invoice written on or after a date, paid or not — the open-invoice
+// query above can't answer "when did we first ask for money", because the ones
+// that answer it best are the ones already settled.
+export interface DatedInvoice {
+  id:           string
+  docNumber:    string
+  customerId:   string   // CustomerRef.value — an exact join for anything linked
+  customerName: string
+  txnDate:      string
+  total:        number
+}
+
+export async function getInvoicesSince(sinceISO: string): Promise<DatedInvoice[]> {
+  const page = 1000
+  const out: DatedInvoice[] = []
+
+  for (let start = 1; ; start += page) {
+    const q = `select * from Invoice where TxnDate >= '${sinceISO}' orderby TxnDate asc startposition ${start} maxresults ${page}`
+    const res = await qboFetch<InvoiceQueryResponse>(`query?query=${encodeURIComponent(q)}`)
+    const batch = res.QueryResponse.Invoice ?? []
+    out.push(...batch.map(inv => ({
+      id:           inv.Id,
+      docNumber:    inv.DocNumber ?? inv.Id,
+      customerId:   inv.CustomerRef?.value ?? '',
+      customerName: inv.CustomerRef?.name ?? '',
+      txnDate:      inv.TxnDate,
+      total:        inv.TotalAmt ?? 0,
+    })))
+    if (batch.length < page) break
+  }
+  return out
+}

@@ -132,6 +132,20 @@ interface WarData {
   pin_d: number; pin_w: number; pout_d: number; pout_w: number
   rate_d: number | null; cooks_d: number; cooks_w: number
 }
+interface TurnoverSpecies {
+  species: string
+  head: number
+  matched: number
+  medianDays: number | null
+  fastest: number | null
+  slowest: number | null
+}
+interface TurnoverData {
+  asOf: string; since: string; months: number; windowDays: number
+  overall: { medianDays: number | null; invoicesRead: number } | null
+  coverage: { carcasses: number; withCustomer: number; matched: number; ambiguous: number; unmatched: number }
+  species: TurnoverSpecies[]
+}
 interface LaborWeek {
   week_start: string; week_end: string
   labor_dollars: number; labor_hours: number; headcount: number; avg_hours: number; over40: number
@@ -440,6 +454,7 @@ export default function ExecPage() {
   const [receivables, setReceivables] = useState<ReceivablesData | null>(null)
   const [war, setWar] = useState<WarData | null>(null)
   const [labor, setLabor] = useState<LaborWeek[] | null>(null)
+  const [turnover, setTurnover] = useState<TurnoverData | null>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
 
   const [period, setPeriod] = useState<PeriodKey>('ttm')
@@ -464,6 +479,7 @@ export default function ExecPage() {
     grab<ReceivablesData>('/api/exec/receivables', setReceivables, 'receivables')
     grab<WarData>('/api/exec/war', setWar, 'war')
     grab<{ weeks: LaborWeek[] }>('/api/exec/labor', d => setLabor(d.weeks), 'labor')
+    grab<TurnoverData>('/api/exec/turnover?months=12', setTurnover, 'turnover')
   }
 
   const changePeriod = (p: PeriodKey) => {
@@ -687,6 +703,57 @@ export default function ExecPage() {
               </div>
               <WarTile label="Smokehouse cooks" day={war.cooks_d} week={war.cooks_w} unit="loads" />
             </div>
+          )}
+
+          {/* Kill to invoice. How long the plant's money sits inside an animal
+              before anyone asks for it back — the number under profit per head
+              (Charlie, 2026-08-22). */}
+          <SectionLabel>Turnover — slaughter to invoice{turnover ? `, last ${turnover.months} months` : ''}</SectionLabel>
+          {errors.turnover ? <ErrorBox msg={errors.turnover} /> : !turnover ? (
+            <div style={{ color: C.lightBrown, fontSize: '0.85rem' }}>Reading invoices…</div>
+          ) : turnover.coverage.matched === 0 ? (
+            <div style={{ color: C.lightBrown, fontSize: '0.85rem' }}>
+              No carcass in the last {turnover.months} months could be matched to an invoice yet.
+            </div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                {turnover.species.filter(sp => sp.matched > 0).map(sp => (
+                  <StatTile
+                    key={sp.species}
+                    label={sp.species}
+                    value={String(sp.medianDays)}
+                    unit="days"
+                    sub={`median of ${sp.matched} of ${sp.head} head · ${sp.fastest}–${sp.slowest} d`}
+                    accent={INCOME_COLOR}
+                  />
+                ))}
+                {turnover.overall?.medianDays != null && (
+                  <StatTile
+                    label="All species"
+                    value={String(turnover.overall.medianDays)}
+                    unit="days"
+                    sub={`${turnover.coverage.matched} carcasses matched`}
+                  />
+                )}
+              </div>
+              {/* Say what the number rests on. A median over 59% of the
+                  billable animals is worth having; a median presented as if it
+                  covered all of them is not. */}
+              <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.6rem', lineHeight: 1.6 }}>
+                Days from kill to the first invoice to that animal&apos;s buyer.
+                Matched {turnover.coverage.matched} of the {turnover.coverage.withCustomer} carcasses
+                that had a named cut customer
+                {turnover.coverage.carcasses > turnover.coverage.withCustomer && (
+                  <> (of {turnover.coverage.carcasses} killed — the rest carry no buyer, so nothing to bill against)</>
+                )}.
+                {turnover.coverage.ambiguous > 0 && (
+                  <> {turnover.coverage.ambiguous} left out for being billed too often to tell which invoice was the animal.</>
+                )}
+                {' '}QuickBooks and the kill floor share no id, so buyers are matched by name —
+                linking a customer to QuickBooks on Processing → QuickBooks makes their animals count here exactly.
+              </div>
+            </>
           )}
 
           <SectionLabel>Labor efficiency — weekly</SectionLabel>
