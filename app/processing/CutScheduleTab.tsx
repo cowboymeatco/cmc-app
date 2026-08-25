@@ -3,10 +3,11 @@ import { Fragment, useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { HarvestAppointment, HarvestLog, CarcassAssignment } from '@/lib/types'
 import AssignCarcassesModal from './AssignCarcassesModal'
+import LinkScanSheetModal from './LinkScanSheetModal'
 import GrindAllModal from './GrindAllModal'
 import {
   type PriorityWeights, type ScheduleEntry, type BreakItem, type ListItem, type FutureBooking,
-  type FutureItem, type HarvestDay,
+  type FutureItem, type HarvestDay, type CarcassLink,
   DEFAULT_WEIGHTS, WEIGHT_LABELS, buildEntries, loadScheduleData, uniqueCarcasses as uniqueOf,
   calcScore, speciesColor, speciesIcon, portionBadge, cutDateByKey, hangAtCut, hangColor,
   carcassTotals, FUTURE_WINDOW_DEFAULT_DAYS, FUTURE_WINDOW_CHOICES,
@@ -107,6 +108,10 @@ export default function CutScheduleTab() {
   const [assignments, setAssignments] = useState<CarcassAssignment[]>([])
   const [assignModal, setAssignModal] = useState<{ appointments: HarvestAppointment[]; carcasses: HarvestLog[] } | null>(null)
   const [grindModal,  setGrindModal]  = useState<GrindTarget | null>(null)
+  // harvest_log_id → the packing sessions this animal reached. An animal with
+  // no entry was never scanned in, which is why it is still on this list.
+  const [carcassLinks, setCarcassLinks] = useState<Map<string, CarcassLink[]>>(new Map())
+  const [linkModal,    setLinkModal]    = useState<ScheduleEntry | null>(null)
   // Booked animals not harvested yet — a heads-up rail, not part of the
   // schedule itself. See lib/cutSchedule FutureBooking.
   const [futureBookings, setFutureBookings] = useState<FutureBooking[]>([])
@@ -134,10 +139,11 @@ export default function CutScheduleTab() {
   const loadAll = useCallback(async () => {
     setLoading(true)
     try {
-      const { logs, apptMap, instrIds, instrByBuyer, saved, assignments, futureBookings, harvestDays } = await loadScheduleData(todayISO)
+      const { logs, apptMap, instrIds, instrByBuyer, saved, assignments, futureBookings, harvestDays, carcassLinks } = await loadScheduleData(todayISO)
       setLogs(logs)
       setAppts([...apptMap.values()])
       setAssignments(assignments)
+      setCarcassLinks(carcassLinks)
       setFutureBookings(futureBookings)
       setHarvestDays(harvestDays)
       setEntries(buildEntries(logs, apptMap, instrIds, saved, assignments, weights, futureBookings, instrByBuyer))
@@ -157,6 +163,19 @@ export default function CutScheduleTab() {
   // to a single booking made a mixed-up tag unfixable — the buyer you want is on
   // the appointment next door (Jill, 2026-07-28). Group = same producer, species
   // and kill day; a carcass with no producer falls back to its own booking.
+  // Which sides of a carcass have reached a packing session. Same rule the
+  // inputs API uses to decide whether to pull it off the rail: a link with no
+  // side is a whole animal and covers both. Keeping the two in step is what
+  // makes "not scanned in" mean the same thing here as it does there.
+  const sidesLinked = (links: CarcassLink[]): Set<'L' | 'R'> => {
+    const seen = new Set<'L' | 'R'>()
+    for (const l of links) {
+      if (l.side) seen.add(l.side)
+      else { seen.add('L'); seen.add('R') }
+    }
+    return seen
+  }
+
   const openAssign = (entry: ScheduleEntry) => {
     const appt = appts.find(a => a.id === entry.source_appointment_id)
     if (!appt) return
@@ -1090,6 +1109,82 @@ export default function CutScheduleTab() {
                           ⇄ {entry.assigned ? 'Reassign' : 'Assign'}
                         </button>
                       )}
+                      {/* Scan-sheet state. A carcass nobody scanned in never
+                          comes off the cooler rail, so it is still on this list
+                          after the meat is packed — and its boxes printed with
+                          no producer, hanging weight or kill type. Showing it
+                          here is the point: the row IS the symptom (Jill,
+                          2026-08-25). */}
+                      {(() => {
+                        const links = carcassLinks.get(entry.harvest_log_id) ?? []
+                        const seen  = sidesLinked(links)
+                        const full  = seen.has('L') && seen.has('R')
+                        // Almost every row on this list is an animal nobody has
+                        // scanned in — because that is what "still hanging"
+                        // means. Warning on all of them would say nothing. The
+                        // badge fires only where the silence is actually WRONG:
+                        // one half scanned and the other never, or a carcass
+                        // whose cutting day has already gone by. Everything else
+                        // keeps the quiet link, so the repair is still one click
+                        // away without dressing a normal row as a problem.
+                        const planned = cutDates.get(entry.key)
+                        const alarm   = links.length > 0 || (!!planned && planned < todayISO)
+                        const color = full ? C.green : C.amber
+                        const text  = full
+                          ? '✓ scanned in'
+                          : links.length
+                            ? `◐ ${[...seen].join('')} half only`
+                            : '⚠ never scanned in'
+                        if (!full && !alarm) {
+                          return (
+                            <button
+                              onClick={e => { e.stopPropagation(); setLinkModal(entry) }}
+                              onDragStart={e => e.stopPropagation()}
+                              title="Not scanned into a packing session yet — normal while it is still hanging. Link it by hand if the scan was missed."
+                              style={{
+                                marginLeft: 6, padding: '0 5px', height: 16, lineHeight: '14px', flexShrink: 0,
+                                background: 'transparent', border: '1px solid rgba(166,120,90,0.25)',
+                                borderRadius: 3, cursor: 'pointer', color: C.medBrown,
+                                fontSize: '0.62rem', whiteSpace: 'nowrap',
+                              }}
+                            >
+                              🔗
+                            </button>
+                          )
+                        }
+                        return (
+                          <>
+                            <span
+                              title={links.length
+                                ? links.map(l => `${l.side ? `${l.side} half` : 'whole'} → ${l.customer_name ?? '—'} (${l.pack_date ?? '—'})${l.manual ? ' · linked by hand' : ''}`).join('\n')
+                                : 'Its cutting day has gone by and nobody scanned this carcass into a packing session. Its boxes printed with no producer, hanging weight or kill type, and it stays on this list until it is linked.'}
+                              style={{
+                                marginLeft: 6, padding: '0 5px', borderRadius: 3, flexShrink: 0,
+                                background: `${color}1A`, border: `1px solid ${color}55`, color,
+                                fontSize: '0.6rem', fontWeight: 700, whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {text}
+                            </span>
+                            {!full && (
+                              <button
+                                onClick={e => { e.stopPropagation(); setLinkModal(entry) }}
+                                onDragStart={e => e.stopPropagation()}
+                                title="Link this animal to the session its boxes were packed under"
+                                style={{
+                                  marginLeft: 4, padding: '0 6px', height: 16, lineHeight: '14px', flexShrink: 0,
+                                  background: 'rgba(245,158,11,0.16)',
+                                  border: '1px solid rgba(245,158,11,0.5)',
+                                  borderRadius: 3, cursor: 'pointer', color: C.amber,
+                                  fontSize: '0.62rem', fontWeight: 700, whiteSpace: 'nowrap',
+                                }}
+                              >
+                                🔗 Link
+                              </button>
+                            )}
+                          </>
+                        )
+                      })()}
                     </div>
                     <input
                       type="text"
@@ -1262,6 +1357,24 @@ export default function CutScheduleTab() {
           </div>
         </>
       )}
+
+      {/* Repair a missed carcass scan from the schedule the animal is stuck on */}
+      {linkModal && (() => {
+        const animal = logs.find(l => l.id === linkModal.harvest_log_id)
+        if (!animal) return null
+        return (
+          <LinkScanSheetModal
+            animal={animal}
+            cutCustomerNames={[
+              ...linkModal.cut_customers.map(c => c.name),
+              linkModal.customer_name,
+            ].filter(Boolean)}
+            existing={carcassLinks.get(linkModal.harvest_log_id) ?? []}
+            onClose={() => setLinkModal(null)}
+            onLinked={() => { setLinkModal(null); loadAll() }}
+          />
+        )
+      })()}
 
       {/* Assign carcasses → cut customers */}
       {assignModal && (

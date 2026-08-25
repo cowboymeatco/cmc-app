@@ -2,16 +2,22 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { isoDate } from '@/lib/dates'
+import { julianYYDDD } from '@/lib/label'
 
 export const dynamic = 'force-dynamic'
 
 // GET /api/processing/inputs?customer_name=X&pack_date=YYYY-MM-DD
-// Returns all inputs for a given scanner session
+// Returns all inputs for a given scanner session.
+// ?harvest_log_ids=a,b,c instead answers the other direction — which sessions
+// each of these animals was scanned into — for the cut schedule's "never
+// scanned in" check.
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const customer_name = searchParams.get('customer_name')
   const pack_date     = searchParams.get('pack_date')
   const session_date  = searchParams.get('session_date')
+  const harvestIds    = (searchParams.get('harvest_log_ids') ?? '')
+    .split(',').map(v => v.trim()).filter(Boolean)
 
   let query = supabase
     .from('processing_inputs')
@@ -21,6 +27,7 @@ export async function GET(req: NextRequest) {
   if (customer_name) query = query.eq('customer_name', customer_name)
   if (pack_date)     query = query.eq('pack_date', pack_date)
   if (session_date)  query = query.eq('session_date', session_date)
+  if (harvestIds.length) query = query.in('linked_harvest_id', harvestIds)
 
   const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
@@ -77,6 +84,60 @@ export async function POST(req: NextRequest) {
       weight_lbs  = harvest.hot_carcass_weight_lbs
       input_type  = 'carcass'
       linked_harvest_id = harvest.id
+    }
+  }
+
+  // ── Linked by hand from the cut schedule ────────────────────────────────────
+  // An animal nobody scanned in never leaves the cooler rail, so it sits on the
+  // cut schedule forever and its boxes print with no producer, no hanging
+  // weight and no kill type. Jill, 2026-08-25: "If they forget to scan an
+  // animal in, make it so we can link an animal on the cut schedule to a scan
+  // sheet."
+  //
+  // The animal arrives as an ID, not a tag, because the operator already picked
+  // it off a list — re-deriving a YYDDD-TAG identifier and looking it up again
+  // could only ever lose information, or land on the wrong carcass the day two
+  // animals share a tag. The row it builds is otherwise identical to a scanned
+  // one, box_identifier included, so the cooler-pull below and a later real
+  // scan of the other side both behave exactly as they would have.
+  const linkSide: string | null = /^[LR]$/i.test(body.side ?? '') ? String(body.side).toUpperCase() : null
+  if (!identifier && body.harvest_log_id) {
+    const { data: harvest } = await supabase
+      .from('harvest_log')
+      .select('id, species, carcass_tag, harvest_date, hot_carcass_weight_lbs, producer, appointment_id')
+      .eq('id', body.harvest_log_id)
+      .maybeSingle()
+
+    if (!harvest) return NextResponse.json({ error: 'animal not found' }, { status: 404 })
+
+    const hcw   = harvest.hot_carcass_weight_lbs != null ? Number(harvest.hot_carcass_weight_lbs) : null
+    weight_lbs  = linkSide ? (hcw != null ? hcw / 2 : null) : hcw
+    description = `${harvest.species} — Tag ${harvest.carcass_tag}${linkSide ? ` ${linkSide} Half` : ''}${harvest.producer ? ` (${harvest.producer})` : ''}`
+    input_type  = 'carcass'
+    linked_harvest_id = harvest.id
+    identifier  = `${julianYYDDD(harvest.harvest_date)}-${harvest.carcass_tag}${linkSide ? `-${linkSide}` : ''}`
+    if (harvest.appointment_id && !body.linked_appointment_id) {
+      body.linked_appointment_id = harvest.appointment_id
+    }
+    // Says so on the row itself. A carcass input that no scanner ever produced
+    // should not be indistinguishable from one that was actually scanned at the
+    // rail — someone reconciling a yield later needs to see the difference.
+    if (!body.notes) body.notes = 'Linked by hand from the cut schedule (not scanned)'
+
+    // Linking the same side twice would put the carcass weight into the yield
+    // denominator twice and read as a plausible-but-wrong number, so it's
+    // refused rather than deduped — the caller is a button, not a scan gun, and
+    // a second press means the first one already worked.
+    const { data: dupe } = await supabase
+      .from('processing_inputs')
+      .select('id, customer_name, pack_date')
+      .eq('linked_harvest_id', harvest.id)
+      .eq('box_identifier', identifier)
+      .maybeSingle()
+    if (dupe) {
+      return NextResponse.json(
+        { error: `Already linked to ${dupe.customer_name} (${dupe.pack_date})`, existing: dupe },
+        { status: 409 })
     }
   }
 

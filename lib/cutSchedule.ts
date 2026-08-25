@@ -309,6 +309,14 @@ export interface HarvestDay {
   species: Map<string, number>
 }
 
+/** One session an animal was scanned (or hand-linked) into. */
+export interface CarcassLink {
+  customer_name: string | null
+  pack_date:     string | null
+  side:          'L' | 'R' | null
+  manual:        boolean
+}
+
 export interface ScheduleData {
   logs:            HarvestLog[]
   apptMap:         Map<string, HarvestAppointment>
@@ -320,6 +328,10 @@ export interface ScheduleData {
   assignments:     CarcassAssignment[]
   futureBookings:  FutureBooking[]
   harvestDays:     HarvestDay[]
+  /** harvest_log_id → the packing sessions this animal has been scanned into.
+   *  Absent (or empty) means nobody ever scanned it in, which is why it is
+   *  still hanging on the schedule. */
+  carcassLinks:    Map<string, CarcassLink[]>
 }
 
 // How far out the Upcoming Bookings rail looks by default. The crew picks the
@@ -344,7 +356,7 @@ export async function loadScheduleData(todayISO: string): Promise<ScheduleData> 
       const logs    = data as HarvestLog[]
       const logIds  = logs.map(l => l.id)
       const apptIds = Array.from(new Set(logs.map(l => l.appointment_id).filter(Boolean)))
-      const [assignData, apptData] = await Promise.all([
+      const [assignData, apptData, inputData] = await Promise.all([
         logIds.length
           ? fetch(`/api/carcass-assignments?harvest_log_ids=${logIds.join(',')}`)
               .then(r => r.json()).catch(() => [])
@@ -352,12 +364,20 @@ export async function loadScheduleData(todayISO: string): Promise<ScheduleData> 
         apptIds.length
           ? fetch(`/api/appointments?ids=${apptIds.join(',')}`).then(r => r.json())
           : [],
+        // Which of these animals has actually reached a packing session. A miss
+        // here must not take the schedule down with it — the planner works fine
+        // without the badge.
+        logIds.length
+          ? fetch(`/api/processing/inputs?harvest_log_ids=${logIds.join(',')}`)
+              .then(r => r.json()).catch(() => [])
+          : [],
       ])
       if (!Array.isArray(apptData)) throw new Error('unexpected /api/appointments response')
       return {
         logs,
         assignments:  Array.isArray(assignData) ? assignData as CarcassAssignment[] : [],
         appointments: apptData as HarvestAppointment[],
+        carcassLinks: buildCarcassLinks(Array.isArray(inputData) ? inputData : []),
       }
     }),
     fetch('/api/cutting-instructions?ids_only=1').then(r => r.json()),
@@ -422,7 +442,30 @@ export async function loadScheduleData(todayISO: string): Promise<ScheduleData> 
     saved:       planIsLive(savedAll, todayISO) ? savedAll : [],
     futureBookings,
     harvestDays: [...killDays.values()].sort((a, b) => a.date.localeCompare(b.date)),
+    carcassLinks: harvest.carcassLinks,
   }
+}
+
+/** Group carcass inputs by the animal they point at. The side comes off the
+ *  identifier's -L/-R suffix, which is the only place it is recorded. */
+function buildCarcassLinks(rows: unknown[]): Map<string, CarcassLink[]> {
+  const out = new Map<string, CarcassLink[]>()
+  for (const r of rows as Array<{
+    linked_harvest_id: string | null; customer_name: string | null
+    pack_date: string | null; box_identifier: string | null; notes: string | null
+  }>) {
+    if (!r?.linked_harvest_id) continue
+    const m = (r.box_identifier ?? '').match(/-([LR])$/i)
+    const list = out.get(r.linked_harvest_id) ?? []
+    list.push({
+      customer_name: r.customer_name,
+      pack_date:     r.pack_date,
+      side:          m ? (m[1].toUpperCase() as 'L' | 'R') : null,
+      manual:        /not scanned/i.test(r.notes ?? ''),
+    })
+    out.set(r.linked_harvest_id, list)
+  }
+  return out
 }
 
 // ── Build ranked list from cooler inventory ───────────────────────────────────
