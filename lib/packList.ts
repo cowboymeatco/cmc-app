@@ -13,6 +13,9 @@ export type PackRow = {
   isGrind?:      boolean
   isAddon?:      boolean
   writeIn?:      boolean
+  // A row that names a product or a batch rather than a primal — the sausage
+  // and trim lines. The scanner's species prefix stays off these.
+  noSpecies?:    boolean
 }
 
 // Bagged trim (trim.dest === 'bag'): the customer takes their trim un-ground in
@@ -20,6 +23,15 @@ export type PackRow = {
 // cutters' line has to be loud about it — trim reaching a grinder is not
 // recoverable (Jill, 2026-07-28).
 export const trimIsBagged = (t: any) => t?.dest === 'bag'
+
+// A split trim: a share of it comes back in bulk bags un-ground and the rest
+// goes through the grind/sausage answers as usual (Jill, 2026-08-25 — "bag half
+// of trim, run other half into sausage"). The cutters' line has to be just as
+// loud as a fully bagged one; the bag is what can't be undone.
+export const trimIsSplit   = (t: any) => t?.dest === 'split' && Number(t?.bagPct) > 0
+export const trimBagPct    = (t: any) => Number(t?.bagPct) || 0
+export const splitBagRow   = (t: any): [string, string] =>
+  ['Trim to Bag', `${trimBagPct(t)}% of trim · ${bagSizeLabel(t)} · BAG BEFORE GRINDING`]
 
 export const bagSizeLabel = (t: any) => (t?.bagSize ? `${t.bagSize} lb bags` : 'bag size not specified')
 
@@ -30,6 +42,9 @@ export const baggedTrimCutterRows = (): Array<[string, string]> => [['Trim', 'BA
 export function beefTrimCutterRows(t: any): Array<[string, string]> {
   if (trimIsBagged(t)) return baggedTrimCutterRows()
   const rows: Array<[string, string]> = []
+  // First line on the cutters' page, before the blend: the bagged share has to
+  // come off the pile before anything reaches a grinder.
+  if (trimIsSplit(t)) rows.push(splitBagRow(t))
   if (t?.fatPct) rows.push(['Grind Blend', t.fatPct])
   // Excess fat is thrown away unless the customer asked for it, and that call
   // gets made at the table while the animal is being broken — long before
@@ -43,6 +58,11 @@ export function beefTrimPackRows(t: any): Array<[string, string]> {
   if (!t) return []
   if (trimIsBagged(t)) return baggedTrimPackRows(t)
   const rows: Array<[string, string]> = []
+  const bagged = trimIsSplit(t)
+  if (bagged) rows.push(['Bagged Trim', `${trimBagPct(t)}% of trim · ${bagSizeLabel(t)}`])
+  // With part of the pile bagged, the patty/loose shares divide what is LEFT —
+  // say so, or the percentages on the sheet add up past the animal's trim.
+  const of = bagged ? 'of the trim left' : 'of trim'
   const pattyPct = Number(t.pattyPct ?? 0)
   // Patties can be ordered as a share of the trim or as a flat weight; the two
   // are never both set (Jill, 2026-08-21). A weight always leaves a remainder,
@@ -53,7 +73,7 @@ export function beefTrimPackRows(t: any): Array<[string, string]> {
   if (byWeight || pattyPct < 100) {
     const parts = [
       t.loose?.packSize ? `${t.loose.packSize} lb ${t.loose?.rollstock ? 'rollstock' : 'packs'}` : '',
-      byWeight ? 'whatever is left after the patties' : pattyPct > 0 ? `${100 - pattyPct}% of trim` : '',
+      byWeight ? 'whatever is left after the patties' : pattyPct > 0 ? `${100 - pattyPct}% ${of}` : '',
     ].filter(Boolean)
     if (parts.length) rows.push(['Loose Grind', parts.join(' · ')])
   }
@@ -61,7 +81,7 @@ export function beefTrimPackRows(t: any): Array<[string, string]> {
     const parts = [
       t.patties?.size ?? '',
       t.patties?.pkg === '1lb' ? '1 lb pkgs' : t.patties?.pkg === '10lb' ? '10 lb box' : '',
-      byWeight ? `${pattyLbs} lb` : pattyPct < 100 ? `${pattyPct}% of trim` : 'all trim',
+      byWeight ? `${pattyLbs} lb` : pattyPct < 100 ? `${pattyPct}% ${of}` : bagged ? 'all the trim left' : 'all trim',
     ].filter(Boolean)
     rows.push(['Patties', parts.join(' · ')])
   }
@@ -102,8 +122,13 @@ export function porkTrimCutterRows(t: any, f: (s: string) => string): Array<[str
   if (!t) return []
   if (trimIsBagged(t)) return baggedTrimCutterRows()
   const split = trimSplitOf(t)
-  const share = split ? '50% of trim' : 'all trim'
+  // Two flavours divide what is left AFTER the bag, not the whole pile — say
+  // which, or the shares on the page add up to more trim than the animal has.
+  const bagged = trimIsSplit(t)
+  const of     = bagged ? 'of the trim left' : 'of trim'
+  const share  = split ? `50% ${of}` : bagged ? `all ${of}` : 'all trim'
   const rows: Array<[string, string]> = []
+  if (bagged) rows.push(splitBagRow(t))
   if (t.flavor1) rows.push([f(t.flavor1), [f(t.format1 ?? ''), share].filter(Boolean).join(' · ')])
   if (split)     rows.push([f(t.flavor2), [f(t.format2 ?? ''), share].filter(Boolean).join(' · ')])
   return rows
@@ -112,9 +137,11 @@ export function porkTrimCutterRows(t: any, f: (s: string) => string): Array<[str
 export function porkTrimRows(t: any, f: (s: string) => string): Array<[string, string]> {
   if (!t) return []
   if (trimIsBagged(t)) return [...baggedTrimCutterRows(), ...baggedTrimPackRows(t)]
-  const split = trimSplitOf(t)
-  const share = split ? '50% of trim' : ''
+  const split  = trimSplitOf(t)
+  const bagged = trimIsSplit(t)
+  const share  = split ? `50% ${bagged ? 'of the trim left' : 'of trim'}` : ''
   const rows: Array<[string, string]> = []
+  if (bagged) rows.push(['Bagged Trim', `${trimBagPct(t)}% of trim · ${bagSizeLabel(t)}`])
   if (t.flavor1) rows.push([f(t.flavor1), [f(t.format1 ?? ''), share].filter(Boolean).join(' · ')])
   if (split)     rows.push([f(t.flavor2), [f(t.format2 ?? ''), share].filter(Boolean).join(' · ')])
   return rows
@@ -581,7 +608,7 @@ export function buildPackList(d: any, species: string): PackRow[] {
     : roastOr(r?.cut, r?.roastCount, c => withT(c, r?.thickness ?? ''), perHalf)
 
   // ── Page 2: Packaging Sheet ───────────────────────────────────────────────
-  type PR = { sectionTitle?: string; cut?: string; spec?: string; isGrind?: boolean; isAddon?: boolean; writeIn?: boolean }
+  type PR = PackRow
   const prs: PR[] = []
   const grindFrom: string[] = []
 
@@ -832,8 +859,12 @@ export function buildPackList(d: any, species: string): PackRow[] {
   // Ground/trim section: packaging style & size from the v2 trim step, plus which cuts went to grind
   const trimPrs = isBeef ? beefTrimPackRows(d.trim) : isPork ? porkTrimRows(d.trim, fmt) : []
   if (trimPrs.length || grindFrom.length) {
-    filteredPrs.push({ sectionTitle: trimIsBagged(d.trim) ? 'Trim' : isPork ? 'Sausage / Trim' : `Ground ${species}` })
-    trimPrs.forEach(([l, v]) => filteredPrs.push({ cut: l, spec: v }))
+    filteredPrs.push({ sectionTitle: trimIsBagged(d.trim) ? 'Trim'
+      : isPork ? 'Sausage / Trim'
+      // A split trim puts bags and grind under one header, so the header has to
+      // name both — "Ground Beef" alone read as though the bags were ground.
+      : trimIsSplit(d.trim) ? `Trim & Ground ${species}` : `Ground ${species}` })
+    trimPrs.forEach(([l, v]) => filteredPrs.push({ cut: l, spec: v, noSpecies: true }))
     // On pork everything sent to grind BECOMES the sausage listed above, so a
     // separate "Ground Pork · From: Hams" row read as though the ham were a
     // second, different product — the opposite of what it means (Charlie, on
@@ -931,7 +962,7 @@ export function expectedLines(rows: PackRow[], species = ''): ExpectedLine[] {
       key:     cutKey(cut),
       section,
       cut,
-      label:   packLabel(cut, species, section, !!r.isGrind || !!r.writeIn),
+      label:   packLabel(cut, species, section, !!r.isGrind || !!r.writeIn || !!r.noSpecies),
       species,
       spec:    String(r.spec ?? ''),
       isGrind: !!r.isGrind,
