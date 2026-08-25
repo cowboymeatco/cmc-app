@@ -560,7 +560,18 @@ function BrowserTab() {
   const [selected, setSelected] = useState<PluItem | null>(null)
   const [loading, setLoading]   = useState(true)
 
+  // The mount effect below and the debounce effect after it both open with the
+  // same empty filters, and StrictMode double-invokes the mount effect on top of
+  // that — three identical trips to /api/processing to fill one list. Remembering
+  // the query last asked for collapses them into one. Only an exact repeat is
+  // dropped, so a real keystroke always changes the key and always goes through;
+  // a failed load forgets its key so a retry isn't swallowed too.
+  const lastQuery = useRef<string | null>(null)
+
   const load = useCallback(async (q = '', sp = '', inactive = false) => {
+    const key = `${q}|${sp}|${inactive}`
+    if (lastQuery.current === key) return
+    lastQuery.current = key
     setLoading(true)
     try {
       const params = new URLSearchParams()
@@ -570,7 +581,10 @@ function BrowserTab() {
       const res = await fetch(`/api/processing?${params}`)
       const json = await res.json()
       setItems(Array.isArray(json) ? json : [])
-    } catch { setItems([]) }
+    } catch {
+      setItems([])
+      lastQuery.current = null
+    }
     setLoading(false)
   }, [])
 
