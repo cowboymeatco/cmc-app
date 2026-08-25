@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
   match.cards.forEach((card, i) => {
     const species = packSpecies((card.data?.species as string) ?? card.species ?? 'Beef')
     speciesSeen.add(species)
-    for (const l of expectedLines(buildPackList(card.data, species))) {
+    for (const l of expectedLines(buildPackList(card.data, species), species)) {
       lines.push({ ...l, card: i })
     }
   })

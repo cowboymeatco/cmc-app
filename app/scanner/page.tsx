@@ -111,6 +111,8 @@ interface ExpectedLine {
   key:     string
   section: string
   cut:     string
+  label:   string
+  species: string
   spec:    string
   isGrind: boolean
   writeIn: boolean
@@ -3087,7 +3089,6 @@ export default function ScannerPage() {
 
           <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
             {(() => {
-              const species = expected.species[0] ?? 'beef'
               // Packed lines drop off the list entirely rather than just
               // greying out — what's left standing is what's still owed, with
               // nothing to read past to find it (Charlie, 2026-08-18).
@@ -3103,7 +3104,10 @@ export default function ScannerPage() {
                       </div>
                     )}
                     <div
-                      onClick={() => { if (linkingPlu) linkPluToCut(linkingPlu.plu, linkingPlu.name, l.key, species) }}
+                      // The line's own species, not the session's first — a
+                      // beef card and a pork card on one bench each own their
+                      // links.
+                      onClick={() => { if (linkingPlu) linkPluToCut(linkingPlu.plu, linkingPlu.name, l.key, l.species || expected.species[0] || 'beef') }}
                       style={{
                         display: 'flex', alignItems: 'baseline', gap: '0.4rem', padding: '0.22rem 0.35rem',
                         borderRadius: 3, cursor: linkingPlu ? 'pointer' : 'default',
@@ -3114,7 +3118,7 @@ export default function ScannerPage() {
                         ☐
                       </span>
                       <span style={{ color: C.cream, fontSize: '0.86rem', fontWeight: 600 }}>
-                        {l.cut}
+                        {l.label || l.cut}
                       </span>
                       <span style={{ color: C.lightBrown, fontSize: '0.72rem', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {l.spec}

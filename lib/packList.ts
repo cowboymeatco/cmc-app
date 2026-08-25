@@ -876,6 +876,8 @@ export type ExpectedLine = {
   key:     string    // what a PLU gets linked to — stable across cards
   section: string
   cut:     string
+  label:   string    // `cut`, said out loud: "Beef Brisket" rather than "Brisket"
+  species: string    // the card this line came off, for the PLU link it earns
   spec:    string
   isGrind: boolean
   writeIn: boolean
@@ -899,9 +901,25 @@ export function packSpecies(s?: string | null): string {
   return 'beef'
 }
 
+// A packing line says which animal it came off: "Beef Brisket", not "Brisket".
+// The bench packs beef and pork in the same afternoon and the card's section
+// headers scroll off, so a bare cut name left the packer guessing which species
+// the line meant (Chris, 2026-08-25).
+//
+// Silent where the species is already said — "Ground Beef", "Plate / Beef
+// Bacon", "Frenched Rack of Lamb", anything under a "Ground Beef" header — and
+// on the grind and weigh-in rows, which name a batch rather than a package.
+export function packLabel(cut: string, species: string, section = '', plain = false): string {
+  const word = species ? species[0].toUpperCase() + species.slice(1) : ''
+  if (!word || plain) return cut
+  const says = (s: string) => s.toLowerCase().includes(word.toLowerCase())
+  if (says(cut) || says(section)) return cut
+  return `${word} ${cut}`
+}
+
 // Add-on rows ("· seasoned") are how a cut is packed, not a package of their
 // own, so they never become a line to tick off.
-export function expectedLines(rows: PackRow[]): ExpectedLine[] {
+export function expectedLines(rows: PackRow[], species = ''): ExpectedLine[] {
   const out: ExpectedLine[] = []
   let section = ''
   for (const r of rows) {
@@ -913,6 +931,8 @@ export function expectedLines(rows: PackRow[]): ExpectedLine[] {
       key:     cutKey(cut),
       section,
       cut,
+      label:   packLabel(cut, species, section, !!r.isGrind || !!r.writeIn),
+      species,
       spec:    String(r.spec ?? ''),
       isGrind: !!r.isGrind,
       writeIn: !!r.writeIn,
