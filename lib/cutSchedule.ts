@@ -3,7 +3,7 @@
 // (app/processing/CutScheduleTab) and the read-only mobile crew view
 // (app/cut-schedule) so the two can never drift apart.
 import { HarvestAppointment, HarvestLog, CarcassAssignment } from '@/lib/types'
-import { isoDate, daysBetweenISO, addDaysISO } from '@/lib/dates'
+import { isoDate, daysBetweenISO, addDaysISO, dayOfWeekISO } from '@/lib/dates'
 
 export interface PriorityWeights {
   days_hanging:     number
@@ -182,6 +182,45 @@ export function cutDateByKey(list: ListItem[]): Map<string, string> {
     else if (day) byKey.set(item.key, day)
   }
   return byKey
+}
+
+/** The next cutting day after `iso`. The plant has never once put a day break
+ *  on a Saturday or Sunday (97 breaks on record, Mon–Fri only), so the day
+ *  after Friday is Monday. */
+export function nextCuttingDayISO(iso: string): string {
+  let next = addDaysISO(iso, 1)
+  while (dayOfWeekISO(next) === 0 || dayOfWeekISO(next) === 6) next = addDaysISO(next, 1)
+  return next
+}
+
+/**
+ * Fill in the date of any day break that has landed underneath a dated one.
+ *
+ * Charlie, 2026-08-25: "Do I need to really even need to enter a daybreak? if
+ * it goes underneath another date then why not just go sequential to that
+ * date?" — a break dropped below Wednesday is Thursday, and making him say so
+ * is asking him to retype what the list already shows.
+ *
+ * Only ever fills a BLANK date, and only when something dated sits above it: a
+ * date already on a break was put there on purpose and is never moved, and a
+ * break above every dated one has nothing to be sequential to, so it keeps
+ * waiting rather than inventing a cutting day. Dates already spoken for are
+ * skipped, because one break per day is the rule the planner enforces anyway.
+ */
+export function autoDateBreaks(list: ListItem[]): ListItem[] {
+  const taken = new Set(
+    list.filter((e): e is BreakItem => e.type === 'break' && !!e.break_date).map(e => e.break_date))
+  let above = ''
+  return list.map(e => {
+    if (e.type !== 'break') return e
+    if (e.break_date) { above = e.break_date; return e }
+    if (!above) return e
+    let d = nextCuttingDayISO(above)
+    while (taken.has(d)) d = nextCuttingDayISO(d)
+    taken.add(d)
+    above = d
+    return { ...e, break_date: d }
+  })
 }
 
 /** Days hung by the scheduled cut day. Never below what it has hung already —

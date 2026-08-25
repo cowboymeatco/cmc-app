@@ -9,7 +9,7 @@ import {
   type PriorityWeights, type ScheduleEntry, type BreakItem, type ListItem, type FutureBooking,
   type FutureItem, type HarvestDay, type CarcassLink,
   DEFAULT_WEIGHTS, WEIGHT_LABELS, buildEntries, loadScheduleData, uniqueCarcasses as uniqueOf,
-  calcScore, speciesColor, speciesIcon, portionBadge, cutDateByKey, hangAtCut, hangColor,
+  calcScore, speciesColor, speciesIcon, portionBadge, cutDateByKey, hangAtCut, hangColor, autoDateBreaks,
   carcassTotals, FUTURE_WINDOW_DEFAULT_DAYS, FUTURE_WINDOW_CHOICES,
 } from '@/lib/cutSchedule'
 import { isoDate, dateLabel, addDaysISO, mondayOfISO } from '@/lib/dates'
@@ -273,7 +273,11 @@ export default function CutScheduleTab() {
       if (fromIdx === -1 || toIdx === -1) return prev
       const [moved] = list.splice(fromIdx, 1)
       list.splice(toIdx, 0, moved)
-      return list.map((e, i) => ({ ...e, rank: i + 1 }))
+      // A blank day break that has just landed under a dated one takes the next
+      // cutting day — see autoDateBreaks. Runs on the whole list rather than the
+      // moved item, because dragging a DATED break can leave a blank one below
+      // it newly answerable too.
+      return autoDateBreaks(list).map((e, i) => ({ ...e, rank: i + 1 }))
     })
     setDragging(null); setDragOver(null)
   }
