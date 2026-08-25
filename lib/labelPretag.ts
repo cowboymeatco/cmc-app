@@ -1,4 +1,4 @@
-import { BoxRecord } from './label'
+import { BoxRecord, LabelRoll, rollFrameCSS, rollPrintScript } from './label'
 
 // ══════════════════════════════════════════════════════════════════════════════
 // BOX TAG — the sticker that goes inside the lid BEFORE the box is filled.
@@ -26,10 +26,14 @@ const esc = (s: unknown) =>
 const fmtDay = (iso?: string | null) =>
   iso ? new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : ''
 
-export function generatePretag(box: BoxRecord): string {
+export function generatePretag(box: BoxRecord, roll: LabelRoll = '4in'): string {
   const num = String(box.box_number ?? '?')
-  // Three digits still has to fit the 3.7in body, so shrink past two.
-  const numSize = num.length >= 3 ? 132 : 168
+  // Three digits still has to fit the body, so shrink past two. The 62mm
+  // Brother roll is 2.2in printable — the numeral is the whole point of this
+  // tag, so it takes as much of that as it can and everything else follows.
+  const numSize = roll === '62mm'
+    ? (num.length >= 3 ? 76 : 100)
+    : (num.length >= 3 ? 132 : 168)
 
   return `<!DOCTYPE html>
 <html>
@@ -37,9 +41,9 @@ export function generatePretag(box: BoxRecord): string {
 <meta charset="utf-8">
 <title>Box Tag — ${esc(box.customer_name)} Box ${esc(num)}</title>
 <style>
-  @page { size: 4in auto; margin: 0.15in; }
+  ${rollFrameCSS(roll)}
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { width: 3.7in; font-family: Arial, sans-serif; color: #000; background: #fff; text-align: center; }
+  body { font-family: Arial, sans-serif; color: #000; background: #fff; text-align: center; }
   .kind     { font-size: 10pt; font-weight: bold; letter-spacing: 0.22em; border-bottom: 2px solid #000;
               padding-bottom: 3px; margin-bottom: 2px; }
   .word     { font-size: 15pt; font-weight: bold; letter-spacing: 0.3em; line-height: 1; margin-top: 4px; }
@@ -49,7 +53,13 @@ export function generatePretag(box: BoxRecord): string {
               border-top: 2px solid #000; padding-top: 4px; }
   .for      { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 13pt; font-weight: bold; line-height: 1.15; }
   .date     { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 10pt; line-height: 1.2; margin-top: 2px; }
-  @media print { html, body { width: 4in; } }
+${roll !== '62mm' ? '' : `
+  /* Brother 62mm roll — the numeral already shrank above; bring the lines
+     around it down in step so nothing out-shouts it. */
+  .star     { font-size: 20pt; }
+  .customer { font-size: 12pt; }
+  .for      { font-size: 10pt; }
+`}
 </style>
 </head>
 <body>
@@ -60,7 +70,7 @@ export function generatePretag(box: BoxRecord): string {
   <div class="customer">${esc(box.customer_name).toUpperCase()}</div>
   ${box.box_label ? `<div class="for">${esc(box.box_label).toUpperCase()}</div>` : ''}
   <div class="date">${esc(fmtDay(box.pack_date))}</div>
-  <script>window.onload = () => setTimeout(() => window.print(), 250)</script>
+  ${rollPrintScript(roll)}
 </body>
 </html>`
 }

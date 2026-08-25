@@ -1,4 +1,4 @@
-import { makeCode39Barcode, julianYYDDD, displayCustomerName, LabelFlags, DEFAULT_FLAGS, LabelAnimal, BoxRecord, BoxScan, USDA_EST_NUMBER, marksInspection } from './label'
+import { makeCode39Barcode, julianYYDDD, displayCustomerName, LabelFlags, DEFAULT_FLAGS, LabelAnimal, BoxRecord, BoxScan, USDA_EST_NUMBER, marksInspection, LabelRoll, rollFrameCSS, rollPrintScript } from './label'
 
 // Work-in-progress tag — rides with the box from the processing room to value
 // add. Replaces the handwritten WIP sheet (WEIGHT / CUSTOMER / INTENT / LABEL /
@@ -139,7 +139,7 @@ export function wipDataFromBox(box: BoxRecord, scans: BoxScan[], animal?: LabelA
 
 // ── Tag ───────────────────────────────────────────────────────────────────────
 
-export function generateWIPLabel(data: WIPTagData, flags: LabelFlags = DEFAULT_FLAGS): string {
+export function generateWIPLabel(data: WIPTagData, flags: LabelFlags = DEFAULT_FLAGS, roll: LabelRoll = '4in'): string {
   const julian  = julianYYDDD(data.date)
   const dateStr = new Date(data.date + 'T12:00:00').toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })
   const weight  = data.weightLbs != null ? `${Number(data.weightLbs).toFixed(1)} lb` : '__________'
@@ -199,9 +199,9 @@ export function generateWIPLabel(data: WIPTagData, flags: LabelFlags = DEFAULT_F
 <meta charset="utf-8">
 <title>WIP Tag — ${esc(data.customer)} ${esc(data.intent)}</title>
 <style>
-  @page { size: 4in auto; margin: 0.15in; }
+  ${rollFrameCSS(roll)}
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { width: 3.7in; font-family: Arial, sans-serif; color: #000; background: #fff; }
+  body { font-family: Arial, sans-serif; color: #000; background: #fff; }
   .logo    { display: block; width: 100%; max-width: 2.6in; height: auto; margin: 0 auto 2px; }
   .title   { font-size: 17pt; font-weight: bold; text-align: center; letter-spacing: 0.06em;
              border: 2.5px solid #000; border-radius: 3px; padding: 2px 0; margin-bottom: 4px; }
@@ -246,7 +246,29 @@ export function generateWIPLabel(data: WIPTagData, flags: LabelFlags = DEFAULT_F
   .barcode svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
   .code    { text-align: center; font-size: 10pt; font-family: monospace; letter-spacing: 0.12em; font-weight: bold; }
   .foot    { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 8.5pt; text-align: center; margin-top: 3px; }
-  @media print { html, body { width: 4in; } }
+${roll !== '62mm' ? '' : `
+  /* ── Brother 62mm roll ──────────────────────────────────────────────────
+     INTENT is what this tag exists to say, so it gives up the least. The
+     FROM/WEIGHT/LABEL/FOR rows stack their key over the fill line instead of
+     sitting beside it — a 1.05in key column would leave nothing to write on. */
+  .logo    { max-width: 1.7in; }
+  .title   { font-size: 13pt; }
+  .cust    { font-size: 15pt; }
+  .intent  { font-size: 15pt; }
+  .intent.multi { font-size: 11.5pt; }
+  .sline   { font-size: 10.5pt; }
+  .insp    { font-size: 9pt; gap: 4px; }
+  .insp .bug { width: 0.36in; }
+  .insp.nfs  { font-size: 10pt; }
+  .row     { display: block; font-size: 10.5pt; padding: 2px 0; }
+  .k       { width: auto; display: block; font-size: 8pt; }
+  .v       { display: block; min-height: 17px; }
+  /* Squeezed to 2.2in the barcode would come out 0.3in tall. Bar WIDTHS are
+     still above the reader's floor; the height isn't, so stretch it back —
+     !important because makeCode39Barcode carries height:auto inline, and it is
+     shared with surfaces (game tag, PLU book) that still want that. */
+  .barcode svg { width: 100% !important; height: 0.62in !important; }
+`}
 </style>
 </head>
 <body>
@@ -284,7 +306,7 @@ export function generateWIPLabel(data: WIPTagData, flags: LabelFlags = DEFAULT_F
   <div class="code">${esc(data.code)}</div>` : ''}
 
   ${data.notes ? `<hr><div class="foot">${esc(data.notes)}</div>` : ''}
-  <script>window.onload = () => setTimeout(() => window.print(), 250)</script>
+  ${rollPrintScript(roll)}
 </body>
 </html>`
 }

@@ -9,6 +9,52 @@ export interface LabelFlags { usda_bug: boolean; retail_exempt: boolean; not_for
 
 export const DEFAULT_FLAGS: LabelFlags = { usda_bug: true, retail_exempt: false, not_for_sale: false, not_for_human: false }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// ROLL STOCK — which printer this label is coming out of.
+//
+// '4in'  — 4x6 thermal shipping-label printer (the packing bench).
+// '62mm' — Brother QL on a 62mm DK continuous roll, which is what harvest and
+//          receiving already print to. Charlie, 2026-08-25: "Can a label get
+//          optimized for Jill on her brother printer so I don't have to buy
+//          another shipping label printer?"
+//
+// The narrow roll is 2.4in wide with ~2.2in printable — 60% of the 4in label's
+// body. The label REFLOWS rather than shrinks: continuous roll has no fixed
+// length, so the cut list keeps its full type size and simply runs longer.
+// Only the few elements that are wide by design (logo, customer name, box
+// numeral, compliance mark) come down, and they stay the biggest things on it.
+// ══════════════════════════════════════════════════════════════════════════════
+export type LabelRoll = '4in' | '62mm'
+
+export const parseRoll = (v: string | null): LabelRoll => (v === '62mm' ? '62mm' : '4in')
+
+// The page frame every scanner label shares, so the three of them cannot drift
+// apart on the one thing the printer actually cares about.
+export function rollFrameCSS(roll: LabelRoll): string {
+  return roll === '62mm'
+    ? `@page { size: 62mm auto; margin: 2mm 3mm; }
+  body { width: 2.2in; }
+  @media print { html, body { width: 2.2in; } }`
+    : `@page { size: 4in auto; margin: 0.15in; }
+  body { width: 3.7in; }
+  @media print { html, body { width: 4in; } }`
+}
+
+// Chromium won't honour `size: <width> auto` on the Brother's continuous roll —
+// it falls back to a full page and spits out a foot of blank tape. Measure the
+// rendered label and stamp an exact page height first, the same trick the
+// receiving box label already uses.
+export function rollPrintScript(roll: LabelRoll): string {
+  if (roll !== '62mm') return `<script>window.onload = () => setTimeout(() => window.print(), 250)</script>`
+  return `<script>window.onload = () => setTimeout(() => {
+    var mm = Math.ceil(document.body.offsetHeight * 25.4 / 96) + 6
+    var s = document.createElement('style')
+    s.textContent = '@page { size: 62mm ' + mm + 'mm; margin: 2mm 3mm; }'
+    document.head.appendChild(s)
+    setTimeout(() => window.print(), 60)
+  }, 350)</script>`
+}
+
 // The one rule for whether a label may bear the mark of inspection, shared by
 // every label we print so the surfaces cannot drift apart.
 //
@@ -77,7 +123,11 @@ export function makeCode39Barcode(text: string): string {
     }
     if (ci < chars.length - 1) x += N
   }
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${x} ${H}" width="${x}" height="${H}" style="display:block;max-width:100%;height:auto;margin:0 auto"><g fill="#000">${rects}</g></svg>`
+  // preserveAspectRatio="none" lets a narrow roll stretch the bars vertically
+  // without touching their widths — a 1D barcode reads the same however tall it
+  // is, and squeezed to 2.2in it needs the height back. At 4in nothing changes:
+  // height:auto still follows the intrinsic ratio.
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${x} ${H}" width="${x}" height="${H}" preserveAspectRatio="none" style="display:block;max-width:100%;height:auto;margin:0 auto"><g fill="#000">${rects}</g></svg>`
 }
 
 // The animal behind the box, resolved from the carcass scan (harvest record).
@@ -109,7 +159,7 @@ export function julianYYDDD(dateStr: string): string {
   return String(d.getFullYear()).slice(2) + String(day).padStart(3, '0')
 }
 
-export function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlags = DEFAULT_FLAGS, animal?: LabelAnimal): string {
+export function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlags = DEFAULT_FLAGS, animal?: LabelAnimal, roll: LabelRoll = '4in'): string {
   const grouped: Record<string, { count: number; weight: number }> = {}
   scans.forEach(s => {
     const key = s.item_name || s.plu_number || 'Unknown'
@@ -163,9 +213,9 @@ export function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlag
 <meta charset="utf-8">
 <title>Box Label — ${escLabel(box.customer_name)} ${boxLabelText}</title>
 <style>
-  @page { size: 4in auto; margin: 0.15in; }
+  ${rollFrameCSS(roll)}
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { width: 3.7in; font-family: Arial, sans-serif; color: #000; background: #fff; }
+  body { font-family: Arial, sans-serif; color: #000; background: #fff; }
   .logo     { display: block; width: 100%; max-width: 3.05in; height: auto; margin: 0 auto 3px; }
   .customer { font-size: 21pt; font-weight: bold; text-align: center; line-height: 1.0; margin: 0; }
   .producer { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 11pt; text-align: center; line-height: 1.2; }
@@ -195,7 +245,26 @@ export function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlag
   .barcode  { text-align: center; margin: 4px 0 2px; }
   .barcode svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
   .serial   { text-align: center; font-size: 10pt; font-family: monospace; letter-spacing: 0.1em; font-weight: bold; margin: 4px 0 2px; }
-  @media print { html, body { width: 4in; } }
+${roll !== '62mm' ? '' : `
+  /* ── Brother 62mm roll ──────────────────────────────────────────────────
+     Only what is wide by design comes down. The cut list keeps its 11pt so a
+     packer still reads it at arm's length — on a continuous roll the label
+     just runs longer, which costs tape, not legibility. */
+  .logo     { max-width: 1.95in; }
+  .customer { font-size: 16pt; }
+  .bn       { font-size: 21pt; }
+  .box-num  { font-size: 12pt; }
+  /* The mark can't float over the box row at this width — 0.6in of a 2.2in
+     label would land on the numeral. It gets its own centered line instead. */
+  .mark     { position: static; transform: none; width: 0.62in; margin: 3px auto 0; }
+  .mark.up  { top: auto; }
+  .nfh      { font-size: 10.5pt; }
+  /* Squeezed to 2.2in the barcode would come out 0.3in tall. Bar WIDTHS are
+     still above the reader's floor; the height isn't, so stretch it back —
+     !important because makeCode39Barcode carries height:auto inline, and it is
+     shared with surfaces (game tag, PLU book) that still want that. */
+  .barcode svg { width: 100% !important; height: 0.62in !important; }
+`}
 </style>
 </head>
 <body>
@@ -216,7 +285,7 @@ export function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlag
   <hr>
   <div class="footer">${totalCuts} cut${totalCuts !== 1 ? 's' : ''} | ${totalWeight.toFixed(2)} lbs total</div>
   ${barcodeHTML}
-  <script>window.onload = () => setTimeout(() => window.print(), 250)</script>
+  ${rollPrintScript(roll)}
 </body>
 </html>`
 }

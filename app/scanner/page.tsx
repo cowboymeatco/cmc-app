@@ -150,6 +150,16 @@ interface SharedYield {
 interface LabelFlags { usda_bug: boolean; retail_exempt: boolean; not_for_sale: boolean; not_for_human: boolean }
 const DEFAULT_FLAGS: LabelFlags = { usda_bug: true, retail_exempt: false, not_for_sale: false, not_for_human: false }
 
+// Which label printer THIS machine prints to. Unlike box type this is a
+// property of the station, not of the session — the packing bench has the 4in
+// thermal, Jill's desk has a Brother QL on a 62mm roll — so it's remembered per
+// device rather than per session, and the label route reflows to match.
+// Charlie, 2026-08-25: "Can a label get optimized for Jill on her brother
+// printer so I don't have to buy another shipping label printer?"
+type LabelRoll = '4in' | '62mm'
+const ROLL_KEY = 'scannerLabelRoll'
+const ROLL_LABEL: Record<LabelRoll, string> = { '4in': '4in', '62mm': 'Brother 2.4in' }
+
 // A session's compliance/ownership type, picked once up front and sticky for
 // every box in it. USDA + CMC print the USDA bug (both inspected, for sale);
 // Custom (custom-exempt) prints NOT FOR SALE; Pet Food prints NOT FOR HUMAN
@@ -477,6 +487,16 @@ export default function ScannerPage() {
   const [labelFlags,  setLabelFlags]  = useState<LabelFlags>(DEFAULT_FLAGS)
   // Session box type — declared up front, sticky for every box in the session.
   const [boxType,     setBoxType]     = useState<BoxType>('USDA')
+  // Per-device, so it can't be read during SSR — starts at the 4in bench
+  // printer and picks up this station's own setting after mount.
+  const [labelRoll,   setLabelRoll]   = useState<LabelRoll>('4in')
+  useEffect(() => {
+    try { if (window.localStorage.getItem(ROLL_KEY) === '62mm') setLabelRoll('62mm') } catch { /* private mode */ }
+  }, [])
+  function pickLabelRoll(r: LabelRoll) {
+    setLabelRoll(r)
+    try { window.localStorage.setItem(ROLL_KEY, r) } catch { /* private mode */ }
+  }
 
   // ── Inputs ───────────────────────────────────────────────────────────────────
   const [inputs,       setInputs]       = useState<ProcessingInput[]>([])
@@ -1444,6 +1464,7 @@ export default function ScannerPage() {
     if (flags.not_for_sale)  p.set('nfs',    '1')
     if (flags.not_for_human) p.set('pet',    '1')
     if (format)              p.set('format', format)
+    if (labelRoll !== '4in') p.set('roll', labelRoll)
     window.open(`/api/boxes/label?${p}`, '_blank')
   }
 
@@ -2802,6 +2823,27 @@ export default function ScannerPage() {
               >
                 {labelFlags.retail_exempt ? '✓ ' : ''}Retail Exempt
               </button>
+              {/* Printer width — this station's setting, not this session's, so
+                  it stays put when the next customer's boxes start. */}
+              <span style={{ fontSize: '0.65rem', color: 'rgba(166,120,90,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em', marginLeft: '0.6rem' }}>Printer:</span>
+              {(['4in', '62mm'] as LabelRoll[]).map(r => (
+                <button
+                  key={r}
+                  onClick={() => pickLabelRoll(r)}
+                  title={r === '4in'
+                    ? 'The 4x6 thermal label printer at the packing bench.'
+                    : 'A Brother QL on the 62mm continuous roll — same label, reflowed 2.4in wide and longer. Remembered on this computer.'}
+                  style={{
+                    background: labelRoll === r ? 'rgba(201,168,130,0.28)' : 'rgba(255,255,255,0.03)',
+                    border: `1px solid ${labelRoll === r ? 'rgba(201,168,130,0.6)' : 'rgba(166,120,90,0.2)'}`,
+                    borderRadius: 3, padding: '0.2rem 0.7rem',
+                    color: labelRoll === r ? C.cream : C.lightBrown,
+                    fontSize: '0.72rem', cursor: 'pointer', fontWeight: labelRoll === r ? 700 : 400,
+                  }}
+                >
+                  {labelRoll === r ? '✓ ' : ''}{ROLL_LABEL[r]}
+                </button>
+              ))}
             </div>
           </div>
         )}

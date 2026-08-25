@@ -1,7 +1,7 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
-import { generateLabel, LabelFlags, LabelAnimal, BoxRecord, BoxScan } from '@/lib/label'
+import { generateLabel, parseRoll, LabelFlags, LabelAnimal, BoxRecord, BoxScan } from '@/lib/label'
 import { generateCMBLabel } from '@/lib/labelCMB'
 import { generateWIPLabel, wipDataFromBox, isWIPBoxLabel } from '@/lib/labelWIP'
 import { generatePretag } from '@/lib/labelPretag'
@@ -229,11 +229,15 @@ export async function GET(req: NextRequest) {
   const box   = boxRes.data   as BoxRecord
   const scans = scansRes.data as BoxScan[]
 
+  // Which printer this is coming out of — the packing bench's 4in thermal, or a
+  // Brother QL on the 62mm roll. Set per device on the scanner (?roll=62mm).
+  const roll = parseRoll(searchParams.get('roll'))
+
   // The packing tag is pure wayfinding — a number for the inside of the lid,
   // printed before the box holds anything. It needs no scans, no carcass and no
   // compliance mark, so it short-circuits ahead of all that resolution.
   if (searchParams.get('format') === 'pretag') {
-    return new NextResponse(generatePretag(box), {
+    return new NextResponse(generatePretag(box, roll), {
       headers: { 'Content-Type': 'text/html;charset=utf-8', 'Cache-Control': 'no-store' },
     })
   }
@@ -287,11 +291,14 @@ export async function GET(req: NextRequest) {
     const hit  = await resolveWIPIntent(box, base.items, base.weightLbs ?? 0)
     html = generateWIPLabel(
       hit ? { ...base, intent: hit.label ?? base.intent, intentSource: hit.source, orders: hit.orders } : base,
-      flags)
+      flags, roll)
   } else if (useCMB) {
+    // The US Foods case label is 4x6 because US Foods says so — the dock scans
+    // it against a spec we don't own. It ignores ?roll rather than printing a
+    // narrow label that would be rejected at receiving.
     html = generateCMBLabel(box, scans, { productGtin: searchParams.get('product'), lot: searchParams.get('lot') })
   } else {
-    html = generateLabel(box, scans, flags, animal)
+    html = generateLabel(box, scans, flags, animal, roll)
   }
 
   return new NextResponse(html, {
