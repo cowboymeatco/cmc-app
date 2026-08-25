@@ -267,6 +267,38 @@ async function recordRoll(id: string, fromDate: string, toDate: string) {
   }
 }
 
+// Moving a booking moves its carcasses with it.
+//
+// Part A seeds a harvest_log row per head as soon as the booking is on a day,
+// and that row carries its own harvest_date. Rescheduling the appointment left
+// those rows behind, so an animal taken off the schedule went on standing in
+// Part B of a kill day it was no longer part of (Jill, 2026-08-25 - Wibaux
+// Belles was still on the 8/25 list after the booking moved to 9/3).
+//
+// A row that has real harvest data on it stays put: weights, a knock time or a
+// finished Part B mean the animal was killed that day, and a kill record is a
+// record of a day, not of a booking. Same test the Harvest Log's delete guard
+// uses before it warns.
+async function moveCarcasses(apptId: string, toDate: string) {
+  try {
+    const { data: logs } = await supabase
+      .from('harvest_log')
+      .select('id, hot_carcass_weight_lbs, live_weight_lbs, part_b_complete, knock_time')
+      .eq('appointment_id', apptId)
+
+    const unharvested = (logs ?? []).filter(l =>
+      l.hot_carcass_weight_lbs == null && l.live_weight_lbs == null && !l.part_b_complete && !l.knock_time)
+    if (unharvested.length === 0) return
+
+    await supabase
+      .from('harvest_log')
+      .update({ harvest_date: toDate })
+      .in('id', unharvested.map(l => l.id))
+  } catch {
+    // Same rule as the roll log: the booking's move is what matters.
+  }
+}
+
 // PATCH /api/appointments â€” update an appointment
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
@@ -311,7 +343,10 @@ export async function PATCH(req: NextRequest) {
     .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  if (rollFrom) await recordRoll(id, rollFrom, updates.harvest_date)
+  if (rollFrom) {
+    await recordRoll(id, rollFrom, updates.harvest_date)
+    await moveCarcasses(id, updates.harvest_date)
+  }
   return NextResponse.json(data)
 }
 
