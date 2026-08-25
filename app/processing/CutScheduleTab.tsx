@@ -1,5 +1,5 @@
 'use client'
-import { Fragment, useEffect, useState, useCallback } from 'react'
+import { Fragment, useEffect, useRef, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { HarvestAppointment, HarvestLog, CarcassAssignment } from '@/lib/types'
 import AssignCarcassesModal from './AssignCarcassesModal'
@@ -136,25 +136,45 @@ export default function CutScheduleTab() {
   }
 
   // ── Load from cooler inventory ────────────────────────────────────────────────
+  // Opening the tab asks seven questions of the server at once, so a load is
+  // something to do deliberately: once on mount, and again after a save, an
+  // assignment or a link changes an answer.
+  //
+  // Two things keep it to that. The callback takes no dependencies, so the
+  // mount effect below has nothing to re-fire on — and the ref swallows any
+  // caller that lands on a batch already in the air: React's dev double-mount,
+  // a double-clicked Retry, a modal closing onto a load still running. The crew
+  // view of this same data guards it the same way (app/cut-schedule).
+  const inFlight = useRef(false)
+
+  // The weights re-score a list we already hold; they never change what we ask
+  // the server for. Read at call time rather than depended on, because as a
+  // dependency they'd put all seven requests back on the wire every time a
+  // priority slider moved.
+  const weightsRef = useRef(weights)
+  useEffect(() => { weightsRef.current = weights }, [weights])
+
   const loadAll = useCallback(async () => {
+    if (inFlight.current) return
+    inFlight.current = true
     setLoading(true)
     try {
-      const { logs, apptMap, instrIds, instrByBuyer, saved, assignments, futureBookings, harvestDays, carcassLinks } = await loadScheduleData(todayISO)
+      const { logs, apptMap, instrIds, instrByBuyer, saved, assignments, futureBookings, harvestDays, carcassLinks } = await loadScheduleData(isoDate())
       setLogs(logs)
       setAppts([...apptMap.values()])
       setAssignments(assignments)
       setCarcassLinks(carcassLinks)
       setFutureBookings(futureBookings)
       setHarvestDays(harvestDays)
-      setEntries(buildEntries(logs, apptMap, instrIds, saved, assignments, weights, futureBookings, instrByBuyer))
+      setEntries(buildEntries(logs, apptMap, instrIds, saved, assignments, weightsRef.current, futureBookings, instrByBuyer))
       setLoadError(false)
     } catch {
       setLoadError(true)
     } finally {
+      inFlight.current = false
       setLoading(false)
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [todayISO])
+  }, [])
 
   useEffect(() => { loadAll() }, [loadAll])
 
