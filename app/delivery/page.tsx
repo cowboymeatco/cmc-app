@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { DeliveryScan } from '@/lib/types'
 import { isoDateTime } from '@/lib/dates'
 
-type Tab = 'new' | 'loadout' | 'log' | 'baker'
+type Tab = 'schedule' | 'new' | 'loadout' | 'log' | 'baker'
 type LogFilter = 'all' | 'pending' | 'reviewed'
 type Destination = 'customer' | 'baker_storage'
 
@@ -699,6 +699,275 @@ function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// SCHEDULE TAB — delivery runs the plant plans, before the truck is loaded
+//
+// Charlie (2026-08-25): "Can I make a delivery schedule so that it would show
+// up on /calendar." Every other lane on the calendar comes off a date some page
+// already carries; delivery had none, because the delivery log only ever
+// recorded runs that had already happened. This is where the date comes from.
+// ══════════════════════════════════════════════════════════════════════════════
+
+interface Stop { customer: string; town: string; note: string }
+interface DeliveryRun {
+  id:           string
+  run_date:     string
+  route:        string
+  driver:       string
+  depart_time:  string | null
+  stops:        Stop[]
+  notes:        string
+  status:       string
+}
+
+const RUN_STATUS: Record<string, { label: string; color: string }> = {
+  planned:   { label: 'Planned',     color: C.tan },
+  out:       { label: 'On the road', color: C.blue },
+  delivered: { label: 'Delivered',   color: C.green },
+  cancelled: { label: 'Cancelled',   color: C.lightBrown },
+}
+const RUN_STATUSES = ['planned', 'out', 'delivered', 'cancelled'] as const
+
+const emptyStop = (): Stop => ({ customer: '', town: '', note: '' })
+
+const runDay = (iso: string) =>
+  new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+
+function ScheduleTab() {
+  const [runs,    setRuns]    = useState<DeliveryRun[]>([])
+  const [loading, setLoading] = useState(true)
+  const [busy,    setBusy]    = useState('')
+  const [adding,  setAdding]  = useState(false)
+
+  // The new-run form. Kept flat rather than in one object so a half-typed run
+  // survives a re-render of the list behind it.
+  const [date,   setDate]   = useState('')
+  const [route,  setRoute]  = useState('')
+  const [driver, setDriver] = useState('')
+  const [depart, setDepart] = useState('')
+  const [notes,  setNotes]  = useState('')
+  const [stops,  setStops]  = useState<Stop[]>([emptyStop()])
+
+  const load = useCallback(() => {
+    fetch('/api/delivery/runs?upcoming=1')
+      .then(r => r.json())
+      .then((d: unknown) => { if (Array.isArray(d)) setRuns(d as DeliveryRun[]) })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  function resetForm() {
+    setDate(''); setRoute(''); setDriver(''); setDepart(''); setNotes(''); setStops([emptyStop()])
+  }
+
+  async function save() {
+    if (!date || !route.trim()) return
+    setBusy('new')
+    const res = await fetch('/api/delivery/runs', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ run_date: date, route, driver, depart_time: depart, notes, stops }),
+    })
+    const j = await res.json().catch(() => ({}))
+    setBusy('')
+    if (j?.error) { alert(`Could not schedule the run: ${j.error}`); return }
+    resetForm()
+    setAdding(false)
+    load()
+  }
+
+  async function setStatus(run: DeliveryRun, status: string) {
+    setBusy(run.id)
+    await fetch('/api/delivery/runs', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: run.id, status }),
+    }).catch(() => {})
+    setRuns(prev => prev.map(r => (r.id === run.id ? { ...r, status } : r)))
+    setBusy('')
+  }
+
+  // Cancelling is the softer option — it keeps the run on the calendar, struck
+  // through, so a driver who was told about it can see it was called off.
+  async function remove(run: DeliveryRun) {
+    if (!window.confirm(
+      `Delete the ${runDay(run.run_date)} run to ${run.route || 'nowhere named'}?\n\n`
+      + 'If it was called off, "Cancelled" keeps it on the calendar instead.'
+    )) return
+    setBusy(run.id)
+    await fetch(`/api/delivery/runs?id=${run.id}`, { method: 'DELETE' }).catch(() => {})
+    setRuns(prev => prev.filter(r => r.id !== run.id))
+    setBusy('')
+  }
+
+  const todayISO = new Date().toLocaleDateString('en-CA')
+  const upcoming = runs.filter(r => r.run_date >= todayISO)
+  const past     = runs.filter(r => r.run_date <  todayISO)
+
+  return (
+    <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1.5rem', overflowY: 'auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <h3 style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0 }}>
+          🗓 Delivery Schedule
+        </h3>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.9rem' }}>
+          <Link href="/calendar" style={{ color: C.tan, fontSize: '0.78rem', textDecoration: 'none' }}>
+            see it on the calendar →
+          </Link>
+          <button onClick={() => setAdding(a => !a)} style={{ ...BTN(adding ? C.medBrown : C.tan, adding ? C.cream : C.dark), padding: '0.4rem 1rem', fontSize: '0.8rem' }}>
+            {adding ? 'Cancel' : '+ Schedule a Run'}
+          </button>
+        </div>
+      </div>
+
+      {adding && (
+        <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(201,168,130,0.4)', borderRadius: 4, padding: '1.1rem', marginBottom: '1.25rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.9rem' }}>
+            <div>
+              <label style={LABEL}>Date *</label>
+              <input type="date" value={date} onChange={e => setDate(e.target.value)} style={INPUT} />
+            </div>
+            <div>
+              <label style={LABEL}>Route *</label>
+              <input value={route} onChange={e => setRoute(e.target.value)} placeholder="Billings" style={INPUT} />
+            </div>
+            <div>
+              <label style={LABEL}>Driver</label>
+              <input value={driver} onChange={e => setDriver(e.target.value)} placeholder="Who is taking it" style={INPUT} />
+            </div>
+            <div>
+              <label style={LABEL}>Leaves At</label>
+              <input type="time" value={depart} onChange={e => setDepart(e.target.value)} style={INPUT} />
+            </div>
+          </div>
+
+          {/* Stops are names and towns, not boxes. A run gets planned before the
+              product is packed, so there is nothing to scan yet — the barcodes
+              come later, on Load Out. */}
+          <div style={{ marginTop: '1rem' }}>
+            <label style={LABEL}>Stops</label>
+            {stops.map((st, i) => (
+              <div key={i} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.4rem' }}>
+                <input value={st.customer} placeholder="Customer"
+                  onChange={e => setStops(p => p.map((x, j) => (j === i ? { ...x, customer: e.target.value } : x)))}
+                  style={{ ...INPUT, flex: 2 }} />
+                <input value={st.town} placeholder="Town"
+                  onChange={e => setStops(p => p.map((x, j) => (j === i ? { ...x, town: e.target.value } : x)))}
+                  style={{ ...INPUT, flex: 1 }} />
+                <input value={st.note} placeholder="Note (optional)"
+                  onChange={e => setStops(p => p.map((x, j) => (j === i ? { ...x, note: e.target.value } : x)))}
+                  style={{ ...INPUT, flex: 2 }} />
+                <button onClick={() => setStops(p => (p.length === 1 ? [emptyStop()] : p.filter((_, j) => j !== i)))}
+                  style={{ background: 'transparent', border: '1px solid rgba(166,120,90,0.35)', borderRadius: 3, color: C.lightBrown, cursor: 'pointer', padding: '0 0.7rem' }}>×</button>
+              </div>
+            ))}
+            <button onClick={() => setStops(p => [...p, emptyStop()])}
+              style={{ background: 'transparent', border: '1px dashed rgba(166,120,90,0.45)', borderRadius: 3, color: C.tan, cursor: 'pointer', fontSize: '0.78rem', padding: '0.35rem 0.9rem' }}>
+              + Add a stop
+            </button>
+          </div>
+
+          <div style={{ marginTop: '1rem' }}>
+            <label style={LABEL}>Notes</label>
+            <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Anything the driver needs to know" style={INPUT} />
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
+            <button onClick={save} disabled={!date || !route.trim() || busy === 'new'}
+              style={{ ...BTN(C.green, C.dark), opacity: !date || !route.trim() || busy === 'new' ? 0.5 : 1 }}>
+              {busy === 'new' ? 'Saving…' : 'Schedule Run'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <div style={{ color: C.lightBrown, fontSize: '0.9rem', textAlign: 'center', padding: '3rem' }}>Loading…</div>
+      ) : runs.length === 0 ? (
+        <p style={{ color: C.lightBrown, fontSize: '0.88rem', textAlign: 'center', padding: '2.5rem 1rem', margin: 0 }}>
+          No runs scheduled.<br />
+          <span style={{ fontSize: '0.8rem' }}>Schedule one and it shows up on the Delivery lane of the calendar.</span>
+        </p>
+      ) : (
+        <>
+          <RunList runs={upcoming} busy={busy} onStatus={setStatus} onDelete={remove} empty="Nothing scheduled ahead." />
+          {past.length > 0 && (
+            <>
+              <div style={{ color: C.lightBrown, fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.14em', margin: '1.4rem 0 0.5rem', borderBottom: '1px solid rgba(166,120,90,0.2)', paddingBottom: '0.2rem' }}>
+                THE PAST WEEK
+              </div>
+              <RunList runs={past} busy={busy} onStatus={setStatus} onDelete={remove} empty="" />
+            </>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+function RunList({ runs, busy, onStatus, onDelete, empty }: {
+  runs: DeliveryRun[]; busy: string; empty: string
+  onStatus: (r: DeliveryRun, status: string) => void
+  onDelete: (r: DeliveryRun) => void
+}) {
+  if (runs.length === 0) {
+    return empty
+      ? <p style={{ color: C.lightBrown, fontSize: '0.84rem', margin: '0.5rem 0 0' }}>{empty}</p>
+      : null
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+      {runs.map(r => {
+        const cfg  = RUN_STATUS[r.status] ?? RUN_STATUS.planned
+        const done = r.status === 'delivered' || r.status === 'cancelled'
+        return (
+          <div key={r.id} style={{
+            background: 'rgba(255,255,255,0.04)', border: `1px solid ${done ? 'rgba(166,120,90,0.18)' : 'rgba(201,168,130,0.35)'}`,
+            borderLeft: `3px solid ${cfg.color}`, borderRadius: 4, padding: '0.75rem 1rem', opacity: done ? 0.7 : 1,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+              <div style={{ minWidth: 0 }}>
+                <span style={{ color: C.cream, fontWeight: 700, fontSize: '0.95rem' }}>
+                  {runDay(r.run_date)} · {r.route || 'Route not named'}
+                </span>
+                <span style={{ color: C.lightBrown, fontSize: '0.78rem', marginLeft: '0.6rem' }}>
+                  {[r.depart_time ? `leaves ${r.depart_time.slice(0, 5)}` : '', r.driver].filter(Boolean).join(' · ')}
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+                <span style={{ color: cfg.color, fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                  {cfg.label}
+                </span>
+                {RUN_STATUSES.filter(st => st !== r.status).map(st => (
+                  <button key={st} onClick={() => onStatus(r, st)} disabled={busy === r.id}
+                    style={{ background: 'transparent', border: '1px solid rgba(166,120,90,0.35)', borderRadius: 3, color: C.lightBrown, fontSize: '0.68rem', padding: '0.15rem 0.5rem', cursor: 'pointer' }}>
+                    {RUN_STATUS[st].label}
+                  </button>
+                ))}
+                <button onClick={() => onDelete(r)} disabled={busy === r.id}
+                  style={{ background: 'transparent', border: 'none', color: '#e05555', fontSize: '0.85rem', cursor: 'pointer' }}>×</button>
+              </div>
+            </div>
+            {r.stops?.length > 0 && (
+              <div style={{ marginTop: '0.45rem', display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                {r.stops.map((st, i) => (
+                  <span key={i} title={st.note || undefined}
+                    style={{ background: 'rgba(201,168,130,0.12)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 99, color: C.tan, fontSize: '0.72rem', padding: '0.1rem 0.6rem' }}>
+                    {st.customer || st.town}{st.customer && st.town ? ` · ${st.town}` : ''}{st.note ? ' *' : ''}
+                  </span>
+                ))}
+              </div>
+            )}
+            {r.notes && (
+              <div style={{ color: C.lightBrown, fontSize: '0.76rem', marginTop: '0.4rem' }}>{r.notes}</div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // BAKER STORAGE TAB — what's on the shelf in Baker right now
 // ══════════════════════════════════════════════════════════════════════════════
 function BakerStorageTab() {
@@ -1230,7 +1499,7 @@ export default function DeliveryPage() {
         </div>
 
         <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden' }}>
-          {(['new', 'loadout', 'log', 'baker'] as Tab[]).map(t => (
+          {(['schedule', 'new', 'loadout', 'log', 'baker'] as Tab[]).map(t => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -1242,13 +1511,14 @@ export default function DeliveryPage() {
                 transition: 'background 0.15s',
               }}
             >
-              {t === 'new' ? '🚚 New Delivery' : t === 'loadout' ? '📦 Load Out' : t === 'log' ? '📋 Delivery Log' : '🏔 Baker Storage'}
+              {t === 'schedule' ? '🗓 Schedule' : t === 'new' ? '🚚 New Delivery' : t === 'loadout' ? '📦 Load Out' : t === 'log' ? '📋 Delivery Log' : '🏔 Baker Storage'}
             </button>
           ))}
         </div>
       </header>
 
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1300px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
+        {tab === 'schedule' && <ScheduleTab />}
         {tab === 'new'  && <NewDeliveryTab onSaved={() => setLogKey(k => k + 1)} pluMap={pluMap} />}
         {tab === 'loadout' && <LoadOutTab onSaved={() => setLogKey(k => k + 1)} />}
         {tab === 'log'  && <DeliveryLogTab key={logKey} pluMap={pluMap} />}

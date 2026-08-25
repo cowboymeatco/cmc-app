@@ -13,7 +13,7 @@ export const dynamic = 'force-dynamic'
 //
 // GET /api/calendar?from=YYYY-MM-DD&to=YYYY-MM-DD
 
-type Lane = 'receiving' | 'harvest' | 'processing' | 'smokehouse' | 'retail' | 'pickup'
+type Lane = 'receiving' | 'harvest' | 'processing' | 'smokehouse' | 'retail' | 'pickup' | 'delivery'
 
 interface CalEvent {
   id:        string
@@ -46,6 +46,7 @@ const LANE_HREF: Record<Lane, string> = {
   smokehouse: '/cooks',
   retail:     '/orders',
   pickup:     '/scanner',
+  delivery:   '/delivery',
 }
 
 const day = (v: string | null | undefined): string => (v ? String(v).slice(0, 10) : '')
@@ -77,7 +78,7 @@ export async function GET(req: NextRequest) {
   const events: CalEvent[] = []
   const todayISO = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Denver' })
 
-  const [recvAppts, boxes, appts, sessions, cooks, retail, planned, pickups, cutPlan, chillingLogs, futureAppts] = await Promise.all([
+  const [recvAppts, boxes, appts, sessions, cooks, retail, planned, pickups, cutPlan, chillingLogs, futureAppts, runs] = await Promise.all([
     // Receiving — animals scheduled to arrive, off the receiving calendar
     // (appointment.receive_date, default the day before harvest). Charlie:
     // "Receiving should come off of the receiving calendar."
@@ -136,6 +137,12 @@ export async function GET(req: NextRequest) {
       .select('id, harvest_date, species, head_count, source, status')
       .gt('harvest_date', todayISO)
       .lte('harvest_date', to),
+    // Delivery — runs the plant has SCHEDULED. Charlie (2026-08-25): "Can I make
+    // a delivery schedule so that it would show up on /calendar." The truck
+    // leaving is an operational day like any other, so it gets its own lane.
+    supabase.from('delivery_runs')
+      .select('id, run_date, route, driver, depart_time, stops, status')
+      .gte('run_date', from).lte('run_date', to),
   ])
 
   // Recipe names for tagged cooks (small table — one fetch, mapped by key).
@@ -280,6 +287,27 @@ export async function GET(req: NextRequest) {
       title: `💵 ${r.customer_name || 'Pickup'}`,
       subtitle: collected ? 'collected ✓' : 'pickup',
       status: (r.status as string) ?? undefined, href: LANE_HREF.pickup,
+    })
+  }
+
+  for (const r of runs.data ?? []) {
+    const d = day(r.run_date as string)
+    if (!d) continue
+    const status = (r.status as string) ?? 'planned'
+    const stops  = Array.isArray(r.stops) ? r.stops.length : 0
+    events.push({
+      id: `run-${r.id}`, lane: 'delivery', date: d,
+      // Still planned until the truck actually rolls, so it draws in the dashed
+      // "planned" style the projected cuts and planned cooks use.
+      planned: status === 'planned' || status === 'cancelled',
+      title: `🚚 ${r.route || 'Delivery run'}`,
+      subtitle: [
+        status === 'cancelled' ? 'CANCELLED' : '',
+        r.depart_time ? String(r.depart_time).slice(0, 5) : '',
+        stops ? `${stops} stop${stops === 1 ? '' : 's'}` : '',
+        (r.driver as string) || '',
+      ].filter(Boolean).join(' · '),
+      status, href: LANE_HREF.delivery,
     })
   }
 
