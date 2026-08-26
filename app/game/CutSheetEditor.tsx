@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { GAME_SHEET, MIN_BATCH_LBS, type GameSheet, type SmokehousePick } from '@/lib/gameCuts'
+import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
+import { GAME_SHEET, MIN_BATCH_LBS, type GameSheet } from '@/lib/gameCuts'
 import OrderBuilder from './OrderBuilder'
 import { rulesFor } from '@/lib/gameRules'
 import { C, INPUT, LABEL, BTN } from './ui'
@@ -26,7 +26,11 @@ export default function CutSheetEditor({
   sheet, onChange, compact, roastLbs = null, trimLbs = null,
 }: {
   sheet: GameSheet
-  onChange: (next: GameSheet) => void
+  // A setState dispatcher, not a plain callback, so every edit below can go
+  // through a FUNCTIONAL update. Writing the whole sheet back from a render
+  // closure loses taps: two flavours tapped inside one frame both start from
+  // the same stale array and the second overwrites the first.
+  onChange: Dispatch<SetStateAction<GameSheet>>
   compact?: boolean
   /** Weighed apart at the counter. Roasts and trim do not substitute. */
   roastLbs?: number | null
@@ -56,14 +60,15 @@ export default function CutSheetEditor({
 
   const answers = (key: string) => (sheet[key as 'grind' | 'services' | 'returns'] ?? {}) as Record<string, string>
 
-  const setAnswer = (section: string, field: string, value: string) => {
-    const current = { ...answers(section) }
-    // Re-picking the same option clears it. Without this a mis-tap on a radio
-    // row can never be undone, and "no answer" is a real answer on a cut sheet.
-    if (current[field] === value) delete current[field]
-    else current[field] = value
-    onChange({ ...sheet, [section]: current })
-  }
+  const setAnswer = (section: string, field: string, value: string) =>
+    onChange(prev => {
+      const current = { ...((prev[section as 'grind' | 'services' | 'returns'] ?? {}) as Record<string, string>) }
+      // Re-picking the same option clears it. Without this a mis-tap on a radio
+      // row can never be undone, and "no answer" is a real answer on a cut sheet.
+      if (current[field] === value) delete current[field]
+      else current[field] = value
+      return { ...prev, [section]: current }
+    })
 
   const visible = (section: (typeof GAME_SHEET)[number], field: (typeof GAME_SHEET)[number]['fields'][number]) => {
     if (!field.showIf) return true
@@ -72,31 +77,31 @@ export default function CutSheetEditor({
 
   // ── Smokehouse picks ────────────────────────────────────────────────────
   const picks = sheet.smokehouse ?? []
-  const setPicks = (next: SmokehousePick[]) => onChange({ ...sheet, smokehouse: next })
 
   const catalog  = [...roastGroups, ...trimGroups]
   const findPick = (category: string, flavor: string) =>
     picks.find(p => p.category === category && p.flavor === flavor)
 
-  const togglePick = (group: CatalogGroup, flavor: CatalogFlavor) => {
-    if (findPick(group.key, flavor.name)) {
-      setPicks(picks.filter(p => !(p.category === group.key && p.flavor === flavor.name)))
-      return
-    }
-    setPicks([...picks, {
-      category: group.key,
-      flavor:   flavor.name,
-      // A flavour that already names a cheese starts ticked; the counter can
-      // untick it. A convenience, never the billing decision.
-      cheese:      flavor.cheeseHint && group.cheeseRate != null,
-      cheese_type: '',
-      // One batch is the honest default: it is the smallest thing the
-      // smokehouse will actually run, so it is never a quantity nobody meant.
-      batches: 1,
-      lbs:     MIN_BATCH_LBS,
-      plu:     flavor.plu,
-    }])
-  }
+  const togglePick = (group: CatalogGroup, flavor: CatalogFlavor) =>
+    onChange(prev => {
+      const current = prev.smokehouse ?? []
+      if (current.some(p => p.category === group.key && p.flavor === flavor.name)) {
+        return { ...prev, smokehouse: current.filter(p => !(p.category === group.key && p.flavor === flavor.name)) }
+      }
+      return { ...prev, smokehouse: [...current, {
+        category: group.key,
+        flavor:   flavor.name,
+        // A flavour that already names a cheese starts ticked; the counter can
+        // untick it. A convenience, never the billing decision.
+        cheese:      flavor.cheeseHint && group.cheeseRate != null,
+        cheese_type: '',
+        // One batch is the honest default: it is the smallest thing the
+        // smokehouse will actually run, so it is never a quantity nobody meant.
+        batches: 1,
+        lbs:     MIN_BATCH_LBS,
+        plu:     flavor.plu,
+      }] }
+    })
 
   // Quantity, cheese, rank and fat all live on the order lines now — see
   // OrderBuilder. This component's job stops at choosing flavours.
@@ -315,7 +320,7 @@ export default function CutSheetEditor({
         <textarea
           value={sheet.notes ?? ''} rows={2} style={{ ...INPUT, resize: 'vertical' }}
           placeholder="What the hunter said that does not fit a box"
-          onChange={e => onChange({ ...sheet, notes: e.target.value })}
+          onChange={e => onChange(prev => ({ ...prev, notes: e.target.value }))}
         />
       </div>
     </div>

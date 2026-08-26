@@ -86,6 +86,10 @@ export function daysHeld(receivedAt: string): number {
   return Math.max(0, Math.floor((Date.now() - new Date(receivedAt).getTime()) / 86400000))
 }
 
+/** A YYYY-MM-DD as a short human date, noon-anchored so it cannot shift a day. */
+export const dateLabelSafe = (iso: string) =>
+  new Date(`${iso.slice(0, 10)}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+
 /** Open a printable document in its own window. */
 export function printHTML(html: string) {
   const w = window.open('', '_blank', 'width=820,height=1000')

@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import type { GameIntake } from '@/lib/types'
+import OnlineOrders from './OnlineOrders'
 import { C, INPUT, BTN, STATUS_META, STATUS_FLOW, money, daysHeld } from './ui'
 
 // The board — every animal in the building, grouped by where it is.
@@ -61,6 +62,11 @@ export default function BoardTab({
 
   return (
     <div>
+      {/* Orders hunters sent in before the meat arrived. Above the columns
+          because they are not on the board yet — nothing has been weighed and
+          no claim number exists until somebody takes one in. */}
+      <OnlineOrders onImported={onRefresh} />
+
       {/* ── Filters ── */}
       <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap' }}>
         <input

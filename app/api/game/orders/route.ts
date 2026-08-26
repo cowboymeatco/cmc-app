@@ -48,9 +48,14 @@ export async function GET(req: NextRequest) {
 // with a truck idling outside.
 export async function POST(req: NextRequest) {
   const body = await req.json()
-  const { order_id, weight_in_lbs, received_by, storage_location, condition, cleaning_hours } = body as {
-    order_id?: string; weight_in_lbs?: number; received_by?: string
-    storage_location?: string; condition?: string; cleaning_hours?: number
+  const {
+    order_id, weight_in_lbs, roast_lbs, trim_lbs,
+    received_by, storage_location, condition, cleaning_hours,
+  } = body as {
+    order_id?: string; weight_in_lbs?: number | null
+    roast_lbs?: number | null; trim_lbs?: number | null
+    received_by?: string; storage_location?: string
+    condition?: string; cleaning_hours?: number | null
   }
   if (!order_id) return NextResponse.json({ error: 'order_id required' }, { status: 400 })
 
@@ -88,7 +93,13 @@ export async function POST(req: NextRequest) {
       finished_product: order.finished_product,
       condition:        condition || 'Boned Out',
       received_by:      String(received_by ?? ''),
-      weight_in_lbs:    weight_in_lbs ?? null,
+      // The two pools are weighed apart: steaks and jerky can only come off the
+      // roasts, so a single total would let a jerky order look filled against a
+      // cooler that is all trim. Total falls back to the sum when not given.
+      roast_lbs:        roast_lbs ?? null,
+      trim_lbs:         trim_lbs ?? null,
+      weight_in_lbs:    weight_in_lbs ?? (
+        (Number(roast_lbs) || 0) + (Number(trim_lbs) || 0) || null),
       cleaning_hours:   hours,
       cleaning_fee:     Number(hours ?? 0) > 0,
       storage_location: String(storage_location ?? ''),
