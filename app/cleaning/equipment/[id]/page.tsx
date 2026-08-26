@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { PHASES, PHASE_LABEL, type CleaningStep, type Phase } from '@/lib/cleaning'
 import {
   C, TAP, useCrewMember, CleaningHeader, Banner, BigButton,
-  PhotoButton, inputStyle, cardStyle,
+  PhotoButton, StepVideo, inputStyle, cardStyle,
 } from '../../ui'
 
 // One machine's procedure: how it comes apart, gets cleaned, and goes back
@@ -13,7 +13,9 @@ import {
 // Reassembly is the half that actually costs money when it goes wrong, so the
 // three phases are equal citizens here rather than teardown with an afterthought.
 // Reference photos are shown large — a picture of how the auger seats is worth
-// more than the sentence describing it.
+// more than the sentence describing it. A step can carry a clip as well, for the
+// parts of reassembly a still frame can't hold: the order things go back in, and
+// how far something turns before it seats.
 
 interface Equipment {
   id: string
@@ -76,8 +78,9 @@ export default function ProcedurePage({ params }: { params: Promise<{ id: string
             </p>
             <p style={{ color: C.tan, fontSize: 14, lineHeight: 1.5, marginBottom: 14 }}>
               Next time someone tears it down, walk through it with the phone —
-              a photo and a sentence per step is enough, and it beats the version
-              that only lives in one person&apos;s head.
+              a sentence per step, with a photo or a few seconds of video, is
+              enough, and it beats the version that only lives in one
+              person&apos;s head.
             </p>
             <Link
               href="/cleaning/admin"
@@ -162,6 +165,8 @@ export default function ProcedurePage({ params }: { params: Promise<{ id: string
                           }}
                         />
                       )}
+
+                      {step.video_url && <StepVideo src={step.video_url} />}
 
                       <button
                         onClick={() => setSuggesting(suggesting === step.id ? null : step.id)}

@@ -91,6 +91,7 @@ export interface CleaningStep {
   step_no: number
   instruction: string
   photo_url: string | null
+  video_url: string | null
   caution: string | null
   translations: Record<string, string>
 }
@@ -353,6 +354,19 @@ export function shiftDateFor(now: Date, todayISO: string): string {
 }
 
 export const CLEANING_PHOTO_BUCKET = 'cleaning-photos'
+
+/**
+ * Clips live in the same bucket as the photos — same lifetime, same owner, and
+ * one bucket to widen when a phone starts writing some new container.
+ *
+ * The cap is generous because the alternative to a 60 MB clip is a step nobody
+ * writes up. It is not unbounded: a whole teardown filmed in one take is a
+ * video nobody scrubs through on the floor, and the steps are the index.
+ */
+export const CLEANING_VIDEO_TYPES = [
+  'video/mp4', 'video/quicktime', 'video/webm', 'video/x-m4v', 'video/3gpp',
+]
+export const CLEANING_VIDEO_MAX_BYTES = 200 * 1024 * 1024
 
 // ── Plant map ───────────────────────────────────────────────────────────
 

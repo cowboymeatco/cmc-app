@@ -4,7 +4,7 @@ import {
   FREQUENCIES, PRODUCTION_SIGNALS, SIGNAL_LABEL, SIGNAL_SOURCE, PHASES, PHASE_LABEL,
   type Frequency, type ProductionSignal, type Phase, type CleaningStep,
 } from '@/lib/cleaning'
-import { C, TAP, CleaningHeader, Banner, BigButton, PhotoButton, inputStyle, cardStyle } from '../ui'
+import { C, TAP, CleaningHeader, Banner, BigButton, PhotoButton, VideoButton, StepVideo, inputStyle, cardStyle } from '../ui'
 import MapEditor from './MapEditor'
 
 // Where the checklist and the procedures get written.
@@ -538,6 +538,7 @@ function ProcedureEditor({ equipmentId, onBack, onError }: {
   const [text,  setText]  = useState('')
   const [caution, setCaution] = useState('')
   const [photo, setPhoto] = useState<string | null>(null)
+  const [video, setVideo] = useState<string | null>(null)
 
   const load = useCallback(() => {
     fetch(`/api/cleaning/equipment?id=${equipmentId}`)
@@ -554,12 +555,13 @@ function ProcedureEditor({ equipmentId, onBack, onError }: {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         asset_id: equipmentId, phase,
-        instruction: text, caution: caution || undefined, photo_url: photo,
+        instruction: text, caution: caution || undefined,
+        photo_url: photo, video_url: video,
       }),
     })
     const body = await res.json()
     if (!res.ok) { onError(body?.error ?? "Couldn't add that step."); return }
-    setText(''); setCaution(''); setPhoto(null)
+    setText(''); setCaution(''); setPhoto(null); setVideo(null)
     load()
   }
 
@@ -634,6 +636,9 @@ function ProcedureEditor({ equipmentId, onBack, onError }: {
                     }}
                   />
                 )}
+                {/* Small, but playable — the only way to be sure the right clip
+                    landed on the right step is to watch a second of it. */}
+                {s.video_url && <StepVideo src={s.video_url} style={{ width: 180, marginTop: 8 }} />}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 <button onClick={() => move(s.id, 'up')}   disabled={i === 0} style={miniBtn(C.tan)}>↑</button>
@@ -671,6 +676,10 @@ function ProcedureEditor({ equipmentId, onBack, onError }: {
           label={photo ? 'Photo attached ✓' : 'Reference photo'}
           extra={{ kind: 'reference' }}
           onUploaded={url => setPhoto(url)}
+        />
+        <VideoButton
+          label={video ? 'Clip attached ✓' : 'Reference clip (optional)'}
+          onUploaded={url => setVideo(url)}
         />
         <BigButton label="Add step" onClick={addStep} disabled={!text.trim()} />
       </div>

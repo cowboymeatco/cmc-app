@@ -365,3 +365,111 @@ export function PhotoButton({ label, onUploaded, extra, disabled }: {
     </div>
   )
 }
+
+/**
+ * Clip picker for a procedure step.
+ *
+ * The file never passes through the app: we ask the server for a signed URL and
+ * PUT the bytes straight at storage. That is not an optimisation — the API
+ * routes run on the edge, where the body cap is a few megabytes, and any clip
+ * worth filming is bigger than that.
+ *
+ * `capture` is deliberately absent. A photo is nearly always taken on the spot,
+ * so PhotoButton opens the camera; a clip of the auger going back in is usually
+ * one somebody already shot, and forcing the camera would hide it.
+ */
+export function VideoButton({ label, onUploaded, disabled }: {
+  label:      string
+  onUploaded: (url: string, path: string) => void
+  disabled?:  boolean
+}) {
+  const [busy, setBusy]     = useState(false)
+  const [error, setError]   = useState<string | null>(null)
+
+  async function upload(file: File) {
+    setBusy(true)
+    setError(null)
+    try {
+      const signRes = await fetch('/api/cleaning/video', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: file.name, size: file.size, type: file.type }),
+      })
+      const sign = await signRes.json()
+      if (!signRes.ok) { setError(sign?.error ?? 'Upload failed'); return }
+
+      const put = await fetch(sign.upload_url, {
+        method:  'PUT',
+        headers: { 'Content-Type': file.type || 'video/mp4' },
+        body:    file,
+      })
+      // The signed URL talks to storage directly, so a rejection here is the
+      // bucket's, not ours — say which of the two failed rather than a flat
+      // "upload failed" that sends someone looking in the wrong place.
+      if (!put.ok) { setError('Storage turned the clip away — try a shorter one.'); return }
+
+      onUploaded(sign.url, sign.path)
+    } catch {
+      setError('Upload failed — check your signal.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div>
+      <label style={{
+        display:        'flex',
+        alignItems:     'center',
+        justifyContent: 'center',
+        gap:            8,
+        minHeight:      48,
+        background:     C.dark,
+        border:         `1px dashed ${C.medBrown}`,
+        borderRadius:   8,
+        color:          busy ? C.lightBrown : C.tan,
+        fontSize:       15,
+        cursor:         disabled || busy ? 'default' : 'pointer',
+        opacity:        disabled ? 0.5 : 1,
+      }}>
+        🎥 {busy ? 'Uploading… hold on' : label}
+        <input
+          type="file"
+          accept="video/*"
+          disabled={disabled || busy}
+          style={{ display: 'none' }}
+          onChange={e => {
+            const f = e.target.files?.[0]
+            if (f) upload(f)
+            e.target.value = ''   // same file twice in a row still fires
+          }}
+        />
+      </label>
+      {error && <div style={{ color: C.red, fontSize: 13, marginTop: 6 }}>{error}</div>}
+    </div>
+  )
+}
+
+/**
+ * A step's clip, played in place.
+ *
+ * `preload="metadata"` matters more here than it looks: a procedure can carry a
+ * dozen steps, and preloading them all would pull a few hundred megabytes over
+ * shop wifi to show a screen somebody scrolls past. `playsInline` keeps iOS from
+ * throwing it fullscreen the moment it starts.
+ */
+export function StepVideo({ src, style }: { src: string; style?: React.CSSProperties }) {
+  return (
+    <video
+      src={src}
+      controls
+      playsInline
+      preload="metadata"
+      style={{
+        width: '100%', marginTop: 10, borderRadius: 8, display: 'block',
+        border: `1px solid ${C.medBrown}`, background: '#000',
+        ...style,
+      }}
+    />
+  )
+}

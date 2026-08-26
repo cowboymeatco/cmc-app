@@ -34,6 +34,7 @@ export async function POST(req: NextRequest) {
       step_no:     ((last?.[0]?.step_no as number) ?? 0) + 1,
       instruction: instruction.trim(),
       photo_url:   body.photo_url ?? null,
+      video_url:   body.video_url ?? null,
       caution:     body.caution?.trim() || null,
     }])
     .select().single()
