@@ -151,6 +151,109 @@ async function resizeImage(file: File, max = 1000): Promise<Blob> {
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // EDIT PANEL
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/**
+ * Has this PLU actually reached the scale?
+ *
+ * The Connections tab used to answer that for Clover and QuickBooks and stay
+ * silent about the scale, which is the oldest and busiest of the three — so the
+ * question got answered by guesswork instead. Charlie, 2026-08-26, on a PLU Jill
+ * had hand-typed at the scale the day before: "I am assuming it came back from
+ * the scale?" It hadn't. Nothing does.
+ *
+ * Two separate facts, and conflating them is exactly the trap:
+ *
+ *   OUT — the app pushes to the scale. Derived, not stored: an item is on the
+ *         scale if it was eligible for a push that has since succeeded and
+ *         hasn't been edited afterwards.
+ *   IN  — the scale tells the app nothing on its own. A PLU typed at the keypad
+ *         is invisible here until somebody captures the scale's book and imports
+ *         the .ht. ht_skeleton is the proof that ever happened for this item.
+ *
+ * Everything below is read off rows we already keep, so it can't drift from what
+ * the push actually did.
+ */
+function ScaleStatus({ item, isNew, lastPush }: {
+  item: PluItem
+  isNew: boolean
+  lastPush: PushReq | null | undefined
+}) {
+  const box = (color: string, title: string, body: React.ReactNode) => (
+    <div style={{ background: 'rgba(255,255,255,0.03)', border: `1px solid ${color}`, borderRadius: 4, padding: '0.85rem 1rem', marginBottom: '0.75rem' }}>
+      <div style={{ color, fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.35rem' }}>{title}</div>
+      <div style={{ color: C.lightBrown, fontSize: '0.78rem', lineHeight: 1.6 }}>{body}</div>
+    </div>
+  )
+
+  if (isNew) {
+    return box(C.lightBrown, '⚖ Scale — not created yet',
+      <>Save the PLU, give it a price, then <strong style={{ color: C.tan }}>🛰 Push to scales</strong> on the Export tab.</>)
+  }
+
+  const price = item.price == null ? null : Number(item.price)
+
+  // The push only carries priced, active items — and it reports every scale as
+  // updated either way, so a skipped item looks synced. Say so here, on the item
+  // itself, rather than only in the Export tab's list.
+  if (!item.active) {
+    return box(C.yellow, '⚖ Scale — inactive, so the push skips it',
+      <>Deleting a PLU here never deletes it at the scale: HCT imports only add and update.
+        This one has to come off the Hobart by hand (Manager Mode → PLU edit → delete).</>)
+  }
+  if (price == null || price === 0) {
+    return box(C.yellow, '⚖ Scale — no price, so the push skips it',
+      <>The push only sends items with a real price, and it still reports every scale as
+        updated. Set a price on the <strong style={{ color: C.tan }}>Pricing</strong> tab, then push.</>)
+  }
+  if (price === 0.01) {
+    return box(C.lightBrown, '⚖ Scale — held off on purpose',
+      <>$0.01 is the placeholder for wild-game service items, wholesale cut codes and meat
+        boxes. These are meant to stay off the scale.</>)
+  }
+
+  const scaleKnowsIt = item.ht_skeleton != null
+  const captureNote = (
+    <div style={{ marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(166,120,90,0.15)', opacity: 0.9 }}>
+      {scaleKnowsIt
+        ? <>The scale has sent us a record for this one, so its label format is the real one, not a guess.</>
+        : <><strong style={{ color: C.tan }}>The scale has never sent us a record for this item.</strong>{' '}
+            Its label format is inferred from its siblings. Nothing typed at the keypad reaches the
+            app on its own — it only arrives when someone captures the scale&apos;s book and imports
+            the .ht here.</>}
+    </div>
+  )
+
+  if (lastPush === undefined) {
+    return box(C.lightBrown, '⚖ Scale', 'Checking the push log…')
+  }
+  if (!lastPush?.completed_at) {
+    return box(C.yellow, '⚖ Scale — no successful push on record',
+      <>Nothing in the log shows this book reaching the scales. Run{' '}
+        <strong style={{ color: C.tan }}>🛰 Push to scales</strong> from the Export tab.{captureNote}</>)
+  }
+
+  const pushedAt = new Date(lastPush.completed_at)
+  // A PLU created after the last push shows up here too: PUT stamps updated_at
+  // on create, so "never pushed" and "edited since pushed" are the same test.
+  // A row with no stamp at all can't be compared — say that instead of guessing
+  // it is current, which is the error that costs a wrong label.
+  const editedAt = item.updated_at ? new Date(item.updated_at) : null
+  if (!editedAt || isNaN(editedAt.getTime())) {
+    return box(C.lightBrown, '⚖ Scale — can’t tell',
+      <>This row carries no last-changed stamp, so there is no way to say whether it made the
+        push that finished {pushedAt.toLocaleString()}. Push again if in doubt — it is a merge,
+        and re-sending costs nothing.{captureNote}</>)
+  }
+  const staleEdit = editedAt > pushedAt
+
+  return staleEdit
+    ? box(C.yellow, '⚖ Scale — edited since the last push',
+        <>Changed here {editedAt.toLocaleString()}; the scales were last written{' '}
+          {pushedAt.toLocaleString()}. What the scale prints is still the old version until you{' '}
+          <strong style={{ color: C.tan }}>🛰 Push to scales</strong>.{captureNote}</>)
+    : box(C.green, '⚖ Scale — sent',
+        <>Included in the push that finished {pushedAt.toLocaleString()}, and unchanged here since.{captureNote}</>)
+}
+
 function EditPanel({ item, onSaved, onDeleted, onClose }: {
   item: PluItem
   onSaved: (updated: PluItem) => void
@@ -163,6 +266,9 @@ function EditPanel({ item, onSaved, onDeleted, onClose }: {
   const [error, setError]     = useState<string | null>(null)
   const [editTab, setEditTab] = useState<'basic' | 'pricing' | 'label' | 'photo' | 'connections'>('basic')
   const [photoBusy, setPhotoBusy] = useState(false)
+  // When the scales were last actually written to. Needed to answer the only
+  // question the Connections tab was missing: is this item ON the scale?
+  const [lastPush, setLastPush] = useState<PushReq | null | undefined>(undefined)
   const fileRef = useRef<HTMLInputElement>(null)
   const isNew = !form.id
 
@@ -200,6 +306,17 @@ function EditPanel({ item, onSaved, onDeleted, onClose }: {
     else setError('Could not remove photo.')
     setPhotoBusy(false)
   }
+
+  useEffect(() => {
+    fetch('/api/scale-push')
+      .then(r => r.json())
+      .then((rows: PushReq[]) => setLastPush(
+        (Array.isArray(rows) ? rows : []).find(
+          r => r.status === 'done' && (r.result?.scales ?? []).some(sc => sc.ok),
+        ) ?? null,
+      ))
+      .catch(() => setLastPush(null))
+  }, [])
 
   const f = (k: keyof PluItem) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm(p => ({ ...p, [k]: e.target.value }))
@@ -393,10 +510,15 @@ function EditPanel({ item, onSaved, onDeleted, onClose }: {
                 {form.quickbooks_item_id ? '✓ Linked' : 'Not linked'}
               </div>
             </div>
+            <div style={{ gridColumn: 'span 2' }}>
+              <ScaleStatus item={form} isNew={isNew} lastPush={lastPush} />
+            </div>
+
             <div style={{ gridColumn: 'span 2', background: 'rgba(255,255,255,0.03)', borderRadius: 4, padding: '0.85rem 1rem', fontSize: '0.8rem', color: C.lightBrown }}>
               <strong style={{ color: C.tan, display: 'block', marginBottom: '0.4rem' }}>Connections</strong>
               Clover sync and QuickBooks integration are managed from their respective tabs.
-              IDs here are set automatically during sync.
+              IDs here are set automatically during sync. The scale is the one downstream
+              with no ID to hold — a PLU is matched there by its number.
             </div>
           </div>
         )}
