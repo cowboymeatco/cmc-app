@@ -162,6 +162,18 @@ interface LaborWeek {
   labor_pct: number; dollars_per_lb: number
 }
 
+interface SmokehouseWeek { week: string; cooks: number; hours: number; daysRun: number; utilPct: number }
+interface SmokehouseData {
+  weeks: number; weekHours: number
+  series: SmokehouseWeek[]
+  current: SmokehouseWeek | null
+  last4: { utilPct: number; hours: number; cooks: number; daysRun: number }
+  priorUtilPct: number | null
+  lastCookEndedAt: string | null
+  daysSinceLastCook: number | null
+  feedStale: boolean
+}
+
 // ── Shared bits ───────────────────────────────────────────────────────────────
 function StatTile({ label, value, unit, sub, hero, accent }: {
   label: string; value: string; unit?: string; sub?: string; hero?: boolean; accent?: string
@@ -195,6 +207,58 @@ function ErrorBox({ msg }: { msg: string }) {
   return (
     <div style={{ background: C.dark, border: '1px solid #E8883A', borderRadius: 4, padding: '1rem', color: '#E8883A', fontSize: '0.85rem' }}>
       {msg}
+    </div>
+  )
+}
+
+// ── Smokehouse utilisation bars ───────────────────────────────────────────────
+// Twelve weeks of "how much of the week was the house cooking". Bars rather
+// than a line: each week is a discrete amount of work done, and a line between
+// two weeks implies a value in between that nobody measured.
+function SmokehouseBars({ series, weekHours }: { series: SmokehouseWeek[]; weekHours: number }) {
+  // Scaled to the best week in view, not to 100% — the house tops out around a
+  // third of the calendar and flooring the chart at 100 would squash every bar
+  // into the same illegible stub.
+  const peak = Math.max(...series.map(w => w.utilPct), 1)
+  const label = (iso: string) =>
+    new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' })
+
+  return (
+    <div style={{
+      background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4,
+      padding: '1rem 1.25rem',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 120 }}>
+        {series.map((w, i) => {
+          const partial = i === series.length - 1
+          return (
+            <div key={w.week} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+              <div style={{ fontSize: '0.6rem', color: C.lightBrown }}>
+                {w.utilPct > 0 ? `${Math.round(w.utilPct)}%` : ''}
+              </div>
+              <div
+                title={`Week of ${label(w.week)} — ${w.hours} h over ${w.cooks} cook${w.cooks === 1 ? '' : 's'} on ${w.daysRun} day${w.daysRun === 1 ? '' : 's'} (${w.utilPct}% of ${weekHours} h)${partial ? ' · week still running' : ''}`}
+                style={{
+                  width: '100%',
+                  height: `${Math.max((w.utilPct / peak) * 92, w.utilPct > 0 ? 2 : 1)}px`,
+                  // The current week is incomplete by definition, so it is drawn
+                  // hollow — a short solid bar would read as a bad week.
+                  background: partial ? 'transparent' : COST_COLOR,
+                  border: partial ? `1px dashed ${COST_COLOR}` : 'none',
+                  borderRadius: 2,
+                }}
+              />
+            </div>
+          )
+        })}
+      </div>
+      <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+        {series.map((w, i) => (
+          <div key={w.week} style={{ flex: 1, textAlign: 'center', fontSize: '0.6rem', color: C.lightBrown }}>
+            {i % 2 === 0 ? label(w.week) : ''}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -464,6 +528,7 @@ export default function ExecPage() {
   const [war, setWar] = useState<WarData | null>(null)
   const [labor, setLabor] = useState<LaborWeek[] | null>(null)
   const [turnover, setTurnover] = useState<TurnoverData | null>(null)
+  const [smoke, setSmoke] = useState<SmokehouseData | null>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
 
   const [period, setPeriod] = useState<PeriodKey>('ttm')
@@ -489,6 +554,7 @@ export default function ExecPage() {
     grab<WarData>('/api/exec/war', setWar, 'war')
     grab<{ weeks: LaborWeek[] }>('/api/exec/labor', d => setLabor(d.weeks), 'labor')
     grab<TurnoverData>('/api/exec/turnover?months=12', setTurnover, 'turnover')
+    grab<SmokehouseData>('/api/exec/smokehouse?weeks=12', setSmoke, 'smokehouse')
   }
 
   const changePeriod = (p: PeriodKey) => {
@@ -712,6 +778,59 @@ export default function ExecPage() {
               </div>
               <WarTile label="Smokehouse cooks" day={war.cooks_d} week={war.cooks_w} unit="loads" />
             </div>
+          )}
+
+          {/* The WAR tile above counts cooks; a count can't tell eight short
+              loads from eight overnight ones. This is the hours (Charlie,
+              2026-08-26: "I would like to see how often the smokehouse is
+              running on a basis"). */}
+          <SectionLabel>Smokehouse — share of the week actually cooking</SectionLabel>
+          {errors.smokehouse ? (
+            <ErrorBox msg={errors.smokehouse} />
+          ) : !smoke ? (
+            <div style={{ color: C.lightBrown, fontSize: '0.85rem' }}>Loading…</div>
+          ) : (
+            <>
+              {/* The cook feed is an FTP script on the packaging kiosk and it
+                  has gone quiet before without telling anyone. A silent 0%
+                  would read as an idle house, so when the feed looks dead the
+                  page says it cannot tell the difference. */}
+              {smoke.feedStale && (
+                <div style={{
+                  background: C.dark, border: `1px solid ${WARN_COLOR}`, borderRadius: 4,
+                  padding: '0.75rem 1rem', color: WARN_COLOR, fontSize: '0.82rem', marginBottom: '0.75rem',
+                }}>
+                  {smoke.lastCookEndedAt
+                    ? `No cook recorded for ${smoke.daysSinceLastCook} days. That is either a quiet house or the cook importer on the packaging kiosk has stopped — these numbers can't tell the difference.`
+                    : 'No cook data at all in this window — check the cook importer on the packaging kiosk before reading anything below.'}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+                <StatTile
+                  hero
+                  label="Utilisation"
+                  value={`${smoke.last4.utilPct}%`}
+                  accent={COST_COLOR}
+                  sub={smoke.priorUtilPct != null
+                    ? `last 4 full weeks · ${smoke.priorUtilPct}% the 4 before`
+                    : 'last 4 full weeks'}
+                />
+                <StatTile label="Hours cooking" value={`${smoke.last4.hours}`} unit="/wk"
+                  sub={`of ${smoke.weekHours} h in a week`} />
+                <StatTile label="Days it ran" value={`${smoke.last4.daysRun}`} unit="/wk"
+                  sub="days with at least one cook" />
+                <StatTile label="Cooks" value={`${smoke.last4.cooks}`} unit="/wk"
+                  sub="loads through the house" />
+              </div>
+
+              <SmokehouseBars series={smoke.series} weekHours={smoke.weekHours} />
+              <div style={{ fontSize: '0.7rem', color: C.lightBrown, marginTop: '0.5rem' }}>
+                Against the calendar week, not shop hours — the house cooks through the night, so
+                an hours-open denominator would read over 100%. A cook counts in the week it started.
+                The last bar is the week still running.
+              </div>
+            </>
           )}
 
           {/* Kill to invoice to cash. How long the plant's money sits inside an
