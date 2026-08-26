@@ -141,11 +141,25 @@ export default function CutScheduleTab() {
   // assignment or a link changes an answer.
   //
   // Two things keep it to that. The callback takes no dependencies, so the
-  // mount effect below has nothing to re-fire on — and the ref swallows any
-  // caller that lands on a batch already in the air: React's dev double-mount,
-  // a double-clicked Retry, a modal closing onto a load still running. The crew
-  // view of this same data guards it the same way (app/cut-schedule).
+  // mount effect below has nothing to re-fire on — and a caller landing on a
+  // batch already in the air doesn't start a second one: React's dev
+  // double-mount, a double-clicked Retry, a modal closing onto a load still
+  // running. The crew view of this same data guards it the same way
+  // (app/cut-schedule).
   const inFlight = useRef(false)
+
+  // …but a caller who CHANGED something is not the same as one who merely
+  // wants the screen drawn, and only the first needs the door held open. A
+  // modal that just linked a carcass closes and asks for a reload; the batch
+  // already in the air was sent BEFORE that write and cannot contain it, so
+  // dropping the request leaves the screen quietly stale — a carcass linked to
+  // a scan sheet whose row still reads "never scanned in". Those callers pass
+  // `changed`, and get one more pass once the current batch lands.
+  //
+  // Everyone else — the mount effect, a jabbed Retry — is asking for data they
+  // have no reason to think moved, and is still swallowed. That distinction is
+  // what keeps React's dev double-mount from costing two batches again.
+  const pending = useRef(false)
 
   // The weights re-score a list we already hold; they never change what we ask
   // the server for. Read at call time rather than depended on, because as a
@@ -154,23 +168,32 @@ export default function CutScheduleTab() {
   const weightsRef = useRef(weights)
   useEffect(() => { weightsRef.current = weights }, [weights])
 
-  const loadAll = useCallback(async () => {
-    if (inFlight.current) return
+  const loadAll = useCallback(async (changed = false) => {
+    if (inFlight.current) { pending.current ||= changed; return }
     inFlight.current = true
     setLoading(true)
     try {
-      const { logs, apptMap, instrIds, instrByBuyer, saved, assignments, futureBookings, harvestDays, carcassLinks } = await loadScheduleData(isoDate())
-      setLogs(logs)
-      setAppts([...apptMap.values()])
-      setAssignments(assignments)
-      setCarcassLinks(carcassLinks)
-      setFutureBookings(futureBookings)
-      setHarvestDays(harvestDays)
-      setEntries(buildEntries(logs, apptMap, instrIds, saved, assignments, weightsRef.current, futureBookings, instrByBuyer))
-      setLoadError(false)
+      // Cleared before the request goes out, so anything asked for DURING it
+      // sets the flag again and earns exactly one more pass — no matter how
+      // many callers asked, and never more than one extra batch on the wire.
+      do {
+        pending.current = false
+        const { logs, apptMap, instrIds, instrByBuyer, saved, assignments, futureBookings, harvestDays, carcassLinks } = await loadScheduleData(isoDate())
+        setLogs(logs)
+        setAppts([...apptMap.values()])
+        setAssignments(assignments)
+        setCarcassLinks(carcassLinks)
+        setFutureBookings(futureBookings)
+        setHarvestDays(harvestDays)
+        setEntries(buildEntries(logs, apptMap, instrIds, saved, assignments, weightsRef.current, futureBookings, instrByBuyer))
+        setLoadError(false)
+      } while (pending.current)
     } catch {
+      // A failed load leaves the error banner and its Retry, which is a better
+      // answer than looping against a server that just said no.
       setLoadError(true)
     } finally {
+      pending.current  = false
       inFlight.current = false
       setLoading(false)
     }
@@ -574,7 +597,7 @@ export default function CutScheduleTab() {
         }}>
           <span>⚠ Couldn&apos;t load the cooler — the schedule below may be incomplete.</span>
           <button
-            onClick={loadAll}
+            onClick={() => loadAll()}
             style={{
               background: 'transparent', border: `1px solid rgba(239,68,68,0.45)`, color: C.red,
               borderRadius: 4, padding: '0.3rem 0.9rem', fontWeight: 700, fontSize: '0.8rem', cursor: 'pointer',
@@ -1395,7 +1418,7 @@ export default function CutScheduleTab() {
             ].filter(Boolean)}
             existing={carcassLinks.get(linkModal.harvest_log_id) ?? []}
             onClose={() => setLinkModal(null)}
-            onLinked={() => { setLinkModal(null); loadAll() }}
+            onLinked={() => { setLinkModal(null); loadAll(true) }}
           />
         )
       })()}
@@ -1410,7 +1433,7 @@ export default function CutScheduleTab() {
             assignModal.carcasses.some(l => l.id === a.harvest_log_id)
           )}
           onClose={() => setAssignModal(null)}
-          onSaved={() => { setAssignModal(null); loadAll() }}
+          onSaved={() => { setAssignModal(null); loadAll(true) }}
         />
       )}
 
@@ -1420,7 +1443,7 @@ export default function CutScheduleTab() {
         <GrindAllModal
           {...grindModal}
           onClose={() => setGrindModal(null)}
-          onSaved={() => { setGrindModal(null); loadAll() }}
+          onSaved={() => { setGrindModal(null); loadAll(true) }}
         />
       )}
     </div>
