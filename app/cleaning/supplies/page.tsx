@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
+import Link from 'next/link'
 import { dateLabel } from '@/lib/dates'
 import { C, useCrewMember, CleaningHeader, Banner, BigButton, inputStyle, cardStyle } from '../ui'
 
@@ -65,8 +66,24 @@ export default function SuppliesPage() {
         {error && <Banner tone="error">{error}</Banner>}
 
         {!asking && (
-          <div style={{ marginBottom: 20 }}>
+          <div style={{ marginBottom: 20, display: 'flex', flexDirection: 'column', gap: 10 }}>
             <BigButton label="+ Request a supply" onClick={() => setAsking(true)} />
+            {/* The shelf cards are the fast path — this screen is where you end
+                up when there isn't a card to scan, or when you're setting them
+                up. Quieter than the request button for that reason. */}
+            {supplies.length > 0 && (
+              <Link
+                href="/cleaning/supplies/cards"
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  minHeight: 48, borderRadius: 8, textDecoration: 'none',
+                  background: C.dark, border: `1px solid ${C.medBrown}`,
+                  color: C.tan, fontSize: 15,
+                }}
+              >
+                ▦ Shelf cards to print
+              </Link>
+            )}
           </div>
         )}
 
@@ -176,6 +193,10 @@ function RequestForm({ supplies, defaultName, onDone, onCancel }: {
 }) {
   const [supplyId, setSupplyId] = useState('')
   const [freeText, setFreeText] = useState('')
+  // Typing something the list has never heard of is how the list grows. On by
+  // default because the catalog starts near-empty and every real ask belongs in
+  // it; clearable because "more of those blue towels" doesn't.
+  const [addToList, setAddToList] = useState(true)
   const [qty,      setQty]      = useState('')
   const [out,      setOut]      = useState(false)
   const [name,     setName]     = useState(defaultName ?? '')
@@ -193,8 +214,9 @@ function RequestForm({ supplies, defaultName, onDone, onCancel }: {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          supply_id:    supplyId || undefined,
-          name_text:    freeText.trim() || undefined,
+          supply_id:      supplyId || undefined,
+          name_text:      freeText.trim() || undefined,
+          add_to_catalog: !supplyId && !!freeText.trim() && addToList,
           qty:          qty.trim() || undefined,
           urgency:      out ? 'out' : 'normal',
           requested_by: name.trim(),
@@ -236,6 +258,23 @@ function RequestForm({ supplies, defaultName, onDone, onCancel }: {
         placeholder={supplies.length ? '…or type something else' : 'What do you need?'}
         style={inputStyle}
       />
+
+      {/* Only when they're asking for something that isn't on the list — there
+          is nothing to add when they picked from it. */}
+      {!supplyId && freeText.trim() !== '' && (
+        <label style={{
+          display: 'flex', alignItems: 'center', gap: 10, minHeight: 44,
+          color: C.tan, fontSize: 14, cursor: 'pointer',
+        }}>
+          <input
+            type="checkbox"
+            checked={addToList}
+            onChange={e => setAddToList(e.target.checked)}
+            style={{ width: 22, height: 22, accentColor: C.tan }}
+          />
+          Add &ldquo;{freeText.trim()}&rdquo; to the supply list
+        </label>
+      )}
 
       <input
         value={qty}

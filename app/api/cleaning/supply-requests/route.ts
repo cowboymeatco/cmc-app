@@ -38,7 +38,9 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await req.json()
-  const { supply_id, name_text, qty, urgency, requested_by, note } = body as Record<string, string | undefined>
+  const { supply_id, name_text, qty, urgency, requested_by, note } =
+    body as Record<string, string | undefined>
+  const addToCatalog = body.add_to_catalog === true
 
   if (!requested_by?.trim()) {
     return NextResponse.json({ error: 'Add your name to the request.' }, { status: 400 })
@@ -47,6 +49,7 @@ export async function POST(req: NextRequest) {
   // A request can name a catalog item or be free text — the crew must never be
   // blocked from asking for something because nobody set it up first.
   let label = name_text?.trim() ?? ''
+  let linkedSupplyId = supply_id ?? null
   if (supply_id && !label) {
     const { data } = await supabase
       .from('cleaning_supplies').select('name').eq('id', supply_id).single()
@@ -56,16 +59,52 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Say what you need.' }, { status: 400 })
   }
 
+  // Free text asked for something the list has never heard of. Charlie,
+  // 2026-08-26: "Can we have a way to request a new supply?" — the request
+  // already worked, but it died as one line of text and the catalog stayed
+  // empty (one active item the day he asked), so the next person typed the same
+  // thing again and nothing could ever hang off it: no vendor, no unit, no
+  // reorder card. Adopting it here is what lets the list grow out of the work
+  // instead of out of a data-entry session.
+  //
+  // Curated by the ASKER, not automatic: a checkbox they can clear, so "more of
+  // those blue towels" stays a one-off and doesn't become a permanent entry.
+  if (addToCatalog && !linkedSupplyId) {
+    const { data: existing } = await supabase
+      .from('cleaning_supplies').select('id, active').ilike('name', label).maybeSingle()
+
+    if (existing) {
+      // Someone retired it before. Asking for it again is as good a reason as
+      // any to put it back, and it keeps its vendor and unit.
+      if (!existing.active) {
+        await supabase.from('cleaning_supplies').update({ active: true }).eq('id', existing.id)
+      }
+      linkedSupplyId = existing.id as string
+      const { data: nm } = await supabase
+        .from('cleaning_supplies').select('name').eq('id', existing.id).single()
+      if (nm?.name) label = nm.name as string        // keep the catalog's spelling
+    } else {
+      // A failure here must not lose the request — the list is the thing that
+      // stops the plant running out of detergent, and the catalog entry is a
+      // convenience on top of it.
+      const { data: made } = await supabase
+        .from('cleaning_supplies')
+        .insert([{ name: label, unit: body.unit?.trim() || null, sort_order: 100 }])
+        .select('id').single()
+      if (made) linkedSupplyId = made.id as string
+    }
+  }
+
   const isOut = urgency === 'out'
 
   // Don't stack duplicates: if this item is already on the open list, bump it
   // rather than adding a second row. Five people noticing the same empty drum
   // is one order, not five.
-  if (supply_id) {
+  if (linkedSupplyId) {
     const { data: dupe } = await supabase
       .from('cleaning_supply_requests')
       .select('id, note, urgency')
-      .eq('supply_id', supply_id).eq('status', 'open')
+      .eq('supply_id', linkedSupplyId).eq('status', 'open')
       .limit(1).maybeSingle()
 
     if (dupe) {
@@ -86,7 +125,7 @@ export async function POST(req: NextRequest) {
   const { data, error } = await supabase
     .from('cleaning_supply_requests')
     .insert([{
-      supply_id:    supply_id ?? null,
+      supply_id:    linkedSupplyId,
       name_text:    label,
       qty:          qty?.trim() || null,
       urgency:      isOut ? 'out' : 'normal',
