@@ -1624,7 +1624,15 @@ function WorksheetTab({ date }: { date: string }) {
         // (Charlie, 2026-08-17); the length of the row between them is the fix.
         return `<tr>
         <td class="cid">${r.carcassTag ? esc(r.carcassTag) : cidStr}</td>
-        <td class="kt"><span class="cb">${r.killType === 'Custom' ? '☑' : '☐'} Custom</span><span class="cb">${r.killType === 'USDA' ? '☑' : '☐'} USDA</span></td>
+        <td class="kt"><span class="cb">${r.killType === 'Custom' ? '☑' : '☐'} Custom</span><span class="cb">${r.killType === 'USDA' ? '☑' : '☐'} USDA</span>${
+          // Over-thirty-months is a cattle question — SRM removal turns on it —
+          // so the box only prints on beef rows and stays off hog and lamb sheets.
+          // It prints ticked when the check-in already knows, and empty otherwise
+          // so the floor can tick it when an inspector calls one over (Charlie).
+          g.species === 'Beef'
+            ? `<span class="cb otmbox">${r.over_30_months ? '☑' : '☐'} +30 MO</span>`
+            : ''
+        }</td>
         <td class="id">${r.ear_tag ? esc(r.ear_tag) : '—'}${r.over_30_months ? ' <span class="otm">OTM</span>' : ''}</td>
         <td>${esc(r.sex)}</td>
         <td>${esc(r.breed)}</td>
@@ -1652,6 +1660,7 @@ function WorksheetTab({ date }: { date: string }) {
       td.wt { width: 0.8in; height: 32pt; }
       td.kt { width: 0.9in; padding: 4pt 5pt; }
       td.kt .cb { display: block; font-size: 8pt; white-space: nowrap; line-height: 1.6; }
+      td.kt .otmbox { color: #bb0000; font-weight: 700; }
       td.id { font-weight: 600; }
       .pre { font-weight: 700; font-size: 11pt; }
       tr.grp td { background: #ddd; font-weight: 700; font-size: 10pt; letter-spacing: 0.03em; }
@@ -1725,6 +1734,7 @@ function WorksheetTab({ date }: { date: string }) {
       td.wt { width: 0.85in; height: 26pt; }
       td.kt { width: 0.9in; padding: 3pt 5pt; }
       td.kt .cb { display: block; font-size: 8pt; white-space: nowrap; line-height: 1.6; }
+      td.kt .otmbox { color: #bb0000; font-weight: 700; }
       .pre { font-weight: 700; font-size: 10.5pt; }
       .otm { color: #bb0000; font-weight: 700; font-size: 7.5pt; border: 1pt solid #bb0000; padding: 0 2pt; margin-left: 2pt; }
       .sig { margin-top: 24pt; font-size: 9pt; }
