@@ -445,6 +445,113 @@ function NewOrderTab({ onSaved, pluList }: { onSaved: () => void; pluList: PluIt
 // ══════════════════════════════════════════════════════════════════════════════
 // ORDER DETAIL PANEL
 // ══════════════════════════════════════════════════════════════════════════════
+// ── Printed pick ticket ───────────────────────────────────────────────────────
+//
+// The paper copy of a retail order, for whoever walks the cooler with it and for
+// the box it ends up taped to (Charlie, 2026-08-26).
+//
+// It is a PICK sheet, not a receipt. What matters to the person holding it is
+// what to pull, how it is measured, and where it goes afterwards — so quantities
+// get a write-in box rather than being presented as settled, and the three
+// things that change the handling (due date, fresh vs frozen, and how it leaves
+// the building) sit in boxes across the top instead of buried in a line of text.
+//
+// Anything already filled in the app prints pre-filled, the same bargain the
+// harvest worksheet makes: a number that is known is shown, a number that isn't
+// leaves a line to write on.
+function printOrder(order: RetailOrder) {
+  const esc = (s: string) => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] as string))
+
+  const fmtDay = (iso: string) =>
+    new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+  const fmtWhen = (ts: string) =>
+    new Date(ts).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+
+  // How the order leaves, and the one detail that goes with it. A delivery sheet
+  // with no address on it sends somebody back to a screen.
+  const handoff =
+    order.fulfillment_type === 'delivery' ? { label: 'Delivery', when: order.delivery_datetime, where: order.delivery_address }
+    : order.fulfillment_type === 'shipping' ? { label: 'Shipping', when: null, where: order.shipping_address }
+    : { label: 'Pickup', when: order.pickup_datetime, where: null }
+
+  const items = order.retail_order_items ?? []
+  // The Picked box is left empty to write in, whatever the unit — the unit column
+  // right beside it already says whether that means pounds or packages.
+  const rows = items.map(i => {
+    const filled = Number(i.qty_filled) > 0
+    return `<tr>
+      <td class="plu">${i.plu_number ? esc(i.plu_number) : ''}</td>
+      <td class="nm">${esc(i.item_name)}</td>
+      <td class="qty">${esc(String(i.qty_ordered))}</td>
+      <td class="un">${esc(i.unit || '')}</td>
+      <td class="pick">${filled ? `<span class="pre">${esc(String(i.qty_filled))}</span>` : ''}</td>
+      <td class="note">${esc(i.notes || '')}</td>
+    </tr>`
+  }).join('')
+
+  const body = rows || '<tr><td colspan="6" class="empty">No items on this order.</td></tr>'
+
+  const boxes = [
+    { k: 'Due',         v: fmtDay(order.due_date) },
+    { k: 'Condition',   v: order.fresh_or_frozen === 'fresh' ? 'FRESH' : 'FROZEN' },
+    { k: 'Fulfillment', v: handoff.when ? `${handoff.label} · ${fmtWhen(handoff.when)}` : handoff.label },
+  ].map(b => `<div class="box"><div class="bk">${esc(b.k)}</div><div class="bv">${esc(b.v)}</div></div>`).join('')
+
+  const css = `
+    @page { size: letter portrait; margin: 0.5in; }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; color: #000; margin: 0; }
+    h1 { font-size: 15pt; margin: 0 0 1pt; letter-spacing: 0.03em; }
+    .sub { font-size: 8.5pt; color: #444; text-transform: uppercase; letter-spacing: 0.12em; margin-bottom: 10pt; }
+    .cust { font-size: 13pt; font-weight: 800; letter-spacing: 0.02em; }
+    .meta { font-size: 9.5pt; color: #333; margin-bottom: 9pt; }
+    .boxes { display: flex; gap: 8pt; margin-bottom: 10pt; }
+    .box { border: 1pt solid #000; padding: 4pt 8pt; min-width: 1.5in; }
+    .bk { font-size: 7pt; text-transform: uppercase; letter-spacing: 0.1em; color: #555; }
+    .bv { font-size: 11pt; font-weight: 800; margin-top: 1pt; }
+    .where { font-size: 10pt; border: 0.75pt solid #000; padding: 5pt 8pt; margin-bottom: 9pt; }
+    .note-blk { font-size: 10pt; font-style: italic; border-left: 2.5pt solid #000; padding: 3pt 0 3pt 8pt; margin-bottom: 10pt; }
+    table { width: 100%; border-collapse: collapse; font-size: 10pt; }
+    th, td { border: 0.75pt solid #000; padding: 5pt 6pt; text-align: left; vertical-align: middle; }
+    th { background: #eee; font-size: 7.5pt; text-transform: uppercase; letter-spacing: 0.05em; }
+    td.plu { width: 0.6in; font-family: monospace; font-size: 9pt; }
+    td.nm { font-weight: 600; }
+    td.qty { width: 0.5in; text-align: center; font-weight: 800; font-size: 11pt; }
+    td.un { width: 0.5in; font-size: 8.5pt; color: #444; }
+    td.pick { width: 0.9in; height: 30pt; }
+    td.note { width: 1.6in; font-size: 8.5pt; color: #333; }
+    .pre { font-weight: 700; font-size: 11pt; }
+    .empty { text-align: center; padding: 20pt; color: #666; }
+    .sig { margin-top: 22pt; font-size: 9pt; }
+    .sig span { display: inline-block; border-top: 0.75pt solid #000; padding-top: 2pt; width: 2.1in; margin-right: 0.45in; }
+    .foot { margin-top: 14pt; font-size: 8pt; color: #666; }
+  `
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Order — ${esc(order.customer_name)}</title><style>${css}</style></head><body>
+    <h1>Cowboy Meat Co. — Retail Order</h1>
+    <div class="sub">Forsyth, Montana</div>
+    <div class="cust">${esc(order.customer_name)}</div>
+    <div class="meta">
+      ${order.customer_phone ? esc(order.customer_phone) + ' &nbsp;·&nbsp; ' : ''}Ordered ${fmtDay(order.order_date)}${order.taken_by ? ' &nbsp;·&nbsp; Taken by ' + esc(order.taken_by) : ''} &nbsp;·&nbsp; ${esc(STATUS_LABELS[order.status])}
+    </div>
+    <div class="boxes">${boxes}</div>
+    ${handoff.where ? `<div class="where"><strong>${esc(handoff.label)} to:</strong> ${esc(handoff.where)}</div>` : ''}
+    ${order.notes ? `<div class="note-blk">${esc(order.notes)}</div>` : ''}
+    <table>
+      <thead><tr>
+        <th>PLU</th><th>Item</th><th>Qty</th><th>Unit</th><th>Picked</th><th>Notes</th>
+      </tr></thead>
+      <tbody>${body}</tbody>
+    </table>
+    <div class="sig"><span>Picked by</span><span>Checked by</span><span>Date</span></div>
+    <div class="foot">Cowboy Meat Company · 1109 Front St, Forsyth MT · (406) 346-7660</div>
+    <script>window.onload=function(){window.print()}<\/script>
+  </body></html>`
+
+  const w = window.open('', '_blank', 'width=900,height=760')
+  if (w) { w.document.write(html); w.document.close() }
+}
+
 function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOrder; onUpdated: (o: RetailOrder) => void; onDeleted: (id: string) => void; pluList: PluItem[] }) {
   const [advancing, setAdvancing] = useState(false)
   const [deleting, setDeleting]   = useState(false)
@@ -566,7 +673,7 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
             <div style={{ fontSize: '0.82rem', color: C.lightBrown }}>{order.customer_phone}</div>
           )}
           <div style={{ fontSize: '0.78rem', color: C.tan, marginTop: '0.25rem' }}>
-            Ordered {new Date(order.order_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+            Ordered {new Date(order.order_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
             {order.taken_by ? ` · Taken by ${order.taken_by}` : ''}
           </div>
         </div>
@@ -581,6 +688,13 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
               {advancing ? '…' : `→ Mark ${STATUS_LABELS[nextStatus]}`}
             </button>
           )}
+          <button
+            onClick={() => printOrder(order)}
+            title="Print a pick ticket for this order"
+            style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.35)', color: C.tan, borderRadius: 3, padding: '0.4rem 0.9rem', fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer' }}
+          >
+            🖨 Print Order
+          </button>
           <button
             onClick={deleteOrder}
             disabled={deleting}
@@ -829,7 +943,7 @@ function OrderListTab({ fulfilled, pluList }: { fulfilled: boolean; pluList: Plu
     setSelected(prev => prev?.id === id ? null : prev)
   }
 
-  const overdue = (o: RetailOrder) => new Date(o.due_date) < new Date() && o.status !== 'fulfilled'
+  const overdue = (o: RetailOrder) => o.due_date < isoDate() && o.status !== 'fulfilled'
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: '1.5rem', height: '100%' }}>
