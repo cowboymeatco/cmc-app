@@ -13,6 +13,7 @@
 // count are shown as three separate things. A number that isn't fully evidenced
 // never gets to look like one that is.
 import { useEffect, useState, useCallback } from 'react'
+import Link from 'next/link'
 import type { CureLoadSummary, RackLoad } from '@/lib/cureLoad'
 
 const C = {
@@ -217,6 +218,10 @@ export default function CureTab() {
         24 hams and 72 bacons to a load (Charlie, 2026-08-25). Shoulder bacon is
         counted against the bacon comb; change either number, or give another rack
         a size, under 🌡️ Cook Profiles on the Schedule tab.
+        <br />
+        Piece by piece — whose it is, days in cure, marking one done — is the
+        operational board on{' '}
+        <Link href="/processing" style={{ color: C.blue }}>Processing → In Cure</Link>.
         <button
           onClick={load}
           style={{
