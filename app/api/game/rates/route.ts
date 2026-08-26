@@ -1,6 +1,7 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import type { GameRate } from '@/lib/gameBilling'
 
 export const dynamic = 'force-dynamic'
@@ -21,6 +22,10 @@ export async function GET() {
 }
 
 // PATCH /api/game/rates — { key, rate?, cheese_rate?, label?, active?, note?, updated_by? }
+//
+// Writes go through the SERVICE ROLE. game_rates is readable by the public
+// hunter order form, so anon holds SELECT and nothing more — otherwise anybody
+// with the publishable key could rewrite our prices.
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
   const { key, rate, cheese_rate, label, active, note, updated_by } = body as {
@@ -48,7 +53,7 @@ export async function PATCH(req: NextRequest) {
   if (active !== undefined) updates.active = active
   if (note !== undefined)   updates.note = note
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('game_rates').update(updates).eq('key', key).select().single()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json(data as GameRate)
