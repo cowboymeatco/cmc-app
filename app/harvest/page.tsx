@@ -410,6 +410,25 @@ function PartATab({ date, appt }: { date: string; appt: HarvestAppointment | nul
   async function save(i: number) {
     const a = rows[i]
     if (!appt) return
+
+    // Part A fills the kill order in for you and writes it on save, so saving a
+    // row for a day that hasn't happened commits a number for an animal nobody
+    // has touched — and the worksheet for that day then prints it. That is how a
+    // September 3 beef ended up carrying kill order 1 on August 24, four seconds
+    // after the row above it (Charlie, 2026-08-26).
+    //
+    // Lining tomorrow up on purpose is legitimate, so this asks rather than
+    // blocks. It only has to stop the save nobody meant to make.
+    if (date > isoDate() && !confirm(
+      `${shortDate(date)} hasn't happened yet.
+
+` +
+      `Saving now records kill order ${a.harvestOrder} for this animal and marks Part A done. ` +
+      `The worksheet will show it as a plan, not a recorded order.
+
+Save anyway?`
+    )) return
+
     upd(i, { saving: true, error: '' })
 
     const knockTime  = a.knockTime || null
@@ -1340,6 +1359,19 @@ interface WSRow {
   // Pre-filled from this animal's harvest record (Part A/B) when one exists, so
   // anything already typed into the app shows on the worksheet instead of a blank.
   killOrder:  number | null
+  // Whether that record is a RECORD or only a PLAN.
+  //
+  // Part A hands you a suggested kill order the moment it loads and stamps it on
+  // save, so lining up tomorrow's appointments — or a stray save on one nine days
+  // out — writes a kill order for an animal nobody has touched. Printing that as
+  // a filled-in number turns the sheet the crew writes the real order on into one
+  // that already disagrees with the floor (Charlie, 2026-08-26; a Sept 3 animal
+  // was carrying kill order 1 on Aug 24).
+  //
+  // A number is only real once something from the floor exists alongside it: a
+  // knock time, a live weight, a carcass tag, or a hanging weight. Kill order and
+  // kill type on their own are a plan.
+  harvested:  boolean
   killType:   'USDA' | 'Custom' | null
   half1:      number | null
   half2:      number | null
@@ -1502,6 +1534,11 @@ function WorksheetTab({ date }: { date: string }) {
               slot: an.animal_index ?? i + 1,
               ear_tag: an.ear_tag || '', sex: an.sex || '', breed: an.breed || '', over_30_months: an.over_30_months,
               killOrder:  log?.harvest_order ?? null,
+              harvested:  log != null && (
+                !!log.knock_time || log.live_weight_lbs != null || !!log.carcass_tag ||
+                log.half_1_weight_lbs != null || log.half_2_weight_lbs != null ||
+                log.hot_carcass_weight_lbs != null
+              ),
               killType:   log?.kill_type ?? null,
               half1:      log?.half_1_weight_lbs ?? null,
               half2:      log?.half_2_weight_lbs ?? null,
@@ -1636,7 +1673,7 @@ function WorksheetTab({ date }: { date: string }) {
         <td class="id">${r.ear_tag ? esc(r.ear_tag) : '—'}${r.over_30_months ? ' <span class="otm">OTM</span>' : ''}</td>
         <td>${esc(r.sex)}</td>
         <td>${esc(r.breed)}</td>
-        <td class="ko">${r.killOrder != null ? `<span class="pre">${r.killOrder}</span>` : ''}</td>
+        <td class="ko">${r.harvested && r.killOrder != null ? `<span class="pre">${r.killOrder}</span>` : ''}</td>
         <td class="wt">${r.half1 != null ? `<span class="pre">${r.half1}</span>` : ''}</td>
         <td class="wt">${r.half2 != null ? `<span class="pre">${r.half2}</span>` : ''}</td>
         <td class="wt">${r.total != null ? `<span class="pre">${r.total}</span>` : ''}</td>
@@ -1949,6 +1986,7 @@ function WorksheetTab({ date }: { date: string }) {
 
       <div style={{ color: C.lightBrown, fontSize: '0.8rem' }}>
         Every animal checked in for this date, across all producers. The blank Kill Order / L&nbsp;Half / R&nbsp;Half / Total columns are for writing weights at the rail before logging in Part&nbsp;A/B.
+        A kill order that Part&nbsp;A has only <em>suggested</em> shows greyed below and prints as an empty box — the floor decides the real order.
       </div>
 
       {loading && <div style={{ color: C.lightBrown, textAlign: 'center', padding: '2rem' }}>Loading…</div>}
@@ -2032,7 +2070,14 @@ function FragmentGroup({ gi, group, startId, skipped, onToggle }: {
             <div style={{ color: C.lightBrown, fontSize: '0.62rem', fontWeight: 700, marginTop: 1 }}>{split ? '2 ×' : '1 ×'}</div>
           </td>
           <td style={{ padding: '0.5rem 0.75rem', color: C.tan, fontWeight: 800, fontFamily: 'monospace' }}>{r.carcassTag || String(startId + r.slot - 1).padStart(2, '0')}</td>
-          <td style={{ padding: '0.5rem 0.75rem', color: C.cream, fontWeight: 600 }}>{r.killOrder ?? blank}</td>
+          <td style={{ padding: '0.5rem 0.75rem', fontWeight: 600, color: r.harvested ? C.cream : C.lightBrown }}>
+            {r.killOrder == null ? blank : r.harvested ? r.killOrder : (
+              <span title="Suggested by Part A, not recorded at the rail — prints as an empty box" style={{ opacity: 0.75 }}>
+                {r.killOrder}
+                <span style={{ fontSize: '0.6rem', fontWeight: 700, letterSpacing: '0.06em', marginLeft: 4, border: `1px solid ${C.lightBrown}`, borderRadius: 2, padding: '0 3px' }}>PLAN</span>
+              </span>
+            )}
+          </td>
           {r.killType
             ? <td style={{ padding: '0.5rem 0.75rem' }}><KillTypeBadge killType={r.killType} /></td>
             : <td style={{ padding: '0.5rem 0.75rem', color: 'rgba(166,120,90,0.45)', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>☐ Custom &nbsp;☐ USDA</td>}
