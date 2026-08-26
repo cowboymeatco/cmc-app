@@ -520,6 +520,30 @@ export default function ScannerPage() {
   const [cureProduct, setCureProduct] = useState<string | null>(null)
   const [cureWeight,  setCureWeight]  = useState('')
   const [cureSaving,  setCureSaving]  = useState(false)
+  // Where the weight in the box came from, so the floor can see the difference
+  // between a number somebody scanned and a number somebody typed.
+  const [cureWeighSrc, setCureWeighSrc] = useState<'scale' | 'typed' | null>(null)
+  // The modal is open — read by doScan, which otherwise sends a Hobart label
+  // straight into the open box.
+  const cureModalRef = useRef<{ tagNumber: string; existing: CureTag | null } | null>(null)
+  useEffect(() => { cureModalRef.current = cureModal }, [cureModal])
+
+  // A weight label read while a seal is open belongs to that seal. The gun's
+  // digits land in whichever field has focus, so the same 13 digits have to be
+  // caught in the weight box itself as well as on the scan path.
+  function applyCureWeightInput(raw: string) {
+    const digits = raw.replace(/\D/g, '')
+    if (digits.length >= 13) {
+      const d = decodeBarcode(digits.slice(0, 13))
+      if (d) {
+        setCureWeight(d.weightLbs.toFixed(2))
+        setCureWeighSrc('scale')
+        return
+      }
+    }
+    setCureWeight(raw)
+    setCureWeighSrc(raw ? 'typed' : null)
+  }
 
   // ── Session management ─────────────────────────────────��──────────────────────
   const [sessions,         setSessions]         = useState<SessionWithStats[]>([])
@@ -849,6 +873,22 @@ export default function ScannerPage() {
 
   // ── Process a scan ────────────────────────────────────────────────────────────
   const doScan = useCallback(async (raw: string) => {
+    // A cure seal is open and waiting for its weight — a Hobart label scanned
+    // now is that piece on the scale, not a package going into a box.
+    if (cureModalRef.current) {
+      const d = decodeBarcode(raw)
+      if (d) {
+        setCureWeight(d.weightLbs.toFixed(2))
+        setCureWeighSrc('scale')
+        setLastKind('ok')
+        setLastItem(`⚖ ${d.weightLbs.toFixed(2)} lb on seal ${cureModalRef.current.tagNumber}`)
+      } else {
+        setLastKind('warn')
+        setLastItem('That label carries no weight — key the pounds in')
+      }
+      return
+    }
+
     const box = activeBoxRef.current
     if (!box || box.is_closed) return
 
@@ -1706,6 +1746,7 @@ export default function ScannerPage() {
   async function openCureModal(tagNumber: string) {
     setScan('')
     setCureWeight('')
+    setCureWeighSrc(null)
     setCureProduct(null)
     let existing: CureTag | null = null
     try {
@@ -1745,10 +1786,43 @@ export default function ScannerPage() {
         setTimeout(() => setFlash(null), 2500)
       }
       setCureModal(null)
+      setCureWeighSrc(null)
     } catch {
       setFlash('bad')
       setLastKind('bad')
       setLastItem('Cure tag save failed — rescan the seal')
+    } finally {
+      setCureSaving(false)
+      scanRef.current?.focus()
+    }
+  }
+
+  // A seal already hanging in the cooler can still be weighed. Nothing about
+  // the piece has changed — the weight just wasn't taken when it went in, and
+  // without a way to add it later every unweighed piece stays unweighed forever.
+  async function saveCureWeight(tag: CureTag) {
+    if (cureSaving || !cureWeight) return
+    const lbs = parseFloat(cureWeight)
+    if (!(lbs > 0)) return
+    setCureSaving(true)
+    try {
+      const res = await fetch('/api/cure-tags', {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ id: tag.id, weight_lbs: lbs }),
+      })
+      if (!res.ok) throw new Error()
+      setLastKind('ok')
+      setLastItem(`⚖ Tag ${tag.tag_number} · ${tag.product} — ${lbs.toFixed(2)} lb`)
+      setFlash('ok')
+      setTimeout(() => setFlash(null), 2500)
+      setCureModal(null)
+      setCureWeight('')
+      setCureWeighSrc(null)
+    } catch {
+      setFlash('bad')
+      setLastKind('bad')
+      setLastItem('Could not save the weight — rescan the seal')
     } finally {
       setCureSaving(false)
       scanRef.current?.focus()
@@ -3429,6 +3503,36 @@ export default function ScannerPage() {
                     This is <strong style={{ color: C.cream }}>{cureModal.existing.customer_name}</strong>&apos;s piece — you&apos;re in {customer}&apos;s session.
                   </div>
                 )}
+                {/* Still in cure with no weight on it — take it now rather than
+                    losing the piece from the pounds going into the house. */}
+                {cureModal.existing.status === 'curing' && cureModal.existing.weight_lbs == null && (
+                  <div style={{ marginBottom: '1rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.45rem' }}>
+                      <span style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                        No weight on this seal
+                      </span>
+                      {cureWeighSrc === 'scale' && (
+                        <span style={{ fontSize: '0.68rem', color: C.green, fontWeight: 700 }}>⚖ off the label</span>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <input
+                        type="text" inputMode="decimal"
+                        value={cureWeight}
+                        onChange={e => applyCureWeightInput(e.target.value)}
+                        placeholder="scan the scale label, or key it in"
+                        style={{ flex: 1, background: 'rgba(255,255,255,0.07)', border: `1px solid ${cureWeighSrc === 'scale' ? C.green : 'rgba(166,120,90,0.4)'}`, borderRadius: 4, padding: '0.55rem 0.7rem', color: C.cream, fontSize: '1.05rem', fontFamily: 'monospace', outline: 'none', boxSizing: 'border-box', minWidth: 0 }}
+                      />
+                      <button
+                        onClick={() => saveCureWeight(cureModal.existing!)}
+                        disabled={cureSaving || !(parseFloat(cureWeight) > 0)}
+                        style={{ background: parseFloat(cureWeight) > 0 ? C.tan : C.medBrown, color: C.dark, border: 'none', borderRadius: 4, padding: '0.55rem 0.9rem', fontSize: '0.85rem', fontWeight: 700, cursor: parseFloat(cureWeight) > 0 && !cureSaving ? 'pointer' : 'default', opacity: cureSaving ? 0.5 : parseFloat(cureWeight) > 0 ? 1 : 0.6 }}
+                      >
+                        Save lb
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {cureModal.existing.status === 'curing' && (
                   cureModal.existing.customer_name.trim().toLowerCase() === customer.trim().toLowerCase() ? (
                     <button
@@ -3486,15 +3590,23 @@ export default function ScannerPage() {
                 <div style={{ color: C.lightBrown, fontSize: '0.85rem', marginBottom: '1.25rem' }}>
                   Going to cure for <strong style={{ color: C.cream }}>{customer}</strong>
                 </div>
-                <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.65rem' }}>
-                  Weight (lbs) — optional
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.65rem' }}>
+                  <span style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                    Weight (lbs)
+                  </span>
+                  {cureWeighSrc === 'scale' && (
+                    <span style={{ fontSize: '0.68rem', color: C.green, fontWeight: 700 }}>⚖ off the label</span>
+                  )}
                 </div>
+                {/* Scan the piece's Hobart label straight into this box and the
+                    pounds come off the barcode — the weight nobody was typing
+                    in (Charlie, 2026-08-26). Typed entry still works. */}
                 <input
-                  type="number" step="0.01" min="0.01"
+                  type="text" inputMode="decimal"
                   value={cureWeight}
-                  onChange={e => setCureWeight(e.target.value)}
-                  placeholder="—"
-                  style={{ width: '100%', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(166,120,90,0.4)', borderRadius: 4, padding: '0.6rem 0.75rem', color: C.cream, fontSize: '1.2rem', fontFamily: 'monospace', outline: 'none', marginBottom: '1.25rem', boxSizing: 'border-box' }}
+                  onChange={e => applyCureWeightInput(e.target.value)}
+                  placeholder="scan the scale label, or key it in"
+                  style={{ width: '100%', background: 'rgba(255,255,255,0.07)', border: `1px solid ${cureWeighSrc === 'scale' ? C.green : 'rgba(166,120,90,0.4)'}`, borderRadius: 4, padding: '0.6rem 0.75rem', color: C.cream, fontSize: '1.2rem', fontFamily: 'monospace', outline: 'none', marginBottom: '1.25rem', boxSizing: 'border-box' }}
                 />
                 <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.65rem' }}>
                   What&apos;s the tag on?

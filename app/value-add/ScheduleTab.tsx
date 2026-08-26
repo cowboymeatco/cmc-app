@@ -675,7 +675,8 @@ function ProfilePanel({
 }: { profiles: CookProfile[]; settings: CookSettings; onChanged: () => void }) {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<string | null>(null)
-  const [draft, setDraft] = useState<{ setup: string; teardown: string; lbs: string }>({ setup: '', teardown: '', lbs: '' })
+  const [draft, setDraft] = useState<{ setup: string; teardown: string; lbs: string; units: string; unitLabel: string }>(
+    { setup: '', teardown: '', lbs: '', units: '', unitLabel: '' })
   const [busy, setBusy] = useState(false)
   const [observed, setObserved] = useState<Map<string, LoadObservation>>(new Map())
 
@@ -709,7 +710,9 @@ function ProfilePanel({
     setDraft({
       setup:    String(p.setup_minutes ?? 0),
       teardown: String(p.teardown_minutes ?? 0),
-      lbs:      p.lbs_per_batch != null ? String(p.lbs_per_batch) : '',
+      lbs:      p.lbs_per_batch   != null ? String(p.lbs_per_batch)   : '',
+      units:    p.units_per_batch != null ? String(p.units_per_batch) : '',
+      unitLabel: p.unit_label ?? '',
     })
   }
 
@@ -722,7 +725,9 @@ function ProfilePanel({
         id: p.id,
         setup_minutes:    parseInt(draft.setup, 10) || 0,
         teardown_minutes: parseInt(draft.teardown, 10) || 0,
-        lbs_per_batch:    draft.lbs ? parseFloat(draft.lbs) : null,
+        lbs_per_batch:    draft.lbs   ? parseFloat(draft.lbs)     : null,
+        units_per_batch:  draft.units ? parseInt(draft.units, 10) : null,
+        unit_label:       draft.unitLabel.trim() || null,
       }),
     })
     setBusy(false)
@@ -730,7 +735,9 @@ function ProfilePanel({
     onChanged()
   }
 
-  const needsInput = profiles.filter(p => !p.lbs_per_batch).length
+  // Either basis counts — a profile with 24 hams to a load knows its capacity
+  // even with no pounds figure behind it.
+  const needsInput = profiles.filter(p => !p.lbs_per_batch && !p.units_per_batch).length
 
   return (
     <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.2)', borderRadius: 4 }}>
@@ -783,6 +790,11 @@ function ProfilePanel({
                   <span style={{ fontSize: '0.7rem', color: C.lightBrown }}>
                     {p.n_observations} cooks
                   </span>
+                  {p.units_per_batch != null && (
+                    <Pill color={C.tan} title="Counted on the floor, not fitted from the logs">
+                      {p.units_per_batch} {p.unit_label ?? 'per load'}{p.unit_label ? '/load' : ''}
+                    </Pill>
+                  )}
                   {p.target_core_f != null && <Pill color={C.red}>{Math.round(Number(p.target_core_f))}°F core</Pill>}
                   {p.typical_start_hour != null && (
                     <span style={{ fontSize: '0.7rem', color: C.lightBrown }}>
@@ -823,12 +835,27 @@ function ProfilePanel({
                              placeholder="one load"
                              value={draft.lbs} onChange={e => setDraft(d => ({ ...d, lbs: e.target.value }))} />
                     </div>
+                    {/* The floor counts hams, not pounds of ham. Either basis can
+                        size a load; whichever needs more loads wins. */}
+                    <div>
+                      <label style={LABEL}>Pieces per load</label>
+                      <input type="number" min="0" step="1" style={{ ...INPUT, width: 120 }}
+                             placeholder="not counted"
+                             value={draft.units} onChange={e => setDraft(d => ({ ...d, units: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label style={LABEL}>Called</label>
+                      <input type="text" style={{ ...INPUT, width: 120 }}
+                             placeholder="hams"
+                             value={draft.unitLabel} onChange={e => setDraft(d => ({ ...d, unitLabel: e.target.value }))} />
+                    </div>
                     <button style={{ ...BTN(C.green), padding: '0.4rem 0.9rem', fontSize: '0.78rem' }}
                             onClick={() => save(p)} disabled={busy}>
                       {busy ? '…' : 'Save'}
                     </button>
                     <span style={{ fontSize: '0.7rem', color: C.lightBrown, maxWidth: 260 }}>
-                      A job heavier than one load is scheduled as back-to-back cooks.
+                      A job heavier — or with more pieces — than one load is scheduled as
+                      back-to-back cooks.
                     </span>
                   </div>
                 )}

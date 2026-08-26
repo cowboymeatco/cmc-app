@@ -32,6 +32,10 @@ export interface CookProfile {
   setup_minutes:      number
   teardown_minutes:   number
   lbs_per_batch:      number | null
+  // A second, countable basis for the same capacity. The floor counts hams, not
+  // pounds of ham: 24 hams or 72 bacons to a load (Charlie, 2026-08-25).
+  units_per_batch:    number | null
+  unit_label:         string | null
   ramp_f_per_hr:      number | null
   target_core_f:      number | null
   typical_start_hour: number | null
@@ -197,10 +201,23 @@ export interface Prediction {
   basis:        string
 }
 
-/** How many house loads a job needs. Unknown batch size = one load. */
-export function batchesFor(profile: CookProfile, lbs: number | null): number {
-  if (!lbs || !profile.lbs_per_batch || profile.lbs_per_batch <= 0) return 1
-  return Math.max(1, Math.ceil(lbs / profile.lbs_per_batch))
+/**
+ * How many house loads a job needs. Unknown batch size = one load.
+ *
+ * Capacity has two bases and they are not interchangeable: a rack holds 24 hams
+ * whatever those hams weigh. When both are known the tighter one wins — 30 hams
+ * is two loads even if they'd fit by weight.
+ */
+export function batchesFor(
+  profile: CookProfile,
+  lbs:     number | null,
+  pieces:  number | null = null,
+): number {
+  const byLbs = lbs && profile.lbs_per_batch && profile.lbs_per_batch > 0
+    ? Math.ceil(lbs / profile.lbs_per_batch) : 1
+  const byPiece = pieces && profile.units_per_batch && profile.units_per_batch > 0
+    ? Math.ceil(pieces / profile.units_per_batch) : 1
+  return Math.max(1, byLbs, byPiece)
 }
 
 /**
@@ -210,9 +227,10 @@ export function batchesFor(profile: CookProfile, lbs: number | null): number {
 export function predict(
   profile:  CookProfile,
   lbs:      number | null,
-  settings: CookSettings = DEFAULT_SETTINGS
+  settings: CookSettings = DEFAULT_SETTINGS,
+  pieces:   number | null = null,
 ): Prediction {
-  const batches = batchesFor(profile, lbs)
+  const batches = batchesFor(profile, lbs, pieces)
   const between = (batches - 1) * settings.changeover_minutes
 
   const scale = (m: number) => m * batches + between

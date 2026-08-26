@@ -30,6 +30,7 @@ const PROFILE_FIELDS = [
   'display_name', 'job_type', 'active',
   'p10_minutes', 'p50_minutes', 'p90_minutes',
   'setup_minutes', 'teardown_minutes', 'lbs_per_batch',
+  'units_per_batch', 'unit_label',
   'ramp_f_per_hr', 'target_core_f',
   'typical_start_hour', 'overnight_pct', 'notes',
 ] as const

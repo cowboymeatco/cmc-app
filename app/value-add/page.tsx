@@ -10,8 +10,9 @@ import {
 import { fmtDayClock } from '@/lib/cookPredict'
 import { WeightOutProposal } from '@/lib/boxWeight'
 import ScheduleTab from './ScheduleTab'
+import CureTab from './CureTab'
 
-type Tab = 'active' | 'schedule' | 'new' | 'history'
+type Tab = 'active' | 'schedule' | 'cure' | 'new' | 'history'
 
 // What /api/value-add/box-weight returns per job: the proposal plus which job
 // it belongs to and what the job already had recorded.
@@ -997,6 +998,7 @@ export default function ValueAddPage() {
   const tabs = [
     { id: 'active'   as Tab, label: '⚙️ Active Jobs' },
     { id: 'schedule' as Tab, label: '📅 Schedule' },
+    { id: 'cure'     as Tab, label: '🧂 In Cure' },
     { id: 'new'      as Tab, label: '+ New Job' },
     { id: 'history'  as Tab, label: '📜 History' },
   ]
@@ -1032,6 +1034,7 @@ export default function ValueAddPage() {
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1200px', width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
         {tab === 'active'   && <ActiveJobsTab key={newKey} />}
         {tab === 'schedule' && <ScheduleTab />}
+        {tab === 'cure'     && <CureTab key={newKey} />}
         {tab === 'new'      && <NewJobTab key={newKey} onSaved={() => { setNewKey(k => k + 1); setTab('active') }} orders={orders} cuttingInstructions={cuttingInstructions} pluList={pluList} />}
         {tab === 'history'  && <HistoryTab />}
       </main>
