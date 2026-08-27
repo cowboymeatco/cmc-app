@@ -93,19 +93,29 @@ export async function POST(req: NextRequest) {
 
     // Appointments for split/payer info + cut dates for service_date
     const apptIds = [...new Set(rows.map(r => r.appointment_id).filter(Boolean))] as string[]
-    const [{ data: appts }, { data: cutDates }] = await Promise.all([
+    const logIds = rows.map(r => r.id)
+    // The day the carcass was actually broken, which is the service date on a
+    // cut & wrap line. It comes off the pack scan: cut_schedule_items is the
+    // PLAN, and its `appointment_id` holds a harvest_log id rather than the
+    // appointment id this route was matching it against — so before
+    // 2026-08-27 that lookup never hit and every cut & wrap charge was dated
+    // "today", whatever day the detector happened to run.
+    const [{ data: appts }, { data: packs }] = await Promise.all([
       apptIds.length
         ? supabase.from('harvest_appointments').select('id, customers').in('id', apptIds)
         : Promise.resolve({ data: [] }),
-      apptIds.length
-        ? supabase.from('cut_schedule_items').select('appointment_id, schedule_date').in('appointment_id', apptIds)
+      logIds.length
+        ? supabase.from('processing_inputs').select('linked_harvest_id, pack_date').in('linked_harvest_id', logIds).not('pack_date', 'is', null)
         : Promise.resolve({ data: [] }),
     ])
     const apptById = new Map((appts ?? []).map(a => [a.id, (a.customers ?? []) as AppointmentCustomer[]]))
-    const cutDateByAppt = new Map<string, string>()
-    for (const c of cutDates ?? []) {
-      const prev = cutDateByAppt.get(c.appointment_id)
-      if (!prev || c.schedule_date > prev) cutDateByAppt.set(c.appointment_id, c.schedule_date)
+    // First scan wins: a carcass packed over two days was cut on the first.
+    const cutDateByLogId = new Map<string, string>()
+    for (const p of packs ?? []) {
+      const id = p.linked_harvest_id as string
+      const d = p.pack_date as string
+      const prev = cutDateByLogId.get(id)
+      if (!prev || d < prev) cutDateByLogId.set(id, d)
     }
 
     interface EventRow {
@@ -160,7 +170,7 @@ export async function POST(req: NextRequest) {
         // fully processed lamb: the $180 all-in fee replaces the $50
         // kill-only fee, so retire any still-pending kill fee for it
         if (h.species === 'Lamb') supersededLambIds.push(h.id)
-        const cutDate = (h.appointment_id && cutDateByAppt.get(h.appointment_id)) || today
+        const cutDate = cutDateByLogId.get(h.id) || today
         for (const p of shares) {
           // beef quarters bill at the quarters rate; a payer with mixed
           // portions (or the producer remainder) uses the whole/half rate

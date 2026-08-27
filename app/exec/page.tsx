@@ -174,6 +174,66 @@ interface SmokehouseData {
   feedStale: boolean
 }
 
+// Revenue recognition — see /api/exec/revenue and lib/revenueRecognition.
+type EnterpriseKey = 'harvest' | 'processing'
+interface RevenueDay {
+  date: string
+  earned: Record<EnterpriseKey, number>
+  scheduled: Record<EnterpriseKey, number>
+  total: number
+  headHarvested: number
+  headCut: number
+  headOwn: number
+}
+interface EnterpriseTotal {
+  key: EnterpriseKey; label: string; blurb: string
+  earned: number; scheduled: number; total: number
+  sharePct: number; head: number; perHead: number
+}
+interface RevSpecies {
+  species: string; killHead: number; cutHead: number
+  harvest: number; processing: number
+  total: number; avgCarcassLbs: number | null; perHead: number
+}
+interface RevenueData {
+  start: string; end: string; today: string
+  days: RevenueDay[]
+  enterprises: EnterpriseTotal[]
+  species: RevSpecies[]
+  totals: { earned: number; scheduled: number; total: number }
+  coverage: {
+    carcasses: number; weighed: number; weightEstimated: number
+    cutDayScanned: number; cutDayPlanned: number; cutDayProjected: number
+    bookedHead: number; ownHead: number; unpriced: string[]
+  }
+  speciesAvgLbs: Record<string, number>
+}
+
+// A warm/cool pair rather than the green/orange used elsewhere on this page:
+// both enterprises are income, and green-vs-orange would read as good-vs-bad.
+const ENTERPRISE_COLOR: Record<EnterpriseKey, string> = {
+  harvest: '#E8883A',
+  processing: '#5B8DBE',
+}
+
+const REV_WINDOWS = [
+  { key: 'around', label: '30 days back · 30 ahead', back: 30, fwd: 30 },
+  { key: 'back90', label: 'Last 90 days', back: 90, fwd: 0 },
+  { key: 'fwd90', label: 'Next 90 days', back: 0, fwd: 90 },
+  { key: 'fwd365', label: 'The year ahead', back: 0, fwd: 365 },
+] as const
+type RevWindowKey = (typeof REV_WINDOWS)[number]['key']
+
+function revenueRange(key: RevWindowKey): { start: string; end: string } {
+  const w = REV_WINDOWS.find(r => r.key === key) ?? REV_WINDOWS[0]
+  const shift = (days: number) => {
+    const d = new Date()
+    d.setDate(d.getDate() + days)
+    return isoDate(d)
+  }
+  return { start: shift(-w.back), end: shift(w.fwd) }
+}
+
 // ── Shared bits ───────────────────────────────────────────────────────────────
 function StatTile({ label, value, unit, sub, hero, accent }: {
   label: string; value: string; unit?: string; sub?: string; hero?: boolean; accent?: string
@@ -256,6 +316,125 @@ function SmokehouseBars({ series, weekHours }: { series: SmokehouseWeek[]; weekH
         {series.map((w, i) => (
           <div key={w.week} style={{ flex: 1, textAlign: 'center', fontSize: '0.6rem', color: C.lightBrown }}>
             {i % 2 === 0 ? label(w.week) : ''}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Revenue recognized per day, by enterprise ─────────────────────────────────
+// Solid is work that's done, faded is work that's on the schedule. Stacked so
+// the height of a bar is the day's whole service revenue and the split inside
+// it is which floor earned it.
+//
+// Past about a hundred days the bars are thinner than the gaps between them,
+// so a long window rolls up into weeks. A rolled-up bar is still one bar per
+// period — the shape stays comparable, only the grain changes.
+function RevenueBars({ data }: { data: RevenueData }) {
+  const weekly = data.days.length > 100
+  const buckets = useMemo(() => {
+    if (!weekly) return data.days.map(d => ({ ...d, label: d.date, span: 1 }))
+    const out: (RevenueDay & { label: string; span: number })[] = []
+    for (const d of data.days) {
+      // Monday-start weeks, so a bar is one working week of the plant.
+      const dow = new Date(d.date + 'T12:00:00').getDay()
+      const monday = new Date(d.date + 'T12:00:00')
+      monday.setDate(monday.getDate() - ((dow + 6) % 7))
+      const key = isoDate(monday)
+      const last = out[out.length - 1]
+      if (last && last.label === key) {
+        last.earned.harvest += d.earned.harvest
+        last.earned.processing += d.earned.processing
+        last.scheduled.harvest += d.scheduled.harvest
+        last.scheduled.processing += d.scheduled.processing
+        last.total += d.total
+        last.headHarvested += d.headHarvested
+        last.headCut += d.headCut
+        last.headOwn += d.headOwn
+        last.span += 1
+      } else {
+        out.push({
+          ...d, label: key, span: 1,
+          earned: { ...d.earned }, scheduled: { ...d.scheduled },
+        })
+      }
+    }
+    return out
+  }, [data.days, weekly])
+
+  const peak = Math.max(...buckets.map(b => b.total), 1)
+  const dayLabel = (iso: string) =>
+    new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' })
+  // Roughly a dozen ticks, whatever the window length.
+  const every = Math.max(1, Math.round(buckets.length / 12))
+
+  const segments: { key: EnterpriseKey; done: boolean }[] = [
+    { key: 'harvest', done: true }, { key: 'processing', done: true },
+    { key: 'harvest', done: false }, { key: 'processing', done: false },
+  ]
+
+  return (
+    <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '1rem 1.25rem' }}>
+      <div style={{ display: 'flex', gap: '1.25rem', flexWrap: 'wrap', fontSize: '0.72rem', color: C.tan, marginBottom: '0.75rem' }}>
+        <span><span style={{ display: 'inline-block', width: 11, height: 11, background: ENTERPRISE_COLOR.harvest, verticalAlign: 'middle', marginRight: 6, borderRadius: 2 }} />Harvest</span>
+        <span><span style={{ display: 'inline-block', width: 11, height: 11, background: ENTERPRISE_COLOR.processing, verticalAlign: 'middle', marginRight: 6, borderRadius: 2 }} />Processing</span>
+        <span style={{ color: C.lightBrown }}>
+          <span style={{ display: 'inline-block', width: 11, height: 11, background: C.lightBrown, opacity: 0.38, verticalAlign: 'middle', marginRight: 6, borderRadius: 2 }} />
+          faded = still on the schedule
+        </span>
+        <span style={{ marginLeft: 'auto', color: C.lightBrown }}>
+          {weekly ? 'one bar per week' : 'one bar per day'} · tallest {usd(peak)}
+        </span>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: buckets.length > 70 ? 1 : 2, height: 150 }}>
+        {buckets.map(b => {
+          const future = b.label > data.today
+          const detail = [
+            b.earned.harvest > 0 ? `harvest earned ${usd(b.earned.harvest)}` : '',
+            b.earned.processing > 0 ? `processing earned ${usd(b.earned.processing)}` : '',
+            b.scheduled.harvest > 0 ? `harvest scheduled ${usd(b.scheduled.harvest)}` : '',
+            b.scheduled.processing > 0 ? `processing scheduled ${usd(b.scheduled.processing)}` : '',
+            `${b.headHarvested} killed · ${b.headCut} cut`,
+            b.headOwn > 0 ? `${b.headOwn} own animals (no service revenue)` : '',
+          ].filter(Boolean).join(' · ')
+          return (
+            <div
+              key={b.label}
+              title={`${weekly ? 'Week of ' : ''}${dayLabel(b.label)} — ${usd(b.total)}${detail ? ` · ${detail}` : ' · nothing on the floor'}`}
+              style={{
+                flex: 1, height: '100%', display: 'flex', flexDirection: 'column-reverse',
+                // A faint ground under the days still ahead, so the line
+                // between done and booked is visible without a legend.
+                background: future ? 'rgba(166,120,90,0.07)' : 'transparent',
+                borderBottom: `1px solid ${GRID}`,
+              }}
+            >
+              {segments.map(s => {
+                const v = s.done ? b.earned[s.key] : b.scheduled[s.key]
+                if (v <= 0) return null
+                return (
+                  <div
+                    key={`${s.key}-${s.done}`}
+                    style={{
+                      height: `${(v / peak) * 100}%`,
+                      background: ENTERPRISE_COLOR[s.key],
+                      opacity: s.done ? 1 : 0.38,
+                      minHeight: 1,
+                    }}
+                  />
+                )
+              })}
+            </div>
+          )
+        })}
+      </div>
+
+      <div style={{ display: 'flex', gap: buckets.length > 70 ? 1 : 2, marginTop: 5 }}>
+        {buckets.map((b, i) => (
+          <div key={b.label} style={{ flex: 1, textAlign: 'center', fontSize: '0.6rem', color: C.lightBrown, whiteSpace: 'nowrap' }}>
+            {i % every === 0 ? dayLabel(b.label) : ''}
           </div>
         ))}
       </div>
@@ -529,9 +708,11 @@ export default function ExecPage() {
   const [labor, setLabor] = useState<LaborWeek[] | null>(null)
   const [turnover, setTurnover] = useState<TurnoverData | null>(null)
   const [smoke, setSmoke] = useState<SmokehouseData | null>(null)
+  const [revenue, setRevenue] = useState<RevenueData | null>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
 
   const [period, setPeriod] = useState<PeriodKey>('ttm')
+  const [revWindow, setRevWindow] = useState<RevWindowKey>('around')
 
   const grab = <T,>(url: string, set: (v: T) => void, key: string) =>
     fetch(url).then(r => r.json()).then(d => {
@@ -547,8 +728,14 @@ export default function ExecPage() {
     return grab<PnlData>(`/api/exec/pnl?start=${start}&end=${end}`, setPnl, 'pnl')
   }
 
+  const loadRevenue = (w: RevWindowKey) => {
+    const { start, end } = revenueRange(w)
+    return grab<RevenueData>(`/api/exec/revenue?start=${start}&end=${end}`, setRevenue, 'revenue')
+  }
+
   const loadAll = () => {
     loadPnl(period)
+    loadRevenue(revWindow)
     grab<OverviewData>('/api/exec/overview', setOverview, 'overview')
     grab<ReceivablesData>('/api/exec/receivables', setReceivables, 'receivables')
     grab<WarData>('/api/exec/war', setWar, 'war')
@@ -561,6 +748,12 @@ export default function ExecPage() {
     setPeriod(p)
     setPnl(null)
     loadPnl(p)
+  }
+
+  const changeRevWindow = (w: RevWindowKey) => {
+    setRevWindow(w)
+    setRevenue(null)
+    loadRevenue(w)
   }
 
   const moveBucket = async (account: string, bucket: 'fixed' | 'variable' | null) => {
@@ -595,7 +788,7 @@ export default function ExecPage() {
 
   const logout = async () => {
     await fetch('/api/exec/login', { method: 'DELETE' })
-    setAuthed(false); setPnl(null); setOverview(null); setWar(null); setLabor(null); setErrors({})
+    setAuthed(false); setPnl(null); setOverview(null); setWar(null); setLabor(null); setRevenue(null); setErrors({})
   }
 
   const latestLabor = labor?.[0] ?? null
@@ -778,6 +971,103 @@ export default function ExecPage() {
               </div>
               <WarTile label="Smokehouse cooks" day={war.cooks_d} week={war.cooks_w} unit="loads" />
             </div>
+          )}
+
+          {/* Charlie, 2026-08-27: "Revenue Recognition by the day fed from the
+              schedule so we can get some granular data as to how harvest is
+              performing against other enterprises." The P&L can't answer that
+              — it dates a job to its invoice, which at a custom plant is
+              pickup day, weeks after the work and lumped with everything else
+              on the ticket. This dates each service to the day it's performed
+              and splits it by floor. */}
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <SectionLabel>Revenue recognition — the day the work happens</SectionLabel>
+            <select
+              value={revWindow}
+              onChange={e => changeRevWindow(e.target.value as RevWindowKey)}
+              style={{
+                background: C.dark, color: C.cream, border: '1px solid rgba(166,120,90,0.4)',
+                borderRadius: 4, fontSize: '0.8rem', padding: '0.35rem 0.6rem',
+              }}
+            >
+              {REV_WINDOWS.map(w => <option key={w.key} value={w.key}>{w.label}</option>)}
+            </select>
+          </div>
+          {errors.revenue ? <ErrorBox msg={errors.revenue} /> : !revenue ? (
+            <div style={{ color: C.lightBrown, fontSize: '0.85rem' }}>Reading the schedule…</div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+                <StatTile label="Earned" value={usd(revenue.totals.earned)} hero
+                  sub="work already done in this window" />
+                <StatTile label="On the schedule" value={usd(revenue.totals.scheduled)}
+                  sub="booked, not yet worked" />
+                {revenue.enterprises.map(e => (
+                  <StatTile key={e.key} label={e.label} value={usd(e.total)} accent={ENTERPRISE_COLOR[e.key]}
+                    sub={`${e.sharePct}% of the window · ${usd(e.perHead)}/head`} />
+                ))}
+              </div>
+
+              <RevenueBars data={revenue} />
+
+              {revenue.species.length > 0 && (
+                <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '0.75rem 1.25rem', marginTop: '1rem', overflowX: 'auto' }}>
+                  <div style={{ fontSize: '0.68rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '0.5rem' }}>
+                    By species — what an animal is worth on the way through
+                  </div>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', color: C.tan }}>
+                    <thead>
+                      <tr style={{ color: C.lightBrown, textTransform: 'uppercase', fontSize: '0.65rem', letterSpacing: '0.08em' }}>
+                        <th style={{ textAlign: 'left', padding: '0.35rem 0.5rem' }}>Species</th>
+                        <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Avg carcass</th>
+                        <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Killed</th>
+                        <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Harvest</th>
+                        <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Cut</th>
+                        <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Processing</th>
+                        <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Per head</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {revenue.species.map(s => (
+                        <tr key={s.species} style={{ borderTop: '1px solid rgba(166,120,90,0.12)' }}>
+                          <td style={{ padding: '0.35rem 0.5rem', color: C.cream }}>{s.species}</td>
+                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>{s.avgCarcassLbs ? `${fmt(s.avgCarcassLbs)} lb` : '—'}</td>
+                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>{s.killHead}</td>
+                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', color: ENTERPRISE_COLOR.harvest }}>{usd(s.harvest)}</td>
+                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>{s.cutHead}</td>
+                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', color: ENTERPRISE_COLOR.processing }}>{usd(s.processing)}</td>
+                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', color: C.cream, fontWeight: 600 }}
+                            title="One animal's kill fee plus one animal's cut &amp; wrap — not the window total over head, since an animal killed before the window is still cut inside it">
+                            {usd(s.perHead)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Where each number came from. A dashboard that quietly mixes a
+                  weighed carcass with a projected one is worse than no
+                  dashboard — this says which is which. */}
+              <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.75rem', lineHeight: 1.6 }}>
+                Kill fees land on kill day, cut &amp; wrap on the day the carcass is broken — the pack scan where there is one,
+                otherwise the day the crew has it down for, otherwise the species&apos; typical hang. Rates are the QuickBooks
+                service items, so these are the same dollars the billing detector would raise.
+                {' '}Of {revenue.coverage.carcasses} carcasses in view, {revenue.coverage.weighed} are priced off a real carcass weight
+                {revenue.coverage.weightEstimated > 0 && ` and ${revenue.coverage.weightEstimated} off the species average`};
+                {' '}{revenue.coverage.cutDayScanned} have a scanned cut day, {revenue.coverage.cutDayPlanned} a planned one
+                and {revenue.coverage.cutDayProjected} a projected one.
+                {revenue.coverage.bookedHead > 0 && ` ${revenue.coverage.bookedHead} head are booked but not yet killed, priced at the species average.`}
+                {revenue.coverage.ownHead > 0 && ` ${revenue.coverage.ownHead} of our own animals are counted as head only — that money shows up in retail, not here.`}
+                {' '}Lamb and goat are billed one flat all-in fee at cut time, so their whole ticket sits under processing —
+                splitting it across the two floors would be a guess.
+                {' '}Retail, value add and wild game aren&apos;t in this picture yet: none of them is driven off the harvest schedule.
+                {revenue.coverage.unpriced.length > 0 && (
+                  <span style={{ color: WARN_COLOR }}> Unpriced: {revenue.coverage.unpriced.join('; ')}.</span>
+                )}
+              </div>
+            </>
           )}
 
           {/* The WAR tile above counts cooks; a count can't tell eight short

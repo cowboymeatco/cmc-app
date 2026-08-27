@@ -43,7 +43,13 @@ const round2 = (n: number) => Math.round(n * 100) / 100
 
 // Producers whose animals are never invoiced (own animals — opportunity
 // cost, not a receivable). Compared on normalized name.
-export const EXCLUDED_PRODUCERS = ['CMC']
+//
+// 'CMC' was the only entry until 2026-08-27, and nothing in harvest_log has
+// ever been recorded under it: the harvest screen writes the producer's full
+// account name, so our own animals come through as "Cowboy Meat Company" —
+// 49 head in the last four months, every one of them a charge waiting to be
+// raised against ourselves. Both spellings stay listed.
+export const EXCLUDED_PRODUCERS = ['CMC', 'COWBOY MEAT COMPANY', 'COWBOY MEAT CO']
 export const isExcludedProducer = (name: string) =>
   EXCLUDED_PRODUCERS.includes(name.toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim())
 
