@@ -3,9 +3,23 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { HarvestAppointment, BoxReceivingLog } from '@/lib/types'
+import GameIntakeForm from '@/app/game/IntakeTab'
 import { isoDate, isoDateTime, addDaysISO, mondayOfISO } from '@/lib/dates'
 
-type Tab = 'animal' | 'box'
+type Tab = 'animal' | 'box' | 'game'
+
+// ── Why wild game is a tab here and not a second intake form ──────────────
+// Three different things arrive at this building and they share almost no
+// fields: a live animal against a booked appointment (ear tag, health cert,
+// brand inspection), a vendor's box product we are buying (invoice, lot, temp),
+// and a hunter's cooler of boned-out trim that is not ours and can never be
+// sold. Three tables, three records — that part is not redundant.
+//
+// What WOULD go wrong is having two doors for "something showed up". So this
+// renders the SAME component the Wild Game module uses, posting to the same
+// /api/game endpoint and the same table. There is one game intake form in this
+// codebase; it just hangs on two walls. Editing it in app/game/IntakeTab.tsx
+// changes both.
 
 const C = {
   dark:       '#1A0A04',
@@ -1106,6 +1120,35 @@ function BoxTab() {
 // ══════════════════════════════════════════════════════════════════════════════
 // PAGE
 // ══════════════════════════════════════════════════════════════════════════════
+// Wild game intake — the same form the Wild Game module uses, with a line
+// pointing at where the animal goes next, because taking it in is only the
+// first act: the order, the board and the ticket all live in /game.
+function GameTab() {
+  return (
+    <div>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem',
+        background: 'rgba(139,111,71,0.12)', border: '1px solid rgba(166,120,90,0.3)',
+        borderRadius: 4, padding: '0.75rem 1rem', marginBottom: '1.25rem', flexWrap: 'wrap',
+      }}>
+        <div style={{ fontSize: '0.78rem', color: C.tan, lineHeight: 1.5 }}>
+          A hunter&rsquo;s own meat — <strong>not for sale</strong>, never commingled with inspected
+          product. Taking it in here issues the claim tag; the board, weigh-out and ticket live in
+          the Wild Game module.
+        </div>
+        <Link href="/game" style={{
+          textDecoration: 'none', color: C.cream, fontSize: '0.8rem', fontWeight: 600,
+          background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(166,120,90,0.35)',
+          borderRadius: 3, padding: '0.45rem 0.9rem', whiteSpace: 'nowrap',
+        }}>
+          Wild Game board →
+        </Link>
+      </div>
+      <GameIntakeForm onSaved={() => { /* the form shows the tag and prints it */ }} />
+    </div>
+  )
+}
+
 export default function ReceivingPage() {
   const [tab, setTab] = useState<Tab>('animal')
 
@@ -1121,21 +1164,21 @@ export default function ReceivingPage() {
         </div>
 
         <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden' }}>
-          {(['animal', 'box'] as Tab[]).map(t => (
+          {(['animal', 'box', 'game'] as Tab[]).map(t => (
             <button key={t} onClick={() => setTab(t)} style={{
               padding: '0.45rem 1.25rem', border: 'none', cursor: 'pointer', fontSize: '0.83rem', fontWeight: 600,
               background: tab === t ? C.medBrown : 'transparent',
               color: tab === t ? C.cream : C.lightBrown,
               letterSpacing: '0.05em', textTransform: 'uppercase', transition: 'background 0.15s',
             }}>
-              {t === 'animal' ? '🐄 Live Animal' : '📦 Box Product'}
+              {t === 'animal' ? '🐄 Live Animal' : t === 'box' ? '📦 Box Product' : '🦌 Wild Game'}
             </button>
           ))}
         </div>
       </header>
 
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1300px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
-        {tab === 'animal' ? <AnimalTab /> : <BoxTab />}
+        {tab === 'animal' ? <AnimalTab /> : tab === 'box' ? <BoxTab /> : <GameTab />}
       </main>
 
       <footer style={{ background: 'var(--dark)', borderTop: '1px solid rgba(166,120,90,0.2)', padding: '0.5rem 2rem', textAlign: 'center', fontSize: '0.72rem', color: C.lightBrown, flexShrink: 0 }}>

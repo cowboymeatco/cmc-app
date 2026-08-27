@@ -364,3 +364,137 @@ export interface DeliveryScan {
   // Processing sessions that rode along, so a run can cover several customers.
   session_refs: { customer_name: string; session_date: string }[]
 }
+
+// ── Wild Game ─────────────────────────────────────────────────────────────────
+// The hunter side of the plant. Game is not amenable — never inspected, never
+// sellable, never commingled — so it lives in its own tables rather than as a
+// species on harvest_appointments. See scripts/2026-08-24_wild_game.sql.
+
+export type GameSpecies =
+  | 'Deer' | 'Elk' | 'Antelope' | 'Buffalo' | 'Moose' | 'Bear' | 'Sheep' | 'Goat' | 'Other'
+
+// The same stations as the rest of the plant — Receiving, Processing, Value
+// Add, Freezer — so game is not a second vocabulary for one species.
+export type GameStatus =
+  | 'receiving'  // tagged in, nobody has touched it yet
+  | 'processing' // on the table: grinding, slicing, packaging
+  | 'value_add'  // in or waiting on the smokehouse
+  | 'freezer'    // done and waiting for the hunter. Whether they have been
+                 // TOLD is notified_at, not a status of its own.
+  | 'picked_up'
+  | 'abandoned'  // the ones nobody ever comes back for
+
+export type GameCondition =
+  'Whole - Hide On' | 'Whole - Skinned' | 'Quartered' | 'Boned Out' | 'Other'
+
+export interface GameIntake {
+  id:               string
+  created_at:       string
+  updated_at:       string
+  tag_number:       string   // WG-26-0014 — the claim number on the animal and the hunter's copy
+  season:           string
+  hunter_name:      string
+  hunter_phone:     string
+  hunter_email:     string
+  customer_id:      string | null
+  qbo_customer_id:  string | null
+  species:          GameSpecies
+  sex:              string
+  license_tag_no:   string   // Montana tag — legally travels with the carcass
+  hunting_district: string
+  harvest_date:     string | null
+  condition:        GameCondition
+  received_at:      string
+  received_by:      string
+  weight_in_lbs:    number | null
+  // Weighed apart, because roasts and trim do not substitute: steaks and jerky
+  // can only come off whole muscle, everything else off the grind.
+  roast_lbs:        number | null
+  trim_lbs:         number | null
+  cape_requested:   boolean
+  antlers_returned: boolean
+  hide_returned:    boolean
+  // Hours against the $60/hr cleaning fee on the slip. cleaning_fee is the
+  // legacy boolean, kept in step by the API — hours are what bills.
+  cleaning_hours:   number | null
+  cleaning_fee:     boolean
+  // Slip header fields: what the products are made from, and how it goes home.
+  base_material:    string
+  finished_product: '' | 'Fresh' | 'Frozen'
+  boxes_out:        number | null
+  storage_location: string
+  status:           GameStatus
+  cut_sheet:        Record<string, unknown>
+  ready_at:         string | null
+  notified_at:      string | null
+  picked_up_at:     string | null
+  picked_up_by:     string
+  notes:            string
+  // Attached by GET /api/game (list) — enough to render a board row without
+  // a second round trip per animal.
+  output_lbs?:      number
+  charge_total?:    number
+}
+
+export interface GameOutput {
+  id:            string
+  created_at:    string
+  intake_id:     string
+  category:      string   // key into game_rates
+  flavor:        string
+  // Cheese is its own field, exactly as the slip asks it — never inferred from
+  // the product name, because "Ghost Pepper" is a cheese and reads like a chilli.
+  cheese:        boolean
+  cheese_type:   '' | 'CH' | 'PJ' | 'MZ' | 'GP'
+  product_name:  string   // rendered from flavour + category + cheese
+  plu:           string | null
+  weight_lbs:    number
+  rate:          number
+  qbo_item_id:   string
+  qbo_item_name: string
+  rate_override: boolean
+  // The slip's "# Fat Trim" column — fat goes in per batch, so it lives on the line.
+  fat_trim_lbs:  number | null
+  fat_trim_kind: '' | 'add_beef_fat' | 'add_pork_fat' | 'add_beef_trim' | 'add_pork_trim'
+  notes:         string
+}
+
+export interface GameAddition {
+  id:            string
+  created_at:    string
+  intake_id:     string
+  kind:          'add_beef_fat' | 'add_pork_fat' | 'add_beef_trim' | 'add_pork_trim'
+  weight_lbs:    number
+  rate:          number
+  qbo_item_id:   string
+  qbo_item_name: string
+}
+
+export interface GameEvent {
+  id:         string
+  created_at: string
+  intake_id:  string
+  event:      string   // 'status' | 'note' | 'notified' | 'weighed'
+  detail:     string
+  actor:      string
+}
+
+// Claim tags print as WG-<yy>-<nnnn>. Nothing else in the plant scans that
+// shape — Hobart barcodes are 13 digits starting '2', cure seals are 7 digits
+// starting '0', carcass tags carry a Julian date — so the shape alone routes a
+// scan to the game board.
+export const isGameTagNumber = (code: string) => /^WG-\d{2}-\d{4}$/i.test(code.trim())
+
+/**
+ * The hunting season an animal belongs to.
+ *
+ * Montana's seasons run autumn into the back end of the calendar year, so the
+ * season is just the year — except for the January cleanup, where a cow elk
+ * shot on 2 January belongs to the season that opened the previous September.
+ * Anything in Jan–Mar rolls back a year rather than opening a season nobody
+ * has hunted yet.
+ */
+export function seasonFor(iso: string): string {
+  const [y, m] = iso.split('-').map(Number)
+  return String(m <= 3 ? y - 1 : y)
+}
