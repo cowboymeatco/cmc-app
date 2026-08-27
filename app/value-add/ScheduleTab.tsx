@@ -13,6 +13,7 @@ import {
   planHouse, fmtDuration, fmtClock, fmtDayClock,
 } from '@/lib/cookPredict'
 import { MIN_JOBS_FOR_SUGGESTION } from '@/lib/loadLearning'
+import SmokehouseBookPanel from './SmokehouseBookPanel'
 
 const C = {
   dark:       '#1A0A04',
@@ -605,6 +606,9 @@ export default function ScheduleTab() {
           </div>
         </div>
       )}
+
+      {/* What the house is committed to, ahead of the queue it's laid into. */}
+      <SmokehouseBookPanel />
 
       <ProfilePanel profiles={profiles} settings={settings} onChanged={load} />
     </div>

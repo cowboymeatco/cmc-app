@@ -13,6 +13,10 @@ export interface ValueAddItem {
   category: string   // Bacon | Ham | Smoked | Sausage | Smokehouse
   detail?:  string   // flavor / lbs / cheese, when the sheet carries it
   qty?:     number   // how many of this exact line (set by extractValueAdd)
+  // Pounds ordered, for the smokehouse block where the sheet asks for a weight
+  // rather than a count. The same number that's inside `detail`, kept as a
+  // number so a schedule can add it up (2026-08-27).
+  lbs?:     number
 }
 
 type Json = Record<string, unknown>
@@ -60,7 +64,11 @@ function smokeItems(raw: unknown, product: string): ValueAddItem[] {
       it.lbs ? `${it.lbs} lb` : '',
       str(it.cheese) ? `+${humanize(str(it.cheese))}` : '',
     ].filter(Boolean).join(' · ')
-    return { product, category: 'Smokehouse', detail: detail || undefined }
+    const lbs = Number(it.lbs)
+    return {
+      product, category: 'Smokehouse', detail: detail || undefined,
+      lbs: Number.isFinite(lbs) && lbs > 0 ? lbs : undefined,
+    }
   })
 }
 
@@ -81,7 +89,11 @@ function sharedValueAdd(d: Json): ValueAddItem[] {
   const hd = asObj(sh.hotDogs)
   if (Object.keys(hd).length) {
     const detail = [hd.lbs ? `${hd.lbs} lb` : '', str(hd.cheese) ? `+${humanize(str(hd.cheese))}` : ''].filter(Boolean).join(' · ')
-    out.push({ product: 'Hot Dogs', category: 'Smokehouse', detail: detail || undefined })
+    const hdLbs = Number(hd.lbs)
+    out.push({
+      product: 'Hot Dogs', category: 'Smokehouse', detail: detail || undefined,
+      lbs: Number.isFinite(hdLbs) && hdLbs > 0 ? hdLbs : undefined,
+    })
   }
   return out
 }
@@ -230,8 +242,14 @@ export function extractValueAdd(species: string | null | undefined, data: unknow
     const k   = `${it.product}__${it.detail ?? ''}`
     const add = it.qty ?? 1
     const ex  = byKey.get(k)
-    if (ex) ex.qty = (ex.qty ?? 1) + add
-    else byKey.set(k, { ...it, qty: add })
+    if (ex) {
+      ex.qty = (ex.qty ?? 1) + add
+      // Identical lines carry identical pounds, so the pounds multiply with the
+      // count — two 25 lb country brot lines are 50 lb of country brots.
+      if (it.lbs != null) ex.lbs = (ex.lbs ?? 0) + it.lbs * add
+    } else {
+      byKey.set(k, { ...it, qty: add, ...(it.lbs != null ? { lbs: it.lbs * add } : {}) })
+    }
   }
   return [...byKey.values()]
 }

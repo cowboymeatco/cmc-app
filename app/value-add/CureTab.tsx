@@ -15,7 +15,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import type { CureLoadSummary, RackLoad } from '@/lib/cureLoad'
-import HogForecastPanel from './HogForecastPanel'
 
 const C = {
   dark:       '#1A0A04',
@@ -172,7 +171,6 @@ export default function CureTab() {
           Nothing is in cure. Pieces land here the moment a numbered seal is scanned
           at the gun — no separate entry, no list to keep.
         </div>
-        <HogForecastPanel />
       </div>
     )
   }
@@ -222,7 +220,6 @@ export default function CureTab() {
         {data.racks.map(r => <RackCard key={r.group} rack={r} />)}
       </div>
 
-      <HogForecastPanel />
 
       <div style={{ fontSize: '0.72rem', color: C.lightBrown, lineHeight: 1.7 }}>
         Load sizes were counted on the floor, not fitted from the controller logs —
@@ -233,6 +230,7 @@ export default function CureTab() {
         Piece by piece — whose it is, days in cure, marking one done — is the
         operational board on{' '}
         <Link href="/processing" style={{ color: C.blue }}>Processing → In Cure</Link>.
+        What&apos;s still coming is on the Schedule tab, under 📖 The Smokehouse Book.
         <button
           onClick={load}
           style={{
