@@ -138,8 +138,19 @@ export default function CureTagsTab() {
                     <td style={{ ...td, fontFamily: 'monospace', color: C.tan, fontWeight: 700 }}>🏷 {t.tag_number}</td>
                     <td style={{ ...td, fontWeight: 600 }}>{t.customer_name}</td>
                     <td style={td}>{t.product}</td>
-                    <td style={{ ...td, color: t.instruction ? C.green : C.lightBrown, fontWeight: t.instruction ? 700 : 400 }}>
-                      {t.instruction ?? 'no cut sheet found'}
+                    {/* Three different answers, not two. "No sheet under this
+                        name" is somebody typing the customer differently from
+                        the office and is worth chasing; "not on the sheet" is
+                        just a piece nobody ordered smoked. */}
+                    <td style={{
+                      ...td,
+                      color: t.instruction ? C.green : t.sheetFound === false ? C.amber : C.lightBrown,
+                      fontWeight: t.instruction || t.sheetFound === false ? 700 : 400,
+                    }}>
+                      {t.instruction
+                        ?? (t.sheetFound === false
+                          ? '⚠ no cut sheet under this name'
+                          : 'not on the sheet')}
                     </td>
                     <td style={{ ...td, textAlign: 'right', fontFamily: 'monospace' }}>{t.weight_lbs != null ? `${Number(t.weight_lbs).toFixed(2)} lb` : '—'}</td>
                     <td style={{ ...td, color: C.lightBrown, fontFamily: 'monospace' }}>{fmtDay(t.session_date ?? t.created_at.slice(0, 10))}</td>

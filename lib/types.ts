@@ -334,6 +334,11 @@ export interface CureTag {
   // Set by GET /api/cure-tags?instructions=1 — what this customer's cut sheet
   // says to do with this product once it's out of cure ("Cut in Quarters").
   instruction?:  string | null
+  // Whether a cut sheet was found for this name at all. A null `instruction`
+  // means two very different things — no sheet under this name (a naming
+  // problem for a person to fix) versus a sheet that didn't order this product
+  // (nothing to do) — and the tab read the same for both.
+  sheetFound?:   boolean
 }
 
 // The seals print as 7 digits with a leading zero ("0341981"). Nothing else in

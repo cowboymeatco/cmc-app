@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireExec } from '@/lib/execGate'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { getInvoicesSince, getInvoicePaidDates } from '@/lib/qboInvoices'
+import { nameKey } from '@/lib/nameKey'
 
 // GET /api/exec/turnover — how long a carcass takes to turn into a bill, and
 // then into money.
@@ -43,19 +44,6 @@ import { getInvoicesSince, getInvoicePaidDates } from '@/lib/qboInvoices'
 
 const WINDOW_DAYS = 180        // past this an invoice is somebody else's animal
 const BUSY_PAYER  = 6          // invoices in the window that make first-after-kill meaningless
-
-/** Same normalization as exec_name_key() in Postgres. Keep the two in step. */
-function nameKey(raw: string): string {
-  return (raw || '')
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, ' ')
-    .replace(/(\s+[0-9]+[A-Z]?)+\s*$/g, '')
-    .trim()
-    .split(' ')
-    .filter(Boolean)
-    .sort()
-    .join(' ')
-}
 
 const daysBetween = (from: string, to: string) =>
   Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000)

@@ -3,6 +3,7 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { requireExec } from '@/lib/execGate'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
+import { nameKey } from '@/lib/nameKey'
 import { getOpenInvoices } from '@/lib/qboInvoices'
 
 // GET /api/exec/receivables — open invoices split by whether the product is
@@ -51,20 +52,6 @@ export async function GET(req: NextRequest) {
       ((onsiteRes.data ?? []) as OnsiteRow[]).map(r => [r.name_key, r]),
     )
 
-    // Same normalization as exec_name_key(): upper-case, drop the trailing
-    // hanging weight or carcass tag ("Steve Rosh 78", "Kyle Barner 177B"),
-    // strip punctuation, then sort the words so "LAST, FIRST" and "First
-    // Last" land on the same key. Keep this in step with the SQL function.
-    const nameKey = (raw: string): string =>
-      (raw || '')
-        .toUpperCase()
-        .replace(/[^A-Z0-9]+/g, ' ')
-        .replace(/(\s+[0-9]+[A-Z]?)+\s*$/g, '')
-        .trim()
-        .split(' ')
-        .filter(Boolean)
-        .sort()
-        .join(' ')
 
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Denver' })
     const daysOld = (d: string) =>

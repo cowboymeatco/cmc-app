@@ -39,6 +39,17 @@ interface Sheet {
   cure_tags:     { tag_number: string; product: string; status: string }[]
 }
 
+// A cure tag whose customer name matches no cut sheet at all. Reported rather
+// than resolved: an abbreviation the floor uses ("MVML KRISTIN") can't be tied
+// to the office's spelling ("MT Veterans Meat Locker Kristin") by any rule, and
+// guessing would put one customer's ham on another's slip.
+interface UnmatchedTagGroup {
+  key:    string
+  names:  string[]
+  curing: number
+  tags:   { tag_number: string; product: string; status: string }[]
+}
+
 // A tag's product → the column its ordered counterpart lives in.
 const TAG_COL: Record<string, string> = {
   'Ham':            'Cured & Smoked Ham',
@@ -126,6 +137,7 @@ export default function ValueAddReport() {
   const [from, setFrom] = useState(yearStart)
   const [to,   setTo]   = useState(today)
   const [sheets, setSheets] = useState<Sheet[]>([])
+  const [unmatched, setUnmatched] = useState<UnmatchedTagGroup[]>([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
 
@@ -140,7 +152,13 @@ export default function ValueAddReport() {
     const p = new URLSearchParams({ type: 'value_add', from, to })
     fetch(`/api/reports?${p}`)
       .then(r => r.json())
-      .then(d => { if (!cancelled) setSheets(Array.isArray(d) ? d : []) })
+      .then(d => {
+        if (cancelled) return
+        // The route used to return a bare array and now returns { rows,
+        // unmatchedTags }; read both so a stale tab doesn't blank the report.
+        setSheets(Array.isArray(d) ? d : (d?.rows ?? []))
+        setUnmatched(Array.isArray(d) ? [] : (d?.unmatchedTags ?? []))
+      })
       .catch(() => { if (!cancelled) setErr('Could not load the report.') })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
@@ -412,6 +430,40 @@ export default function ValueAddReport() {
             )}
           </div>
         </div>
+
+        {/* Tags whose customer name matches no cut sheet. These used to be
+            invisible: the matrix draws tags off the sheet, so a name the office
+            never typed the same way simply wasn't shown, and the customer's row
+            read as a hanging weight with nothing in the cure cooler (Charlie,
+            2026-08-27, on MVML Kristin). Naming them is as far as the app can
+            honestly go — tying "MVML KRISTIN" to "MT Veterans Meat Locker
+            Kristin" is a person's call, not a rule's. */}
+        {unmatched.length > 0 && (
+          <div style={{
+            marginTop: '1rem', background: 'rgba(232,136,58,0.07)',
+            border: `1px solid ${C.amber}`, borderRadius: 4, padding: '0.9rem 1.1rem',
+          }}>
+            <div style={{ color: C.amber, fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.4rem' }}>
+              🏷 In the cure cooler under a name no cut sheet uses
+            </div>
+            <div style={{ fontSize: '0.75rem', color: C.tan, marginBottom: '0.6rem', lineHeight: 1.5 }}>
+              These pieces are tagged and real, but their customer name doesn&apos;t match any sheet, so they appear in
+              nobody&apos;s row above. Usually the floor used a short name the office spelled out in full. Fix it by
+              renaming the tag on <strong style={{ color: C.cream }}>Processing → In Cure</strong> to match the sheet
+              exactly — spelling it differently is what hid them.
+            </div>
+            {unmatched.map(g => (
+              <div key={g.key} style={{ fontSize: '0.78rem', color: C.cream, padding: '0.3rem 0', borderTop: '1px solid rgba(166,120,90,0.18)' }}>
+                <strong>{g.names.join(' / ')}</strong>
+                <span style={{ color: C.lightBrown }}>
+                  {' '}— {g.tags.length} piece{g.tags.length === 1 ? '' : 's'}
+                  {g.curing > 0 && `, ${g.curing} still curing`}:{' '}
+                  {g.tags.map(t => `${t.product} ${t.tag_number}${t.status === 'done' ? '✓' : ''}`).join(' · ')}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
 
         <p style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.75rem', lineHeight: 1.6 }}>
           Built from the <strong style={{ color: C.tan }}>cut sheets</strong> — what each customer ordered, before

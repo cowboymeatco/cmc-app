@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase'
 // protect it — the anon grant has to come off the view itself, which means
 // this read moves to the service role. Server-side only.
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
+import { nameKey } from '@/lib/nameKey'
 import { extractValueAdd } from '@/lib/valueAdd'
 
 export const dynamic = 'force-dynamic'
@@ -109,12 +110,25 @@ export async function GET(req: NextRequest) {
     // Seal tags by customer — the ACTUAL pieces riding through the cure cooler,
     // shown against what the sheet ordered. Tags know their customer, not which
     // of a customer's animals, so a rare multi-sheet customer repeats them.
+    //
+    // Matched on nameKey() rather than the raw string. The office types the cut
+    // sheet and the floor types the cure tag, so the two spellings rarely agree:
+    // an exact match lost every tag Kristin had, and her row showed a hanging
+    // weight with no pieces against it (Charlie, 2026-08-27). The key closes
+    // case, spacing, punctuation, word order and the floor's trailing "2" for a
+    // second animal — it cannot close an abbreviation, so whatever is left over
+    // is reported below instead of being dropped on the floor.
     const tagsByName = new Map<string, { tag_number: string; product: string; status: string }[]>()
+    const tagNamesByKey = new Map<string, Set<string>>()
     for (const t of cureTags ?? []) {
-      const key = String(t.customer_name ?? '').trim().toLowerCase()
+      const raw = String(t.customer_name ?? '').trim()
+      const key = nameKey(raw)
       const list = tagsByName.get(key) ?? []
       list.push({ tag_number: String(t.tag_number), product: String(t.product), status: String(t.status) })
       tagsByName.set(key, list)
+      const names = tagNamesByKey.get(key) ?? new Set<string>()
+      names.add(raw)
+      tagNamesByKey.set(key, names)
     }
 
     // ci id → scheduled harvest date, and ci id → the customer SLOTS it's linked
@@ -207,7 +221,7 @@ export async function GET(req: NextRequest) {
         // animal, carrying its id so a split animal counts once in a total.
         carcasses:     carcassesFor(ci.id as string).map(id => ({ id, lbs: wtByLog.get(id) ?? null })),
         products:      extractValueAdd(ci.species as string, ci.data),
-        cure_tags:     tagsByName.get(String(ci.customer_name ?? '').trim().toLowerCase()) ?? [],
+        cure_tags:     tagsByName.get(nameKey(ci.customer_name as string)) ?? [],
       }
     }).filter(r =>
       r.products.length > 0 &&
@@ -215,7 +229,29 @@ export async function GET(req: NextRequest) {
       (!to   || (r.date && r.date <= to))
     )
 
-    return NextResponse.json(rows)
+    // Cure tags whose customer matches NO cut sheet at all.
+    //
+    // These used to vanish: the tag list was keyed off the sheet, so a piece
+    // whose name didn't match simply wasn't drawn, and the row read as "this
+    // customer has a hanging weight and nothing in the cure cooler" rather than
+    // "we can't tell which of her sheets these belong to". Whether the name is
+    // an abbreviation, a typo or a customer with no sheet on file is a question
+    // for a person — so they are reported, not resolved.
+    //
+    // Matched against every live sheet, not just the ones inside the date
+    // window, so narrowing the dates doesn't manufacture orphans.
+    const sheetKeys = new Set((cis ?? []).map(ci => nameKey(ci.customer_name as string)))
+    const unmatchedTags = [...tagsByName.entries()]
+      .filter(([key]) => !sheetKeys.has(key))
+      .map(([key, tags]) => ({
+        key,
+        names: [...(tagNamesByKey.get(key) ?? [])].sort(),
+        tags,
+        curing: tags.filter(t => t.status === 'curing').length,
+      }))
+      .sort((a, b) => b.tags.length - a.tags.length)
+
+    return NextResponse.json({ rows, unmatchedTags })
   }
 
   if (type === 'appointments') {

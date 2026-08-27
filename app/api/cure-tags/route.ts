@@ -2,6 +2,7 @@ export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { extractValueAdd } from '@/lib/valueAdd'
+import { nameKey } from '@/lib/nameKey'
 import { CureTag } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
@@ -49,19 +50,25 @@ export async function GET(req: NextRequest) {
     .select('customer_name, species, data, created_at')
     .neq('status', 'archived')
     .order('created_at', { ascending: true })
+  //
+  // Keyed on nameKey(), not the raw string. The floor types the tag and the
+  // office types the sheet, so the spellings rarely agree — "MVML KRISTIN" vs
+  // "MT Veterans Meat Locker Kristin" — and an exact match silently found
+  // nothing, which is indistinguishable on screen from a sheet that asked for
+  // nothing (Charlie, 2026-08-27). `sheetFound` tells those two apart.
   const sheetByName = new Map<string, { species: string | null; data: unknown }>()
   for (const ci of cis ?? []) {
-    const name = String(ci.customer_name ?? '').trim().toLowerCase()
-    if (name) sheetByName.set(name, { species: ci.species as string | null, data: ci.data })
+    const key = nameKey(ci.customer_name as string)
+    if (key) sheetByName.set(key, { species: ci.species as string | null, data: ci.data })
   }
 
   const withInstructions = (tags as CureTag[]).map(tag => {
-    const sheet = sheetByName.get(tag.customer_name.trim().toLowerCase())
-    if (!sheet) return { ...tag, instruction: null }
+    const sheet = sheetByName.get(nameKey(tag.customer_name))
+    if (!sheet) return { ...tag, instruction: null, sheetFound: false }
     const wanted = SHEET_PRODUCT[tag.product]
-    if (!wanted) return { ...tag, instruction: null }
+    if (!wanted) return { ...tag, instruction: null, sheetFound: true }
     const item = extractValueAdd(sheet.species, sheet.data).find(it => it.product === wanted)
-    return { ...tag, instruction: item ? (item.detail ?? 'On sheet — no cut style given') : null }
+    return { ...tag, instruction: item ? (item.detail ?? 'On sheet — no cut style given') : null, sheetFound: true }
   })
   return NextResponse.json(withInstructions)
 }
