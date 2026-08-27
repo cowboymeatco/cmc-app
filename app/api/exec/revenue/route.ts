@@ -4,9 +4,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireExec } from '@/lib/execGate'
 import { supabase } from '@/lib/supabase'
 import {
-  buildRevenueRecognition, placedCutDays, speciesAverages,
-  type AppointmentRow, type HarvestRow, type PlanRow,
+  booksFromDailyPnl, buildRevenueRecognition, placedCutDays, speciesAverages,
+  type AppointmentRow, type BooksInput, type HarvestRow, type PlanRow,
 } from '@/lib/revenueRecognition'
+import { dayColumns, fetchProfitAndLossByDay, leafAccountSeries, sectionValues } from '@/lib/qboReports'
 import { addDaysISO } from '@/lib/dates'
 
 // GET /api/exec/revenue?start=YYYY-MM-DD&end=YYYY-MM-DD
@@ -100,6 +101,31 @@ export async function GET(req: NextRequest) {
       if (!prev || d < prev) packDayByLogId.set(id, d)
     }
 
+    // Retail and the smokehouse come off the books, which only cover days that
+    // have happened — a window entirely in the future skips QuickBooks
+    // altogether rather than asking it about next month.
+    const booksEnd = end < today ? end : today
+    let books: BooksInput | undefined
+    let booksError: string | undefined
+    if (start <= booksEnd) {
+      try {
+        const pnl = await fetchProfitAndLossByDay(start, booksEnd)
+        const dates = dayColumns(pnl)
+        books = booksFromDailyPnl(
+          dates,
+          leafAccountSeries(pnl, 'Income', dates.length),
+          // sectionValues keeps the report's trailing Total column; summing it
+          // would count the period twice.
+          sectionValues(pnl, 'Income').slice(0, dates.length),
+          booksEnd,
+        )
+      } catch (e) {
+        // The schedule-fed half stands on its own, so a QuickBooks hiccup
+        // shouldn't blank the whole section — say which half is missing.
+        booksError = e instanceof Error ? e.message : String(e)
+      }
+    }
+
     const result = buildRevenueRecognition({
       start, end, today,
       harvests,
@@ -107,9 +133,10 @@ export async function GET(req: NextRequest) {
       packDayByLogId,
       plannedCutDayByLogId: placedCutDays((planRes.data ?? []) as PlanRow[], today),
       speciesAvgLbs: speciesAverages((avgRes.data ?? []) as Pick<HarvestRow, 'species' | 'hot_carcass_weight_lbs'>[]),
+      books,
     })
 
-    return NextResponse.json(result)
+    return NextResponse.json({ ...result, booksError: booksError ?? null })
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 })
   }

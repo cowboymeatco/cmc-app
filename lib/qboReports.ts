@@ -71,6 +71,46 @@ export function leafAccounts(report: QboReport, group: string): AccountLine[] {
   return out
 }
 
+export interface AccountSeries {
+  name: string
+  values: number[]   // one per money column, aligned with dayColumns()/monthColumns()
+}
+
+/**
+ * Leaf account rows under a section with their per-column values, rather than
+ * just the period total. Used to put an account's money on the right DAY.
+ *
+ * Alignment: ColData[0] is the account name and the trailing Total column has
+ * no StartDate, so the money columns are the `columnCount` cells after the
+ * label. Sub-total rows carry ColData too, so a caller that sums these will
+ * overshoot the section summary — map the names you want and treat the
+ * remainder as unattributed rather than assuming these add up.
+ */
+export function leafAccountSeries(report: QboReport, group: string, columnCount: number): AccountSeries[] {
+  const out: AccountSeries[] = []
+  const walk = (rows: ReportRow[] | undefined) => {
+    for (const r of rows ?? []) {
+      const cols = r.ColData
+      if (cols && cols.length >= 2 && cols[0].value) {
+        out.push({ name: cols[0].value, values: cols.slice(1, 1 + columnCount).map(c => num(c.value)) })
+      }
+      walk(r.Rows?.Row)
+    }
+  }
+  walk(findSection(report, group)?.Rows?.Row)
+  return out
+}
+
+/** The YYYY-MM-DD of each column, in report order (Total column excluded). */
+export function dayColumns(report: QboReport): string[] {
+  const out: string[] = []
+  for (const col of report.Columns?.Column ?? []) {
+    const start = col.MetaData?.find(m => m.Name === 'StartDate')?.Value
+    if (start) out.push(start)
+  }
+  return out
+}
+
 /** The YYYY-MM of each month column, in report order (Total column excluded). */
 export function monthColumns(report: QboReport): string[] {
   const out: string[] = []
@@ -84,6 +124,18 @@ export function monthColumns(report: QboReport): string[] {
 export async function fetchProfitAndLossByMonth(startDate: string, endDate: string): Promise<QboReport> {
   return qboFetch<QboReport>(
     `reports/ProfitAndLoss?start_date=${startDate}&end_date=${endDate}&summarize_column_by=Month&accounting_method=Accrual`,
+  )
+}
+
+/**
+ * P&L one column per day. Retail and the smokehouse don't run off the harvest
+ * schedule, so the books are the only day-by-day record of what they earned;
+ * see lib/revenueRecognition. Cheap enough to ask for — a quarter of days comes
+ * back in about two seconds.
+ */
+export async function fetchProfitAndLossByDay(startDate: string, endDate: string): Promise<QboReport> {
+  return qboFetch<QboReport>(
+    `reports/ProfitAndLoss?start_date=${startDate}&end_date=${endDate}&summarize_column_by=Days&accounting_method=Accrual`,
   )
 }
 

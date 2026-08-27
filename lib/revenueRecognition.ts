@@ -18,12 +18,80 @@ import { killFeeCharge, cutWrapCharge, isExcludedProducer } from './billingRules
 import { projectedCutDate } from './cutSchedule'
 import { addDaysISO } from './dates'
 
-export type EnterpriseKey = 'harvest' | 'processing'
+export type EnterpriseKey = 'harvest' | 'processing' | 'valueAdd' | 'retail'
 
-export const ENTERPRISES: { key: EnterpriseKey; label: string; blurb: string }[] = [
-  { key: 'harvest',    label: 'Harvest',    blurb: 'kill fees, recognized on kill day' },
-  { key: 'processing', label: 'Processing', blurb: 'cut & wrap, recognized on the day the carcass is broken' },
+/** Where an enterprise's numbers come from. The two are not interchangeable and
+ *  the page says which is which:
+ *  - 'schedule': modelled from the plant's own records at the QBO service rates.
+ *    The only way to separate the kill floor from the cut floor, because
+ *    QuickBooks posts both to one "CMC Custom … Processing" account. Carries a
+ *    forward book.
+ *  - 'books': the actual daily P&L. Nothing schedules a walk-in, so retail and
+ *    the smokehouse have no forward book and stop at today. */
+export type EnterpriseSource = 'schedule' | 'books'
+
+export const ENTERPRISES: { key: EnterpriseKey; label: string; source: EnterpriseSource; blurb: string }[] = [
+  { key: 'harvest',    label: 'Harvest',    source: 'schedule', blurb: 'kill fees, recognized on kill day' },
+  { key: 'processing', label: 'Processing', source: 'schedule', blurb: 'cut & wrap, recognized on the day the carcass is broken' },
+  { key: 'valueAdd',   label: 'Value add',  source: 'books',    blurb: 'the smokehouse: custom smoking plus its own product over the counter' },
+  { key: 'retail',     label: 'Retail',     source: 'books',    blurb: 'the case — beef, hog, lamb, organ and vendor sales' },
 ]
+
+// ── Which income account belongs to which enterprise ──────────────────────────
+// QuickBooks already splits the plant the way Charlie thinks about it, so the
+// mapping is by account name rather than by guessing at line items.
+//
+// 'Smokehouse Sales' is a counter sale, but it is the smokehouse's own product
+// and the question this section answers is whether the house earns its keep —
+// so it sits with the custom smoking rather than with the case. One line to
+// move if that's the wrong call.
+//
+// Deliberately unmapped, and reported separately underneath: the custom
+// kill & processing accounts (that money is what the schedule-fed harvest and
+// processing figures model — counting both would double it), wholesale, wild
+// game, shipping, and discounts, which can't be attributed to one floor.
+export const INCOME_ACCOUNT_ENTERPRISE: Record<string, EnterpriseKey> = {
+  'CMC Custom Smokehouse': 'valueAdd',
+  'Smokehouse Sales': 'valueAdd',
+  'Beef Retail Sales': 'retail',
+  'Hog Retail Sales': 'retail',
+  'Lamb/Sheep Retail Sales': 'retail',
+  'Organ Sales': 'retail',
+  'Vendor Retail Sales': 'retail',
+}
+
+/** Accounts held out of the four enterprises, grouped for the footnote. */
+export const UNMAPPED_INCOME: Record<string, keyof BooksContext> = {
+  'CMC Custom Beef Processing': 'customProcessing',
+  'CMC Custom Hog Processing': 'customProcessing',
+  'CMC Custom Lamb/Sheep/Goat Processing': 'customProcessing',
+  'CMC Wholesale Beef Sales': 'wholesale',
+  'CMC Wholesale Hog Sales': 'wholesale',
+  'CMC Wholesale Lamb Sales': 'wholesale',
+  'Wild Game Processing': 'wildGame',
+  'Shipping Income': 'shipping',
+  'Discounts': 'discounts',
+}
+
+export interface BooksContext {
+  /** What QuickBooks actually booked for custom kill & processing over the same
+   *  days. Not expected to equal the modelled harvest + processing: the gap is
+   *  the invoice lag this whole view exists to remove. */
+  customProcessing: number
+  wholesale: number
+  wildGame: number
+  shipping: number
+  discounts: number
+  other: number
+}
+
+export interface BooksInput {
+  /** date -> enterprise -> dollars booked that day. */
+  byDay: Map<string, Partial<Record<EnterpriseKey, number>>>
+  context: BooksContext
+  /** Last day the books cover. Nothing after this is knowable from QuickBooks. */
+  through: string
+}
 
 // ── What the caller has to hand us ────────────────────────────────────────────
 export interface HarvestRow {
@@ -69,11 +137,13 @@ export interface RevenueDay {
 export interface EnterpriseTotal {
   key: EnterpriseKey
   label: string
+  source: EnterpriseSource
   blurb: string
   earned: number
   scheduled: number
   total: number
   sharePct: number
+  /** Head through this floor — schedule-fed enterprises only; 0 for the books. */
   head: number
   perHead: number
 }
@@ -100,6 +170,8 @@ export interface RevenueRecognition {
   enterprises: EnterpriseTotal[]
   species: SpeciesRow[]
   totals: { earned: number; scheduled: number; total: number }
+  /** Present when the window reaches into days the books cover. */
+  books: (BooksContext & { through: string }) | null
   coverage: {
     carcasses: number
     weighed: number         // priced off a real carcass weight
@@ -164,6 +236,58 @@ export function placedCutDays(plan: PlanRow[], todayISO: string): Map<string, st
   return byLogId
 }
 
+// ── Books → daily enterprise dollars ──────────────────────────────────────────
+/**
+ * Fold a daily P&L into the two book-fed enterprises, and total what was held
+ * out so the page can account for every dollar it isn't showing.
+ *
+ * `accounts` must be the Income leaves with one value per day in `dates`
+ * (qboReports.leafAccountSeries). Sub-total rows come back in that walk too, so
+ * an unrecognized name is NOT silently swept into `other` — only names the P&L
+ * actually posts to are counted, and anything genuinely new shows up as a
+ * mismatch against the section summary rather than as invented revenue.
+ */
+export function booksFromDailyPnl(
+  dates: string[],
+  accounts: { name: string; values: number[] }[],
+  /** The Income section's own daily summary, so `other` is an exact residual
+   *  rather than an assumption about which rows the account walk returned. */
+  incomeSummary: number[],
+  through: string,
+): BooksInput {
+  const byDay = new Map<string, Partial<Record<EnterpriseKey, number>>>()
+  const context: BooksContext = {
+    customProcessing: 0, wholesale: 0, wildGame: 0, shipping: 0, discounts: 0, other: 0,
+  }
+  let attributed = 0
+
+  for (const a of accounts) {
+    // A section can repeat an account name (two "Vendor Retail Sales" under
+    // different parents) and both are real, so don't dedupe by name. Sub-total
+    // rows come back from the same walk repeating their children's numbers —
+    // they're excluded by only ever counting names we recognize.
+    const enterprise = INCOME_ACCOUNT_ENTERPRISE[a.name]
+    const bucket = UNMAPPED_INCOME[a.name]
+    if (!enterprise && !bucket) continue
+
+    let total = 0
+    a.values.forEach((v, i) => {
+      total += v
+      const date = dates[i]
+      if (v === 0 || !date || !enterprise) return
+      const row = byDay.get(date) ?? {}
+      row[enterprise] = (row[enterprise] ?? 0) + v
+      byDay.set(date, row)
+    })
+    attributed += total
+    if (bucket) context[bucket] += total
+  }
+
+  context.other = incomeSummary.reduce((s, v) => s + v, 0) - attributed
+  for (const key of Object.keys(context) as (keyof BooksContext)[]) context[key] = r2(context[key])
+  return { byDay, context, through }
+}
+
 // ── The engine ────────────────────────────────────────────────────────────────
 export interface BuildInput {
   start: string
@@ -176,6 +300,9 @@ export interface BuildInput {
   /** harvest_log.id -> the day the live cut plan has it down for. */
   plannedCutDayByLogId: Map<string, string>
   speciesAvgLbs: Record<string, number>
+  /** Daily P&L for the enterprises the schedule can't reach. Omitted when the
+   *  window is entirely in the future, where the books have nothing to say. */
+  books?: BooksInput
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100
@@ -183,8 +310,11 @@ const r2 = (n: number) => Math.round(n * 100) / 100
 /** Species billed one flat fee that covers kill and cut together. */
 const isFlatAllIn = (species: string) => species === 'Lamb' || species === 'Goat'
 
+const zeroByEnterprise = (): Record<EnterpriseKey, number> =>
+  ({ harvest: 0, processing: 0, valueAdd: 0, retail: 0 })
+
 export function buildRevenueRecognition(input: BuildInput): RevenueRecognition {
-  const { start, end, today, harvests, appointments, packDayByLogId, plannedCutDayByLogId, speciesAvgLbs } = input
+  const { start, end, today, harvests, appointments, packDayByLogId, plannedCutDayByLogId, speciesAvgLbs, books } = input
 
   const byDay = new Map<string, RevenueDay>()
   const dayOf = (date: string): RevenueDay => {
@@ -192,8 +322,8 @@ export function buildRevenueRecognition(input: BuildInput): RevenueRecognition {
     if (!d) {
       d = {
         date,
-        earned: { harvest: 0, processing: 0 },
-        scheduled: { harvest: 0, processing: 0 },
+        earned: zeroByEnterprise(),
+        scheduled: zeroByEnterprise(),
         total: 0, headHarvested: 0, headCut: 0, headOwn: 0,
       }
       byDay.set(date, d)
@@ -203,7 +333,9 @@ export function buildRevenueRecognition(input: BuildInput): RevenueRecognition {
   const inWindow = (date: string) => date >= start && date <= end
 
   const speciesAgg = new Map<string, { killHead: number; cutHead: number; harvest: number; processing: number }>()
-  const bumpSpecies = (species: string, key: EnterpriseKey, amount: number, head: number) => {
+  // Species only means anything on the two floors that handle animals; retail
+  // and the smokehouse arrive as dollars off the books, with no head behind them.
+  const bumpSpecies = (species: string, key: 'harvest' | 'processing', amount: number, head: number) => {
     const s = speciesAgg.get(species) ?? { killHead: 0, cutHead: 0, harvest: 0, processing: 0 }
     s[key] += amount
     if (key === 'harvest') s.killHead += head
@@ -335,15 +467,33 @@ export function buildRevenueRecognition(input: BuildInput): RevenueRecognition {
     }
   }
 
+  // ── Retail and the smokehouse, off the books ────────────────────────────────
+  // Nothing schedules a walk-in, so these two are whatever QuickBooks posted on
+  // the day. All of it counts as earned: the money is already in the books.
+  if (books) {
+    for (const [date, amounts] of books.byDay) {
+      if (!inWindow(date)) continue
+      const d = dayOf(date)
+      for (const [key, amount] of Object.entries(amounts) as [EnterpriseKey, number][]) {
+        d.earned[key] += amount
+      }
+    }
+  }
+
   // ── Lay the window out day by day, gaps included ─────────────────────────────
   // A day nobody worked is a real answer to "how is harvest doing" — dropping
   // the empty days would draw a chart of only the good ones.
+  const keys = ENTERPRISES.map(e => e.key)
   const days: RevenueDay[] = []
   for (let d = start; d <= end; d = addDaysISO(d, 1)) {
     const row = dayOf(d)
-    row.earned = { harvest: r2(row.earned.harvest), processing: r2(row.earned.processing) }
-    row.scheduled = { harvest: r2(row.scheduled.harvest), processing: r2(row.scheduled.processing) }
-    row.total = r2(row.earned.harvest + row.earned.processing + row.scheduled.harvest + row.scheduled.processing)
+    let total = 0
+    for (const k of keys) {
+      row.earned[k] = r2(row.earned[k])
+      row.scheduled[k] = r2(row.scheduled[k])
+      total += row.earned[k] + row.scheduled[k]
+    }
+    row.total = r2(total)
     days.push(row)
   }
 
@@ -354,9 +504,13 @@ export function buildRevenueRecognition(input: BuildInput): RevenueRecognition {
     const earned = sum(d => d.earned[e.key])
     const scheduled = sum(d => d.scheduled[e.key])
     const total = earned + scheduled
-    const head = e.key === 'harvest' ? sum(d => d.headHarvested) : sum(d => d.headCut)
+    // Head is a kill-floor / cut-floor count. Retail and the smokehouse are
+    // measured in dollars off the books, not in animals.
+    const head = e.key === 'harvest' ? sum(d => d.headHarvested)
+      : e.key === 'processing' ? sum(d => d.headCut)
+      : 0
     return {
-      key: e.key, label: e.label, blurb: e.blurb,
+      key: e.key, label: e.label, source: e.source, blurb: e.blurb,
       earned: r2(earned), scheduled: r2(scheduled), total: r2(total),
       sharePct: totalAll > 0 ? Math.round((total / totalAll) * 1000) / 10 : 0,
       head,
@@ -384,10 +538,11 @@ export function buildRevenueRecognition(input: BuildInput): RevenueRecognition {
   return {
     start, end, today, days, enterprises, species,
     totals: {
-      earned: r2(sum(d => d.earned.harvest + d.earned.processing)),
-      scheduled: r2(sum(d => d.scheduled.harvest + d.scheduled.processing)),
+      earned: r2(sum(d => keys.reduce((a, k) => a + d.earned[k], 0))),
+      scheduled: r2(sum(d => keys.reduce((a, k) => a + d.scheduled[k], 0))),
       total: r2(totalAll),
     },
+    books: books ? { ...books.context, through: books.through } : null,
     coverage,
     speciesAvgLbs,
   }

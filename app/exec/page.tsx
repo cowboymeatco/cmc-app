@@ -175,7 +175,7 @@ interface SmokehouseData {
 }
 
 // Revenue recognition — see /api/exec/revenue and lib/revenueRecognition.
-type EnterpriseKey = 'harvest' | 'processing'
+type EnterpriseKey = 'harvest' | 'processing' | 'valueAdd' | 'retail'
 interface RevenueDay {
   date: string
   earned: Record<EnterpriseKey, number>
@@ -186,7 +186,7 @@ interface RevenueDay {
   headOwn: number
 }
 interface EnterpriseTotal {
-  key: EnterpriseKey; label: string; blurb: string
+  key: EnterpriseKey; label: string; source: 'schedule' | 'books'; blurb: string
   earned: number; scheduled: number; total: number
   sharePct: number; head: number; perHead: number
 }
@@ -201,6 +201,11 @@ interface RevenueData {
   enterprises: EnterpriseTotal[]
   species: RevSpecies[]
   totals: { earned: number; scheduled: number; total: number }
+  books: {
+    customProcessing: number; wholesale: number; wildGame: number
+    shipping: number; discounts: number; other: number; through: string
+  } | null
+  booksError: string | null
   coverage: {
     carcasses: number; weighed: number; weightEstimated: number
     cutDayScanned: number; cutDayPlanned: number; cutDayProjected: number
@@ -209,11 +214,18 @@ interface RevenueData {
   speciesAvgLbs: Record<string, number>
 }
 
-// A warm/cool pair rather than the green/orange used elsewhere on this page:
-// both enterprises are income, and green-vs-orange would read as good-vs-bad.
+// Four hues that read as siblings rather than as good-vs-bad — every one of
+// these is income, so the green/orange used in the break-even chart would say
+// the wrong thing here.
 const ENTERPRISE_COLOR: Record<EnterpriseKey, string> = {
   harvest: '#E8883A',
   processing: '#5B8DBE',
+  valueAdd: '#A97BC4',
+  retail: '#4FA97A',
+}
+const ENTERPRISE_ORDER: EnterpriseKey[] = ['harvest', 'processing', 'valueAdd', 'retail']
+const ENTERPRISE_LABEL: Record<EnterpriseKey, string> = {
+  harvest: 'Harvest', processing: 'Processing', valueAdd: 'Value add', retail: 'Retail',
 }
 
 const REV_WINDOWS = [
@@ -344,10 +356,10 @@ function RevenueBars({ data }: { data: RevenueData }) {
       const key = isoDate(monday)
       const last = out[out.length - 1]
       if (last && last.label === key) {
-        last.earned.harvest += d.earned.harvest
-        last.earned.processing += d.earned.processing
-        last.scheduled.harvest += d.scheduled.harvest
-        last.scheduled.processing += d.scheduled.processing
+        for (const k of ENTERPRISE_ORDER) {
+          last.earned[k] += d.earned[k]
+          last.scheduled[k] += d.scheduled[k]
+        }
         last.total += d.total
         last.headHarvested += d.headHarvested
         last.headCut += d.headCut
@@ -369,16 +381,22 @@ function RevenueBars({ data }: { data: RevenueData }) {
   // Roughly a dozen ticks, whatever the window length.
   const every = Math.max(1, Math.round(buckets.length / 12))
 
+  // Done work first from the bottom, then everything still on the schedule, so
+  // the solid block and the faded block each read as one thing.
   const segments: { key: EnterpriseKey; done: boolean }[] = [
-    { key: 'harvest', done: true }, { key: 'processing', done: true },
-    { key: 'harvest', done: false }, { key: 'processing', done: false },
+    ...ENTERPRISE_ORDER.map(key => ({ key, done: true })),
+    ...ENTERPRISE_ORDER.map(key => ({ key, done: false })),
   ]
 
   return (
     <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '1rem 1.25rem' }}>
       <div style={{ display: 'flex', gap: '1.25rem', flexWrap: 'wrap', fontSize: '0.72rem', color: C.tan, marginBottom: '0.75rem' }}>
-        <span><span style={{ display: 'inline-block', width: 11, height: 11, background: ENTERPRISE_COLOR.harvest, verticalAlign: 'middle', marginRight: 6, borderRadius: 2 }} />Harvest</span>
-        <span><span style={{ display: 'inline-block', width: 11, height: 11, background: ENTERPRISE_COLOR.processing, verticalAlign: 'middle', marginRight: 6, borderRadius: 2 }} />Processing</span>
+        {ENTERPRISE_ORDER.map(k => (
+          <span key={k}>
+            <span style={{ display: 'inline-block', width: 11, height: 11, background: ENTERPRISE_COLOR[k], verticalAlign: 'middle', marginRight: 6, borderRadius: 2 }} />
+            {ENTERPRISE_LABEL[k]}
+          </span>
+        ))}
         <span style={{ color: C.lightBrown }}>
           <span style={{ display: 'inline-block', width: 11, height: 11, background: C.lightBrown, opacity: 0.38, verticalAlign: 'middle', marginRight: 6, borderRadius: 2 }} />
           faded = still on the schedule
@@ -392,10 +410,8 @@ function RevenueBars({ data }: { data: RevenueData }) {
         {buckets.map(b => {
           const future = b.label > data.today
           const detail = [
-            b.earned.harvest > 0 ? `harvest earned ${usd(b.earned.harvest)}` : '',
-            b.earned.processing > 0 ? `processing earned ${usd(b.earned.processing)}` : '',
-            b.scheduled.harvest > 0 ? `harvest scheduled ${usd(b.scheduled.harvest)}` : '',
-            b.scheduled.processing > 0 ? `processing scheduled ${usd(b.scheduled.processing)}` : '',
+            ...ENTERPRISE_ORDER.map(k => b.earned[k] > 0 ? `${ENTERPRISE_LABEL[k].toLowerCase()} ${usd(b.earned[k])}` : ''),
+            ...ENTERPRISE_ORDER.map(k => b.scheduled[k] > 0 ? `${ENTERPRISE_LABEL[k].toLowerCase()} booked ${usd(b.scheduled[k])}` : ''),
             `${b.headHarvested} killed · ${b.headCut} cut`,
             b.headOwn > 0 ? `${b.headOwn} own animals (no service revenue)` : '',
           ].filter(Boolean).join(' · ')
@@ -999,12 +1015,12 @@ export default function ExecPage() {
             <>
               <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
                 <StatTile label="Earned" value={usd(revenue.totals.earned)} hero
-                  sub="work already done in this window" />
+                  sub="done, or already in the books" />
                 <StatTile label="On the schedule" value={usd(revenue.totals.scheduled)}
                   sub="booked, not yet worked" />
                 {revenue.enterprises.map(e => (
                   <StatTile key={e.key} label={e.label} value={usd(e.total)} accent={ENTERPRISE_COLOR[e.key]}
-                    sub={`${e.sharePct}% of the window · ${usd(e.perHead)}/head`} />
+                    sub={`${e.sharePct}% of the four${e.head > 0 ? ` · ${usd(e.perHead)}/head` : ' · from the books'}`} />
                 ))}
               </div>
 
@@ -1013,7 +1029,7 @@ export default function ExecPage() {
               {revenue.species.length > 0 && (
                 <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '0.75rem 1.25rem', marginTop: '1rem', overflowX: 'auto' }}>
                   <div style={{ fontSize: '0.68rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '0.5rem' }}>
-                    By species — what an animal is worth on the way through
+                    By species — what an animal is worth on the way through (harvest &amp; processing only)
                   </div>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', color: C.tan }}>
                     <thead>
@@ -1062,9 +1078,27 @@ export default function ExecPage() {
                 {revenue.coverage.ownHead > 0 && ` ${revenue.coverage.ownHead} of our own animals are counted as head only — that money shows up in retail, not here.`}
                 {' '}Lamb and goat are billed one flat all-in fee at cut time, so their whole ticket sits under processing —
                 splitting it across the two floors would be a guess.
-                {' '}Retail, value add and wild game aren&apos;t in this picture yet: none of them is driven off the harvest schedule.
                 {revenue.coverage.unpriced.length > 0 && (
                   <span style={{ color: WARN_COLOR }}> Unpriced: {revenue.coverage.unpriced.join('; ')}.</span>
+                )}
+                {' '}<strong style={{ color: C.tan, fontWeight: 600 }}>Value add and retail come off the books instead</strong> —
+                nothing schedules a walk-in, so they are the daily QuickBooks P&amp;L by income account and they stop at
+                {' '}{revenue.books ? revenue.books.through : 'today'}, with no forward book. Value add is the smokehouse&apos;s own
+                account plus its product sold over the counter; retail is the beef, hog, lamb, organ and vendor cases.
+                {revenue.booksError && (
+                  <span style={{ color: WARN_COLOR }}> QuickBooks did not answer, so value add and retail are missing here: {revenue.booksError}</span>
+                )}
+                {revenue.books && (
+                  <>
+                    {' '}Outside these four over the same days: wholesale {usd(revenue.books.wholesale)}, wild game {usd(revenue.books.wildGame)},
+                    shipping {usd(revenue.books.shipping)}, discounts {usd(revenue.books.discounts)}
+                    {Math.abs(revenue.books.other) >= 1 && `, other income ${usd(revenue.books.other)}`}.
+                    {' '}QuickBooks booked {usd(revenue.books.customProcessing)} of custom kill &amp; processing in those days against the
+                    {' '}{usd(revenue.enterprises.filter(e => e.source === 'schedule').reduce((a, e) => a + e.earned, 0))} of harvest and
+                    processing worked. Expect the modelled figure to run lower, for two reasons and neither is an error: the books
+                    are dated by invoice, which is the lag this view exists to remove, and they also carry the per-animal extras —
+                    patty, sausage, slicing and seasoning fees — that only exist once the cut sheet is priced.
+                  </>
                 )}
               </div>
             </>
