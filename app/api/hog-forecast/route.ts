@@ -2,7 +2,7 @@ export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { forecastRun, learnHogRate, type ApptRow, type SheetRow } from '@/lib/hogForecast'
-import type { CookProfile } from '@/lib/cookPredict'
+import { DEFAULT_SETTINGS, type CookProfile } from '@/lib/cookPredict'
 
 export const dynamic = 'force-dynamic'
 
@@ -30,6 +30,9 @@ export async function GET(req: NextRequest) {
       .neq('status', 'archived'),
     supabase.from('cook_profile').select('*'),
   ])
+  // The house settings carry the changeover the schedule is laid out on.
+  const { data: settings } = await supabase
+    .from('cook_settings').select('*').eq('id', 1).maybeSingle()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   const sheetRows   = (sheets ?? []) as SheetRow[]
@@ -40,7 +43,10 @@ export async function GET(req: NextRequest) {
   const booked = ((appts ?? []) as ApptRow[])
     .filter(a => !/cancel/i.test(a.status ?? ''))
 
-  const forecast = forecastRun(booked, sheetRows, profileRows, learnHogRate(sheetRows))
+  const forecast = forecastRun(
+    booked, sheetRows, profileRows, learnHogRate(sheetRows),
+    settings ? { ...DEFAULT_SETTINGS, ...settings } : DEFAULT_SETTINGS,
+  )
   // NOT `days` — the forecast's own `days` array is the kill-day breakdown.
   return NextResponse.json({ ...forecast, windowDays: days })
 }

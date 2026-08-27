@@ -11,6 +11,7 @@
 // them — everything killed the same day cures together, and two dates a month
 // apart can't share a part-full rack.
 import { useEffect, useState, useCallback } from 'react'
+import { fmtDuration } from '@/lib/cookPredict'
 import type { RunForecast, DayForecast } from '@/lib/hogForecast'
 
 const C = {
@@ -64,9 +65,13 @@ function DayRow({ day }: { day: DayForecast }) {
       <span style={{ color: C.orange, fontWeight: 700, fontSize: '0.85rem', minWidth: 70 }}>
         {day.loads != null ? `${day.loads} load${day.loads === 1 ? '' : 's'}` : '—'}
       </span>
+      <span style={{ color: C.blue, fontSize: '0.8rem', minWidth: 80 }}>
+        {day.houseMinutes != null ? fmtDuration(day.houseMinutes) : ''}
+      </span>
       <span style={{ color: C.lightBrown, fontSize: '0.76rem' }}>
         {day.racks.filter(r => r.loads != null).map(r =>
           `${r.label.toLowerCase()} ${r.slots}/${r.unitsPerBatch} → ${r.loads}`
+          + (r.perLoadMinutes != null ? ` @ ${fmtDuration(r.perLoadMinutes)}` : '')
         ).join(' · ')}
         {day.racks.some(r => r.loads == null) && (
           <span style={{ color: C.lightBrown }}>
@@ -155,6 +160,17 @@ export default function HogForecastPanel() {
                 counted kill day by kill day, over {data.days.length} day{data.days.length === 1 ? '' : 's'}
               </div>
             </div>
+            {data.houseMinutes != null && (
+              <div>
+                <span style={{ color: C.blue, fontSize: '1.2rem', fontWeight: 700 }}>
+                  {fmtDuration(data.houseMinutes)}
+                </span>
+                <span style={{ color: C.lightBrown, fontSize: '0.8rem' }}> in the house</span>
+                <div style={{ fontSize: '0.72rem', color: C.lightBrown }}>
+                  fitted cook times, back to back, {data.changeoverMinutes}m between loads
+                </div>
+              </div>
+            )}
             {data.loadsIfCombined != null && data.loadsIfCombined !== data.loads && (
               <div>
                 <span style={{ color: C.tan, fontSize: '1.2rem', fontWeight: 700 }}>{data.loadsIfCombined}</span>

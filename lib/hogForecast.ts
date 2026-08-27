@@ -17,7 +17,7 @@
 // how many head it actually read and how many it projected.
 import { extractValueAdd } from '@/lib/valueAdd'
 import { rackFor, loadsFor } from '@/lib/cureLoad'
-import type { CookProfile } from '@/lib/cookPredict'
+import { DEFAULT_SETTINGS, type CookProfile, type CookSettings } from '@/lib/cookPredict'
 
 /** Hog-equivalents below this and a learned per-hog rate is not worth quoting. */
 export const MIN_HOGS_FOR_RATE = 10
@@ -130,6 +130,13 @@ export interface ForecastRack {
   unitLabel:     string | null
   loads:         number | null
   spaceLeft:     number | null
+  /** One load of this product, door to door: the fitted p50 plus prep and
+      pack-out. Null when no profile owns the rack. */
+  perLoadMinutes: number | null
+  /** Every load on this rack. Changeovers are NOT in here — they belong to the
+      house, which runs one lane across all racks, so they're added once at the
+      day level. */
+  cookMinutes:    number | null
 }
 
 export interface DayForecast {
@@ -144,6 +151,9 @@ export interface DayForecast {
   pieces:       Record<string, number>
   racks:        ForecastRack[]
   loads:        number | null
+  /** Hours the house is tied up for this day's hogs: every load's own cook plus
+      a changeover between them. One lane, so these run back to back. */
+  houseMinutes: number | null
 }
 
 export interface RunForecast {
@@ -158,6 +168,10 @@ export interface RunForecast {
   loads:         number | null
   /** Loads if every hog in the window cured at once. A floor, not a plan. */
   loadsIfCombined: number | null
+  /** House time across the whole run, day by day. */
+  houseMinutes:    number | null
+  /** The changeover the house time was laid out on, for the panel to cite. */
+  changeoverMinutes: number
   firstDate:   string | null
   lastDate:    string | null
 }
@@ -167,6 +181,11 @@ export function racksFromCounts(
   counts:   Record<string, number>,
   profiles: CookProfile[],
 ): ForecastRack[] {
+  // One load, door to door. The fitted p50 is time in the house; prep and
+  // pack-out are the crew's own minutes either side and both default to 0
+  // until someone sets them, so this is a floor on the real day.
+  const perLoad = (p: CookProfile) => p.p50_minutes + p.setup_minutes + p.teardown_minutes
+
   const byProfile = new Map(profiles.map(p => [p.profile_key, p]))
   const racks = new Map<string, ForecastRack>()
 
@@ -182,6 +201,8 @@ export function racksFromCounts(
         unitsPerBatch: profile?.units_per_batch ?? null,
         unitLabel:     profile?.unit_label ?? null,
         loads: null, spaceLeft: null,
+        perLoadMinutes: profile ? perLoad(profile) : null,
+        cookMinutes:    null,
       }
       racks.set(spec.group, rack)
     }
@@ -196,8 +217,30 @@ export function racksFromCounts(
     const cap = loadsFor(rack.slots, rack.unitsPerBatch)
     rack.loads     = cap.loads
     rack.spaceLeft = cap.spaceLeft
+    rack.cookMinutes = rack.loads != null && rack.perLoadMinutes != null
+      ? rack.loads * rack.perLoadMinutes
+      : null
   }
   return [...racks.values()].sort((a, b) => b.pieces - a.pieces)
+}
+
+/**
+ * How long the house is tied up by a set of racks.
+ *
+ * The smokehouse is ONE lane (lib/cookPredict.ts), so loads don't overlap: the
+ * time is every load's own cook end to end, plus the house changeover between
+ * each pair. Changeovers are counted ACROSS racks, not within one, because the
+ * lane doesn't care whether the next load is hams or bacon.
+ */
+export function houseMinutesFor(
+  racks:    ForecastRack[],
+  settings: CookSettings = DEFAULT_SETTINGS,
+): number | null {
+  const timed = racks.filter(r => r.cookMinutes != null && r.loads != null)
+  if (!timed.length) return null
+  const cook  = timed.reduce((n, r) => n + (r.cookMinutes ?? 0), 0)
+  const loads = timed.reduce((n, r) => n + (r.loads ?? 0), 0)
+  return cook + Math.max(0, loads - 1) * settings.changeover_minutes
 }
 
 const addInto = (into: Record<string, number>, from: Record<string, number>) => {
@@ -222,6 +265,7 @@ export function forecastRun(
   sheets:    SheetRow[],
   profiles:  CookProfile[],
   rate?:     HogRate,
+  settings:  CookSettings = DEFAULT_SETTINGS,
 ): RunForecast {
   const learned = rate ?? learnHogRate(sheets)
   const byAppt = new Map<string, SheetRow[]>()
@@ -288,6 +332,7 @@ export function forecastRun(
       loads: racks.some(r => r.loads != null)
         ? racks.reduce((n, r) => n + (r.loads ?? 0), 0)
         : null,
+      houseMinutes: houseMinutesFor(racks, settings),
     })
   }
 
@@ -312,6 +357,12 @@ export function forecastRun(
     loadsIfCombined: combined.some(r => r.loads != null)
       ? combined.reduce((n, r) => n + (r.loads ?? 0), 0)
       : null,
+    // Summed per day, not off the combined racks: a day's changeovers only
+    // exist within that day's own run of loads.
+    houseMinutes: out.some(d => d.houseMinutes != null)
+      ? out.reduce((n, d) => n + (d.houseMinutes ?? 0), 0)
+      : null,
+    changeoverMinutes: settings.changeover_minutes,
     firstDate: dates.length ? dates[0] : null,
     lastDate:  dates.length ? dates[dates.length - 1] : null,
   }
