@@ -1,5 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
+import { feedbackSpec } from '@/lib/feedbackTypes'
 import { supabase } from '@/lib/supabase'
 
 export async function GET() {
@@ -50,7 +51,9 @@ export async function POST(req: NextRequest) {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        type:        body.type === 'bug' ? '🐛 Bug' : '💡 Idea',
+        // Label off the shared spec — this said '💡 Idea' for anything that
+        // wasn't a bug, which would have relabelled a safety report.
+        type:        feedbackSpec(body.type).chip,
         submitter:   who,
         page_url:    page,
         description: body.description,

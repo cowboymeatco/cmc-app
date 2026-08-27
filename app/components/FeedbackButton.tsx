@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { usePathname } from 'next/navigation'
 import { installTelemetry, addBreadcrumb, getTelemetry } from '@/lib/feedbackTelemetry'
 import { PhotoButton } from '@/app/cleaning/ui'
+import { FEEDBACK_TYPES, feedbackSpec, type FeedbackType } from '@/lib/feedbackTypes'
 
 const C = {
   dark:       '#1A0A04',
@@ -16,15 +17,16 @@ const C = {
   amber:      '#F59E0B',
 }
 
-// Three destinations behind one button.
+// Two destinations behind one button.
 //
-// 'bug' and 'idea' are about the software and go to Charlie's punch list.
+// Everything in FEEDBACK_TYPES (bug, idea, customer incident, safety) goes to
+// Charlie's punch list in the feedback table.
 // 'cleaning' is about the plant — buildup on a machine, something the night
 // crew missed — and goes to the cleaning issue inbox instead. Same button
 // because the day crew spots these while they're on /processing or the
 // scanner, not while browsing a cleaning menu, and a second floating button
 // would be clutter competing with this one.
-type ReportType = 'bug' | 'idea' | 'cleaning'
+type ReportType = FeedbackType | 'cleaning'
 
 export default function FeedbackButton() {
   const pathname = usePathname()
@@ -201,7 +203,10 @@ export default function FeedbackButton() {
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ color: C.cream, fontWeight: 700, fontSize: 15 }}>
-                {type === 'cleaning' ? 'Report a Cleaning Issue' : 'Send Feedback'}
+                {type === 'cleaning' ? 'Report a Cleaning Issue'
+                  : type === 'incident' ? 'Report a Customer Incident'
+                  : type === 'safety' ? 'Report a Safety Issue'
+                  : 'Send Feedback'}
               </span>
               <button
                 onClick={() => setOpen(false)}
@@ -212,7 +217,7 @@ export default function FeedbackButton() {
             </div>
 
             <div style={{ display: 'flex', gap: 6 }}>
-              {(['bug', 'idea', 'cleaning'] as const).map(t => (
+              {([...FEEDBACK_TYPES.map(f => f.key), 'cleaning'] as ReportType[]).map(t => (
                 <button
                   key={t}
                   onClick={() => setType(t)}
@@ -224,11 +229,12 @@ export default function FeedbackButton() {
                     background: type === t ? C.medBrown : 'transparent',
                     color:      type === t ? C.cream : C.tan,
                     cursor:     'pointer',
-                    fontSize:   12,
+                    fontSize:   11,
                     fontWeight: type === t ? 700 : 400,
+                    whiteSpace: 'nowrap',
                   } as React.CSSProperties}
                 >
-                  {t === 'bug' ? '🐛 Bug' : t === 'idea' ? '💡 Idea' : '🧽 Cleaning'}
+                  {t === 'cleaning' ? '🧽 Cleaning' : feedbackSpec(t).chip}
                 </button>
               ))}
             </div>
@@ -319,8 +325,7 @@ export default function FeedbackButton() {
               value={description}
               onChange={e => setDescription(e.target.value)}
               placeholder={
-                type === 'bug'      ? 'What went wrong?' :
-                type === 'idea'     ? 'What would make this better?' :
+                type !== 'cleaning' ? feedbackSpec(type).placeholder :
                 intent === 'miss'   ? "What wasn't clean?" :
                                       'What needs cleaning or fixing tonight?'
               }
@@ -387,7 +392,7 @@ export default function FeedbackButton() {
             <div style={{ fontSize: 11, color: C.lightBrown, textAlign: 'center' }}>
               {type === 'cleaning'
                 ? 'Goes to the cleaning crew’s inbox'
-                : `page: ${pathname}`}
+                : (feedbackSpec(type).note || `page: ${pathname}`)}
             </div>
           </div>
         </div>

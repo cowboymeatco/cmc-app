@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { FEEDBACK_TYPES, feedbackSpec, type FeedbackType } from '@/lib/feedbackTypes'
 
 const C = {
   dark:       '#1A0A04',
@@ -18,7 +19,7 @@ interface Breadcrumb { t: string; kind: string; label: string }
 interface FeedbackItem {
   id:          string
   created_at:  string
-  type:        'bug' | 'idea'
+  type:        string
   description: string
   submitter:   string | null
   page_url:    string | null
@@ -97,7 +98,7 @@ function Diagnostics({ item }: { item: FeedbackItem }) {
 export default function FeedbackPage() {
   const [items, setItems]     = useState<FeedbackItem[]>([])
   const [loading, setLoading] = useState(true)
-  const [filter, setFilter]   = useState<'all' | 'new' | 'bug' | 'idea'>('new')
+  const [filter, setFilter]   = useState<'all' | 'new' | FeedbackType>('new')
 
   useEffect(() => {
     fetch('/api/feedback')
@@ -115,13 +116,16 @@ export default function FeedbackPage() {
   }
 
   const filtered = items.filter(i => {
-    if (filter === 'new')  return i.status === 'new'
-    if (filter === 'bug')  return i.type === 'bug'
-    if (filter === 'idea') return i.type === 'idea'
-    return true
+    if (filter === 'new') return i.status === 'new'
+    if (filter === 'all') return true
+    return i.type === filter
   })
 
   const newCount = items.filter(i => i.status === 'new').length
+  const newByType = items.reduce((m, i) => {
+    if (i.status === 'new') m.set(i.type, (m.get(i.type) ?? 0) + 1)
+    return m
+  }, new Map<string, number>())
 
   return (
     <div style={{ minHeight: '100vh', background: C.dark, padding: 24, fontFamily: 'system-ui, sans-serif' }}>
@@ -136,7 +140,12 @@ export default function FeedbackPage() {
         </div>
 
         <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
-          {(['new', 'bug', 'idea', 'all'] as const).map(f => (
+          {/* One tab per reportable type, off FEEDBACK_TYPES, so a category
+              added to the widget can't go missing here — which is how a safety
+              report would end up filed among the suggestions. Counts are shown
+              for the types that carry something new, so an empty Safety tab
+              doesn't read as unread work. */}
+          {(['new', ...FEEDBACK_TYPES.map(t => t.key), 'all'] as const).map(f => (
             <button
               key={f}
               onClick={() => setFilter(f)}
@@ -151,7 +160,9 @@ export default function FeedbackPage() {
                 fontWeight:   filter === f ? 700 : 400,
               } as React.CSSProperties}
             >
-              {f === 'new' ? `New (${newCount})` : f === 'bug' ? '🐛 Bugs' : f === 'idea' ? '💡 Ideas' : 'All'}
+              {f === 'new' ? `New (${newCount})`
+                : f === 'all' ? 'All'
+                : `${feedbackSpec(f).tab}${newByType.get(f) ? ` (${newByType.get(f)})` : ''}`}
             </button>
           ))}
         </div>
@@ -180,14 +191,14 @@ export default function FeedbackPage() {
               <div style={{ flex: 1 }}>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
                   <span style={{
-                    background:   item.type === 'bug' ? C.red : C.amber,
+                    background:   feedbackSpec(item.type).color,
                     color:        '#fff',
                     fontSize:     11,
                     fontWeight:   700,
                     padding:      '2px 8px',
                     borderRadius: 4,
                   }}>
-                    {item.type === 'bug' ? '🐛 BUG' : '💡 IDEA'}
+                    {feedbackSpec(item.type).badge}
                   </span>
                   {item.status === 'done'      && <span style={{ fontSize: 11, color: C.green,  fontWeight: 700 }}>✓ DONE</span>}
                   {item.status === 'dismissed' && <span style={{ fontSize: 11, color: C.tan }}>DISMISSED</span>}
