@@ -5,6 +5,7 @@ import { isCureTagNumber, type ProcessingInput, type CureTag } from '@/lib/types
 import { isoDate } from '@/lib/dates'
 import { speciesIcon, speciesFromDescription } from '@/lib/cutSchedule'
 
+import CustomerPicker, { type CustomerName } from './CustomerPicker'
 const C = {
   dark:       '#1A0A04',
   darkBrown:  '#351E0E',
@@ -446,6 +447,10 @@ export default function ScannerPage() {
   // instead of "Unknown Item".
   const [retiredPluMap, setRetiredPluMap] = useState<Record<string, string>>({})
   const [pluLoaded, setPluLoaded] = useState(false)
+  // Names the office has already used, offered when a session is opened so the
+  // floor's shorthand stops forking off the cut sheet. See CustomerPicker.
+  const [custNames, setCustNames] = useState<CustomerName[]>([])
+  const [custAliases, setCustAliases] = useState<{ alias: string; expands_to: string }[]>([])
 
   // ── Session ──────────────────────────────────────────────────────────────────
   const [customer, setCustomer] = useState('')
@@ -646,6 +651,18 @@ export default function ScannerPage() {
       setSessions(Array.isArray(data) ? data as SessionWithStats[] : [])
     } catch { /* keep what's on screen — a failed refresh shouldn't empty the list */ }
     setSessionsLoading(false)
+  }, [])
+
+  // Failing to load these leaves the field a plain text box, which is exactly
+  // what it was before — never a reason to stop the crew opening a session.
+  useEffect(() => {
+    fetch('/api/scanner/customer-names')
+      .then(r => r.json())
+      .then(d => {
+        setCustNames(Array.isArray(d?.names) ? d.names : [])
+        setCustAliases(Array.isArray(d?.aliases) ? d.aliases : [])
+      })
+      .catch(() => { /* suggestions are a convenience, not a gate */ })
   }, [])
 
   useEffect(() => { loadSessions() }, [loadSessions])
@@ -2491,9 +2508,14 @@ export default function ScannerPage() {
               <h2 style={{ fontFamily: 'Georgia, serif', color: C.cream, fontSize: '1.1rem', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 1.5rem' }}>New Session</h2>
               <div style={{ marginBottom: '1rem' }}>
                 <label style={LBL}>Customer</label>
-                <input autoFocus style={INPUT} value={customer} onChange={e => setCustomer(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter' && customer.trim() && pluLoaded) { setShowNewForm(false); startSession() } }}
-                  placeholder="Customer name" />
+                <CustomerPicker
+                  autoFocus
+                  value={customer}
+                  onChange={setCustomer}
+                  onEnter={() => { if (customer.trim() && pluLoaded) { setShowNewForm(false); startSession() } }}
+                  names={custNames}
+                  aliases={custAliases}
+                />
               </div>
               <div style={{ marginBottom: '1rem' }}>
                 <label style={LBL}>Box Type</label>
