@@ -25,9 +25,9 @@ export const MIN_WEIGHED_FOR_ESTIMATE = 5
 //
 // The house is counted in SLOTS, not pieces: a belly takes a whole comb, but
 // shoulder bacon hangs two to a comb (Charlie, 2026-08-27), so 30 shoulder
-// bacons cost 15 combs against the 72. Hocks, jowls and loins have no counted
-// capacity yet — they show as pieces and stay out of the load math rather than
-// being invented into it.
+// bacons cost 15 combs against the 72. Jowls and loins have no counted capacity
+// yet — they show as pieces and stay out of the load math rather than being
+// invented into it.
 export interface RackSpec {
   group: string; label: string; profileKey: string | null
   /** Pieces that share one slot on the rack. 1 = one each. */
@@ -38,7 +38,11 @@ const RACK: Record<string, RackSpec> = {
   'Bacon':          { group: 'bacon', label: 'Bacon comb', profileKey: 'SMKD BACON',        perSlot: 1 },
   'Shoulder Bacon': { group: 'bacon', label: 'Bacon comb', profileKey: 'SMKD BACON',        perSlot: 2 },
   'Bone-In Loin':   { group: 'loin',  label: 'Loins',      profileKey: 'BONE IN PORKCHOP',  perSlot: 1 },
-  'Hocks':          { group: 'hocks', label: 'Hocks',      profileKey: null,                perSlot: 1 },
+  // Hocks ride the ham rack (Charlie, 2026-08-27), so they cost ham capacity
+  // rather than sitting outside the load math. Counted one to a slot because
+  // that is all that was said — if several hocks share a ham's place, perSlot
+  // is the one number to change.
+  'Hocks':          { group: 'ham',   label: 'Ham rack',   profileKey: 'BONE IN HAM',       perSlot: 1 },
   'Jowl':           { group: 'jowl',  label: 'Jowls',      profileKey: null,                perSlot: 1 },
 }
 const OTHER: RackSpec = { group: 'other', label: 'Other', profileKey: null, perSlot: 1 }
