@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase'
 // protect it — the anon grant has to come off the view itself, which means
 // this read moves to the service role. Server-side only.
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
-import { nameKey } from '@/lib/nameKey'
+import { aliasMap, nameKeyWith, type CustomerNameAlias } from '@/lib/nameKey'
 import { extractValueAdd } from '@/lib/valueAdd'
 
 export const dynamic = 'force-dynamic'
@@ -95,6 +95,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(data)
   }
 
+  // Cure products that can only have come off a hog, so they are never shown
+  // against a customer's beef or lamb sheet.
+  const PORK_ONLY = new Set(['Ham', 'Shoulder Bacon', 'Hocks', 'Jowl', 'Bone-In Loin'])
+
   if (type === 'value_add') {
     // Who ordered which value-add product, from the CUT SHEETS (what the
     // customer asked for), not the packed scans — the source of truth before
@@ -105,6 +109,13 @@ export async function GET(req: NextRequest) {
       supabase.from('harvest_appointments').select('id, harvest_date, customers'),
       supabase.from('cure_tags').select('tag_number, product, customer_name, status'),
     ])
+    // What the floor's shorthand stands for — see lib/nameKey. Read separately
+    // so a failure here degrades to plain word-matching instead of blanking the
+    // whole report.
+    const { data: aliasRows } = await supabase
+      .from('customer_name_aliases').select('alias, expands_to')
+    const aliases = aliasMap((aliasRows ?? []) as CustomerNameAlias[])
+    const key = (raw: string | null | undefined) => nameKeyWith(raw, aliases)
     if (ciErr) return NextResponse.json({ error: ciErr.message }, { status: 500 })
 
     // Seal tags by customer — the ACTUAL pieces riding through the cure cooler,
@@ -122,13 +133,13 @@ export async function GET(req: NextRequest) {
     const tagNamesByKey = new Map<string, Set<string>>()
     for (const t of cureTags ?? []) {
       const raw = String(t.customer_name ?? '').trim()
-      const key = nameKey(raw)
-      const list = tagsByName.get(key) ?? []
+      const k = key(raw)
+      const list = tagsByName.get(k) ?? []
       list.push({ tag_number: String(t.tag_number), product: String(t.product), status: String(t.status) })
-      tagsByName.set(key, list)
-      const names = tagNamesByKey.get(key) ?? new Set<string>()
+      tagsByName.set(k, list)
+      const names = tagNamesByKey.get(k) ?? new Set<string>()
       names.add(raw)
-      tagNamesByKey.set(key, names)
+      tagNamesByKey.set(k, names)
     }
 
     // ci id → scheduled harvest date, and ci id → the customer SLOTS it's linked
@@ -221,7 +232,14 @@ export async function GET(req: NextRequest) {
         // animal, carrying its id so a split animal counts once in a total.
         carcasses:     carcassesFor(ci.id as string).map(id => ({ id, lbs: wtByLog.get(id) ?? null })),
         products:      extractValueAdd(ci.species as string, ci.data),
-        cure_tags:     tagsByName.get(nameKey(ci.customer_name as string)) ?? [],
+        // A customer with several sheets gets their tags shown against each,
+        // because a tag knows whose piece it is and not which of their animals.
+        // That is tolerable for a hog and a hog; it is nonsense for a ham on a
+        // lamb sheet, and Kristin has six sheets across four species. Only the
+        // products that can ONLY come off a hog are held back — bacon stays
+        // unfiltered because beef bacon is a real thing we cure.
+        cure_tags:     (tagsByName.get(key(ci.customer_name as string)) ?? [])
+                         .filter(t => !(PORK_ONLY.has(t.product) && ci.species !== 'Pork')),
       }
     }).filter(r =>
       r.products.length > 0 &&
@@ -240,7 +258,7 @@ export async function GET(req: NextRequest) {
     //
     // Matched against every live sheet, not just the ones inside the date
     // window, so narrowing the dates doesn't manufacture orphans.
-    const sheetKeys = new Set((cis ?? []).map(ci => nameKey(ci.customer_name as string)))
+    const sheetKeys = new Set((cis ?? []).map(ci => key(ci.customer_name as string)))
     const unmatchedTags = [...tagsByName.entries()]
       .filter(([key]) => !sheetKeys.has(key))
       .map(([key, tags]) => ({

@@ -2,7 +2,7 @@ export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { extractValueAdd } from '@/lib/valueAdd'
-import { nameKey } from '@/lib/nameKey'
+import { aliasMap, nameKeyWith, type CustomerNameAlias } from '@/lib/nameKey'
 import { CureTag } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
@@ -56,19 +56,36 @@ export async function GET(req: NextRequest) {
   // "MT Veterans Meat Locker Kristin" — and an exact match silently found
   // nothing, which is indistinguishable on screen from a sheet that asked for
   // nothing (Charlie, 2026-08-27). `sheetFound` tells those two apart.
-  const sheetByName = new Map<string, { species: string | null; data: unknown }>()
+  const { data: aliasRows } = await supabase
+    .from('customer_name_aliases').select('alias, expands_to')
+  const aliases = aliasMap((aliasRows ?? []) as CustomerNameAlias[])
+  const key = (raw: string | null | undefined) => nameKeyWith(raw, aliases)
+
+  // ALL of a customer's sheets, not just their latest. Keeping one per name
+  // meant a customer with a hog sheet and a lamb sheet had their hams looked up
+  // against whichever was written last — Kristin has six sheets across four
+  // species, and her hams came back "not on the sheet" from her lamb card.
+  // Newest first, so the answer comes from the most recent sheet that actually
+  // asks for the piece.
+  const sheetsByName = new Map<string, { species: string | null; data: unknown }[]>()
   for (const ci of cis ?? []) {
-    const key = nameKey(ci.customer_name as string)
-    if (key) sheetByName.set(key, { species: ci.species as string | null, data: ci.data })
+    const k = key(ci.customer_name as string)
+    if (!k) continue
+    const list = sheetsByName.get(k) ?? []
+    list.unshift({ species: ci.species as string | null, data: ci.data })
+    sheetsByName.set(k, list)
   }
 
   const withInstructions = (tags as CureTag[]).map(tag => {
-    const sheet = sheetByName.get(nameKey(tag.customer_name))
-    if (!sheet) return { ...tag, instruction: null, sheetFound: false }
+    const sheets = sheetsByName.get(key(tag.customer_name))
+    if (!sheets?.length) return { ...tag, instruction: null, sheetFound: false }
     const wanted = SHEET_PRODUCT[tag.product]
     if (!wanted) return { ...tag, instruction: null, sheetFound: true }
-    const item = extractValueAdd(sheet.species, sheet.data).find(it => it.product === wanted)
-    return { ...tag, instruction: item ? (item.detail ?? 'On sheet — no cut style given') : null, sheetFound: true }
+    for (const sheet of sheets) {
+      const item = extractValueAdd(sheet.species, sheet.data).find(it => it.product === wanted)
+      if (item) return { ...tag, instruction: item.detail ?? 'On sheet — no cut style given', sheetFound: true }
+    }
+    return { ...tag, instruction: null, sheetFound: true }
   })
   return NextResponse.json(withInstructions)
 }
