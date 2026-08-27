@@ -202,7 +202,7 @@ interface RevenueData {
   species: RevSpecies[]
   totals: { earned: number; scheduled: number; total: number }
   books: {
-    customProcessing: number; wildGame: number
+    customProcessing: number
     shipping: number; discounts: number; other: number; through: string
   } | null
   booksError: string | null
@@ -1086,15 +1086,15 @@ export default function ExecPage() {
                 {' '}<strong style={{ color: C.tan, fontWeight: 600 }}>Value add, retail and wholesale come off the books instead</strong> —
                 nothing schedules a walk-in or a pallet going out the door, so those three are the daily QuickBooks P&amp;L by income
                 account and they stop at {revenue.books ? revenue.books.through : 'today'}, with no forward book. Value add is the
-                smokehouse&apos;s own account plus its product sold over the counter; retail is the beef, hog, lamb, organ and vendor
+                smokehouse&apos;s own account, wild game, and its product sold over the counter; retail is the beef, hog, lamb, organ and vendor
                 cases; wholesale is beef, hog and lamb sold on, which is mostly where our own animals turn into money.
                 {revenue.booksError && (
                   <span style={{ color: WARN_COLOR }}> QuickBooks did not answer, so value add, retail and wholesale are missing here: {revenue.booksError}</span>
                 )}
                 {revenue.books && (
                   <>
-                    {' '}Outside these {revenue.enterprises.length} over the same days: wild game {usd(revenue.books.wildGame)},
-                    shipping {usd(revenue.books.shipping)}, discounts {usd(revenue.books.discounts)}
+                    {' '}Outside these {revenue.enterprises.length} over the same days: shipping {usd(revenue.books.shipping)},
+                    discounts {usd(revenue.books.discounts)}
                     {Math.abs(revenue.books.other) >= 1 && `, other income ${usd(revenue.books.other)}`}.
                     {' '}QuickBooks booked {usd(revenue.books.customProcessing)} of custom kill &amp; processing in those days against the
                     {' '}{usd(revenue.enterprises.filter(e => e.source === 'schedule').reduce((a, e) => a + e.earned, 0))} of harvest and

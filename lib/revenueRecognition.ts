@@ -34,7 +34,7 @@ export type EnterpriseSource = 'schedule' | 'books'
 export const ENTERPRISES: { key: EnterpriseKey; label: string; source: EnterpriseSource; blurb: string }[] = [
   { key: 'harvest',    label: 'Harvest',    source: 'schedule', blurb: 'kill fees, recognized on kill day' },
   { key: 'processing', label: 'Processing', source: 'schedule', blurb: 'cut & wrap, recognized on the day the carcass is broken' },
-  { key: 'valueAdd',   label: 'Value add',  source: 'books',    blurb: 'the smokehouse: custom smoking plus its own product over the counter' },
+  { key: 'valueAdd',   label: 'Value add',  source: 'books',    blurb: 'the smokehouse: custom smoking, wild game, and its own product over the counter' },
   { key: 'retail',     label: 'Retail',     source: 'books',    blurb: 'the case — beef, hog, lamb, organ and vendor sales' },
   { key: 'wholesale',  label: 'Wholesale',  source: 'books',    blurb: 'carcasses and boxes sold on, mostly our own animals' },
 ]
@@ -52,13 +52,19 @@ export const ENTERPRISES: { key: EnterpriseKey; label: string; source: Enterpris
 // harvest and processing on purpose — we don't invoice ourselves a kill fee —
 // so this is the line that shows what that side of the plant actually earns.
 //
+// Wild game sits with value add (Charlie, 2026-08-27) — it is the same
+// smokehouse, the same sausage kitchen and the same crew, billed off its own
+// rate card. $23k over the two years to Aug 2026, and it lands in the fall,
+// so it stops being a rounding error exactly when the kill floor slows down.
+//
 // Deliberately unmapped, and reported separately underneath: the custom
 // kill & processing accounts (that money is what the schedule-fed harvest and
-// processing figures model — counting both would double it), wild game,
-// shipping, and discounts, which can't be attributed to one floor.
+// processing figures model — counting both would double it), shipping, and
+// discounts, which can't be attributed to one floor.
 export const INCOME_ACCOUNT_ENTERPRISE: Record<string, EnterpriseKey> = {
   'CMC Custom Smokehouse': 'valueAdd',
   'Smokehouse Sales': 'valueAdd',
+  'Wild Game Processing': 'valueAdd',
   'Beef Retail Sales': 'retail',
   'Hog Retail Sales': 'retail',
   'Lamb/Sheep Retail Sales': 'retail',
@@ -74,7 +80,6 @@ export const UNMAPPED_INCOME: Record<string, keyof BooksContext> = {
   'CMC Custom Beef Processing': 'customProcessing',
   'CMC Custom Hog Processing': 'customProcessing',
   'CMC Custom Lamb/Sheep/Goat Processing': 'customProcessing',
-  'Wild Game Processing': 'wildGame',
   'Shipping Income': 'shipping',
   'Discounts': 'discounts',
 }
@@ -84,7 +89,6 @@ export interface BooksContext {
    *  days. Not expected to equal the modelled harvest + processing: the gap is
    *  the invoice lag this whole view exists to remove. */
   customProcessing: number
-  wildGame: number
   shipping: number
   discounts: number
   other: number
@@ -262,7 +266,7 @@ export function booksFromDailyPnl(
 ): BooksInput {
   const byDay = new Map<string, Partial<Record<EnterpriseKey, number>>>()
   const context: BooksContext = {
-    customProcessing: 0, wildGame: 0, shipping: 0, discounts: 0, other: 0,
+    customProcessing: 0, shipping: 0, discounts: 0, other: 0,
   }
   let attributed = 0
 
