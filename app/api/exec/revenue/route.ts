@@ -2,7 +2,7 @@ export const runtime = 'edge'
 export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { requireExec } from '@/lib/execGate'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import {
   booksFromDailyPnl, buildRevenueRecognition, placedCutDays, speciesAverages,
   type AppointmentRow, type BooksInput, type HarvestRow, type PlanRow,
@@ -39,15 +39,15 @@ export async function GET(req: NextRequest) {
     const from = addDaysISO(start, -LOOKBACK_DAYS)
 
     const [harvestRes, apptRes, planRes, avgRes] = await Promise.all([
-      supabase.from('harvest_log')
+      supabaseAdmin.from('harvest_log')
         .select('id, harvest_date, species, status, producer, carcass_tag, hot_carcass_weight_lbs, appointment_id')
         .gte('harvest_date', from).lte('harvest_date', end),
-      supabase.from('harvest_appointments')
+      supabaseAdmin.from('harvest_appointments')
         .select('id, harvest_date, species, head_count, producer_id, customers')
         .gte('harvest_date', from).lte('harvest_date', end),
       // The plan is one ordered list under a single schedule_date, so it can't
       // be date-filtered here; the newest few dozen rows always cover it.
-      supabase.from('cut_schedule_items')
+      supabaseAdmin.from('cut_schedule_items')
         .select('kind, schedule_date, manual_rank, break_date, appointment_id, future_appointment_id')
         .order('schedule_date', { ascending: false })
         .order('manual_rank', { ascending: true })
@@ -55,7 +55,7 @@ export async function GET(req: NextRequest) {
       // A year of real carcass weights, for pricing animals that aren't on the
       // rail yet. Wider than the window on purpose — a quiet fortnight would
       // otherwise set the average for every booking behind it.
-      supabase.from('harvest_log')
+      supabaseAdmin.from('harvest_log')
         .select('species, hot_carcass_weight_lbs')
         .gte('harvest_date', addDaysISO(today, -365)),
     ])
@@ -68,10 +68,12 @@ export async function GET(req: NextRequest) {
 
     // Producer names live on the customer record; harvest_appointments only
     // carries the id. Own animals have to be recognizable by name, so this
-    // join isn't optional.
+    // join isn't optional — and `customers` is under RLS, which is why this
+    // whole route reads through the service-role client like every other
+    // /api/exec route. The anon key gets "permission denied" here.
     const producerIds = [...new Set((apptRes.data ?? []).map(a => a.producer_id).filter(Boolean))] as string[]
     const custRes = producerIds.length
-      ? await supabase.from('customers').select('id, name').in('id', producerIds)
+      ? await supabaseAdmin.from('customers').select('id, name').in('id', producerIds)
       : { data: [], error: null }
     if (custRes.error) throw new Error(custRes.error.message)
     const producerName = new Map((custRes.data ?? []).map(c => [c.id as string, (c.name as string) ?? '']))
@@ -86,7 +88,7 @@ export async function GET(req: NextRequest) {
 
     // The day each carcass was really broken, off the packing scans.
     const packRes = logIds.length
-      ? await supabase.from('processing_inputs')
+      ? await supabaseAdmin.from('processing_inputs')
           .select('linked_harvest_id, pack_date')
           .in('linked_harvest_id', logIds)
           .not('pack_date', 'is', null)

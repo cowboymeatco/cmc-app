@@ -175,7 +175,7 @@ interface SmokehouseData {
 }
 
 // Revenue recognition — see /api/exec/revenue and lib/revenueRecognition.
-type EnterpriseKey = 'harvest' | 'processing' | 'valueAdd' | 'retail'
+type EnterpriseKey = 'harvest' | 'processing' | 'valueAdd' | 'retail' | 'wholesale'
 interface RevenueDay {
   date: string
   earned: Record<EnterpriseKey, number>
@@ -202,7 +202,7 @@ interface RevenueData {
   species: RevSpecies[]
   totals: { earned: number; scheduled: number; total: number }
   books: {
-    customProcessing: number; wholesale: number; wildGame: number
+    customProcessing: number; wildGame: number
     shipping: number; discounts: number; other: number; through: string
   } | null
   booksError: string | null
@@ -214,18 +214,20 @@ interface RevenueData {
   speciesAvgLbs: Record<string, number>
 }
 
-// Four hues that read as siblings rather than as good-vs-bad — every one of
-// these is income, so the green/orange used in the break-even chart would say
-// the wrong thing here.
+// Hues that read as siblings rather than as good-vs-bad — every one of these is
+// income, so the green/orange used in the break-even chart would say the wrong
+// thing here.
 const ENTERPRISE_COLOR: Record<EnterpriseKey, string> = {
   harvest: '#E8883A',
   processing: '#5B8DBE',
   valueAdd: '#A97BC4',
   retail: '#4FA97A',
+  wholesale: '#D98BA6',
 }
-const ENTERPRISE_ORDER: EnterpriseKey[] = ['harvest', 'processing', 'valueAdd', 'retail']
+const ENTERPRISE_ORDER: EnterpriseKey[] = ['harvest', 'processing', 'valueAdd', 'retail', 'wholesale']
 const ENTERPRISE_LABEL: Record<EnterpriseKey, string> = {
-  harvest: 'Harvest', processing: 'Processing', valueAdd: 'Value add', retail: 'Retail',
+  harvest: 'Harvest', processing: 'Processing', valueAdd: 'Value add',
+  retail: 'Retail', wholesale: 'Wholesale',
 }
 
 const REV_WINDOWS = [
@@ -1020,7 +1022,7 @@ export default function ExecPage() {
                   sub="booked, not yet worked" />
                 {revenue.enterprises.map(e => (
                   <StatTile key={e.key} label={e.label} value={usd(e.total)} accent={ENTERPRISE_COLOR[e.key]}
-                    sub={`${e.sharePct}% of the four${e.head > 0 ? ` · ${usd(e.perHead)}/head` : ' · from the books'}`} />
+                    sub={`${e.sharePct}% of the mix${e.head > 0 ? ` · ${usd(e.perHead)}/head` : ' · from the books'}`} />
                 ))}
               </div>
 
@@ -1075,22 +1077,23 @@ export default function ExecPage() {
                 {' '}{revenue.coverage.cutDayScanned} have a scanned cut day, {revenue.coverage.cutDayPlanned} a planned one
                 and {revenue.coverage.cutDayProjected} a projected one.
                 {revenue.coverage.bookedHead > 0 && ` ${revenue.coverage.bookedHead} head are booked but not yet killed, priced at the species average.`}
-                {revenue.coverage.ownHead > 0 && ` ${revenue.coverage.ownHead} of our own animals are counted as head only — that money shows up in retail, not here.`}
+                {revenue.coverage.ownHead > 0 && ` ${revenue.coverage.ownHead} of our own animals are counted as head only — we don't invoice ourselves a kill fee, so what they earn lands under wholesale and retail instead.`}
                 {' '}Lamb and goat are billed one flat all-in fee at cut time, so their whole ticket sits under processing —
                 splitting it across the two floors would be a guess.
                 {revenue.coverage.unpriced.length > 0 && (
                   <span style={{ color: WARN_COLOR }}> Unpriced: {revenue.coverage.unpriced.join('; ')}.</span>
                 )}
-                {' '}<strong style={{ color: C.tan, fontWeight: 600 }}>Value add and retail come off the books instead</strong> —
-                nothing schedules a walk-in, so they are the daily QuickBooks P&amp;L by income account and they stop at
-                {' '}{revenue.books ? revenue.books.through : 'today'}, with no forward book. Value add is the smokehouse&apos;s own
-                account plus its product sold over the counter; retail is the beef, hog, lamb, organ and vendor cases.
+                {' '}<strong style={{ color: C.tan, fontWeight: 600 }}>Value add, retail and wholesale come off the books instead</strong> —
+                nothing schedules a walk-in or a pallet going out the door, so those three are the daily QuickBooks P&amp;L by income
+                account and they stop at {revenue.books ? revenue.books.through : 'today'}, with no forward book. Value add is the
+                smokehouse&apos;s own account plus its product sold over the counter; retail is the beef, hog, lamb, organ and vendor
+                cases; wholesale is beef, hog and lamb sold on, which is mostly where our own animals turn into money.
                 {revenue.booksError && (
-                  <span style={{ color: WARN_COLOR }}> QuickBooks did not answer, so value add and retail are missing here: {revenue.booksError}</span>
+                  <span style={{ color: WARN_COLOR }}> QuickBooks did not answer, so value add, retail and wholesale are missing here: {revenue.booksError}</span>
                 )}
                 {revenue.books && (
                   <>
-                    {' '}Outside these four over the same days: wholesale {usd(revenue.books.wholesale)}, wild game {usd(revenue.books.wildGame)},
+                    {' '}Outside these {revenue.enterprises.length} over the same days: wild game {usd(revenue.books.wildGame)},
                     shipping {usd(revenue.books.shipping)}, discounts {usd(revenue.books.discounts)}
                     {Math.abs(revenue.books.other) >= 1 && `, other income ${usd(revenue.books.other)}`}.
                     {' '}QuickBooks booked {usd(revenue.books.customProcessing)} of custom kill &amp; processing in those days against the

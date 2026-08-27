@@ -18,7 +18,7 @@ import { killFeeCharge, cutWrapCharge, isExcludedProducer } from './billingRules
 import { projectedCutDate } from './cutSchedule'
 import { addDaysISO } from './dates'
 
-export type EnterpriseKey = 'harvest' | 'processing' | 'valueAdd' | 'retail'
+export type EnterpriseKey = 'harvest' | 'processing' | 'valueAdd' | 'retail' | 'wholesale'
 
 /** Where an enterprise's numbers come from. The two are not interchangeable and
  *  the page says which is which:
@@ -26,8 +26,9 @@ export type EnterpriseKey = 'harvest' | 'processing' | 'valueAdd' | 'retail'
  *    The only way to separate the kill floor from the cut floor, because
  *    QuickBooks posts both to one "CMC Custom … Processing" account. Carries a
  *    forward book.
- *  - 'books': the actual daily P&L. Nothing schedules a walk-in, so retail and
- *    the smokehouse have no forward book and stop at today. */
+ *  - 'books': the actual daily P&L. Nothing schedules a walk-in or a pallet
+ *    going out the door, so retail, the smokehouse and wholesale have no
+ *    forward book and stop at today. */
 export type EnterpriseSource = 'schedule' | 'books'
 
 export const ENTERPRISES: { key: EnterpriseKey; label: string; source: EnterpriseSource; blurb: string }[] = [
@@ -35,6 +36,7 @@ export const ENTERPRISES: { key: EnterpriseKey; label: string; source: Enterpris
   { key: 'processing', label: 'Processing', source: 'schedule', blurb: 'cut & wrap, recognized on the day the carcass is broken' },
   { key: 'valueAdd',   label: 'Value add',  source: 'books',    blurb: 'the smokehouse: custom smoking plus its own product over the counter' },
   { key: 'retail',     label: 'Retail',     source: 'books',    blurb: 'the case — beef, hog, lamb, organ and vendor sales' },
+  { key: 'wholesale',  label: 'Wholesale',  source: 'books',    blurb: 'carcasses and boxes sold on, mostly our own animals' },
 ]
 
 // ── Which income account belongs to which enterprise ──────────────────────────
@@ -46,10 +48,14 @@ export const ENTERPRISES: { key: EnterpriseKey; label: string; source: Enterpris
 // so it sits with the custom smoking rather than with the case. One line to
 // move if that's the wrong call.
 //
+// Wholesale is where our OWN animals turn into money. They're held out of
+// harvest and processing on purpose — we don't invoice ourselves a kill fee —
+// so this is the line that shows what that side of the plant actually earns.
+//
 // Deliberately unmapped, and reported separately underneath: the custom
 // kill & processing accounts (that money is what the schedule-fed harvest and
-// processing figures model — counting both would double it), wholesale, wild
-// game, shipping, and discounts, which can't be attributed to one floor.
+// processing figures model — counting both would double it), wild game,
+// shipping, and discounts, which can't be attributed to one floor.
 export const INCOME_ACCOUNT_ENTERPRISE: Record<string, EnterpriseKey> = {
   'CMC Custom Smokehouse': 'valueAdd',
   'Smokehouse Sales': 'valueAdd',
@@ -58,16 +64,16 @@ export const INCOME_ACCOUNT_ENTERPRISE: Record<string, EnterpriseKey> = {
   'Lamb/Sheep Retail Sales': 'retail',
   'Organ Sales': 'retail',
   'Vendor Retail Sales': 'retail',
+  'CMC Wholesale Beef Sales': 'wholesale',
+  'CMC Wholesale Hog Sales': 'wholesale',
+  'CMC Wholesale Lamb Sales': 'wholesale',
 }
 
-/** Accounts held out of the four enterprises, grouped for the footnote. */
+/** Income held out of the enterprises entirely, grouped for the footnote. */
 export const UNMAPPED_INCOME: Record<string, keyof BooksContext> = {
   'CMC Custom Beef Processing': 'customProcessing',
   'CMC Custom Hog Processing': 'customProcessing',
   'CMC Custom Lamb/Sheep/Goat Processing': 'customProcessing',
-  'CMC Wholesale Beef Sales': 'wholesale',
-  'CMC Wholesale Hog Sales': 'wholesale',
-  'CMC Wholesale Lamb Sales': 'wholesale',
   'Wild Game Processing': 'wildGame',
   'Shipping Income': 'shipping',
   'Discounts': 'discounts',
@@ -78,7 +84,6 @@ export interface BooksContext {
    *  days. Not expected to equal the modelled harvest + processing: the gap is
    *  the invoice lag this whole view exists to remove. */
   customProcessing: number
-  wholesale: number
   wildGame: number
   shipping: number
   discounts: number
@@ -257,7 +262,7 @@ export function booksFromDailyPnl(
 ): BooksInput {
   const byDay = new Map<string, Partial<Record<EnterpriseKey, number>>>()
   const context: BooksContext = {
-    customProcessing: 0, wholesale: 0, wildGame: 0, shipping: 0, discounts: 0, other: 0,
+    customProcessing: 0, wildGame: 0, shipping: 0, discounts: 0, other: 0,
   }
   let attributed = 0
 
@@ -311,7 +316,7 @@ const r2 = (n: number) => Math.round(n * 100) / 100
 const isFlatAllIn = (species: string) => species === 'Lamb' || species === 'Goat'
 
 const zeroByEnterprise = (): Record<EnterpriseKey, number> =>
-  ({ harvest: 0, processing: 0, valueAdd: 0, retail: 0 })
+  ({ harvest: 0, processing: 0, valueAdd: 0, retail: 0, wholesale: 0 })
 
 export function buildRevenueRecognition(input: BuildInput): RevenueRecognition {
   const { start, end, today, harvests, appointments, packDayByLogId, plannedCutDayByLogId, speciesAvgLbs, books } = input
