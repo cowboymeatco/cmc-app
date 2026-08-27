@@ -20,24 +20,36 @@ import type { CookProfile } from '@/lib/cookPredict'
 /** Below this many weighed pieces, a per-piece average is noise, not evidence. */
 export const MIN_WEIGHED_FOR_ESTIMATE = 5
 
-// A tag's product → the rack it hangs on, and the cook profile that owns that
-// rack's capacity. Shoulder bacon rides the bacon combs, so it counts against
-// the same 72 (said out loud on the board so it can be corrected). Hocks, jowls
-// and loins have no counted capacity yet: they show as pieces and stay out of
-// the load math rather than being invented into it.
-const RACK: Record<string, { group: string; label: string; profileKey: string | null }> = {
-  'Ham':            { group: 'ham',   label: 'Ham rack',   profileKey: 'BONE IN HAM' },
-  'Bacon':          { group: 'bacon', label: 'Bacon comb', profileKey: 'SMKD BACON' },
-  'Shoulder Bacon': { group: 'bacon', label: 'Bacon comb', profileKey: 'SMKD BACON' },
-  'Bone-In Loin':   { group: 'loin',  label: 'Loins',      profileKey: 'BONE IN PORKCHOP' },
-  'Hocks':          { group: 'hocks', label: 'Hocks',      profileKey: null },
-  'Jowl':           { group: 'jowl',  label: 'Jowls',      profileKey: null },
+// A tag's product → the rack it hangs on, the cook profile that owns that
+// rack's capacity, and how many of the piece share one slot on it.
+//
+// The house is counted in SLOTS, not pieces: a belly takes a whole comb, but
+// shoulder bacon hangs two to a comb (Charlie, 2026-08-27), so 30 shoulder
+// bacons cost 15 combs against the 72. Hocks, jowls and loins have no counted
+// capacity yet — they show as pieces and stay out of the load math rather than
+// being invented into it.
+export interface RackSpec {
+  group: string; label: string; profileKey: string | null
+  /** Pieces that share one slot on the rack. 1 = one each. */
+  perSlot: number
 }
-const OTHER = { group: 'other', label: 'Other', profileKey: null }
+const RACK: Record<string, RackSpec> = {
+  'Ham':            { group: 'ham',   label: 'Ham rack',   profileKey: 'BONE IN HAM',       perSlot: 1 },
+  'Bacon':          { group: 'bacon', label: 'Bacon comb', profileKey: 'SMKD BACON',        perSlot: 1 },
+  'Shoulder Bacon': { group: 'bacon', label: 'Bacon comb', profileKey: 'SMKD BACON',        perSlot: 2 },
+  'Bone-In Loin':   { group: 'loin',  label: 'Loins',      profileKey: 'BONE IN PORKCHOP',  perSlot: 1 },
+  'Hocks':          { group: 'hocks', label: 'Hocks',      profileKey: null,                perSlot: 1 },
+  'Jowl':           { group: 'jowl',  label: 'Jowls',      profileKey: null,                perSlot: 1 },
+}
+const OTHER: RackSpec = { group: 'other', label: 'Other', profileKey: null, perSlot: 1 }
+
+export const rackFor = (product: string): RackSpec => RACK[product] ?? OTHER
 
 export interface ProductLine {
   product:     string
   pieces:      number
+  /** Rack slots those pieces cost — combs, not bellies. */
+  slots:       number
   weighed:     number   // pieces with a real weight on the tag
   weighedLbs:  number   // sum of those weights
   /** Median weighed piece, or null when too few weighed pieces to say. */
@@ -51,6 +63,9 @@ export interface RackLoad {
   products: ProductLine[]
 
   pieces:      number
+  /** What those pieces cost in rack slots. Equals pieces unless something
+      shares a slot, which today only shoulder bacon does. */
+  slots:       number
   weighed:     number
   unweighed:   number
   weighedLbs:  number
@@ -67,13 +82,14 @@ export interface RackLoad {
   unitLabel:     string | null
   /** Loads this rack needs at the counted capacity. Null when uncounted. */
   loads:         number | null
-  /** Room left on the last, partial load — how much more the house can take. */
+  /** Slots still free on the last load — how much more the house can take. */
   spaceLeft:     number | null
 }
 
 export interface CureLoadSummary {
   racks:        RackLoad[]
   pieces:       number
+  slots:        number
   unweighed:    number
   weighedLbs:   number
   estimatedLbs: number
@@ -91,6 +107,14 @@ function median(v: number[]): number | null {
 
 const round1 = (n: number) => Math.round(n * 10) / 10
 
+/** How many loads a slot count needs, and what's left free on the last one. */
+export function loadsFor(slots: number, unitsPerBatch: number | null | undefined):
+  { loads: number | null; spaceLeft: number | null } {
+  if (!unitsPerBatch || unitsPerBatch <= 0) return { loads: null, spaceLeft: null }
+  const loads = Math.ceil(slots / unitsPerBatch)
+  return { loads, spaceLeft: loads * unitsPerBatch - slots }
+}
+
 /**
  * Roll a set of cure tags up into rack loads.
  *
@@ -101,18 +125,20 @@ export function summarizeCure(tags: CureTag[], profiles: CookProfile[]): CureLoa
   const byProfile = new Map(profiles.map(p => [p.profile_key, p]))
 
   interface Line extends ProductLine {
-    group: string; label: string; profileKey: string | null; weights: number[]
+    group: string; label: string; profileKey: string | null
+    perSlot: number; weights: number[]
   }
   const lines = new Map<string, Line>()
   let oldest: string | null = null
 
   for (const t of tags) {
-    const rack = RACK[t.product] ?? OTHER
+    const rack = rackFor(t.product)
     let line = lines.get(t.product)
     if (!line) {
       line = {
-        product: t.product, pieces: 0, weighed: 0, weighedLbs: 0, perPieceLbs: null,
-        group: rack.group, label: rack.label, profileKey: rack.profileKey, weights: [],
+        product: t.product, pieces: 0, slots: 0, weighed: 0, weighedLbs: 0, perPieceLbs: null,
+        group: rack.group, label: rack.label, profileKey: rack.profileKey,
+        perSlot: rack.perSlot, weights: [],
       }
       lines.set(t.product, line)
     }
@@ -130,6 +156,9 @@ export function summarizeCure(tags: CureTag[], profiles: CookProfile[]): CureLoa
   for (const line of lines.values()) {
     line.perPieceLbs = line.weighed >= MIN_WEIGHED_FOR_ESTIMATE ? round1(median(line.weights) ?? 0) : null
     line.weighedLbs  = round1(line.weighedLbs)
+    // Whole slots per product — you don't leave half a comb for a ham to
+    // finish, so the remainder of each product rounds up on its own.
+    line.slots = Math.ceil(line.pieces / line.perSlot)
   }
 
   const racks = new Map<string, RackLoad>()
@@ -139,7 +168,7 @@ export function summarizeCure(tags: CureTag[], profiles: CookProfile[]): CureLoa
       const profile = line.profileKey ? byProfile.get(line.profileKey) ?? null : null
       rack = {
         group: line.group, label: line.label, products: [],
-        pieces: 0, weighed: 0, unweighed: 0, weighedLbs: 0, estimatedLbs: 0, totalLbs: 0,
+        pieces: 0, slots: 0, weighed: 0, unweighed: 0, weighedLbs: 0, estimatedLbs: 0, totalLbs: 0,
         weightComplete: false,
         profileKey:    line.profileKey,
         displayName:   profile?.display_name ?? null,
@@ -152,11 +181,13 @@ export function summarizeCure(tags: CureTag[], profiles: CookProfile[]): CureLoa
     rack.products.push({
       product:     line.product,
       pieces:      line.pieces,
+      slots:       line.slots,
       weighed:     line.weighed,
       weighedLbs:  line.weighedLbs,
       perPieceLbs: line.perPieceLbs,
     })
     rack.pieces     += line.pieces
+    rack.slots      += line.slots
     rack.weighed    += line.weighed
     rack.weighedLbs += line.weighedLbs
     // Each product estimates its own remainder — a shoulder bacon is not a
@@ -171,10 +202,9 @@ export function summarizeCure(tags: CureTag[], profiles: CookProfile[]): CureLoa
     rack.estimatedLbs   = round1(rack.estimatedLbs)
     rack.totalLbs       = round1(rack.weighedLbs + rack.estimatedLbs)
     rack.weightComplete = rack.unweighed === 0 && rack.pieces > 0
-    if (rack.unitsPerBatch && rack.unitsPerBatch > 0) {
-      rack.loads     = Math.ceil(rack.pieces / rack.unitsPerBatch)
-      rack.spaceLeft = rack.loads * rack.unitsPerBatch - rack.pieces
-    }
+    const cap = loadsFor(rack.slots, rack.unitsPerBatch)
+    rack.loads     = cap.loads
+    rack.spaceLeft = cap.spaceLeft
   }
 
   const all     = [...racks.values()].sort((a, b) => b.pieces - a.pieces)
@@ -183,6 +213,7 @@ export function summarizeCure(tags: CureTag[], profiles: CookProfile[]): CureLoa
   return {
     racks:        all,
     pieces:       all.reduce((n, r) => n + r.pieces, 0),
+    slots:        all.reduce((n, r) => n + r.slots, 0),
     unweighed:    all.reduce((n, r) => n + r.unweighed, 0),
     weighedLbs:   round1(all.reduce((n, r) => n + r.weighedLbs, 0)),
     estimatedLbs: round1(all.reduce((n, r) => n + r.estimatedLbs, 0)),

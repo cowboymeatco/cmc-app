@@ -15,6 +15,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import type { CureLoadSummary, RackLoad } from '@/lib/cureLoad'
+import HogForecastPanel from './HogForecastPanel'
 
 const C = {
   dark:       '#1A0A04',
@@ -79,6 +80,9 @@ function RackCard({ rack }: { rack: RackLoad }) {
               {rack.loads} load{rack.loads === 1 ? '' : 's'}
             </Pill>
             <span style={{ fontSize: '0.72rem', color: C.lightBrown }}>
+              {/* Slots, not pieces, once something shares one — shoulder bacon
+                  hangs two to a comb, so 30 of them cost 15 of the 72. */}
+              {rack.slots !== rack.pieces && `${rack.slots} ${unit} · `}
               at {rack.unitsPerBatch} {unit} a load
               {rack.spaceLeft ? ` · room for ${rack.spaceLeft} more on the last one` : ' · the last load is full'}
             </span>
@@ -97,7 +101,9 @@ function RackCard({ rack }: { rack: RackLoad }) {
           {rack.products.map(p => (
             <div key={p.product} style={{ display: 'flex', gap: '0.5rem', fontSize: '0.78rem', color: C.tan }}>
               <span style={{ minWidth: 130 }}>{p.product}</span>
-              <span style={{ color: C.cream }}>{p.pieces}</span>
+              <span style={{ color: C.cream }}>
+                {p.pieces}{p.slots !== p.pieces ? ` (${p.slots} combs)` : ''}
+              </span>
               <span style={{ color: C.lightBrown }}>
                 {p.weighed > 0
                   ? `${p.weighedLbs} lb over ${p.weighed} weighed`
@@ -161,9 +167,12 @@ export default function CureTab() {
   }
   if (!data || data.pieces === 0) {
     return (
-      <div style={{ color: C.lightBrown, padding: '2rem 0', lineHeight: 1.7 }}>
-        Nothing is in cure. Pieces land here the moment a numbered seal is scanned
-        at the gun — no separate entry, no list to keep.
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div style={{ color: C.lightBrown, padding: '1rem 0', lineHeight: 1.7 }}>
+          Nothing is in cure. Pieces land here the moment a numbered seal is scanned
+          at the gun — no separate entry, no list to keep.
+        </div>
+        <HogForecastPanel />
       </div>
     )
   }
@@ -213,11 +222,13 @@ export default function CureTab() {
         {data.racks.map(r => <RackCard key={r.group} rack={r} />)}
       </div>
 
+      <HogForecastPanel />
+
       <div style={{ fontSize: '0.72rem', color: C.lightBrown, lineHeight: 1.7 }}>
         Load sizes were counted on the floor, not fitted from the controller logs —
-        24 hams and 72 bacons to a load (Charlie, 2026-08-25). Shoulder bacon is
-        counted against the bacon comb; change either number, or give another rack
-        a size, under 🌡️ Cook Profiles on the Schedule tab.
+        24 hams to a load and 72 combs of bacon, two shoulder bacons to a comb
+        (Charlie, 2026-08-25 and 08-27). Change either number, or give another
+        rack a size, under 🌡️ Cook Profiles on the Schedule tab.
         <br />
         Piece by piece — whose it is, days in cure, marking one done — is the
         operational board on{' '}
