@@ -13,9 +13,9 @@
 --      Pepperjack (PJ), Mozzarella (MZ), Ghost Pepper (GP). Deriving "has
 --      cheese" from the product name missed GP entirely, billing a cheese
 --      product at $4.50 instead of $5.25.
---   3. CURING IS $2.50/# on the slip. QuickBooks item 97 says $2.00. One of
---      them is wrong and a human has to say which — see the note on the seed
---      row below.
+--   3. CURING IS $2.50/# on the slip; QuickBooks item 97 said $2.00. Settled
+--      2026-08-26 — Charlie chose the slip, and item 97 was raised to $2.50 in
+--      QuickBooks so the books agree. All 19 wild game rates now match QBO.
 --
 -- ── The structural lesson ──────────────────────────────────────────────
 -- On the slip, cheese is its OWN column: you pick a flavour, then tick w/
@@ -119,7 +119,7 @@ INSERT INTO game_rates (key, label, unit, rate, cheese_rate, qbo_item_id, qbo_it
    'Slip offers 1#, 1.5# and 2# packages at one rate.'),
   ('slicing',   'Slicing',                'lb',  2.00, NULL, '101', 'WILD GAME SLICING',            'other',   80, ''),
   ('curing',    'Curing',                 'lb',  2.50, NULL, '97',  'WILD GAME CURING',             'other',   90,
-   'MISMATCH: slip says $2.50/#, QuickBooks item 97 says $2.00. Seeded from the slip. Jill to settle which is right.'),
+   'Slip price. QuickBooks item 97 was $2.00 and was changed to $2.50 on 2026-08-26 so the two agree.'),
   ('add_pork_trim', 'Add Pork Trim (PT)', 'lb',  2.79, NULL, '985', 'WILD GAME ADD PORK TRIM',      'other',  100, ''),
   ('add_beef_trim', 'Add Beef Trim (BT)', 'lb',  4.99, NULL, '986', 'WILD GAME ADD BEEF TRIM',      'other',  110, ''),
   ('add_pork_fat',  'Add Pork Fat (PF)',  'lb',  1.79, NULL, '987', 'WILD GAME ADD PORK FAT',       'other',  120, ''),
