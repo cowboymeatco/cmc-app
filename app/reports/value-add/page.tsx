@@ -66,6 +66,21 @@ const tagsFor = (s: Sheet, col: string) =>
 const tagText = (tags: { tag_number: string; status: string }[]) =>
   tags.map(t => `${t.tag_number}${t.status === 'done' ? '✓' : ''}`).join(' · ')
 
+const HAM_COL = 'Cured & Smoked Ham'
+
+// One line per physical ham, keyed by the seal tag the crew reads off the piece.
+// Charlie's ask (2026-08-28): standing at the rack you have a tag number in your
+// hand, not a customer name, and what you need off it is how to cut that ham.
+interface HamRow {
+  tag:       string | null   // null = the sheet ordered it, nothing tagged in yet
+  status:    string | null   // 'curing' | 'done'
+  customer:  string
+  date:      string | null
+  cut:       string          // how to process it, straight off the cut sheet
+  ambiguous: boolean         // sheet carries two ham styles — can't say which tag is which
+  note:      string
+}
+
 // Column order for the value-add matrix — the way the cut walks the hog, ending
 // with the smokehouse. Anything not listed sorts after, alphabetically.
 const COL_ORDER = [
@@ -102,6 +117,12 @@ const hangText = (s: Sheet) => {
 
 const speciesEmoji = (s: string | null) =>
   s === 'Pork' ? '🐷' : s === 'Beef' ? '🐄' : s === 'Lamb' ? '🐑' : s === 'Goat' ? '🐐' : '🥩'
+
+const TH: React.CSSProperties = {
+  textAlign: 'left', padding: '0.6rem 0.85rem', color: C.tan, fontWeight: 700,
+  whiteSpace: 'nowrap', fontSize: '0.76rem', textTransform: 'uppercase', letterSpacing: '0.05em',
+}
+const TD: React.CSSProperties = { padding: '0.55rem 0.85rem', color: C.cream, verticalAlign: 'top' }
 
 function toCSV(rows: Record<string, unknown>[]): string {
   if (!rows.length) return ''
@@ -141,6 +162,11 @@ export default function ValueAddReport() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
 
+  const [mode,    setMode]    = useState<'all' | 'ham'>('all')
+  // Hams the sheet ordered with no seal on them yet. Off by default: over a
+  // year they outnumber the tagged ones three to one — every ham cut before we
+  // started tagging is one — and this page is read to look a tag UP.
+  const [withUntagged, setWithUntagged] = useState(false)
   const [species, setSpecies] = useState('Pork') // hogs first
   const [search,  setSearch]  = useState('')
   const [sortKey, setSortKey] = useState<'date' | 'customer'>('date')
@@ -169,10 +195,15 @@ export default function ValueAddReport() {
     [sheets],
   )
 
+  // Cured ham only comes off a hog (lib/cureLoad PORK_ONLY_CURE_PRODUCTS), so the
+  // ham view pins the species rather than letting a leftover Beef selection draw
+  // an empty page that reads as "no hams".
+  const effSpecies = mode === 'ham' ? 'Pork' : species
+
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase()
     const out = sheets.filter(s => {
-      if (species !== 'all' && s.species !== species) return false
+      if (effSpecies !== 'all' && s.species !== effSpecies) return false
       if (q && !s.customer_name.toLowerCase().includes(q)) return false
       return true
     })
@@ -182,7 +213,7 @@ export default function ValueAddReport() {
         : (b.date ?? '').localeCompare(a.date ?? '') || a.customer_name.localeCompare(b.customer_name),
     )
     return out
-  }, [sheets, species, search, sortKey])
+  }, [sheets, effSpecies, search, sortKey])
 
   // Columns present in the filtered rows, in cut order. Cell = the detail
   // (brats "German · 25 lb") when the sheet carries it, else a plain check.
@@ -217,7 +248,129 @@ export default function ValueAddReport() {
     return [...byCarcass.values()].reduce((a, b) => a + b, 0)
   }, [rows])
 
+  // The ham list, keyed by the seal number — one line per physical ham.
+  //
+  // Keyed, not listed: a cure tag knows whose ham it is, not which of that
+  // customer's animals, so an unpinned tag draws against EVERY sheet that
+  // customer has (see the cure_tags note in app/api/reports). Building a row per
+  // sheet printed one Montana Veterans ham four times under four different
+  // instructions — worse than useless at the rack. So every sighting of a tag is
+  // merged first, and the row says only what all of them agree on.
+  const hamRows = useMemo<HamRow[]>(() => {
+    interface Acc {
+      tag: string; status: string
+      customers: Set<string>; dates: Set<string>; cuts: Set<string>
+      sheets: number          // sheets this tag was drawn against
+      sheetsOrdering: number  // ...of which actually order a cured ham
+    }
+    const byTag = new Map<string, Acc>()
+    const untagged: HamRow[] = []
+
+    for (const s of rows) {
+      const items = itemsFor(s, HAM_COL)
+      const tags  = tagsFor(s, HAM_COL)
+      if (!items.length && !tags.length) continue
+      const details = [...new Set(items.map(it => it.detail).filter(Boolean))] as string[]
+      for (const t of tags) {
+        const a = byTag.get(t.tag_number) ?? {
+          tag: t.tag_number, status: t.status, customers: new Set<string>(),
+          dates: new Set<string>(), cuts: new Set<string>(), sheets: 0, sheetsOrdering: 0,
+        }
+        // Collapsed whitespace, not just trimmed: the office has this customer
+        // filed twice with a double space inside the name, and a raw Set kept
+        // both, printing one customer three times across a single ham's row.
+        a.customers.add(String(s.customer_name ?? '').replace(/\s+/g, ' ').trim())
+        if (s.date) a.dates.add(s.date)
+        for (const d of details) a.cuts.add(d)
+        a.sheets++
+        if (items.length) a.sheetsOrdering++
+        byTag.set(t.tag_number, a)
+      }
+      // Ordered but unaccounted for: what the sheet asked for, less the seals
+      // actually hanging. These are the hams still to be tagged in.
+      const ordered = items.reduce((n, it) => n + qtyOf(it), 0)
+      for (let i = tags.length; i < ordered; i++) {
+        untagged.push({
+          tag: null, status: null, date: s.date,
+          customer: String(s.customer_name ?? '').replace(/\s+/g, ' ').trim(),
+          cut: details.join('  /  '), ambiguous: details.length > 1,
+          note: 'Not tagged into the cure cooler yet',
+        })
+      }
+    }
+
+    const out: HamRow[] = [...byTag.values()].map(a => {
+      const cuts = [...a.cuts]
+      // One seal, two instructions — either the sheet orders two hams cut two
+      // ways, or the tag isn't pinned to one of the customer's several animals.
+      // Both are a person's call, so both styles print with the reason.
+      const ambiguous = cuts.length > 1
+      const note = !a.sheetsOrdering
+        ? 'No cured ham on this customer’s cut sheet — ask the office'
+        : ambiguous
+          ? a.sheets > 1
+            ? 'This customer has more than one sheet and they differ — pin the tag to its animal on Processing → In Cure'
+            : 'This sheet orders two ham styles — confirm which'
+          : ''
+      return {
+        tag: a.tag, status: a.status,
+        customer: [...a.customers].sort().join(' / '),
+        // Every kill date this tag could belong to. One when the tag is pinned
+        // or the customer has a single sheet, which is the normal case.
+        date: [...a.dates].sort().join(' / ') || null,
+        cut: cuts.join('  /  '), ambiguous, note,
+      }
+    })
+
+    // Ham seals filed under a name no cut sheet uses. On the matrix these sit in
+    // their own banner; here they belong in the list, because the crew looks a
+    // tag up BY NUMBER and "not found" reads the same as "not ours".
+    const q = search.trim().toLowerCase()
+    for (const g of unmatched) {
+      if (q && !g.names.some(n => n.toLowerCase().includes(q))) continue
+      for (const t of g.tags) {
+        if ((TAG_COL[t.product] ?? t.product) !== HAM_COL) continue
+        out.push({
+          tag: t.tag_number, status: t.status, customer: g.names.join(' / '), date: null,
+          cut: '', ambiguous: false,
+          note: 'No cut sheet under this name — ask the office before cutting',
+        })
+      }
+    }
+
+    // Tag order, because that is the order the crew reads them in — seals are
+    // fixed width with a leading zero, so a string sort IS numeric order. The
+    // untagged hams land at the end: there is no number to look them up by.
+    out.sort((a, b) => (a.tag ?? '').localeCompare(b.tag ?? '') || a.customer.localeCompare(b.customer))
+    untagged.sort((a, b) => a.customer.localeCompare(b.customer) || (a.date ?? '').localeCompare(b.date ?? ''))
+    return [...out, ...untagged]
+  }, [rows, unmatched, search])
+
+  const hamStats = useMemo(() => ({
+    curing:   hamRows.filter(h => h.status === 'curing').length,
+    done:     hamRows.filter(h => h.status === 'done').length,
+    untagged: hamRows.filter(h => !h.tag).length,
+  }), [hamRows])
+
+  const hamShown = useMemo(
+    () => withUntagged ? hamRows : hamRows.filter(h => h.tag),
+    [hamRows, withUntagged],
+  )
+
+  const hasRows = mode === 'ham' ? hamShown.length > 0 : rows.length > 0
+
   function exportCSV() {
+    if (mode === 'ham') {
+      download(toCSV(hamShown.map(h => ({
+        cure_tag:   h.tag ?? '',
+        status:     h.tag ? h.status ?? '' : 'not tagged in',
+        customer:   h.customer,
+        kill_date:  h.date ?? '',
+        how_to_cut: h.cut,
+        note:       [h.note, h.ambiguous ? 'Two ham styles on this sheet — confirm which' : ''].filter(Boolean).join(' · '),
+      }))), `hams_${from}_to_${to}.csv`)
+      return
+    }
     const out = rows.map(s => {
       const base: Record<string, unknown> = {
         date: s.date ?? '', customer: s.customer_name, species: s.species ?? '',
@@ -237,7 +390,67 @@ export default function ValueAddReport() {
   // Print the current filtered matrix — a landscape sheet that mirrors what's on
   // screen (same counts, cut styles and totals), opened in its own window so the
   // page's dark UI chrome never bleeds into the print.
+  // The ham sheet — one line per piece, tag number first and big, because it is
+  // read off a seal at the rack. Portrait: five columns, not the matrix's thirty.
+  function printHams() {
+    const bodyRows = hamShown.map(h => {
+      const note = h.note ? `<div class="${h.ambiguous || !h.cut ? 'warn' : 'note'}">${h.ambiguous || !h.cut ? '⚠ ' : ''}${escHtml(h.note)}</div>` : ''
+      return `<tr>
+        <td class="tag">${h.tag ? escHtml(h.tag) : '<span class="untag">— no tag —</span>'}</td>
+        <td class="ctr">${h.tag ? (h.status === 'done' ? '✓ Out of cure' : 'In cure') : ''}</td>
+        <td class="cust">${escHtml(h.customer)}</td>
+        <td class="date">${escHtml(h.date ?? '')}</td>
+        <td class="cut">${escHtml(h.cut) || '<span class="untag">not on the sheet</span>'}${note}</td>
+      </tr>`
+    }).join('')
+    const generated = new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>Ham Processing — ${escHtml(from)} to ${escHtml(to)}</title>
+<style>
+  @page { size: letter portrait; margin: 0.5in }
+  * { box-sizing: border-box; margin: 0; padding: 0 }
+  body { font-family: Arial, sans-serif; color: #000; font-size: 10pt }
+  .hdr { text-align: center; margin-bottom: 10px }
+  .company { font-size: 15pt; font-weight: bold; letter-spacing: 0.06em; text-transform: uppercase }
+  .title { font-size: 12pt; font-weight: bold; letter-spacing: 0.14em; text-transform: uppercase; margin-top: 6px; border-top: 2pt solid #000; border-bottom: 2pt solid #000; padding: 4px 0 }
+  .meta { display: flex; justify-content: space-between; margin: 8px 2px; font-size: 9pt; color: #333 }
+  table { width: 100%; border-collapse: collapse; font-size: 9pt }
+  th, td { border: 0.5pt solid #999; padding: 4px 5px; vertical-align: top }
+  th { background: #eee; font-size: 7.5pt; text-transform: uppercase; letter-spacing: 0.04em; text-align: left }
+  td.tag { font-family: 'Courier New', monospace; font-size: 13pt; font-weight: bold; letter-spacing: 0.06em; white-space: nowrap }
+  td.ctr { text-align: center; white-space: nowrap; font-size: 8pt }
+  td.cust { font-weight: bold }
+  td.date { white-space: nowrap; font-family: monospace; font-size: 8pt }
+  td.cut { font-weight: bold }
+  .untag { font-weight: normal; color: #888; font-style: italic }
+  .warn { font-weight: normal; font-size: 7.5pt; margin-top: 2px }
+  .note { font-weight: normal; font-size: 7.5pt; color: #555; margin-top: 2px }
+  tr { page-break-inside: avoid }
+  .foot { margin-top: 8px; font-size: 7.5pt; color: #666; text-align: right }
+</style></head><body>
+  <div class="hdr">
+    <div class="company">Cowboy Meat Company</div>
+    <div class="title">Ham Processing — by cure tag</div>
+  </div>
+  <div class="meta">
+    <span><strong>${hamShown.length}</strong> ham${hamShown.length === 1 ? '' : 's'} &nbsp;·&nbsp; ${hamStats.curing} in cure &nbsp;·&nbsp; ${hamStats.done} out of cure${withUntagged && hamStats.untagged ? ` &nbsp;·&nbsp; ${hamStats.untagged} not tagged in` : ''}${search.trim() ? ` &nbsp;·&nbsp; <strong>Search:</strong> ${escHtml(search.trim())}` : ''}</span>
+    <span><strong>Kill dates:</strong> ${escHtml(fmtDay(from))} – ${escHtml(fmtDay(to))}</span>
+  </div>
+  <table>
+    <thead><tr><th>Cure tag</th><th>Status</th><th>Customer</th><th>Kill date</th><th>How to cut it</th></tr></thead>
+    <tbody>${bodyRows}</tbody>
+  </table>
+  <div class="foot">Cut style is what the customer&rsquo;s cut sheet ordered · Sorted by tag number · Generated ${escHtml(generated)}</div>
+  <script>window.onload = () => setTimeout(() => window.print(), 200)</script>
+</body></html>`
+
+    const w = window.open('', '_blank')
+    if (w) { w.document.write(html); w.document.close() }
+  }
+
   function printReport() {
+    if (mode === 'ham') return printHams()
     const speciesLabel = species === 'all' ? 'All species' : `${speciesEmoji(species)} ${species}`
     const headCols = cols.map(c => `<th class="prod">${escHtml(c)}</th>`).join('')
     const bodyRows = rows.map(s => {
@@ -313,7 +526,9 @@ export default function ValueAddReport() {
             Value-Add Output
           </h1>
           <p style={{ fontSize: '0.68rem', color: C.lightBrown, letterSpacing: '0.12em', textTransform: 'uppercase', margin: 0 }}>
-            Who ordered value-add — off the cut sheets, by kill date
+            {mode === 'ham'
+              ? 'Every cured ham, by the tag number on the seal'
+              : 'Who ordered value-add — off the cut sheets, by kill date'}
           </p>
         </div>
       </header>
@@ -321,32 +536,56 @@ export default function ValueAddReport() {
       <main style={{ padding: '1.5rem 2rem', maxWidth: 1280, margin: '0 auto', boxSizing: 'border-box' }}>
 
 
+        {/* Two ways to read the same sheets: the matrix by customer, and the ham
+            list by cure tag. The tag is what the crew actually holds when they
+            need to know how a ham gets cut (Charlie, 2026-08-28). */}
+        <div style={{ display: 'flex', gap: 0, marginBottom: '1rem', border: `1px solid ${C.medBrown}`, borderRadius: 3, width: 'fit-content', overflow: 'hidden' }}>
+          {([['all', 'All value-add'], ['ham', '🍖 Hams by tag']] as const).map(([m, label]) => (
+            <button key={m} onClick={() => setMode(m)} style={{
+              background: mode === m ? C.tan : 'transparent', color: mode === m ? C.dark : C.tan,
+              border: 'none', padding: '0.45rem 1.1rem', fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer',
+            }}>{label}</button>
+          ))}
+        </div>
+
         {/* Controls */}
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '1rem' }}>
           <input type="date" value={from} onChange={e => setFrom(e.target.value)} style={{ ...INPUT, width: 150 }} />
           <span style={{ color: C.lightBrown, fontSize: '0.8rem' }}>to</span>
           <input type="date" value={to} onChange={e => setTo(e.target.value)} style={{ ...INPUT, width: 150 }} />
-          <select value={species} onChange={e => setSpecies(e.target.value)} style={{ ...INPUT, width: 150 }}>
-            <option value="Pork">🐷 Hogs (Pork)</option>
-            {speciesList.filter(s => s !== 'Pork').map(s => <option key={s} value={s}>{speciesEmoji(s)} {s}</option>)}
-            <option value="all">All species</option>
-          </select>
-          <select value={sortKey} onChange={e => setSortKey(e.target.value as 'date' | 'customer')} style={{ ...INPUT, width: 150 }}>
-            <option value="date">Sort: kill date</option>
-            <option value="customer">Sort: customer</option>
-          </select>
+          {/* Ham view pins the species to hogs, so the selector would only ever
+              lie about what it's filtering — it goes away with the matrix. */}
+          {mode === 'all' && (
+            <select value={species} onChange={e => setSpecies(e.target.value)} style={{ ...INPUT, width: 150 }}>
+              <option value="Pork">🐷 Hogs (Pork)</option>
+              {speciesList.filter(s => s !== 'Pork').map(s => <option key={s} value={s}>{speciesEmoji(s)} {s}</option>)}
+              <option value="all">All species</option>
+            </select>
+          )}
+          {mode === 'all' && (
+            <select value={sortKey} onChange={e => setSortKey(e.target.value as 'date' | 'customer')} style={{ ...INPUT, width: 150 }}>
+              <option value="date">Sort: kill date</option>
+              <option value="customer">Sort: customer</option>
+            </select>
+          )}
+          {mode === 'ham' && hamStats.untagged > 0 && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: C.tan, fontSize: '0.78rem', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+              <input type="checkbox" checked={withUntagged} onChange={e => setWithUntagged(e.target.checked)} />
+              Include {hamStats.untagged} ordered but not tagged in
+            </label>
+          )}
           <input
             placeholder="Search customer…"
             value={search} onChange={e => setSearch(e.target.value)}
             style={{ ...INPUT, flex: 1, minWidth: 160 }}
           />
-          <button onClick={printReport} disabled={!rows.length} style={{
-            background: 'transparent', color: rows.length ? C.tan : C.medBrown, border: `1px solid ${rows.length ? C.tan : C.medBrown}`, borderRadius: 3,
-            padding: '0.5rem 1.1rem', fontSize: '0.82rem', fontWeight: 700, cursor: rows.length ? 'pointer' : 'default',
+          <button onClick={printReport} disabled={!hasRows} style={{
+            background: 'transparent', color: hasRows ? C.tan : C.medBrown, border: `1px solid ${hasRows ? C.tan : C.medBrown}`, borderRadius: 3,
+            padding: '0.5rem 1.1rem', fontSize: '0.82rem', fontWeight: 700, cursor: hasRows ? 'pointer' : 'default',
           }}>🖨 Print</button>
-          <button onClick={exportCSV} disabled={!rows.length} style={{
-            background: rows.length ? C.tan : C.medBrown, color: C.dark, border: 'none', borderRadius: 3,
-            padding: '0.5rem 1.1rem', fontSize: '0.82rem', fontWeight: 700, cursor: rows.length ? 'pointer' : 'default',
+          <button onClick={exportCSV} disabled={!hasRows} style={{
+            background: hasRows ? C.tan : C.medBrown, color: C.dark, border: 'none', borderRadius: 3,
+            padding: '0.5rem 1.1rem', fontSize: '0.82rem', fontWeight: 700, cursor: hasRows ? 'pointer' : 'default',
           }}>⬇ CSV</button>
         </div>
 
@@ -357,6 +596,56 @@ export default function ValueAddReport() {
               <div style={{ padding: '2rem', textAlign: 'center', color: C.lightBrown }}>Loading…</div>
             ) : err ? (
               <div style={{ padding: '2rem', textAlign: 'center', color: C.amber }}>{err}</div>
+            ) : mode === 'ham' ? (
+              !hamShown.length ? (
+                <div style={{ padding: '2rem', textAlign: 'center', color: C.lightBrown }}>No cured hams for these filters.</div>
+              ) : (
+                <table style={{ borderCollapse: 'collapse', fontSize: '0.86rem', width: '100%' }}>
+                  <thead>
+                    <tr style={{ background: 'rgba(166,120,90,0.14)' }}>
+                      <th style={TH}>Cure tag</th>
+                      <th style={{ ...TH, textAlign: 'center' }}>Status</th>
+                      <th style={TH}>Customer</th>
+                      <th style={TH}>Kill date</th>
+                      <th style={TH}>How to cut it</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {hamShown.map((h, i) => (
+                      <tr key={`${h.tag ?? 'x'}-${i}`} style={{ borderTop: '1px solid rgba(166,120,90,0.1)' }}>
+                        <td style={{ ...TD, fontFamily: 'monospace', fontSize: '1.05rem', fontWeight: 700, letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
+                          {h.tag ?? <span style={{ color: 'rgba(166,120,90,0.5)', fontSize: '0.8rem', fontStyle: 'italic', fontWeight: 400 }}>— no tag —</span>}
+                        </td>
+                        <td style={{ ...TD, textAlign: 'center', whiteSpace: 'nowrap', fontSize: '0.76rem', color: h.status === 'done' ? C.green : C.amber }}>
+                          {h.tag ? (h.status === 'done' ? '✓ Out of cure' : 'In cure') : ''}
+                        </td>
+                        <td style={{ ...TD, fontWeight: 600, whiteSpace: 'nowrap' }}>{h.customer}</td>
+                        <td style={{ ...TD, color: C.lightBrown, fontFamily: 'monospace', fontSize: '0.78rem', whiteSpace: 'nowrap' }}>{h.date ?? '—'}</td>
+                        <td style={TD}>
+                          {h.cut
+                            ? <span style={{ color: C.cream, fontWeight: 700 }}>{h.cut}</span>
+                            : <span style={{ color: 'rgba(166,120,90,0.5)', fontStyle: 'italic' }}>not on the sheet</span>}
+                          {/* Amber whenever the row can't be acted on as it
+                              stands — two possible cuts, or no cut at all. */}
+                          {h.note && (
+                            <div style={{ fontSize: '0.7rem', marginTop: 2, color: h.ambiguous || !h.cut ? C.amber : C.lightBrown }}>
+                              {h.ambiguous || !h.cut ? '⚠ ' : ''}{h.note}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr style={{ borderTop: '2px solid rgba(166,120,90,0.4)', background: 'rgba(166,120,90,0.1)' }}>
+                      <td colSpan={5} style={{ padding: '0.55rem 0.85rem', color: C.amber, fontWeight: 800, fontSize: '0.8rem' }}>
+                        {hamShown.length} ham{hamShown.length === 1 ? '' : 's'} · {hamStats.curing} in cure · {hamStats.done} out of cure
+                        {withUntagged && hamStats.untagged > 0 && ` · ${hamStats.untagged} not tagged in`}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              )
             ) : !rows.length ? (
               <div style={{ padding: '2rem', textAlign: 'center', color: C.lightBrown }}>No value-add orders for these filters.</div>
             ) : (
@@ -438,7 +727,7 @@ export default function ValueAddReport() {
             2026-08-27, on MVML Kristin). Naming them is as far as the app can
             honestly go — tying "MVML KRISTIN" to "MT Veterans Meat Locker
             Kristin" is a person's call, not a rule's. */}
-        {unmatched.length > 0 && (
+        {mode === 'all' && unmatched.length > 0 && (
           <div style={{
             marginTop: '1rem', background: 'rgba(232,136,58,0.07)',
             border: `1px solid ${C.amber}`, borderRadius: 4, padding: '0.9rem 1.1rem',
@@ -465,6 +754,19 @@ export default function ValueAddReport() {
           </div>
         )}
 
+        {mode === 'ham' ? (
+          <p style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.75rem', lineHeight: 1.6 }}>
+            One line per <strong style={{ color: C.tan }}>ham</strong>, in cure-tag order, so a seal read off the piece
+            leads straight to <strong style={{ color: C.tan }}>how that ham gets cut</strong> — the cut style comes off
+            the customer&apos;s cut sheet. A <strong style={{ color: C.tan }}>— no tag —</strong> line is a ham the sheet
+            ordered that nothing has been tagged in for yet; it has no number to look up because the seal hasn&apos;t been
+            put on. Where a sheet orders two hams cut two different ways, nothing in the data says which seal got which,
+            so both styles print with a <strong style={{ color: C.amber }}>⚠</strong> — that one is a person&apos;s call.
+            A tag under a name no cut sheet uses is listed too, rather than silently dropped: fix it by renaming the tag
+            on <strong style={{ color: C.cream }}>Processing → In Cure</strong> to match the sheet.
+            Hogs only — cured ham comes off nothing else.
+          </p>
+        ) : (
         <p style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.75rem', lineHeight: 1.6 }}>
           Built from the <strong style={{ color: C.tan }}>cut sheets</strong> — what each customer ordered, before
           anything is made — one row per sheet. Each cell shows <strong style={{ color: C.tan }}>how many</strong> of that
@@ -481,6 +783,7 @@ export default function ValueAddReport() {
           cure — so an ordered ham with no tag under it hasn&apos;t been tagged in yet. Beef &amp; lamb currently show
           the shared smokehouse and ground-sausage items only.
         </p>
+        )}
 
       </main>
     </div>
