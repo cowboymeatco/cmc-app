@@ -66,6 +66,28 @@ export default function CureTagsTab() {
 
   const inCure = tags.filter(t => t.status === 'curing').length
 
+  // Which of a customer's animals this piece came off. Only ever set by hand:
+  // a seal carries a customer, not a carcass, and nothing in the data says
+  // which of Montana Veterans Meat Locker's five hogs a given ham belongs to.
+  async function setAnimal(tag: CureTag, harvestId: string) {
+    setBusyId(tag.id)
+    try {
+      const res = await fetch('/api/cure-tags', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: tag.id, linked_harvest_id: harvestId || null }),
+      })
+      if (!res.ok) throw new Error()
+      // The label comes from the candidate list already on the row, so the
+      // change shows without another round trip.
+      const label = tag.candidates?.find(c => c.id === harvestId)?.label ?? null
+      setTags(prev => prev.map(t => t.id === tag.id
+        ? { ...t, linked_harvest_id: harvestId || null, linkedAnimal: harvestId ? label : null }
+        : t))
+    } catch {
+      setErr('Could not pin that tag to an animal.')
+    } finally { setBusyId(null) }
+  }
+
   async function setStatus(tag: CureTag, status: 'curing' | 'done') {
     setBusyId(tag.id)
     try {
@@ -125,6 +147,7 @@ export default function CureTagsTab() {
                   <th style={th}>Customer</th>
                   <th style={th}>Product</th>
                   <th style={th}>Cut sheet says</th>
+                  <th style={th}>Animal</th>
                   <th style={{ ...th, textAlign: 'right' }}>Weight</th>
                   <th style={th}>Tagged</th>
                   <th style={{ ...th, textAlign: 'center' }}>Days in cure</th>
@@ -151,6 +174,33 @@ export default function CureTagsTab() {
                         ?? (t.sheetFound === false
                           ? '⚠ no cut sheet under this name'
                           : 'not on the sheet')}
+                    </td>
+                    {/* A customer with one animal has nothing to choose, so the
+                        cell just says which one it is. With several, this is
+                        the only place the floor's knowledge of whose hog is
+                        whose can be written down. */}
+                    <td style={td}>
+                      {(t.candidates?.length ?? 0) > 1 ? (
+                        <select
+                          value={t.linked_harvest_id ?? ''}
+                          disabled={busyId === t.id}
+                          onChange={e => setAnimal(t, e.target.value)}
+                          style={{
+                            background: C.dark, color: t.linked_harvest_id ? C.cream : C.lightBrown,
+                            border: `1px solid ${t.linked_harvest_id ? 'rgba(166,120,90,0.4)' : C.amber}`,
+                            borderRadius: 3, fontSize: '0.78rem', padding: '0.25rem 0.4rem', maxWidth: 190,
+                          }}
+                        >
+                          <option value="">— pick the animal —</option>
+                          {t.candidates?.map(c => (
+                            <option key={c.id} value={c.id}>{c.label}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span style={{ color: C.lightBrown, fontSize: '0.8rem' }}>
+                          {t.linkedAnimal ?? t.candidates?.[0]?.label ?? '—'}
+                        </span>
+                      )}
                     </td>
                     <td style={{ ...td, textAlign: 'right', fontFamily: 'monospace' }}>{t.weight_lbs != null ? `${Number(t.weight_lbs).toFixed(2)} lb` : '—'}</td>
                     <td style={{ ...td, color: C.lightBrown, fontFamily: 'monospace' }}>{fmtDay(t.session_date ?? t.created_at.slice(0, 10))}</td>

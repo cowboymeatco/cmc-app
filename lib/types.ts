@@ -339,6 +339,15 @@ export interface CureTag {
   // problem for a person to fix) versus a sheet that didn't order this product
   // (nothing to do) — and the tab read the same for both.
   sheetFound?:   boolean
+  // The carcass this piece came off, pinned by hand when a customer has more
+  // than one animal (Montana Veterans Meat Locker books five hogs under one
+  // account for five different end buyers). Null = not pinned, and the tag
+  // shows against all of that customer's sheets. Never inferred.
+  linked_harvest_id?: string | null
+  // Set by GET ?instructions=1 — a label for the pinned animal, and the animals
+  // on this customer's sheets to choose from.
+  linkedAnimal?: string | null
+  candidates?:   { id: string; label: string }[]
 }
 
 // The seals print as 7 digits with a leading zero ("0341981"). Nothing else in

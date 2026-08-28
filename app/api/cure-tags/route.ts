@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { extractValueAdd } from '@/lib/valueAdd'
 import { aliasMap, nameKeyWith, type CustomerNameAlias } from '@/lib/nameKey'
+import { buildSheetCarcassIndex, sheetSlots, type AssignmentRow, type CarcassRow } from '@/lib/sheetCarcasses'
+import { cureProductFitsSpecies } from '@/lib/cureLoad'
 import { CureTag } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
@@ -45,11 +47,13 @@ export async function GET(req: NextRequest) {
 
   // Latest live cut sheet per customer name — same source the value-add report
   // reads, so the tag list and the matrix always agree on what was ordered.
-  const { data: cis } = await supabase
-    .from('cutting_instructions')
-    .select('customer_name, species, data, created_at')
-    .neq('status', 'archived')
-    .order('created_at', { ascending: true })
+  const [{ data: cis }, { data: appts }] = await Promise.all([
+    supabase.from('cutting_instructions')
+      .select('id, customer_name, species, data, created_at')
+      .neq('status', 'archived')
+      .order('created_at', { ascending: true }),
+    supabase.from('harvest_appointments').select('id, harvest_date, customers'),
+  ])
   //
   // Keyed on nameKey(), not the raw string. The floor types the tag and the
   // office types the sheet, so the spellings rarely agree — "MVML KRISTIN" vs
@@ -67,25 +71,76 @@ export async function GET(req: NextRequest) {
   // species, and her hams came back "not on the sheet" from her lamb card.
   // Newest first, so the answer comes from the most recent sheet that actually
   // asks for the piece.
-  const sheetsByName = new Map<string, { species: string | null; data: unknown }[]>()
+  const sheetsByName = new Map<string, { id: string; species: string | null; data: unknown }[]>()
   for (const ci of cis ?? []) {
     const k = key(ci.customer_name as string)
     if (!k) continue
     const list = sheetsByName.get(k) ?? []
-    list.unshift({ species: ci.species as string | null, data: ci.data })
+    list.unshift({ id: String(ci.id), species: ci.species as string | null, data: ci.data })
     sheetsByName.set(k, list)
+  }
+
+  // The animals behind those sheets, so the tab can offer a customer with
+  // several head a choice of which one a piece came off. Same resolution the
+  // value-add report uses (lib/sheetCarcasses), so the two can't disagree
+  // about whose hog is whose.
+  const slots = sheetSlots(appts)
+  const apptIds = slots.appointmentIds
+  const [{ data: logs }, { data: asgs }] = apptIds.length
+    ? await Promise.all([
+        supabase.from('harvest_log')
+          .select('id, appointment_id, species, carcass_tag, harvest_date, hot_carcass_weight_lbs, half_1_weight_lbs, half_2_weight_lbs')
+          .in('appointment_id', apptIds),
+        supabase.from('carcass_assignments')
+          .select('harvest_log_id, appointment_id, appointment_customer_id, linked_cutting_instruction_id')
+          .in('appointment_id', apptIds),
+      ])
+    : [{ data: [] as CarcassRow[] }, { data: [] as AssignmentRow[] }]
+  const carcassIdx = buildSheetCarcassIndex(slots, asgs, logs)
+  const logById = new Map((logs ?? []).map(l => [String(l.id), l as Record<string, unknown>]))
+
+  const animalLabel = (id: string): string => {
+    const l = logById.get(id)
+    if (!l) return 'Animal off another check-in'
+    const lbs = carcassIdx.weightOf(id)
+    return [
+      (l.species as string) ?? '',
+      l.carcass_tag ? `#${l.carcass_tag as string}` : '',
+      lbs != null ? `${lbs} lb` : '',
+    ].filter(Boolean).join(' · ') || 'Animal'
   }
 
   const withInstructions = (tags as CureTag[]).map(tag => {
     const sheets = sheetsByName.get(key(tag.customer_name))
-    if (!sheets?.length) return { ...tag, instruction: null, sheetFound: false }
-    const wanted = SHEET_PRODUCT[tag.product]
-    if (!wanted) return { ...tag, instruction: null, sheetFound: true }
-    for (const sheet of sheets) {
-      const item = extractValueAdd(sheet.species, sheet.data).find(it => it.product === wanted)
-      if (item) return { ...tag, instruction: item.detail ?? 'On sheet — no cut style given', sheetFound: true }
+    const linked = tag.linked_harvest_id ? String(tag.linked_harvest_id) : null
+    // Every animal on any of this customer's sheets, each once — what the
+    // crew picks from when a name covers more than one head.
+    // Only the animals that could have produced this piece: a ham off a lamb
+    // is not a choice worth offering.
+    const candidates = [...new Set((sheets ?? []).flatMap(sh => carcassIdx.carcassesFor(sh.id)))]
+      .filter(id => cureProductFitsSpecies(tag.product, logById.get(id)?.species as string))
+      .map(id => ({ id, label: animalLabel(id) }))
+    const extra = {
+      sheetFound: Boolean(sheets?.length),
+      candidates,
+      linkedAnimal: linked ? animalLabel(linked) : null,
     }
-    return { ...tag, instruction: null, sheetFound: true }
+    if (!sheets?.length) return { ...tag, instruction: null, ...extra }
+    const wanted = SHEET_PRODUCT[tag.product]
+    if (!wanted) return { ...tag, instruction: null, ...extra }
+    // A pinned tag reads its instruction off the sheet that animal is on.
+    const ordered = linked
+      ? [...sheets].sort((a, b) => {
+          const am = carcassIdx.carcassesFor(a.id).includes(linked) ? 0 : 1
+          const bm = carcassIdx.carcassesFor(b.id).includes(linked) ? 0 : 1
+          return am - bm
+        })
+      : sheets
+    for (const sheet of ordered) {
+      const item = extractValueAdd(sheet.species, sheet.data).find(it => it.product === wanted)
+      if (item) return { ...tag, instruction: item.detail ?? 'On sheet — no cut style given', ...extra }
+    }
+    return { ...tag, instruction: null, ...extra }
   })
   return NextResponse.json(withInstructions)
 }
@@ -125,9 +180,10 @@ export async function POST(req: NextRequest) {
 // PATCH /api/cure-tags — status flip (done stamps completed_at) or field edits
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
-  const { id, status, product, weight_lbs, notes } = body as {
+  const { id, status, product, weight_lbs, notes, linked_harvest_id } = body as {
     id: string; status?: 'curing' | 'done'; product?: string
     weight_lbs?: number | null; notes?: string | null
+    linked_harvest_id?: string | null
   }
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
 
@@ -136,6 +192,8 @@ export async function PATCH(req: NextRequest) {
   if (product !== undefined)     updates.product = product
   if (weight_lbs !== undefined)  updates.weight_lbs = weight_lbs
   if (notes !== undefined)       updates.notes = notes
+  // null unpins — a wrong animal has to be as easy to take back as to set.
+  if (linked_harvest_id !== undefined) updates.linked_harvest_id = linked_harvest_id || null
 
   const { data, error } = await supabase
     .from('cure_tags').update(updates).eq('id', id).select().single()

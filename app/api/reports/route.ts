@@ -7,7 +7,9 @@ import { supabase } from '@/lib/supabase'
 // this read moves to the service role. Server-side only.
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { aliasMap, nameKeyWith, type CustomerNameAlias } from '@/lib/nameKey'
+import { buildSheetCarcassIndex, sheetSlots, type AssignmentRow, type CarcassRow } from '@/lib/sheetCarcasses'
 import { extractValueAdd } from '@/lib/valueAdd'
+import { cureProductFitsSpecies } from '@/lib/cureLoad'
 
 export const dynamic = 'force-dynamic'
 
@@ -95,10 +97,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(data)
   }
 
-  // Cure products that can only have come off a hog, so they are never shown
-  // against a customer's beef or lamb sheet.
-  const PORK_ONLY = new Set(['Ham', 'Shoulder Bacon', 'Hocks', 'Jowl', 'Bone-In Loin'])
-
   if (type === 'value_add') {
     // Who ordered which value-add product, from the CUT SHEETS (what the
     // customer asked for), not the packed scans — the source of truth before
@@ -107,7 +105,7 @@ export async function GET(req: NextRequest) {
     const [{ data: cis, error: ciErr }, { data: appts }, { data: cureTags }] = await Promise.all([
       supabase.from('cutting_instructions').select('id, customer_name, species, data, status').neq('status', 'archived'),
       supabase.from('harvest_appointments').select('id, harvest_date, customers'),
-      supabase.from('cure_tags').select('tag_number, product, customer_name, status'),
+      supabase.from('cure_tags').select('tag_number, product, customer_name, status, linked_harvest_id'),
     ])
     // What the floor's shorthand stands for — see lib/nameKey. Read separately
     // so a failure here degrades to plain word-matching instead of blanking the
@@ -129,41 +127,29 @@ export async function GET(req: NextRequest) {
     // case, spacing, punctuation, word order and the floor's trailing "2" for a
     // second animal — it cannot close an abbreviation, so whatever is left over
     // is reported below instead of being dropped on the floor.
-    const tagsByName = new Map<string, { tag_number: string; product: string; status: string }[]>()
+    const tagsByName = new Map<string, {
+      tag_number: string; product: string; status: string; linked_harvest_id: string | null
+    }[]>()
     const tagNamesByKey = new Map<string, Set<string>>()
     for (const t of cureTags ?? []) {
       const raw = String(t.customer_name ?? '').trim()
       const k = key(raw)
       const list = tagsByName.get(k) ?? []
-      list.push({ tag_number: String(t.tag_number), product: String(t.product), status: String(t.status) })
+      list.push({
+        tag_number: String(t.tag_number), product: String(t.product), status: String(t.status),
+        linked_harvest_id: t.linked_harvest_id ? String(t.linked_harvest_id) : null,
+      })
       tagsByName.set(k, list)
       const names = tagNamesByKey.get(k) ?? new Set<string>()
       names.add(raw)
       tagNamesByKey.set(k, names)
     }
 
-    // ci id → scheduled harvest date, and ci id → the customer SLOTS it's linked
-    // to (appointment + slot id), which is what points at a real carcass.
-    const dateByCi  = new Map<string, string>()
-    const slotsByCi = new Map<string, { apptId: string; slotId: string }[]>()
-    for (const a of appts ?? []) {
-      for (const c of (a.customers as Array<Record<string, unknown>> ?? [])) {
-        const id = String(c?.linked_cutting_instruction_id ?? '')
-        if (!id) continue
-        if (a.harvest_date) dateByCi.set(id, a.harvest_date as string)
-        const list = slotsByCi.get(id) ?? []
-        list.push({ apptId: String(a.id), slotId: String(c?.id ?? '') })
-        slotsByCi.set(id, list)
-      }
-    }
-
-    // Hanging weight per cut sheet — the same carcass resolution the printed cut
-    // card uses (app/cutting-instructions): the explicit assignment for the
-    // customer's slot, else the only animal on the check-in. A customer taking
-    // more than one animal's worth is linked on several appointments, so the
-    // weights of the DISTINCT carcasses add up. Scoped to the linked check-ins
-    // so neither table is read whole as they grow.
-    const apptIds = [...new Set([...slotsByCi.values()].flat().map(s => s.apptId))]
+    // Which animals each sheet is about, and what they weigh — see
+    // lib/sheetCarcasses. Scoped to the linked check-ins so neither table is
+    // read whole as they grow.
+    const slots = sheetSlots(appts)
+    const apptIds = slots.appointmentIds
     const [{ data: logs }, { data: asgs }] = apptIds.length
       ? await Promise.all([
           supabase.from('harvest_log')
@@ -173,84 +159,29 @@ export async function GET(req: NextRequest) {
             .select('harvest_log_id, appointment_id, appointment_customer_id, linked_cutting_instruction_id')
             .in('appointment_id', apptIds),
         ])
-      : [{ data: [] as Record<string, unknown>[] }, { data: [] as Record<string, unknown>[] }]
+      : [{ data: [] as CarcassRow[] }, { data: [] as AssignmentRow[] }]
 
-    // A buyer can be moved onto an animal booked under a sibling check-in, so an
-    // assignment may point outside the set just read. Pull those in too.
-    const wtByLog = new Map<string, number | null>()
-    const logIdsOn = new Map<string, string[]>()   // appointment id → its carcasses
-    const hang = (l: Record<string, unknown>) => {
-      const hcw = l.hot_carcass_weight_lbs as number | null
-      if (hcw != null) return Number(hcw)
-      const h1 = l.half_1_weight_lbs as number | null
-      const h2 = l.half_2_weight_lbs as number | null
-      return h1 != null || h2 != null ? Number(h1 ?? 0) + Number(h2 ?? 0) : null
-    }
-    for (const l of logs ?? []) {
-      wtByLog.set(String(l.id), hang(l))
-      const list = logIdsOn.get(String(l.appointment_id)) ?? []
-      list.push(String(l.id)); logIdsOn.set(String(l.appointment_id), list)
-    }
+    // A buyer can be moved onto an animal booked under a sibling check-in, so
+    // an assignment may point outside the set just read. Pull those in too.
+    const known = new Set((logs ?? []).map(l => String(l.id)))
     const strayIds = [...new Set((asgs ?? [])
       .map(a => String(a.harvest_log_id ?? ''))
-      .filter(id => id && !wtByLog.has(id)))]
-    if (strayIds.length) {
-      const { data: strays } = await supabase.from('harvest_log')
-        .select('id, hot_carcass_weight_lbs, half_1_weight_lbs, half_2_weight_lbs')
-        .in('id', strayIds)
-      for (const l of strays ?? []) wtByLog.set(String(l.id), hang(l))
-    }
+      .filter(id => id && !known.has(id)))]
+    const strays = strayIds.length
+      ? (await supabase.from('harvest_log')
+          .select('id, appointment_id, hot_carcass_weight_lbs, half_1_weight_lbs, half_2_weight_lbs')
+          .in('id', strayIds)).data ?? []
+      : []
 
-    // One sheet can sit on SEVERAL slots of the same check-in — a locker
-    // bringing five hogs against one cut spec, each slot a different end buyer
-    // with its own animal. So this resolves slot by slot, and a carcass claimed
-    // by one slot is not available to the next.
-    //
-    // It used to take the first assignment that matched the slot OR the sheet.
-    // The sheet half is true of every assignment on that sheet, so every slot
-    // matched the SAME first row and the rest were deduped away: Kristin's
-    // three-hog sheet reported one 180 lb hog instead of 553 lb across three,
-    // which is the hanging weight that didn't line up (Charlie, 2026-08-27).
-    function carcassesFor(ciId: string): string[] {
-      const slots = slotsByCi.get(ciId) ?? []
-      const mine = (asgs ?? []).filter(a => String(a.linked_cutting_instruction_id ?? '') === ciId)
-      const claimed = new Set<string>()
-      const out: string[] = []
-
-      // Pass 1: the assignment made for THIS slot. Unambiguous, so it wins, and
-      // it claims its carcass before any fallback can take it.
-      const bySlot = new Map<string, string>()
-      for (const { apptId, slotId } of slots) {
-        if (!slotId) continue
-        const asg = (asgs ?? []).find(a =>
-          String(a.appointment_id) === apptId && String(a.appointment_customer_id) === slotId)
-        if (!asg) continue
-        bySlot.set(slotId, String(asg.harvest_log_id))
-        claimed.add(String(asg.harvest_log_id))
-      }
-
-      // Pass 2: anything left over. An assignment tied to the sheet but to no
-      // slot we recognise, else the check-in's only animal. More than one
-      // animal and nothing pointing at it means nobody knows which carcass is
-      // theirs — that stays blank rather than being guessed.
-      for (const { apptId, slotId } of slots) {
-        let logId = slotId ? bySlot.get(slotId) ?? '' : ''
-        if (!logId) {
-          const spare = mine.find(a =>
-            String(a.appointment_id) === apptId && !claimed.has(String(a.harvest_log_id)))
-          const onAppt = logIdsOn.get(apptId) ?? []
-          logId = spare ? String(spare.harvest_log_id) : onAppt.length === 1 ? onAppt[0] : ''
-          if (logId) claimed.add(logId)
-        }
-        if (logId && !out.includes(logId)) out.push(logId)
-      }
-      return out
-    }
+    const carcassIdx = buildSheetCarcassIndex(slots, asgs, [...(logs ?? []), ...strays])
+    const dateByCi = slots.dateByCi
 
     const rows = (cis ?? []).map(ci => {
       const data = ci.data as { killDate?: string; portion?: string } | null
       const kd = data?.killDate
       const date = dateByCi.get(ci.id as string) ?? (kd && kd !== 'Unknown' ? kd : null)
+      const carcassIds = carcassIdx.carcassesFor(ci.id as string)
+      const sheetCarcassIds = new Set(carcassIds)
       return {
         id:            ci.id,
         customer_name: ci.customer_name,
@@ -260,16 +191,19 @@ export async function GET(req: NextRequest) {
         // Whole-carcass hanging weights, the way they print on the cut card —
         // portion rides alongside rather than scaling them. One entry per
         // animal, carrying its id so a split animal counts once in a total.
-        carcasses:     carcassesFor(ci.id as string).map(id => ({ id, lbs: wtByLog.get(id) ?? null })),
+        carcasses:     carcassIds.map(id => ({ id, lbs: carcassIdx.weightOf(id) })),
         products:      extractValueAdd(ci.species as string, ci.data),
-        // A customer with several sheets gets their tags shown against each,
-        // because a tag knows whose piece it is and not which of their animals.
-        // That is tolerable for a hog and a hog; it is nonsense for a ham on a
-        // lamb sheet, and Kristin has six sheets across four species. Only the
-        // products that can ONLY come off a hog are held back — bacon stays
-        // unfiltered because beef bacon is a real thing we cure.
+        // A tag PINNED to an animal shows only on the sheet that animal is on.
+        // Everything else falls back to the customer, because a seal knows
+        // whose piece it is and not which of their head — so an unpinned tag
+        // appears against each of their sheets. That is tolerable for a hog
+        // and a hog; it is nonsense for a ham on a lamb sheet, so products
+        // that can ONLY come off a hog are held back. Bacon isn't one: beef
+        // bacon is a real thing we cure.
         cure_tags:     (tagsByName.get(key(ci.customer_name as string)) ?? [])
-                         .filter(t => !(PORK_ONLY.has(t.product) && ci.species !== 'Pork')),
+                         .filter(t => t.linked_harvest_id
+                           ? sheetCarcassIds.has(t.linked_harvest_id)
+                           : cureProductFitsSpecies(t.product, ci.species as string)),
       }
     }).filter(r =>
       r.products.length > 0 &&

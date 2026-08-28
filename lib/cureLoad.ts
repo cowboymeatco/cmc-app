@@ -17,6 +17,21 @@
 import type { CureTag } from '@/lib/types'
 import type { CookProfile } from '@/lib/cookPredict'
 
+// Cure products that can only have come off a hog, so they are never offered
+// against — or shown on — a customer's beef, lamb or goat.
+//
+// Bacon is deliberately NOT here: beef bacon is a real thing we cure, and
+// 'Other' says nothing about the animal by definition.
+//
+// ⚠️ Two vocabularies. harvest_log.species says 'Hog'; cutting_instructions
+// .species says 'Pork'. Callers pass whichever they hold — hence both spellings.
+export const PORK_ONLY_CURE_PRODUCTS = new Set(['Ham', 'Shoulder Bacon', 'Hocks', 'Jowl', 'Bone-In Loin'])
+
+export function cureProductFitsSpecies(product: string, species: string | null | undefined): boolean {
+  if (!PORK_ONLY_CURE_PRODUCTS.has(product)) return true
+  return species === 'Pork' || species === 'Hog'
+}
+
 /** Below this many weighed pieces, a per-piece average is noise, not evidence. */
 export const MIN_WEIGHED_FOR_ESTIMATE = 5
 
