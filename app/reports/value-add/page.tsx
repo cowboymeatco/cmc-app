@@ -260,8 +260,14 @@ export default function ValueAddReport() {
     interface Acc {
       tag: string; status: string
       customers: Set<string>; dates: Set<string>; cuts: Set<string>
-      sheets: number          // sheets this tag was drawn against
-      sheetsOrdering: number  // ...of which actually order a cured ham
+      // Each distinct "what this sheet orders" the tag was drawn against, kept
+      // as an expanded list in sheet order — ['Cut in Quarters', 'Steaks'] for a
+      // hog whose two hams are cut two ways. Keyed by its own text, so two
+      // sheets ordering the same thing collapse to one entry.
+      orders: Map<string, string[]>
+      sheetsOrdering: number
+      /** The one cut this seal is to be given, once it can be settled. */
+      assigned?: string
     }
     const byTag = new Map<string, Acc>()
     const untagged: HamRow[] = []
@@ -270,55 +276,84 @@ export default function ValueAddReport() {
       const items = itemsFor(s, HAM_COL)
       const tags  = tagsFor(s, HAM_COL)
       if (!items.length && !tags.length) continue
-      const details = [...new Set(items.map(it => it.detail).filter(Boolean))] as string[]
+      // One entry per ham the sheet orders, in the order the sheet lists them.
+      const expanded = items.flatMap(it => Array<string>(qtyOf(it)).fill(it.detail ?? ''))
       for (const t of tags) {
         const a = byTag.get(t.tag_number) ?? {
           tag: t.tag_number, status: t.status, customers: new Set<string>(),
-          dates: new Set<string>(), cuts: new Set<string>(), sheets: 0, sheetsOrdering: 0,
+          dates: new Set<string>(), cuts: new Set<string>(),
+          orders: new Map<string, string[]>(), sheetsOrdering: 0,
         }
         // Collapsed whitespace, not just trimmed: the office has this customer
         // filed twice with a double space inside the name, and a raw Set kept
         // both, printing one customer three times across a single ham's row.
         a.customers.add(String(s.customer_name ?? '').replace(/\s+/g, ' ').trim())
         if (s.date) a.dates.add(s.date)
-        for (const d of details) a.cuts.add(d)
-        a.sheets++
-        if (items.length) a.sheetsOrdering++
+        for (const d of expanded) if (d) a.cuts.add(d)
+        if (expanded.length) { a.orders.set(expanded.join('|'), expanded); a.sheetsOrdering++ }
         byTag.set(t.tag_number, a)
       }
       // Ordered but unaccounted for: what the sheet asked for, less the seals
       // actually hanging. These are the hams still to be tagged in.
-      const ordered = items.reduce((n, it) => n + qtyOf(it), 0)
-      for (let i = tags.length; i < ordered; i++) {
+      for (let i = tags.length; i < expanded.length; i++) {
         untagged.push({
           tag: null, status: null, date: s.date,
           customer: String(s.customer_name ?? '').replace(/\s+/g, ' ').trim(),
-          cut: details.join('  /  '), ambiguous: details.length > 1,
+          cut: [...new Set(expanded.filter(Boolean))].join('  /  '),
+          ambiguous: new Set(expanded.filter(Boolean)).size > 1,
           note: 'Not tagged into the cure cooler yet',
         })
       }
     }
 
+    // Which physical ham gets which cut, where the sheet alone cannot say.
+    //
+    // A hog has two hams and they can be ordered cut two different ways. Both go
+    // back to the same customer, so it does not matter which seal takes which —
+    // only that each cut is used once. Charlie's call (2026-08-28): deal them out
+    // in tag order rather than hand the crew a question at the rack.
+    //
+    // Only where every sheet the tag was drawn against orders the SAME thing.
+    // Sheets that order different cuts are different animals, and those can be
+    // different end buyers — Montana Veterans books several hogs under one
+    // account. Dealing there would put one person's ham on another's slip, so it
+    // stays flagged for someone to pin the tag to its animal.
+    const groups = new Map<string, Acc[]>()
+    for (const a of byTag.values()) {
+      const k = [...a.customers].sort().join('|')
+      groups.set(k, [...(groups.get(k) ?? []), a])
+    }
+    for (const g of groups.values()) {
+      const orders = new Map<string, string[]>()
+      for (const a of g) for (const [k, v] of a.orders) orders.set(k, v)
+      if (orders.size !== 1) continue
+      const cuts = [...orders.values()][0]
+      // Nothing to settle unless the sheet names more than one cut, and nothing
+      // that CAN be settled if one of them came through blank.
+      if (cuts.some(c => !c) || new Set(cuts).size < 2) continue
+      g.sort((x, y) => x.tag.localeCompare(y.tag))
+      g.forEach((a, i) => { a.assigned = cuts[i % cuts.length] })
+    }
+
     const out: HamRow[] = [...byTag.values()].map(a => {
       const cuts = [...a.cuts]
-      // One seal, two instructions — either the sheet orders two hams cut two
-      // ways, or the tag isn't pinned to one of the customer's several animals.
-      // Both are a person's call, so both styles print with the reason.
-      const ambiguous = cuts.length > 1
+      const ambiguous = !a.assigned && cuts.length > 1
       const note = !a.sheetsOrdering
         ? 'No cured ham on this customer’s cut sheet — ask the office'
-        : ambiguous
-          ? a.sheets > 1
-            ? 'This customer has more than one sheet and they differ — pin the tag to its animal on Processing → In Cure'
-            : 'This sheet orders two ham styles — confirm which'
-          : ''
+        : a.assigned
+          ? 'Assigned in tag order — the sheet orders one of each and both hams are this customer’s'
+          : ambiguous
+            ? a.orders.size > 1
+              ? 'This customer’s sheets order different cuts — pin the tag to its animal on Processing → In Cure'
+              : 'Two ham styles with nothing to tell them apart — confirm which'
+            : ''
       return {
         tag: a.tag, status: a.status,
         customer: [...a.customers].sort().join(' / '),
         // Every kill date this tag could belong to. One when the tag is pinned
         // or the customer has a single sheet, which is the normal case.
         date: [...a.dates].sort().join(' / ') || null,
-        cut: cuts.join('  /  '), ambiguous, note,
+        cut: a.assigned ?? cuts.join('  /  '), ambiguous, note,
       }
     })
 
