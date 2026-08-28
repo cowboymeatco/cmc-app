@@ -201,17 +201,47 @@ export async function GET(req: NextRequest) {
       for (const l of strays ?? []) wtByLog.set(String(l.id), hang(l))
     }
 
+    // One sheet can sit on SEVERAL slots of the same check-in — a locker
+    // bringing five hogs against one cut spec, each slot a different end buyer
+    // with its own animal. So this resolves slot by slot, and a carcass claimed
+    // by one slot is not available to the next.
+    //
+    // It used to take the first assignment that matched the slot OR the sheet.
+    // The sheet half is true of every assignment on that sheet, so every slot
+    // matched the SAME first row and the rest were deduped away: Kristin's
+    // three-hog sheet reported one 180 lb hog instead of 553 lb across three,
+    // which is the hanging weight that didn't line up (Charlie, 2026-08-27).
     function carcassesFor(ciId: string): string[] {
+      const slots = slotsByCi.get(ciId) ?? []
+      const mine = (asgs ?? []).filter(a => String(a.linked_cutting_instruction_id ?? '') === ciId)
+      const claimed = new Set<string>()
       const out: string[] = []
-      for (const { apptId, slotId } of slotsByCi.get(ciId) ?? []) {
+
+      // Pass 1: the assignment made for THIS slot. Unambiguous, so it wins, and
+      // it claims its carcass before any fallback can take it.
+      const bySlot = new Map<string, string>()
+      for (const { apptId, slotId } of slots) {
+        if (!slotId) continue
         const asg = (asgs ?? []).find(a =>
-          String(a.appointment_id) === apptId &&
-          ((slotId && String(a.appointment_customer_id) === slotId) ||
-           String(a.linked_cutting_instruction_id ?? '') === ciId))
-        const onAppt = logIdsOn.get(apptId) ?? []
-        // No assignment and more than one animal on the check-in — nobody knows
-        // which carcass is theirs, so the weight stays blank rather than guessed.
-        const logId = asg ? String(asg.harvest_log_id) : onAppt.length === 1 ? onAppt[0] : ''
+          String(a.appointment_id) === apptId && String(a.appointment_customer_id) === slotId)
+        if (!asg) continue
+        bySlot.set(slotId, String(asg.harvest_log_id))
+        claimed.add(String(asg.harvest_log_id))
+      }
+
+      // Pass 2: anything left over. An assignment tied to the sheet but to no
+      // slot we recognise, else the check-in's only animal. More than one
+      // animal and nothing pointing at it means nobody knows which carcass is
+      // theirs — that stays blank rather than being guessed.
+      for (const { apptId, slotId } of slots) {
+        let logId = slotId ? bySlot.get(slotId) ?? '' : ''
+        if (!logId) {
+          const spare = mine.find(a =>
+            String(a.appointment_id) === apptId && !claimed.has(String(a.harvest_log_id)))
+          const onAppt = logIdsOn.get(apptId) ?? []
+          logId = spare ? String(spare.harvest_log_id) : onAppt.length === 1 ? onAppt[0] : ''
+          if (logId) claimed.add(logId)
+        }
         if (logId && !out.includes(logId)) out.push(logId)
       }
       return out

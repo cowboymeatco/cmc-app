@@ -43,10 +43,10 @@ export const ENTERPRISES: { key: EnterpriseKey; label: string; source: Enterpris
 // QuickBooks already splits the plant the way Charlie thinks about it, so the
 // mapping is by account name rather than by guessing at line items.
 //
-// 'Smokehouse Sales' is a counter sale, but it is the smokehouse's own product
-// and the question this section answers is whether the house earns its keep —
-// so it sits with the custom smoking rather than with the case. One line to
-// move if that's the wrong call.
+// 'Smokehouse Sales' is RETAIL (Charlie, 2026-08-27). It shipped under value
+// add on the reasoning that the house made the product, and that was the wrong
+// call: the enterprise boundary follows where the money was taken, and this is
+// the case ringing up a package. Value add is the smoking SERVICE.
 //
 // Wholesale is where our OWN animals turn into money. They're held out of
 // harvest and processing on purpose — we don't invoice ourselves a kill fee —
@@ -63,13 +63,13 @@ export const ENTERPRISES: { key: EnterpriseKey; label: string; source: Enterpris
 // discounts, which can't be attributed to one floor.
 export const INCOME_ACCOUNT_ENTERPRISE: Record<string, EnterpriseKey> = {
   'CMC Custom Smokehouse': 'valueAdd',
-  'Smokehouse Sales': 'valueAdd',
   'Wild Game Processing': 'valueAdd',
   'Beef Retail Sales': 'retail',
   'Hog Retail Sales': 'retail',
   'Lamb/Sheep Retail Sales': 'retail',
   'Organ Sales': 'retail',
   'Vendor Retail Sales': 'retail',
+  'Smokehouse Sales': 'retail',
   'CMC Wholesale Beef Sales': 'wholesale',
   'CMC Wholesale Hog Sales': 'wholesale',
   'CMC Wholesale Lamb Sales': 'wholesale',

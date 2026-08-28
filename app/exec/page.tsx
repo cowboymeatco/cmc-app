@@ -1086,7 +1086,7 @@ export default function ExecPage() {
                 {' '}<strong style={{ color: C.tan, fontWeight: 600 }}>Value add, retail and wholesale come off the books instead</strong> —
                 nothing schedules a walk-in or a pallet going out the door, so those three are the daily QuickBooks P&amp;L by income
                 account and they stop at {revenue.books ? revenue.books.through : 'today'}, with no forward book. Value add is the
-                smokehouse&apos;s own account, wild game, and its product sold over the counter; retail is the beef, hog, lamb, organ and vendor
+                smokehouse&apos;s own account plus wild game; retail is the beef, hog, lamb, organ, smokehouse and vendor
                 cases; wholesale is beef, hog and lamb sold on, which is mostly where our own animals turn into money.
                 {revenue.booksError && (
                   <span style={{ color: WARN_COLOR }}> QuickBooks did not answer, so value add, retail and wholesale are missing here: {revenue.booksError}</span>
