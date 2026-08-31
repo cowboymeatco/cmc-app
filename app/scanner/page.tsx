@@ -5,7 +5,7 @@ import { isCureTagNumber, type ProcessingInput, type CureTag } from '@/lib/types
 import { isoDate } from '@/lib/dates'
 import { speciesIcon, speciesFromDescription } from '@/lib/cutSchedule'
 
-import CustomerPicker, { type CustomerName } from './CustomerPicker'
+import CustomerPicker, { resolveCiScan, type CustomerName } from './CustomerPicker'
 const C = {
   dark:       '#1A0A04',
   darkBrown:  '#351E0E',
@@ -617,6 +617,9 @@ export default function ScannerPage() {
   const sealBufRef      = useRef('')
   const traySealRef     = useRef<((tagNumber: string) => void) | null>(null)
   const traySealBusyRef = useRef(false)
+  // Packing-slip barcode (CI-xxxxxxxx) scanned with nothing focused — same
+  // ref pattern as the tray seal, same reason.
+  const ciScanRef       = useRef<((raw: string) => void) | null>(null)
 
   activeBoxRef.current  = activeBox
   pluMapRef.current     = pluMap
@@ -629,6 +632,7 @@ export default function ScannerPage() {
   unpackBoxRef.current  = unpackBox
   applyScanRef.current  = applyScanInput
   traySealRef.current   = handleTraySeal
+  ciScanRef.current     = handleCiScan
 
   // Every write to the scan bar goes through here so the ref and the state can
   // never disagree about what is in it.
@@ -826,17 +830,19 @@ export default function ScannerPage() {
       const box = activeBoxRef.current
       const target = e.target as HTMLElement
       if (!startedRef.current || !box || box.is_closed) {
-        // Nothing open to scan into — the only scan that means anything here is
-        // a cure seal off the slicer tray, which jumps to its owner's session.
-        // Digits buffer until the gun's Enter suffix; requiring the terminator
-        // means a stray EAN can never fire on a 7-digit window of itself.
+        // Nothing open to scan into — the scans that mean anything here are a
+        // cure seal off the slicer tray and a packing slip's CI code, each of
+        // which jumps to its owner's session. Characters buffer until the gun's
+        // Enter suffix; requiring the terminator means a stray EAN can never
+        // fire on a 7-digit window of itself.
         if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
         if (e.ctrlKey || e.metaKey || e.altKey) return
-        if (/^\d$/.test(e.key)) { sealBufRef.current += e.key; return }
+        if (/^[\dA-Za-z-]$/.test(e.key)) { sealBufRef.current += e.key; return }
         if (e.key === 'Enter') {
           const code = sealBufRef.current
           sealBufRef.current = ''
           if (isCureTagNumber(code)) traySealRef.current?.(code)
+          else ciScanRef.current?.(code)
           return
         }
         if (e.key !== 'Shift') sealBufRef.current = ''
@@ -1258,6 +1264,24 @@ export default function ScannerPage() {
     } finally {
       traySealBusyRef.current = false
     }
+  }
+
+  // ── Packing-slip barcode: CI-xxxxxxxx opens its customer's session ──────────
+  // The packaging sheet prints a barcode carrying its instruction id. One scan
+  // from the sessions screen opens (or starts) that customer's packing session
+  // under the office's spelling — no typing, and the slip in hand IS the check
+  // that the right session is open (Charlie, 2026-08-27).
+  async function handleCiScan(raw: string) {
+    if (!pluLoaded) return
+    const name = resolveCiScan(raw, custNames)
+    if (!name) return
+    const dt = isoDate()
+    const sorted = await startSessionFromExisting(name, dt)
+    if (!sorted.some(b => !b.is_closed)) await addBoxTo(name, dt, sorted)
+    setLastKind('ok')
+    setLastItem(`📋 ${name} — session open off the packing slip · scan packages`)
+    setFlash('ok')
+    setTimeout(() => setFlash(null), 3000)
   }
 
   // ── Rename the open session's customer ───────────────────────────────────────
@@ -2339,9 +2363,11 @@ export default function ScannerPage() {
               value={sessionQuery}
               onChange={e => {
                 const raw = e.target.value
-                // A cure seal scanned into the search box is a packaging jump,
-                // not a search — same behavior as scanning with nothing focused.
+                // A cure seal or packing-slip code scanned into the search box
+                // is a session jump, not a search — same behavior as scanning
+                // with nothing focused.
                 if (isCureTagNumber(raw.trim())) { setSessionQuery(''); handleTraySeal(raw.trim()); return }
+                if (resolveCiScan(raw, custNames)) { setSessionQuery(''); handleCiScan(raw.trim()); return }
                 setSessionQuery(raw)
               }}
               placeholder="Find a session — customer, date, producer or tag…"

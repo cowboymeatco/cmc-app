@@ -22,7 +22,7 @@ export async function GET() {
 
   const [sheetRes, sessRes, aliasRes] = await Promise.all([
     supabase.from('cutting_instructions')
-      .select('customer_name, species, created_at')
+      .select('id, customer_name, species, created_at')
       .neq('status', 'archived')
       .order('created_at', { ascending: false }),
     supabase.from('processing_sessions')
@@ -33,23 +33,30 @@ export async function GET() {
   ])
   if (sheetRes.error) return NextResponse.json({ error: sheetRes.error.message }, { status: 500 })
 
-  interface Name { name: string; source: 'sheet' | 'recent'; species: string | null; lastSeen: string }
+  interface Name { name: string; source: 'sheet' | 'recent'; species: string | null; lastSeen: string; ids?: string[] }
   const byName = new Map<string, Name>()
+
+  // The first 8 hex chars of the instruction id — what the packaging sheet's
+  // CI-xxxxxxxx barcode carries, so a scanned slip resolves to its sheet name.
+  const id8 = (id: unknown) => String(id ?? '').replace(/-/g, '').slice(0, 8).toUpperCase()
 
   for (const r of sheetRes.data ?? []) {
     const name = String(r.customer_name ?? '').trim()
     if (!name) continue
     const prev = byName.get(name)
     // A customer with several sheets keeps the newest date and, when the
-    // species differ, no single species rather than an arbitrary one.
+    // species differ, no single species rather than an arbitrary one. Every
+    // sheet's barcode still has to open the session, so the ids accumulate.
     if (prev) {
       if (prev.species && prev.species !== (r.species ?? null)) prev.species = null
+      if (r.id) prev.ids!.push(id8(r.id))
       continue
     }
     byName.set(name, {
       name, source: 'sheet',
       species: (r.species as string) ?? null,
       lastSeen: String(r.created_at ?? '').slice(0, 10),
+      ids: r.id ? [id8(r.id)] : [],
     })
   }
 

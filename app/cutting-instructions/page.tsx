@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import type { HarvestAppointment } from '@/lib/types'
+import { makeCode39Barcode } from '@/lib/label'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1189,6 +1190,14 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
   ${hdr('Packaging Sheet' + ofN, inspectionBadge(carcass))}
   ${unassignedBand(carcass)}
   ${grindBand}
+  ${/* Scanning this at the packing scanner opens the customer's session under
+       this exact name — no typing, and the slip in hand is the check that the
+       right session is open (Charlie, 2026-08-27). Code 39 of the instruction
+       id's first 8 hex chars; the scanner resolves it via customer-names. */''}
+  <div class="slipcode" style="float:right;width:180px;text-align:center;margin:0 0 6px 14px">
+    ${makeCode39Barcode(`CI-${String(ci.id).replace(/-/g, '').slice(0, 8).toUpperCase()}`)}
+    <div style="font-size:10px;color:#75471B;letter-spacing:0.06em;margin-top:2px">SCAN TO OPEN PACKING SESSION</div>
+  </div>
   <div style="font-size:16px;color:#555;margin-bottom:8px">
     <strong>${d.customerName ?? '—'}</strong>${d.portion ? ' · ' + fmt(d.portion) : ''} · Harvest Date: ${harvestDate}
     <span style="margin-left:14px">Producer: <span style="font-weight:bold">${carcass.producer || wline(110)}</span></span>
@@ -1249,6 +1258,10 @@ function cardDocument(title: string, body: string): string {
     /* Big type can push a loaded card past one sheet — keep rows whole when
        content flows across the page break. */
     tr { break-inside: avoid; page-break-inside: avoid; }
+    /* The packing-slip barcode: preserveAspectRatio="none" on the SVG exists so
+       the bars can be stretched taller without widening — a squat barcode is a
+       hard target for the gun. */
+    .slipcode svg { height: 44px !important; }
     @media print {
       body { padding: 0; background: none; }
       .pagebreak { page-break-after: always; }

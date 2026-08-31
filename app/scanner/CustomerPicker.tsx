@@ -31,6 +31,20 @@ export interface CustomerName {
   source: 'sheet' | 'recent'
   species: string | null
   lastSeen: string
+  /** 8-char cutting-instruction id prefixes — what the slip barcode carries */
+  ids?: string[]
+}
+
+// The packaging sheet prints a CI-xxxxxxxx barcode (8 hex chars of the
+// instruction id). Scanning it — into this picker or the sessions screen —
+// resolves straight to the office's spelling of the customer, so nobody types
+// a name at all (Charlie, 2026-08-27).
+const CI_SCAN = /^CI-?([0-9A-F]{8})$/i
+export function resolveCiScan(raw: string, names: CustomerName[]): string | null {
+  const m = raw.trim().match(CI_SCAN)
+  if (!m) return null
+  const id8 = m[1].toUpperCase()
+  return names.find(n => n.ids?.includes(id8))?.name ?? null
 }
 
 const INPUT: React.CSSProperties = {
@@ -59,13 +73,20 @@ export default function CustomerPicker({
 }) {
   const [open, setOpen] = useState(false)
   const [hi, setHi] = useState(0)
+  // Whether the arrow keys have been used since the last keystroke. Enter only
+  // takes the highlighted suggestion when the crew steered onto it (or it's the
+  // same customer respelled) — a suggestion nobody chose must not replace a
+  // typed name, or cuts land in the wrong customer's boxes (ae, 2026-08-28).
+  const [navigated, setNavigated] = useState(false)
   const boxRef = useRef<HTMLDivElement>(null)
 
   const keys = useMemo(() => aliasMap(aliases), [aliases])
 
   const hits = useMemo(() => {
     const q = value.trim()
-    if (!q) return names.slice(0, 8)
+    // Nothing until two typed characters: a list that appears on bare focus is
+    // a list that gets clicked by accident (ae, 2026-08-28).
+    if (q.length < 2) return []
     // Cut sheets that resolve to the same customer come FIRST, even when the
     // letters don't overlap at all: typing "MVML KRISTIN" has to be able to
     // surface "Montana Veterans Meat Locker Kristin", and no amount of
@@ -117,16 +138,27 @@ export default function CustomerPicker({
         // Highlight resets here rather than in an effect on `value`: typing is
         // what invalidates the old highlight, and resetting it in a render
         // cascade is a lint error and a wasted render both.
-        onChange={e => { onChange(e.target.value); setOpen(true); setHi(0) }}
+        onChange={e => { onChange(e.target.value); setOpen(true); setHi(0); setNavigated(false) }}
         onFocus={() => setOpen(true)}
         onKeyDown={e => {
+          // A slip barcode scanned into the field: the gun types CI-xxxxxxxx
+          // and sends Enter — swap in the sheet name it stands for.
+          if (e.key === 'Enter') {
+            const scanned = resolveCiScan(value, names)
+            if (scanned) { e.preventDefault(); pick(scanned); return }
+          }
           if (open && hits.length) {
-            if (e.key === 'ArrowDown') { e.preventDefault(); setHi(h => Math.min(h + 1, hits.length - 1)); return }
-            if (e.key === 'ArrowUp')   { e.preventDefault(); setHi(h => Math.max(h - 1, 0)); return }
-            // Enter takes the highlighted suggestion rather than the half-typed
-            // text — the scanner crew hit Enter out of habit, and the whole
-            // point is that they land on the office's spelling.
-            if (e.key === 'Enter' && hits[hi]) { e.preventDefault(); pick(hits[hi].name); return }
+            if (e.key === 'ArrowDown') { e.preventDefault(); setNavigated(true); setHi(h => Math.min(h + 1, hits.length - 1)); return }
+            if (e.key === 'ArrowUp')   { e.preventDefault(); setNavigated(true); setHi(h => Math.max(h - 1, 0)); return }
+            // Enter takes the highlighted suggestion only when it's the one
+            // they steered onto, or it's this same customer under the office's
+            // spelling. A different customer's name that merely matched the
+            // letters stays a suggestion — Enter on a typed name keeps the
+            // typed name (ae, 2026-08-28).
+            if (e.key === 'Enter' && hits[hi]
+                && (navigated || nameKeyWith(hits[hi].name, keys) === nameKeyWith(value.trim(), keys))) {
+              e.preventDefault(); pick(hits[hi].name); return
+            }
           }
           if (e.key === 'Enter' && value.trim()) { setOpen(false); onEnter?.() }
           if (e.key === 'Escape') setOpen(false)
