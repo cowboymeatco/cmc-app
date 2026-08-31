@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react'
 import { usePathname } from 'next/navigation'
 import { installTelemetry, addBreadcrumb, getTelemetry } from '@/lib/feedbackTelemetry'
 import { PhotoButton } from '@/app/cleaning/ui'
-import { FEEDBACK_TYPES, feedbackSpec, type FeedbackType } from '@/lib/feedbackTypes'
+import { feedbackSpec, type FeedbackType } from '@/lib/feedbackTypes'
 
 const C = {
   dark:       '#1A0A04',
@@ -216,8 +216,11 @@ export default function FeedbackButton() {
               </button>
             </div>
 
+            {/* The everyday reports get the chips; customer incidents and
+                safety live on their own quieter row below — five chips across
+                320px was too crowded to hit (Charlie, 2026-08-27). */}
             <div style={{ display: 'flex', gap: 6 }}>
-              {([...FEEDBACK_TYPES.map(f => f.key), 'cleaning'] as ReportType[]).map(t => (
+              {(['bug', 'idea', 'cleaning'] as ReportType[]).map(t => (
                 <button
                   key={t}
                   onClick={() => setType(t)}
@@ -229,12 +232,34 @@ export default function FeedbackButton() {
                     background: type === t ? C.medBrown : 'transparent',
                     color:      type === t ? C.cream : C.tan,
                     cursor:     'pointer',
-                    fontSize:   11,
+                    fontSize:   12,
                     fontWeight: type === t ? 700 : 400,
                     whiteSpace: 'nowrap',
                   } as React.CSSProperties}
                 >
                   {t === 'cleaning' ? '🧽 Cleaning' : feedbackSpec(t).chip}
+                </button>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginTop: -6 }}>
+              {(['incident', 'safety'] as ReportType[]).map(t => (
+                <button
+                  key={t}
+                  onClick={() => setType(t)}
+                  style={{
+                    flex:       1,
+                    padding:    '4px 0',
+                    borderRadius: 6,
+                    border:     `1px solid ${type === t ? C.amber : 'transparent'}`,
+                    background: type === t ? C.medBrown : 'transparent',
+                    color:      type === t ? C.cream : C.lightBrown,
+                    cursor:     'pointer',
+                    fontSize:   11,
+                    fontWeight: type === t ? 700 : 400,
+                    whiteSpace: 'nowrap',
+                  } as React.CSSProperties}
+                >
+                  {t === 'incident' ? '📋 Customer incident' : '⚠️ Safety issue'}
                 </button>
               ))}
             </div>
