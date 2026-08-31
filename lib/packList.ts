@@ -889,6 +889,28 @@ export function buildPackList(d: any, species: string): PackRow[] {
     }
   }
 
+  // Bacon bought off the form at 90% of retail — any species, a beef order can
+  // carry one. It comes out of the retail freezer at packing time, so the
+  // packager is who has to see it; until now nothing read data.upsells and a
+  // paid-for add-on left the form and vanished (Charlie, 2026-08-28). On a
+  // multi-head drop-off the add-on is one order, not one per animal — it rides
+  // on the first head's card only.
+  const upsells = Array.isArray(d.upsells) && Number(d.headIndex ?? 1) === 1 ? d.upsells : []
+  if (upsells.length) {
+    filteredPrs.push({ sectionTitle: 'Retail Add-Ons' })
+    for (const u of upsells) {
+      filteredPrs.push({
+        cut:  String(u.label ?? u.item ?? 'Bacon'),
+        spec: [
+          u.lbs ? `${u.lbs} lb` : '',
+          u.pricePerLb ? `$${Number(u.pricePerLb).toFixed(2)}/lb` : '',
+          'from the retail freezer — not this animal',
+        ].filter(Boolean).join(' · '),
+        noSpecies: true,
+      })
+    }
+  }
+
   // Raw weight in, for billing the cure and sausage work and for allocating the
   // grind. Blank by design — the Wt (lbs) column is where it gets written as
   // each batch goes in.
