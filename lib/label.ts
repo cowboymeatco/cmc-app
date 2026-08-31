@@ -143,8 +143,8 @@ const escLabel = (v: unknown) => String(v ?? '').replace(/[&<>"]/g, c => ({ '&':
 export function displayCustomerName(name: string, weightLbs?: number | null): string {
   let n = (name || '').trim()
   if (weightLbs) {
-    n = n.replace(/\s*[·\-]?\s*\d{2,4}\s*(#|lbs?)\s*$/i, '').trim()   // "196#", "196 lb"
-    const m = n.match(/\s(\d{2,4})$/)                                 // bare trailing number
+    n = n.replace(/\s*[·\-]?\s*\d{2,4}(\.\d+)?\s*(#|lbs?)\s*$/i, '').trim()   // "196#", "204.5 lb"
+    const m = n.match(/\s(\d{2,4}(?:\.\d+)?)$/)                               // bare trailing number
     if (m && Math.abs(Number(m[1]) - weightLbs) <= 2) n = n.slice(0, m.index).trim()
   }
   return n

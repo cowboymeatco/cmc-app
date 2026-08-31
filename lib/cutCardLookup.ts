@@ -9,10 +9,11 @@ import { isSameParty, CICard } from '@/lib/wipIntent'
 
 // Names as the floor writes them vs. as the cut card holds them: the box says
 // "Travis Buck 204#", the card says "Travis Buck". Strip the hanging weight and
-// punctuation so the two can be compared.
+// punctuation so the two can be compared. Half-pound weights are real —
+// "DAN JOHNSON 204.5" — so the number may carry a decimal.
 export const normName = (n: string) =>
   (n || '')
-    .replace(/\s*[·\-]?\s*\d{2,4}\s*(#|lbs?)?\s*$/i, '')
+    .replace(/\s*[·\-]?\s*\d{2,4}(\.\d+)?\s*(#|lbs?)?\s*$/i, '')
     .toLowerCase()
     .replace(/[^a-z0-9 ]/g, '')
     .replace(/\s+/g, ' ')
