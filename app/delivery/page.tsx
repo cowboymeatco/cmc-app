@@ -453,6 +453,43 @@ function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Reco
           })}
         </div>
 
+        {(() => {
+          // "How many pounds of what cuts is on this pallet?" (Charlie,
+          // 2026-08-31) — totals by cut off the weight-embedded barcodes.
+          // Boxes and carcass tags carry no weight, so they only count as items.
+          const byCut = new Map<string, { lbs: number; n: number }>()
+          let totalLbs = 0
+          for (const b of barcodes) {
+            const dec = decodeBarcode(b.barcode)
+            if (!dec) continue
+            const name = pluMap[dec.plu] ?? `PLU ${dec.plu}`
+            const cur = byCut.get(name) ?? { lbs: 0, n: 0 }
+            cur.lbs += dec.weightLbs
+            cur.n += 1
+            byCut.set(name, cur)
+            totalLbs += dec.weightLbs
+          }
+          if (!byCut.size) return null
+          const rows = [...byCut.entries()].sort((a, b) => b[1].lbs - a[1].lbs)
+          return (
+            <div style={{ padding: '0.6rem 1.25rem', borderTop: '1px solid rgba(166,120,90,0.2)', maxHeight: 190, overflowY: 'auto' }}>
+              <div style={{ fontSize: '0.68rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: '0.35rem' }}>
+                On this pallet
+              </div>
+              {rows.map(([name, r]) => (
+                <div key={name} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', padding: '0.12rem 0' }}>
+                  <span style={{ color: C.cream }}>{name} <span style={{ color: C.lightBrown }}>×{r.n}</span></span>
+                  <span style={{ color: C.tan, fontWeight: 600 }}>{r.lbs.toFixed(1)} lb</span>
+                </div>
+              ))}
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', fontWeight: 700, borderTop: '1px solid rgba(166,120,90,0.25)', marginTop: '0.35rem', paddingTop: '0.35rem' }}>
+                <span style={{ color: C.cream }}>Total</span>
+                <span style={{ color: C.tan }}>{totalLbs.toFixed(1)} lb</span>
+              </div>
+            </div>
+          )
+        })()}
+
         {barcodes.length > 0 && (
           <div style={{ padding: '0.75rem 1.25rem', borderTop: '1px solid rgba(166,120,90,0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: '0.8rem', color: C.tan }}>{barcodes.length} item{barcodes.length !== 1 ? 's' : ''} ready to save</span>
