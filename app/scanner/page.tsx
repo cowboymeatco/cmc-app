@@ -138,6 +138,7 @@ interface ScanLine {
   item_name:  string
   weight_lbs: number
   quantity:   number
+  created_at?: string   // set by the server; drives the live lbs/hr pace
 }
 
 // Quarter-aware yield: response from /api/processing/yield when this session
@@ -161,11 +162,16 @@ const DEFAULT_FLAGS: LabelFlags = { usda_bug: true, retail_exempt: false, not_fo
 type LabelRoll = '4in' | '62mm'
 const ROLL_KEY = 'scannerLabelRoll'
 
-// The Hobart HT scales on the shop LAN. Which one sits next to THIS station is
-// a per-device setting like the printer width, so the wrap bench can put a
-// customer's name on ITS scale's labels without touching the retail counter.
-const SCALE_KEY = 'scannerScaleIp'
-const SCALE_IPS = ['192.168.1.190', '192.168.1.191', '192.168.1.192'] as const
+// The Hobart HT scales on the shop LAN. Which ones sit at THIS station is a
+// per-device setting like the printer width — a station can work a box scale
+// AND a packaging scale at once, so it's a set, not a single pick. Names are
+// the crew's words for each machine; the IP only shows in the hover text.
+const SCALE_KEY = 'scannerScaleIps'
+const SCALES = [
+  { ip: '192.168.1.190', name: '.190' },
+  { ip: '192.168.1.191', name: '.191' },
+  { ip: '192.168.1.192', name: '.192' },
+]
 const SCALE_DEFAULT_NAME = 'COWBOY MEAT CO'
 const ROLL_LABEL: Record<LabelRoll, string> = { '4in': '4in', '62mm': 'Brother 2.4in' }
 
@@ -511,51 +517,61 @@ export default function ScannerPage() {
     try { window.localStorage.setItem(ROLL_KEY, r) } catch { /* private mode */ }
   }
 
-  // This station's neighbouring scale + pushing the customer's name into its
-  // store-name line. The kiosk agent serves the request over the LAN (~2s).
-  const [scaleIp,          setScaleIp]          = useState<string | null>(null)
+  // This station's scales + pushing the customer's name into their store-name
+  // lines. The kiosk agent serves each request over the LAN (~2s); one request
+  // per scale, so the agent needs no notion of a station.
+  const [scaleIps,         setScaleIps]         = useState<string[]>([])
   const [scaleNameBusy,    setScaleNameBusy]    = useState(false)
   const [scaleNameStatus,  setScaleNameStatus]  = useState('')
   useEffect(() => {
     try {
-      const v = window.localStorage.getItem(SCALE_KEY)
-      if (v && (SCALE_IPS as readonly string[]).includes(v)) setScaleIp(v)
-    } catch { /* private mode */ }
+      const v = JSON.parse(window.localStorage.getItem(SCALE_KEY) ?? '[]')
+      if (Array.isArray(v)) setScaleIps(v.filter(ip => SCALES.some(s => s.ip === ip)))
+    } catch { /* private mode / bad json */ }
   }, [])
-  function pickScale(ip: string | null) {
-    setScaleIp(ip)
+  function toggleScale(ip: string) {
     setScaleNameStatus('')
-    try {
-      if (ip) window.localStorage.setItem(SCALE_KEY, ip)
-      else window.localStorage.removeItem(SCALE_KEY)
-    } catch { /* private mode */ }
+    setScaleIps(prev => {
+      const next = prev.includes(ip) ? prev.filter(x => x !== ip) : [...prev, ip]
+      try { window.localStorage.setItem(SCALE_KEY, JSON.stringify(next)) } catch { /* private mode */ }
+      return next
+    })
   }
   async function pushStoreName(name: string) {
-    if (!scaleIp || scaleNameBusy) return
+    if (!scaleIps.length || scaleNameBusy) return
     const upper = name.toUpperCase()
     setScaleNameBusy(true)
     setScaleNameStatus('⏳ sending…')
     try {
-      const res = await fetch('/api/scale-push', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ kind: 'store_name', payload: { ip: scaleIp, store_name: upper }, requested_by: 'scanner' }),
-      })
-      const d = await res.json()
-      if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`)
-      const reqId = d.request?.id as string | undefined
-      for (let i = 0; i < 10; i++) {
+      const ids: string[] = []
+      for (const ip of scaleIps) {
+        const res = await fetch('/api/scale-push', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ kind: 'store_name', payload: { ip, store_name: upper }, requested_by: 'scanner' }),
+        })
+        const d = await res.json()
+        if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`)
+        if (d.request?.id) ids.push(d.request.id)
+      }
+      const pending = new Set(ids)
+      for (let i = 0; i < 12 && pending.size; i++) {
         await new Promise(r => setTimeout(r, 1500))
         const rows = await fetch('/api/scale-push').then(r => r.json()).catch(() => [])
-        const row = Array.isArray(rows) ? (rows as { id?: string; status?: string; result?: { scales?: { error?: string; asleep?: boolean }[] } }[]).find(r => r.id === reqId) : null
-        if (row?.status === 'done') { setScaleNameStatus(`✓ scale prints ${upper}`); setScaleNameBusy(false); return }
-        if (row?.status === 'error') {
-          const s = row.result?.scales?.[0]
-          setScaleNameStatus(`❌ ${s?.asleep ? 'scale is asleep — wake it and retry' : s?.error ?? 'failed'}`)
-          setScaleNameBusy(false); return
+        for (const row of (Array.isArray(rows) ? rows : []) as { id: string; status?: string; result?: { scales?: { ip?: string; error?: string; asleep?: boolean }[] } }[]) {
+          if (!pending.has(row.id)) continue
+          if (row.status === 'done') pending.delete(row.id)
+          if (row.status === 'error') {
+            const s = row.result?.scales?.[0]
+            const who = SCALES.find(x => x.ip === s?.ip)?.name ?? s?.ip ?? 'scale'
+            setScaleNameStatus(`❌ ${who}: ${s?.asleep ? 'asleep — wake it and retry' : s?.error ?? 'failed'}`)
+            setScaleNameBusy(false); return
+          }
         }
       }
-      setScaleNameStatus('⚠️ no answer from the kiosk agent')
+      setScaleNameStatus(pending.size
+        ? '⚠️ no answer from the kiosk agent'
+        : `✓ ${scaleIps.length > 1 ? `${scaleIps.length} scales print` : 'scale prints'} ${upper}`)
     } catch (e) {
       setScaleNameStatus(`❌ ${e instanceof Error ? e.message : 'failed'}`)
     }
@@ -2175,6 +2191,24 @@ export default function ScannerPage() {
     `Whole session, not the box you're on — it won't change when you switch box tabs.\n` +
     `${totalOutputLbs.toFixed(1)} lbs packed across ${boxCount} box${boxCount === 1 ? '' : 'es'} ÷ ${totalInputLbs.toFixed(1)} lbs scanned in` +
     (multiInput ? `\nAll ${inputs.length} inputs combined — not one case on its own.` : '')
+  // Live pace off the scan timestamps: pounds packed in the trailing hour over
+  // the time actually worked in it. Trailing-window, so a lunch break ages out
+  // instead of dragging the number down all afternoon. Needs a few scans and
+  // ten minutes of history before it says anything.
+  const paceLbsHr = (() => {
+    const now = Date.now()
+    const cutoff = now - 60 * 60 * 1000
+    let lbs = 0, oldest = now, n = 0
+    for (const sc of sessionScans) {
+      const t = sc.created_at ? Date.parse(sc.created_at) : NaN
+      if (!isFinite(t) || t < cutoff) continue
+      lbs += Number(sc.weight_lbs) || 0
+      if (t < oldest) oldest = t
+      n++
+    }
+    const hrs = (now - oldest) / 3_600_000
+    return n >= 3 && hrs >= 1 / 6 ? lbs / hrs : null
+  })()
 
   // ══════════════════════════════════════════════════════════════════════════════
   // SETUP SCREEN
@@ -2793,6 +2827,12 @@ export default function ScannerPage() {
               {yieldPct.toFixed(1)}% {multiInput ? `combined (${inputs.length} in)` : 'session yield'}
             </span>
           )}
+          {paceLbsHr !== null && (
+            <span title="Pounds packed over the trailing hour of this session's scans — every station on it, not just this one."
+              style={{ fontSize: '0.78rem', fontWeight: 700, color: C.tan, fontFamily: 'monospace' }}>
+              ⚡ {Math.round(paceLbsHr)} lb/hr
+            </span>
+          )}
           <span style={{ fontSize: '0.72rem', color: C.lightBrown }}>{Object.keys(pluMap).length} PLUs</span>
           {boxes.length > 0 && (
             <button
@@ -3073,27 +3113,31 @@ export default function ScannerPage() {
                   {labelRoll === r ? '✓ ' : ''}{ROLL_LABEL[r]}
                 </button>
               ))}
-              {/* Scale next to this station — a station setting, like the printer.
-                  With one picked, one tap swaps that scale's store-name line (what
-                  its labels print as the store) to this customer, and back. */}
-              <span style={{ fontSize: '0.65rem', color: 'rgba(166,120,90,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em', marginLeft: '0.6rem' }}>Scale:</span>
-              {SCALE_IPS.map(ip => (
-                <button
-                  key={ip}
-                  onClick={() => pickScale(scaleIp === ip ? null : ip)}
-                  title={`Hobart scale at ${ip}. Pick the one at this station; tap again to unset.`}
-                  style={{
-                    background: scaleIp === ip ? 'rgba(201,168,130,0.28)' : 'rgba(255,255,255,0.03)',
-                    border: `1px solid ${scaleIp === ip ? 'rgba(201,168,130,0.6)' : 'rgba(166,120,90,0.2)'}`,
-                    borderRadius: 3, padding: '0.2rem 0.7rem',
-                    color: scaleIp === ip ? C.cream : C.lightBrown,
-                    fontSize: '0.72rem', cursor: 'pointer', fontWeight: scaleIp === ip ? 700 : 400,
-                  }}
-                >
-                  {scaleIp === ip ? '✓ ' : ''}.{ip.split('.').pop()}
-                </button>
-              ))}
-              {scaleIp && (
+              {/* Scales at this station — a station setting, like the printer.
+                  Multi-pick, because a station can run a box scale and a packaging
+                  scale at once; one tap swaps every picked scale's store-name line
+                  (what its labels print as the store) to this customer, and back. */}
+              <span style={{ fontSize: '0.65rem', color: 'rgba(166,120,90,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em', marginLeft: '0.6rem' }}>Scales:</span>
+              {SCALES.map(sc => {
+                const on = scaleIps.includes(sc.ip)
+                return (
+                  <button
+                    key={sc.ip}
+                    onClick={() => toggleScale(sc.ip)}
+                    title={`Hobart scale at ${sc.ip}. Pick every scale this station is working; tap again to unset.`}
+                    style={{
+                      background: on ? 'rgba(201,168,130,0.28)' : 'rgba(255,255,255,0.03)',
+                      border: `1px solid ${on ? 'rgba(201,168,130,0.6)' : 'rgba(166,120,90,0.2)'}`,
+                      borderRadius: 3, padding: '0.2rem 0.7rem',
+                      color: on ? C.cream : C.lightBrown,
+                      fontSize: '0.72rem', cursor: 'pointer', fontWeight: on ? 700 : 400,
+                    }}
+                  >
+                    {on ? '✓ ' : ''}{sc.name}
+                  </button>
+                )
+              })}
+              {scaleIps.length > 0 && (
                 <>
                   <button
                     disabled={scaleNameBusy || !customer}
