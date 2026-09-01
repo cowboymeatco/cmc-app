@@ -57,6 +57,7 @@ const TAG_COL: Record<string, string> = {
   'Shoulder Bacon': 'Shoulder Bacon',
   'Bone-In Loin':   'Smoked Chops',
   'Hocks':          'Cured & Smoked Hocks',
+  'Fresh Side':     'Fresh Side Pork',
 }
 
 const tagsFor = (s: Sheet, col: string) =>
@@ -88,7 +89,7 @@ interface HamRow {
 // Column order for the value-add matrix — the way the cut walks the hog, ending
 // with the smokehouse. Anything not listed sorts after, alphabetically.
 const COL_ORDER = [
-  'Bacon', 'Shoulder Bacon', 'Cured & Smoked Ham', 'Cured & Smoked Hocks',
+  'Bacon', 'Shoulder Bacon', 'Fresh Side Pork', 'Cured & Smoked Ham', 'Cured & Smoked Hocks',
   'Smoked Chops', 'Pulled Pork',
   'Pork Sausage', 'Pork Sausage Links', 'Pork Sausage Patties',
   'Italian Sausage', 'Italian Sausage Links', 'Italian Sausage Patties',

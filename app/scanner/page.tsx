@@ -3701,7 +3701,11 @@ export default function ScannerPage() {
                 {/* Pick, then confirm — a one-tap save closed the modal before the
                     weight could go in (Charlie feedback, 2026-08-11). */}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '1.25rem' }}>
-                  {['Ham', 'Bacon', 'Shoulder Bacon', 'Bone-In Loin', 'Hocks', 'Jowl', 'Other'].map(p => (
+                  {/* Fresh Side is here even though it never cures — the slab
+                      leaves the table for the slicer the way bacon leaves for
+                      the cooler, and the seal is how it's tracked back to its
+                      owner (Charlie, 2026-09-01). */}
+                  {['Ham', 'Bacon', 'Shoulder Bacon', 'Fresh Side', 'Bone-In Loin', 'Hocks', 'Jowl', 'Other'].map(p => (
                     <button
                       key={p}
                       disabled={cureSaving}

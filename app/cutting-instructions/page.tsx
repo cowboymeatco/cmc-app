@@ -1103,11 +1103,21 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
        </div>`
     : ''
 
+  // A business account carries two names and the customer picked which one
+  // headlines (it's the customer_name everything joins on). The other prints
+  // small so the floor can still recognize "87 Rentals" as Michael's hog.
+  const secondaryName = d.businessName
+    ? (d.cardName === 'business'
+        ? (d.contactName ? `c/o ${d.contactName}` : '')
+        : String(d.businessName))
+    : ''
+
   const infoGrid = (carcass: CarcassInfo) =>
     `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;border:1.5px solid #C9A882;margin-bottom:8px">
        <div style="padding:6px 11px;border-right:1px solid #C9A882">
          <div style="font-size:12px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Customer</div>
          <div style="font-size:24px;font-weight:bold">${d.customerName ?? '—'}</div>
+         ${secondaryName ? `<div style="font-size:16px;font-weight:bold;color:#555;margin-top:1px">${secondaryName}</div>` : ''}
          ${d.customerPhone ? `<div style="font-size:16px;color:#555;margin-top:1px">${d.customerPhone}</div>` : ''}
        </div>
        <div style="padding:6px 11px;border-right:1px solid #C9A882">
@@ -1208,7 +1218,7 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
     <div style="font-size:10px;color:#75471B;letter-spacing:0.06em;margin-top:2px">SCAN TO OPEN PACKING SESSION</div>
   </div>
   <div style="font-size:16px;color:#555;margin-bottom:8px">
-    <strong>${d.customerName ?? '—'}</strong>${d.portion ? ' · ' + fmt(d.portion) : ''} · Harvest Date: ${harvestDate}
+    <strong>${d.customerName ?? '—'}</strong>${secondaryName ? ` <span style="color:#777">(${secondaryName})</span>` : ''}${d.portion ? ' · ' + fmt(d.portion) : ''} · Harvest Date: ${harvestDate}
     <span style="margin-left:14px">Producer: <span style="font-weight:bold">${carcass.producer || wline(110)}</span></span>
     <span style="margin-left:14px">Lot # <span style="font-weight:bold">${carcass.lot || wline(46)}</span> · Tag # <span style="font-weight:bold">${carcass.tag || wline(38)}</span></span>
     <span style="margin-left:14px">Hanging Wt: <span style="font-weight:bold">${carcass.hcw != null ? `${carcass.hcw} lbs` : wline(58)}</span></span>
@@ -1809,7 +1819,10 @@ export default function CuttingInstructionsPage() {
       .filter(a => a.customers?.some(c => c.linked_cutting_instruction_id === ci.id))
       .map(a => a.source)
     return [
-      d.customerName, d.customerPhone, (d.customerPhone ?? '').replace(/\D/g, ''),
+      // Both halves of a business account: the office searches "Michael
+      // Williams" and has to find the card headlined "87 Rentals".
+      d.customerName, d.businessName, d.contactName,
+      d.customerPhone, (d.customerPhone ?? '').replace(/\D/g, ''),
       d.customerEmail, d.notes, speciesOf(ci), ci.status,
       ...producers,
       ...carcasses.flatMap(c => [c.tag, c.lot, c.producer]),

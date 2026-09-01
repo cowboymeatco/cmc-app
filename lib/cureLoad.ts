@@ -25,7 +25,7 @@ import type { CookProfile } from '@/lib/cookPredict'
 //
 // ⚠️ Two vocabularies. harvest_log.species says 'Hog'; cutting_instructions
 // .species says 'Pork'. Callers pass whichever they hold — hence both spellings.
-export const PORK_ONLY_CURE_PRODUCTS = new Set(['Ham', 'Shoulder Bacon', 'Hocks', 'Jowl', 'Bone-In Loin'])
+export const PORK_ONLY_CURE_PRODUCTS = new Set(['Ham', 'Shoulder Bacon', 'Hocks', 'Jowl', 'Bone-In Loin', 'Fresh Side'])
 
 export function cureProductFitsSpecies(product: string, species: string | null | undefined): boolean {
   if (!PORK_ONLY_CURE_PRODUCTS.has(product)) return true
@@ -59,6 +59,10 @@ const RACK: Record<string, RackSpec> = {
   // is the one number to change.
   'Hocks':          { group: 'ham',   label: 'Ham rack',   profileKey: 'BONE IN HAM',       perSlot: 1 },
   'Jowl':           { group: 'jowl',  label: 'Jowls',      profileKey: null,                perSlot: 1 },
+  // Fresh side never enters the house — it's tagged so the slab is tracked to
+  // the slicer, not because it cures. Its own group so the board doesn't file
+  // it under "Other", and no profile so it can't cost smokehouse capacity.
+  'Fresh Side':     { group: 'fresh', label: 'Fresh side — slice, no cure', profileKey: null, perSlot: 1 },
 }
 const OTHER: RackSpec = { group: 'other', label: 'Other', profileKey: null, perSlot: 1 }
 

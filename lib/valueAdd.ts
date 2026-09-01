@@ -107,13 +107,22 @@ function porkValueAdd(d: Json): ValueAddItem[] {
   // "split" mode each side is its own entry (cut2/style2 set) and counts as one.
   const perAnimal = str(d.portion).startsWith('whole') ? 2 : 1
 
+  // Fresh side is sliced, not cured — but it leaves the cut floor for the
+  // slicer the same way bacon leaves for the cure cooler, so it's tracked and
+  // counted the same (Charlie, 2026-09-01).
+  const BELLY_VA: Record<string, { product: string; category: string }> = {
+    'bacon':     { product: 'Bacon',           category: 'Bacon' },
+    'side-pork': { product: 'Fresh Side Pork', category: 'Fresh' },
+  }
   const belly = asObj(d.belly)
   if (str(belly.cut2)) {
     for (const cut of [str(belly.cut), str(belly.cut2)]) {
-      if (cut === 'bacon') out.push({ product: 'Bacon', category: 'Bacon', qty: 1 })
+      const hit = BELLY_VA[cut]
+      if (hit) out.push({ ...hit, qty: 1 })
     }
-  } else if (str(belly.cut) === 'bacon') {
-    out.push({ product: 'Bacon', category: 'Bacon', qty: perAnimal })
+  } else {
+    const hit = BELLY_VA[str(belly.cut)]
+    if (hit) out.push({ ...hit, qty: perAnimal })
   }
   // The shoulder is a paired primal too (two per whole hog), split-aware via
   // shoulder2. Shoulder bacon and pulled pork are per-shoulder add-ons, so a

@@ -17,6 +17,7 @@ const SHEET_PRODUCT: Record<string, string> = {
   'Shoulder Bacon': 'Shoulder Bacon',
   'Bone-In Loin':   'Smoked Chops',
   'Hocks':          'Cured & Smoked Hocks',
+  'Fresh Side':     'Fresh Side Pork',
 }
 
 // GET /api/cure-tags?status=curing|done&instructions=1
