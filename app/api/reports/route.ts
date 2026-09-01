@@ -105,7 +105,7 @@ export async function GET(req: NextRequest) {
     const [{ data: cis, error: ciErr }, { data: appts }, { data: cureTags }] = await Promise.all([
       supabase.from('cutting_instructions').select('id, customer_name, species, data, status').neq('status', 'archived'),
       supabase.from('harvest_appointments').select('id, harvest_date, customers'),
-      supabase.from('cure_tags').select('tag_number, product, customer_name, status, linked_harvest_id'),
+      supabase.from('cure_tags').select('tag_number, product, customer_name, status, linked_harvest_id, linked_cutting_instruction_id'),
     ])
     // What the floor's shorthand stands for — see lib/nameKey. Read separately
     // so a failure here degrades to plain word-matching instead of blanking the
@@ -129,6 +129,7 @@ export async function GET(req: NextRequest) {
     // is reported below instead of being dropped on the floor.
     const tagsByName = new Map<string, {
       tag_number: string; product: string; status: string; linked_harvest_id: string | null
+      linked_cutting_instruction_id: string | null
     }[]>()
     const tagNamesByKey = new Map<string, Set<string>>()
     for (const t of cureTags ?? []) {
@@ -138,6 +139,7 @@ export async function GET(req: NextRequest) {
       list.push({
         tag_number: String(t.tag_number), product: String(t.product), status: String(t.status),
         linked_harvest_id: t.linked_harvest_id ? String(t.linked_harvest_id) : null,
+        linked_cutting_instruction_id: t.linked_cutting_instruction_id ? String(t.linked_cutting_instruction_id) : null,
       })
       tagsByName.set(k, list)
       const names = tagNamesByKey.get(k) ?? new Set<string>()
@@ -193,17 +195,20 @@ export async function GET(req: NextRequest) {
         // animal, carrying its id so a split animal counts once in a total.
         carcasses:     carcassIds.map(id => ({ id, lbs: carcassIdx.weightOf(id) })),
         products:      extractValueAdd(ci.species as string, ci.data),
-        // A tag PINNED to an animal shows only on the sheet that animal is on.
-        // Everything else falls back to the customer, because a seal knows
-        // whose piece it is and not which of their head — so an unpinned tag
-        // appears against each of their sheets. That is tolerable for a hog
-        // and a hog; it is nonsense for a ham on a lamb sheet, so products
+        // A tag scanned in off a cut card knows its exact SHEET and shows only
+        // there. A tag PINNED to an animal shows only on the sheet that animal
+        // is on. Everything else falls back to the customer, because a seal
+        // knows whose piece it is and not which of their head — so an unpinned
+        // tag appears against each of their sheets. That is tolerable for a
+        // hog and a hog; it is nonsense for a ham on a lamb sheet, so products
         // that can ONLY come off a hog are held back. Bacon isn't one: beef
         // bacon is a real thing we cure.
         cure_tags:     (tagsByName.get(key(ci.customer_name as string)) ?? [])
-                         .filter(t => t.linked_harvest_id
-                           ? sheetCarcassIds.has(t.linked_harvest_id)
-                           : cureProductFitsSpecies(t.product, ci.species as string)),
+                         .filter(t => t.linked_cutting_instruction_id
+                           ? t.linked_cutting_instruction_id === String(ci.id)
+                           : t.linked_harvest_id
+                             ? sheetCarcassIds.has(t.linked_harvest_id)
+                             : cureProductFitsSpecies(t.product, ci.species as string)),
       }
     }).filter(r =>
       r.products.length > 0 &&

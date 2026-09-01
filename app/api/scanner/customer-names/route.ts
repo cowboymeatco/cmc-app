@@ -36,10 +36,9 @@ export async function GET() {
   interface Name { name: string; source: 'sheet' | 'recent'; species: string | null; lastSeen: string; ids?: string[] }
   const byName = new Map<string, Name>()
 
-  // The first 8 hex chars of the instruction id — what the packaging sheet's
-  // CI-xxxxxxxx barcode carries, so a scanned slip resolves to its sheet name.
-  const id8 = (id: unknown) => String(id ?? '').replace(/-/g, '').slice(0, 8).toUpperCase()
-
+  // FULL instruction ids. The card's CI-xxxxxxxx barcode carries only the
+  // first 8 hex chars — resolveCiScan matches on that prefix — but the cure
+  // tag that gets written needs the whole id to link the piece to its sheet.
   for (const r of sheetRes.data ?? []) {
     const name = String(r.customer_name ?? '').trim()
     if (!name) continue
@@ -49,14 +48,14 @@ export async function GET() {
     // sheet's barcode still has to open the session, so the ids accumulate.
     if (prev) {
       if (prev.species && prev.species !== (r.species ?? null)) prev.species = null
-      if (r.id) prev.ids!.push(id8(r.id))
+      if (r.id) prev.ids!.push(String(r.id))
       continue
     }
     byName.set(name, {
       name, source: 'sheet',
       species: (r.species as string) ?? null,
       lastSeen: String(r.created_at ?? '').slice(0, 10),
-      ids: r.id ? [id8(r.id)] : [],
+      ids: r.id ? [String(r.id)] : [],
     })
   }
 

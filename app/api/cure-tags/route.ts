@@ -128,14 +128,18 @@ export async function GET(req: NextRequest) {
     if (!sheets?.length) return { ...tag, instruction: null, ...extra }
     const wanted = SHEET_PRODUCT[tag.product]
     if (!wanted) return { ...tag, instruction: null, ...extra }
-    // A pinned tag reads its instruction off the sheet that animal is on.
-    const ordered = linked
-      ? [...sheets].sort((a, b) => {
-          const am = carcassIdx.carcassesFor(a.id).includes(linked) ? 0 : 1
-          const bm = carcassIdx.carcassesFor(b.id).includes(linked) ? 0 : 1
-          return am - bm
-        })
-      : sheets
+    // A tag scanned in off a cut card knows its exact sheet — read that one
+    // first. Failing that, a pinned tag reads the sheet its animal is on.
+    const linkedCi = tag.linked_cutting_instruction_id ? String(tag.linked_cutting_instruction_id) : null
+    const ordered = linkedCi
+      ? [...sheets].sort((a, b) => (a.id === linkedCi ? 0 : 1) - (b.id === linkedCi ? 0 : 1))
+      : linked
+        ? [...sheets].sort((a, b) => {
+            const am = carcassIdx.carcassesFor(a.id).includes(linked) ? 0 : 1
+            const bm = carcassIdx.carcassesFor(b.id).includes(linked) ? 0 : 1
+            return am - bm
+          })
+        : sheets
     for (const sheet of ordered) {
       const item = extractValueAdd(sheet.species, sheet.data).find(it => it.product === wanted)
       if (item) return { ...tag, instruction: item.detail ?? 'On sheet — no cut style given', ...extra }
@@ -148,11 +152,19 @@ export async function GET(req: NextRequest) {
 // POST /api/cure-tags — tag a piece in from the scanner.
 // A seal is single-use: if the number already exists the existing row comes
 // back with 409 so the floor sees whose piece it is instead of double-tagging.
+//
+// Carries linked_cutting_instruction_id when the session was opened off a cut
+// card's CI barcode — one tag, one sheet, one animal portion. And it counts:
+// a 3rd Bacon against a sheet that orders 2 comes back 422 with the numbers,
+// for the scanner to put to the person holding the piece. Warn, never block —
+// a split belly seals as two pieces and the sheet can lag the floor, so the
+// crew's "tag anyway" (force) always wins (Charlie, 2026-09-01).
 export async function POST(req: NextRequest) {
   const body = await req.json()
-  const { tag_number, product, customer_name, session_date, weight_lbs } = body as {
+  const { tag_number, product, customer_name, session_date, weight_lbs, linked_cutting_instruction_id, force } = body as {
     tag_number: string; product: string; customer_name: string
     session_date?: string; weight_lbs?: number | null
+    linked_cutting_instruction_id?: string | null; force?: boolean
   }
   if (!tag_number || !product || !customer_name) {
     return NextResponse.json({ error: 'tag_number, product and customer_name required' }, { status: 400 })
@@ -162,6 +174,68 @@ export async function POST(req: NextRequest) {
     .from('cure_tags').select('*').eq('tag_number', tag_number).maybeSingle()
   if (existing) return NextResponse.json(existing, { status: 409 })
 
+  const ciId = linked_cutting_instruction_id || null
+
+  // The count check needs a single sheet to be the denominator. A scanned card
+  // names it outright; a typed name gets one only when exactly one live sheet
+  // matches its key — a customer with two hogs on two sheets has no per-animal
+  // answer without the card, and a wrong warning teaches the floor to ignore
+  // the right ones, so ambiguity skips the check rather than guessing.
+  const wanted = SHEET_PRODUCT[product]
+  if (!force && wanted) {
+    const [{ data: cis }, { data: aliasRows }] = await Promise.all([
+      supabase.from('cutting_instructions')
+        .select('id, customer_name, species, data').neq('status', 'archived'),
+      supabase.from('customer_name_aliases').select('alias, expands_to'),
+    ])
+    const aliases = aliasMap((aliasRows ?? []) as CustomerNameAlias[])
+    const key = (raw: string | null | undefined) => nameKeyWith(raw, aliases)
+
+    const k = key(customer_name)
+    const keyMatches = (cis ?? []).filter(ci => key(ci.customer_name as string) === k)
+    const sheet = ciId
+      ? (cis ?? []).find(ci => String(ci.id) === ciId) ?? null
+      : keyMatches.length === 1 ? keyMatches[0] : null
+
+    if (sheet) {
+      const expected = extractValueAdd(sheet.species as string, sheet.data)
+        .filter(it => it.product === wanted)
+        .reduce((n, it) => n + (it.qty ?? 1), 0)
+      // Pieces already sealed against this sheet: tags carrying its id, plus —
+      // only when this customer has just the one sheet, where there is nothing
+      // to misattribute — legacy tags matched by name key.
+      const { data: sameProduct } = await supabase
+        .from('cure_tags')
+        .select('customer_name, linked_cutting_instruction_id')
+        .eq('product', product)
+      const have = (sameProduct ?? []).filter(t =>
+        t.linked_cutting_instruction_id
+          ? String(t.linked_cutting_instruction_id) === String(sheet.id)
+          : keyMatches.length === 1 && key(t.customer_name as string) === k,
+      ).length
+      if (have + 1 > expected) {
+        return NextResponse.json({
+          warn: expected === 0 ? 'not_ordered' : 'over_count',
+          product, expected, have,
+          sheet_customer: sheet.customer_name,
+        }, { status: 422 })
+      }
+    }
+  }
+
+  // A sheet with exactly one animal behind it settles which carcass the piece
+  // came off — that is arithmetic, not a guess, so the pin sets itself. More
+  // than one stays null for a person to pick on Processing → In Cure.
+  let linked_harvest_id: string | null = null
+  if (ciId) {
+    const { data: asg } = await supabase
+      .from('carcass_assignments')
+      .select('harvest_log_id')
+      .eq('linked_cutting_instruction_id', ciId)
+    const heads = [...new Set((asg ?? []).map(a => String(a.harvest_log_id ?? '')).filter(Boolean))]
+    if (heads.length === 1) linked_harvest_id = heads[0]
+  }
+
   const { data, error } = await supabase
     .from('cure_tags')
     .insert([{
@@ -170,6 +244,8 @@ export async function POST(req: NextRequest) {
       customer_name,
       session_date: session_date || null,
       weight_lbs:   weight_lbs ?? null,
+      linked_cutting_instruction_id: ciId,
+      linked_harvest_id,
     }])
     .select()
     .single()

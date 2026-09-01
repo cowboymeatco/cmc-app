@@ -1166,6 +1166,13 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
         ? `<div style="border:1.5px solid #C9A882;font-size:15px;font-weight:bold;letter-spacing:0.06em;padding:2px 9px">${killTypeLabel(carcass.killType)}</div>`
         : `<div style="border:1.5px dashed #C9A882;color:#C9A882;font-size:15px;font-weight:bold;letter-spacing:0.06em;padding:2px 9px">INSPECTION NOT RECORDED</div>`
 
+  // The card's barcode — Code 39 of the instruction id's first 8 hex chars.
+  // Page 2 has carried it since 2026-08-27; page 1 gets it too because the CUT
+  // CARD is what's in reach when hams and bacons get seal-tagged, and scanning
+  // it opens the session under the office's spelling AND ties the cure seals
+  // to this exact sheet — one instruction, one animal (Charlie, 2026-09-01).
+  const ciBarcode = makeCode39Barcode(`CI-${String(ci.id).replace(/-/g, '').slice(0, 8).toUpperCase()}`)
+
   return carcasses.map((carcass, ci_) => {
   // "1 of 2" only when there really are several, so a normal single-animal
   // card reads exactly as it always has.
@@ -1176,7 +1183,10 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
   return `
 <!-- PAGE 1: CUT CARD — 3-column section layout -->
 <div class="page pagebreak">
-  ${hdr('Cut Card' + ofN)}
+  ${hdr('Cut Card' + ofN, `<div style="background:#F2E8D9;padding:4px 10px 2px;text-align:center">
+       <div style="width:150px;margin:0 auto">${ciBarcode}</div>
+       <div style="font-size:9px;color:#75471B;letter-spacing:0.05em;margin-top:1px">SCAN AT SCANNER — OPENS THIS ANIMAL&rsquo;S SESSION</div>
+     </div>`)}
   ${unassignedBand(carcass)}
   ${grindBand}
   ${infoGrid(carcass)}
@@ -1192,10 +1202,9 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
   ${grindBand}
   ${/* Scanning this at the packing scanner opens the customer's session under
        this exact name — no typing, and the slip in hand is the check that the
-       right session is open (Charlie, 2026-08-27). Code 39 of the instruction
-       id's first 8 hex chars; the scanner resolves it via customer-names. */''}
+       right session is open (Charlie, 2026-08-27). Same code as page 1's. */''}
   <div class="slipcode" style="float:right;width:180px;text-align:center;margin:0 0 6px 14px">
-    ${makeCode39Barcode(`CI-${String(ci.id).replace(/-/g, '').slice(0, 8).toUpperCase()}`)}
+    ${ciBarcode}
     <div style="font-size:10px;color:#75471B;letter-spacing:0.06em;margin-top:2px">SCAN TO OPEN PACKING SESSION</div>
   </div>
   <div style="font-size:16px;color:#555;margin-bottom:8px">

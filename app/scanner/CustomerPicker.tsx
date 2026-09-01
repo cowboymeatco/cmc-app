@@ -31,20 +31,27 @@ export interface CustomerName {
   source: 'sheet' | 'recent'
   species: string | null
   lastSeen: string
-  /** 8-char cutting-instruction id prefixes — what the slip barcode carries */
+  /** Full cutting-instruction ids — the card's barcode carries the first 8 hex */
   ids?: string[]
 }
 
-// The packaging sheet prints a CI-xxxxxxxx barcode (8 hex chars of the
-// instruction id). Scanning it — into this picker or the sessions screen —
+// The cut card and packaging sheet print a CI-xxxxxxxx barcode (8 hex chars of
+// the instruction id). Scanning it — into this picker or the sessions screen —
 // resolves straight to the office's spelling of the customer, so nobody types
-// a name at all (Charlie, 2026-08-27).
+// a name at all (Charlie, 2026-08-27). It also names the exact SHEET: cure
+// tags scanned in that session link to it, so a two-hog customer's pieces land
+// on the right animal (Charlie, 2026-09-01).
 const CI_SCAN = /^CI-?([0-9A-F]{8})$/i
-export function resolveCiScan(raw: string, names: CustomerName[]): string | null {
+const idPrefix = (id: string) => id.replace(/-/g, '').slice(0, 8).toUpperCase()
+export function resolveCiScan(raw: string, names: CustomerName[]): { name: string; ciId: string } | null {
   const m = raw.trim().match(CI_SCAN)
   if (!m) return null
   const id8 = m[1].toUpperCase()
-  return names.find(n => n.ids?.includes(id8))?.name ?? null
+  for (const n of names) {
+    const hit = n.ids?.find(id => idPrefix(id) === id8)
+    if (hit) return { name: n.name, ciId: hit }
+  }
+  return null
 }
 
 const INPUT: React.CSSProperties = {
@@ -145,7 +152,7 @@ export default function CustomerPicker({
           // and sends Enter — swap in the sheet name it stands for.
           if (e.key === 'Enter') {
             const scanned = resolveCiScan(value, names)
-            if (scanned) { e.preventDefault(); pick(scanned); return }
+            if (scanned) { e.preventDefault(); pick(scanned.name); return }
           }
           if (open && hits.length) {
             if (e.key === 'ArrowDown') { e.preventDefault(); setNavigated(true); setHi(h => Math.min(h + 1, hits.length - 1)); return }

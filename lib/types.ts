@@ -344,6 +344,11 @@ export interface CureTag {
   // account for five different end buyers). Null = not pinned, and the tag
   // shows against all of that customer's sheets. Never inferred.
   linked_harvest_id?: string | null
+  // The exact cut sheet this piece belongs to — set when the seal was scanned
+  // in a session opened off a cut card's CI-xxxxxxxx barcode, so a customer
+  // with two hogs gets each piece on the right animal's sheet. Null = legacy
+  // tag or a hand-typed session; those fall back to name matching.
+  linked_cutting_instruction_id?: string | null
   // Set by GET ?instructions=1 — a label for the pinned animal, and the animals
   // on this customer's sheets to choose from.
   linkedAnimal?: string | null

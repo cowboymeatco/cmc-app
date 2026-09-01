@@ -525,6 +525,14 @@ export default function ScannerPage() {
   const [cureProduct, setCureProduct] = useState<string | null>(null)
   const [cureWeight,  setCureWeight]  = useState('')
   const [cureSaving,  setCureSaving]  = useState(false)
+  // The server counted this piece against the sheet and it's one more than the
+  // sheet orders (or the sheet never ordered it). The person holding the piece
+  // decides — "Tag anyway" resends with force (Charlie, 2026-09-01).
+  const [cureWarn,    setCureWarn]    = useState<{ product: string; expected: number; have: number; kind: string } | null>(null)
+  // The cutting instruction the open session was scanned in under — set by a
+  // CI-xxxxxxxx card scan, cleared whenever a session opens any other way.
+  // Every cure seal saved while it's set links to that exact sheet.
+  const sessionCiRef = useRef<string | null>(null)
   // Where the weight in the box came from, so the floor can see the difference
   // between a number somebody scanned and a number somebody typed.
   const [cureWeighSrc, setCureWeighSrc] = useState<'scale' | 'typed' | null>(null)
@@ -885,8 +893,11 @@ export default function ScannerPage() {
     if (/^CT-[0-9a-f-]{36}$/.test(raw)) { addInput(raw); return }
     // Carcass half tag complete (YYDDD-TAG-SIDE or YYMMDD-TAG-SIDE)
     if (/^\d{5,6}-\w+-[LR]$/i.test(raw)) { addInput(raw.toUpperCase()); return }
-    // Partial CMC/CT prefix or carcass tag building up — don't strip
-    if (/^(CMC|CT)/i.test(raw) || /^\d{5,6}-[\w-]*$/.test(raw)) { setScan(raw); return }
+    // Cut card complete (CI-xxxxxxxx) — the crew moved on to the next animal:
+    // jump to that card's session and carry its sheet for the cure seals.
+    if (/^CI-?[0-9A-F]{8}$/i.test(raw)) { setScan(''); handleCiScan(raw); return }
+    // Partial CMC/CT/CI prefix or carcass tag building up — don't strip
+    if (/^(CMC|CT|CI)/i.test(raw) || /^\d{5,6}-[\w-]*$/.test(raw)) { setScan(raw); return }
     // Cure seal complete — the leading zero means it can't be a Hobart
     // EAN prefix mid-stream (those start '2')
     if (isCureTagNumber(raw)) { openCureModal(raw); return }
@@ -1185,6 +1196,9 @@ export default function ScannerPage() {
   // fresh one (the cure-packaging flow needs an open box ready to scan into).
   async function startSessionFromExisting(cust: string, dt: string): Promise<BoxRecord[]> {
     if (!pluLoaded) return []
+    // A session opened any way but a card scan doesn't know its sheet.
+    // handleCiScan re-sets this right after, when a card IS what opened it.
+    sessionCiRef.current = null
     const existing = sessions.find(s => s.customer_name === cust && s.session_date === dt)
     const existingStatus = existing?.status ?? 'scanning'
     const existingType   = (existing?.box_type as BoxType) ?? 'USDA'
@@ -1266,20 +1280,24 @@ export default function ScannerPage() {
     }
   }
 
-  // ── Packing-slip barcode: CI-xxxxxxxx opens its customer's session ──────────
-  // The packaging sheet prints a barcode carrying its instruction id. One scan
-  // from the sessions screen opens (or starts) that customer's packing session
-  // under the office's spelling — no typing, and the slip in hand IS the check
-  // that the right session is open (Charlie, 2026-08-27).
+  // ── Cut card / packing-slip barcode: CI-xxxxxxxx opens its session ─────────
+  // The cut card and packaging sheet print a barcode carrying its instruction
+  // id. One scan opens (or starts) that customer's session under the office's
+  // spelling — no typing, and the card in hand IS the check that the right
+  // session is open (Charlie, 2026-08-27). The session then remembers WHICH
+  // sheet was scanned: cure seals tagged in it link to that instruction, so a
+  // two-hog customer's pieces land on the right animal, and scanning the next
+  // animal's card mid-cut moves the link with it (Charlie, 2026-09-01).
   async function handleCiScan(raw: string) {
     if (!pluLoaded) return
-    const name = resolveCiScan(raw, custNames)
-    if (!name) return
+    const hit = resolveCiScan(raw, custNames)
+    if (!hit) return
     const dt = isoDate()
-    const sorted = await startSessionFromExisting(name, dt)
-    if (!sorted.some(b => !b.is_closed)) await addBoxTo(name, dt, sorted)
+    const sorted = await startSessionFromExisting(hit.name, dt)
+    sessionCiRef.current = hit.ciId
+    if (!sorted.some(b => !b.is_closed)) await addBoxTo(hit.name, dt, sorted)
     setLastKind('ok')
-    setLastItem(`📋 ${name} — session open off the packing slip · scan packages`)
+    setLastItem(`📋 ${hit.name} — session open off the cut card · scan packages`)
     setFlash('ok')
     setTimeout(() => setFlash(null), 3000)
   }
@@ -1789,6 +1807,7 @@ export default function ScannerPage() {
     setCureWeight('')
     setCureWeighSrc(null)
     setCureProduct(null)
+    setCureWarn(null)
     let existing: CureTag | null = null
     try {
       const res = await fetch(`/api/cure-tags?tag=${encodeURIComponent(tagNumber)}`)
@@ -1797,10 +1816,19 @@ export default function ScannerPage() {
     setCureModal({ tagNumber, existing })
   }
 
-  async function saveCureTag(product: string) {
+  async function saveCureTag(product: string, force = false) {
     if (!cureModal || cureSaving) return
     setCureSaving(true)
     try {
+      // The sheet this seal belongs to: the card that opened the session, or —
+      // when the session was typed — the customer's only sheet, which is the
+      // same fact arrived at without the card. Two sheets with no card stays
+      // null; nothing can say which animal, so nothing pretends to.
+      const ciId = sessionCiRef.current
+        ?? (() => {
+          const ids = custNames.find(n => n.name === customer)?.ids
+          return ids?.length === 1 ? ids[0] : null
+        })()
       const res = await fetch('/api/cure-tags', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1810,8 +1838,18 @@ export default function ScannerPage() {
           customer_name: customer,
           session_date:  date,
           weight_lbs:    cureWeight ? parseFloat(cureWeight) : null,
+          linked_cutting_instruction_id: ciId,
+          force,
         }),
       })
+      if (res.status === 422) {
+        // One more piece than the sheet orders. Not an error — the person
+        // holding the piece knows things the sheet doesn't (a split belly, a
+        // verbal add) — so the modal stays up and asks.
+        const w = await res.json()
+        setCureWarn({ product, expected: w.expected ?? 0, have: w.have ?? 0, kind: w.warn ?? 'over_count' })
+        return
+      }
       const row: CureTag = await res.json()
       if (res.status === 409) {
         setLastKind('warn')
@@ -1827,6 +1865,7 @@ export default function ScannerPage() {
         setTimeout(() => setFlash(null), 2500)
       }
       setCureModal(null)
+      setCureWarn(null)
       setCureWeighSrc(null)
     } catch {
       setFlash('bad')
@@ -3666,7 +3705,7 @@ export default function ScannerPage() {
                     <button
                       key={p}
                       disabled={cureSaving}
-                      onClick={() => setCureProduct(p)}
+                      onClick={() => { setCureProduct(p); setCureWarn(null) }}
                       style={{
                         background: cureProduct === p ? C.tan : 'rgba(255,255,255,0.06)',
                         border: `1px solid ${cureProduct === p ? C.tan : 'rgba(166,120,90,0.4)'}`,
@@ -3679,23 +3718,39 @@ export default function ScannerPage() {
                     </button>
                   ))}
                 </div>
+                {/* The server counted this piece against the sheet and it's one
+                    more than ordered. Warn, never block: the person holding the
+                    piece knows things the sheet doesn't — a belly split into
+                    two pieces, a verbal add (Charlie, 2026-09-01). */}
+                {cureWarn && (
+                  <div style={{ background: 'rgba(232,136,58,0.12)', border: `1px solid ${C.yellow}`, borderRadius: 4, padding: '0.7rem 0.85rem', marginBottom: '1rem' }}>
+                    <div style={{ color: C.yellow, fontWeight: 700, fontSize: '0.88rem', marginBottom: 3 }}>
+                      {cureWarn.kind === 'not_ordered'
+                        ? `⚠ The cut sheet doesn't order ${cureWarn.product} cured`
+                        : `⚠ ${cureWarn.product} #${cureWarn.have + 1} — the sheet orders ${cureWarn.expected}`}
+                    </div>
+                    <div style={{ color: C.cream, fontSize: '0.8rem', lineHeight: 1.45 }}>
+                      Check the piece and the card. A split piece or a verbal add is fine — tag it anyway if it&apos;s real.
+                    </div>
+                  </div>
+                )}
                 <div style={{ display: 'flex', gap: '0.6rem' }}>
                   <button
-                    onClick={() => { setCureModal(null); scanRef.current?.focus() }}
+                    onClick={() => { setCureModal(null); setCureWarn(null); scanRef.current?.focus() }}
                     style={{ flex: 1, background: 'transparent', border: '1px solid rgba(166,120,90,0.3)', color: C.lightBrown, borderRadius: 4, padding: '0.85rem', fontSize: '0.9rem', cursor: 'pointer' }}
                   >
                     Cancel
                   </button>
                   <button
-                    onClick={() => cureProduct && saveCureTag(cureProduct)}
+                    onClick={() => cureProduct && saveCureTag(cureProduct, Boolean(cureWarn))}
                     disabled={!cureProduct || cureSaving}
                     style={{
-                      flex: 2, background: cureProduct ? C.green : C.medBrown, color: C.dark, border: 'none',
+                      flex: 2, background: cureWarn ? C.yellow : cureProduct ? C.green : C.medBrown, color: C.dark, border: 'none',
                       borderRadius: 4, padding: '0.85rem', fontSize: '0.95rem', fontWeight: 700,
                       cursor: cureProduct && !cureSaving ? 'pointer' : 'default', opacity: cureSaving ? 0.5 : cureProduct ? 1 : 0.6,
                     }}
                   >
-                    {cureProduct ? `✓ Send ${cureProduct} to cure` : 'Pick a product'}
+                    {cureWarn ? `⚠ Tag ${cureProduct} anyway` : cureProduct ? `✓ Send ${cureProduct} to cure` : 'Pick a product'}
                   </button>
                 </div>
               </>
