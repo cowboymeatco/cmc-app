@@ -160,6 +160,13 @@ const DEFAULT_FLAGS: LabelFlags = { usda_bug: true, retail_exempt: false, not_fo
 // printer so I don't have to buy another shipping label printer?"
 type LabelRoll = '4in' | '62mm'
 const ROLL_KEY = 'scannerLabelRoll'
+
+// The Hobart HT scales on the shop LAN. Which one sits next to THIS station is
+// a per-device setting like the printer width, so the wrap bench can put a
+// customer's name on ITS scale's labels without touching the retail counter.
+const SCALE_KEY = 'scannerScaleIp'
+const SCALE_IPS = ['192.168.1.190', '192.168.1.191', '192.168.1.192'] as const
+const SCALE_DEFAULT_NAME = 'COWBOY MEAT CO'
 const ROLL_LABEL: Record<LabelRoll, string> = { '4in': '4in', '62mm': 'Brother 2.4in' }
 
 // A session's compliance/ownership type, picked once up front and sticky for
@@ -502,6 +509,57 @@ export default function ScannerPage() {
   function pickLabelRoll(r: LabelRoll) {
     setLabelRoll(r)
     try { window.localStorage.setItem(ROLL_KEY, r) } catch { /* private mode */ }
+  }
+
+  // This station's neighbouring scale + pushing the customer's name into its
+  // store-name line. The kiosk agent serves the request over the LAN (~2s).
+  const [scaleIp,          setScaleIp]          = useState<string | null>(null)
+  const [scaleNameBusy,    setScaleNameBusy]    = useState(false)
+  const [scaleNameStatus,  setScaleNameStatus]  = useState('')
+  useEffect(() => {
+    try {
+      const v = window.localStorage.getItem(SCALE_KEY)
+      if (v && (SCALE_IPS as readonly string[]).includes(v)) setScaleIp(v)
+    } catch { /* private mode */ }
+  }, [])
+  function pickScale(ip: string | null) {
+    setScaleIp(ip)
+    setScaleNameStatus('')
+    try {
+      if (ip) window.localStorage.setItem(SCALE_KEY, ip)
+      else window.localStorage.removeItem(SCALE_KEY)
+    } catch { /* private mode */ }
+  }
+  async function pushStoreName(name: string) {
+    if (!scaleIp || scaleNameBusy) return
+    const upper = name.toUpperCase()
+    setScaleNameBusy(true)
+    setScaleNameStatus('⏳ sending…')
+    try {
+      const res = await fetch('/api/scale-push', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ kind: 'store_name', payload: { ip: scaleIp, store_name: upper }, requested_by: 'scanner' }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`)
+      const reqId = d.request?.id as string | undefined
+      for (let i = 0; i < 10; i++) {
+        await new Promise(r => setTimeout(r, 1500))
+        const rows = await fetch('/api/scale-push').then(r => r.json()).catch(() => [])
+        const row = Array.isArray(rows) ? (rows as { id?: string; status?: string; result?: { scales?: { error?: string; asleep?: boolean }[] } }[]).find(r => r.id === reqId) : null
+        if (row?.status === 'done') { setScaleNameStatus(`✓ scale prints ${upper}`); setScaleNameBusy(false); return }
+        if (row?.status === 'error') {
+          const s = row.result?.scales?.[0]
+          setScaleNameStatus(`❌ ${s?.asleep ? 'scale is asleep — wake it and retry' : s?.error ?? 'failed'}`)
+          setScaleNameBusy(false); return
+        }
+      }
+      setScaleNameStatus('⚠️ no answer from the kiosk agent')
+    } catch (e) {
+      setScaleNameStatus(`❌ ${e instanceof Error ? e.message : 'failed'}`)
+    }
+    setScaleNameBusy(false)
   }
 
   // ── Inputs ───────────────────────────────────────────────────────────────────
@@ -3015,6 +3073,61 @@ export default function ScannerPage() {
                   {labelRoll === r ? '✓ ' : ''}{ROLL_LABEL[r]}
                 </button>
               ))}
+              {/* Scale next to this station — a station setting, like the printer.
+                  With one picked, one tap swaps that scale's store-name line (what
+                  its labels print as the store) to this customer, and back. */}
+              <span style={{ fontSize: '0.65rem', color: 'rgba(166,120,90,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em', marginLeft: '0.6rem' }}>Scale:</span>
+              {SCALE_IPS.map(ip => (
+                <button
+                  key={ip}
+                  onClick={() => pickScale(scaleIp === ip ? null : ip)}
+                  title={`Hobart scale at ${ip}. Pick the one at this station; tap again to unset.`}
+                  style={{
+                    background: scaleIp === ip ? 'rgba(201,168,130,0.28)' : 'rgba(255,255,255,0.03)',
+                    border: `1px solid ${scaleIp === ip ? 'rgba(201,168,130,0.6)' : 'rgba(166,120,90,0.2)'}`,
+                    borderRadius: 3, padding: '0.2rem 0.7rem',
+                    color: scaleIp === ip ? C.cream : C.lightBrown,
+                    fontSize: '0.72rem', cursor: 'pointer', fontWeight: scaleIp === ip ? 700 : 400,
+                  }}
+                >
+                  {scaleIp === ip ? '✓ ' : ''}.{ip.split('.').pop()}
+                </button>
+              ))}
+              {scaleIp && (
+                <>
+                  <button
+                    disabled={scaleNameBusy || !customer}
+                    onClick={() => pushStoreName(customer)}
+                    title="Put this customer's name on the scale — its labels print the name where the store name goes."
+                    style={{
+                      background: 'rgba(76,175,80,0.15)', border: '1px solid rgba(76,175,80,0.4)',
+                      borderRadius: 3, padding: '0.2rem 0.7rem', marginLeft: '0.5rem',
+                      color: C.green, fontSize: '0.72rem', cursor: 'pointer', fontWeight: 700,
+                      opacity: scaleNameBusy || !customer ? 0.5 : 1,
+                    }}
+                  >
+                    🏷 Name → scale
+                  </button>
+                  <button
+                    disabled={scaleNameBusy}
+                    onClick={() => pushStoreName(SCALE_DEFAULT_NAME)}
+                    title={`Put the scale back to ${SCALE_DEFAULT_NAME}.`}
+                    style={{
+                      background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(166,120,90,0.3)',
+                      borderRadius: 3, padding: '0.2rem 0.7rem',
+                      color: C.lightBrown, fontSize: '0.72rem', cursor: 'pointer',
+                      opacity: scaleNameBusy ? 0.5 : 1,
+                    }}
+                  >
+                    ↩ CMC
+                  </button>
+                  {scaleNameStatus && (
+                    <span style={{ fontSize: '0.72rem', color: scaleNameStatus.startsWith('✓') ? C.green : scaleNameStatus.startsWith('⏳') ? C.lightBrown : C.yellow }}>
+                      {scaleNameStatus}
+                    </span>
+                  )}
+                </>
+              )}
             </div>
           </div>
         )}
