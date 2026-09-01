@@ -80,6 +80,7 @@ interface SessionWithStats {
   total_weight:   number
   total_cuts:     number
   animals?:       string[]   // carcass input descriptions, e.g. "Beef — Tag 06 (Holdbrook)"
+  carcass_weight?: number    // summed hanging weight of the session's carcass inputs
 }
 
 interface BoxRecord {
@@ -2185,7 +2186,16 @@ export default function ScannerPage() {
       return (
         <div key={`${s.customer_name}|${s.session_date}`} style={{ background: 'rgba(255,255,255,0.03)', border: isMergeSource ? `1px solid ${C.yellow}` : '1px solid rgba(166,120,90,0.2)', borderRadius: 6, padding: '0.9rem 1.1rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.25rem' }}>
-            <span style={{ color: C.cream, fontWeight: 700, fontSize: '0.95rem' }}>{s.customer_name}</span>
+            <span style={{ color: C.cream, fontWeight: 700, fontSize: '0.95rem' }}>
+              {s.customer_name}
+              {/* Hanging weight from the carcass scans — hidden when the office
+                  already typed it into the name ("SETH KING 792#"). */}
+              {(s.carcass_weight ?? 0) > 0 && !s.customer_name.includes(String(Math.round(s.carcass_weight!))) && (
+                <span style={{ color: C.tan, fontWeight: 600, fontSize: '0.8rem' }}>
+                  {' '}· {s.carcass_weight! % 1 === 0 ? s.carcass_weight : s.carcass_weight!.toFixed(1)} lb
+                </span>
+              )}
+            </span>
             <span style={{ color: C.lightBrown, fontSize: '0.75rem' }}>{dateStr}</span>
           </div>
           <div style={{ color: C.lightBrown, fontSize: '0.75rem', marginBottom: (s.animals?.length ?? 0) > 0 ? '0.25rem' : '0.7rem' }}>

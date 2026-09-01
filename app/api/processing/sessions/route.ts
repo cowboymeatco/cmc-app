@@ -47,13 +47,14 @@ export async function GET() {
   // are in each customer's boxes (e.g. "Beef — Tag 06 (Holdbrook)")
   const { data: carcassRows } = await supabase
     .from('processing_inputs')
-    .select('customer_name, session_date, description')
+    .select('customer_name, session_date, description, weight_lbs')
     .eq('input_type', 'carcass')
     .order('created_at', { ascending: false })
     .limit(500)
 
-  const animalGroups = new Map<string, string[]>()
-  for (const r of (carcassRows ?? []) as { customer_name: string | null; session_date: string; description: string }[]) {
+  const animalGroups  = new Map<string, string[]>()
+  const carcassWeight = new Map<string, number>()
+  for (const r of (carcassRows ?? []) as { customer_name: string | null; session_date: string; description: string; weight_lbs: number | null }[]) {
     if (!r.customer_name || !r.description) continue
     const key = `${r.customer_name}|${r.session_date}`
     if (!animalGroups.has(key)) animalGroups.set(key, [])
@@ -62,6 +63,8 @@ export async function GET() {
     const desc = r.description.replace(/ [LR] Half/, '')
     const list = animalGroups.get(key)!
     if (!list.includes(desc)) list.push(desc)
+    // Hanging weight sums per half, so two halves read as the whole animal.
+    carcassWeight.set(key, (carcassWeight.get(key) ?? 0) + (Number(r.weight_lbs) || 0))
   }
 
   // 4. Merge
@@ -69,21 +72,21 @@ export async function GET() {
     id: string | null; customer_name: string; session_date: string
     status: string; notes: string; box_type: string | null; pickup_date: string | null
     box_count: number; closed_count: number; total_weight: number; total_cuts: number
-    animals: string[]
+    animals: string[]; carcass_weight: number
   }> = []
   const seen = new Set<string>()
 
   for (const s of sessions) {
     const key   = `${s.customer_name}|${s.session_date}`
     const stats = boxGroups.get(key) ?? { box_count: 0, closed_count: 0, total_weight: 0, total_cuts: 0 }
-    result.push({ id: s.id, customer_name: s.customer_name, session_date: s.session_date, status: s.status, notes: s.notes, box_type: s.box_type ?? null, pickup_date: s.pickup_date ?? null, ...stats, animals: animalGroups.get(key) ?? [] })
+    result.push({ id: s.id, customer_name: s.customer_name, session_date: s.session_date, status: s.status, notes: s.notes, box_type: s.box_type ?? null, pickup_date: s.pickup_date ?? null, ...stats, animals: animalGroups.get(key) ?? [], carcass_weight: carcassWeight.get(key) ?? 0 })
     seen.add(key)
   }
   // Box groups with no session record yet â†’ derive status
   for (const [key, stats] of boxGroups) {
     if (!seen.has(key)) {
       const { customer_name, session_date, ...rest } = stats
-      result.push({ id: null, customer_name, session_date, status: 'scanning', notes: '', box_type: null, pickup_date: null, ...rest, animals: animalGroups.get(key) ?? [] })
+      result.push({ id: null, customer_name, session_date, status: 'scanning', notes: '', box_type: null, pickup_date: null, ...rest, animals: animalGroups.get(key) ?? [], carcass_weight: carcassWeight.get(key) ?? 0 })
     }
   }
 
