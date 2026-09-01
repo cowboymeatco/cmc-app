@@ -6,7 +6,7 @@ import { makeCode39Barcode } from '@/lib/label'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-import { buildPackList, cutKey, packSpecies, BONE_IN_FILET_THICKNESS, baggedTrimPackRows, loinFields, mergeSides, shoulderFields, EIGHTHS, FMT_OVERRIDES, STEAK_STANDARDS, bagSizeLabel, baggedTrimCutterRows, beefTrimCutterRows, beefTrimPackRows, beefTrimRows, bellyRows, bellyWord, brisketLabel, fracThick, hamCut, hamLine, hamRows, hamStyleWord, hockStyle, isWholeAnimal, lgTrimLabel, porkTrimCutterRows, porkTrimRows, rawWeighIn, ribeyeAdds, roastOr, roastText, sidePair, smokehouseRows, smokehouseTotalLbs, stdThick, trimIsBagged, trimSplitOf, v2fmt } from '@/lib/packList'
+import { buildPackList, BONE_IN_FILET_THICKNESS, baggedTrimPackRows, loinFields, mergeSides, shoulderFields, EIGHTHS, FMT_OVERRIDES, STEAK_STANDARDS, bagSizeLabel, baggedTrimCutterRows, beefTrimCutterRows, beefTrimPackRows, beefTrimRows, bellyRows, bellyWord, brisketLabel, fracThick, hamCut, hamLine, hamRows, hamStyleWord, hockStyle, isWholeAnimal, lgTrimLabel, porkTrimCutterRows, porkTrimRows, rawWeighIn, ribeyeAdds, roastOr, roastText, sidePair, smokehouseRows, smokehouseTotalLbs, stdThick, trimIsBagged, trimSplitOf, v2fmt } from '@/lib/packList'
 
 interface RawInstruction {
   id:         string
@@ -723,33 +723,6 @@ function renderV2Detail(ci: RawInstruction) {
   )
 }
 
-// PLU call-up barcodes for the packaging sheet. Keyed species → cutKey → PLU,
-// but ONLY where a cut resolves to exactly one PLU — a cut with two linked PLUs
-// (bone-in vs boneless ribeye) is ambiguous, so it prints no barcode and the
-// packer keys it, rather than the sheet calling up the wrong item. Loaded once
-// by the page and read here at print time; empty until then (no barcodes, no
-// harm). Coverage grows as packers tap links on the scanner.
-let PLU_CALLUP: Record<string, Record<string, string>> = {}
-async function loadPluCallups() {
-  try {
-    const res  = await fetch('/api/processing/expected?all=1')
-    const data  = await res.json()
-    const byKey: Record<string, Record<string, Set<string>>> = {}
-    for (const l of (data.links ?? []) as { species: string; cut_key: string; plu_number: string }[]) {
-      ;((byKey[l.species] ??= {})[l.cut_key] ??= new Set()).add(l.plu_number)
-    }
-    const map: Record<string, Record<string, string>> = {}
-    for (const sp of Object.keys(byKey)) {
-      map[sp] = {}
-      for (const k of Object.keys(byKey[sp])) {
-        const plus = [...byKey[sp][k]]
-        if (plus.length === 1) map[sp][k] = plus[0]   // unambiguous only
-      }
-    }
-    PLU_CALLUP = map
-  } catch { /* leave empty — sheet just prints without barcodes */ }
-}
-
 // Builds one card's pages — cut card + packaging sheet per carcass — WITHOUT the
 // document shell, so several cards can be printed into a single document
 // (Jill wanted to select a batch and print them in one go).
@@ -1065,17 +1038,8 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
       const fi  = pr.isAddon ? 'italic' : 'normal'
       const pl  = pr.isAddon ? '18px' : '8px'
       const clr = pr.isAddon ? '#8a6200' : '#1A0A04'
-      // Scan-to-call-up: a real package line whose cut maps to exactly one PLU
-      // gets that PLU's barcode under the name, so the packer scans it into the
-      // scale instead of keying the number. Add-on and grind rows aren't packages.
-      const callPlu = (!pr.isAddon && !pr.isGrind && pr.cut)
-        ? PLU_CALLUP[packSpecies(species)]?.[cutKey(pr.cut)]
-        : undefined
-      const callBar = callPlu
-        ? `<div style="margin-top:3px;display:flex;align-items:center;gap:6px"><span style="display:inline-block;width:132px">${makeCode39Barcode(callPlu)}</span><span style="font-size:12px;color:#999;font-family:monospace">PLU ${callPlu}</span></div>`
-        : ''
       tbody += `<tr style="background:${bg}">
-        <td style="padding:6px ${pl} 6px 8px;font-size:22px;font-weight:${fw};font-style:${fi};color:${clr};vertical-align:top">${pr.cut ?? ''}${callBar}</td>
+        <td style="padding:6px ${pl} 6px 8px;font-size:22px;font-weight:${fw};font-style:${fi};color:${clr};vertical-align:top">${pr.cut ?? ''}</td>
         <td style="padding:6px 8px;font-size:18px;color:#555;vertical-align:top">${pr.spec ?? ''}</td>
         <td style="padding:6px 4px;width:58px;border-left:1px solid #ddd;text-align:center">${pr.writeIn ? '<span style="color:#bbb;font-size:16px">—</span>' : ' '}</td>
         <td style="padding:6px 4px;width:68px;border-left:1px solid #ddd;text-align:center">${
@@ -1689,7 +1653,6 @@ export default function CuttingInstructionsPage() {
 
   async function load() {
     setLoading(true)
-    void loadPluCallups()   // fire-and-forget: barcodes appear once links land
     const [ciRes, apptRes] = await Promise.all([
       fetch('/api/cutting-instructions'),
       fetch('/api/appointments'),
