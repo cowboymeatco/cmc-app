@@ -164,13 +164,16 @@ const ROLL_KEY = 'scannerLabelRoll'
 
 // The Hobart HT scales on the shop LAN. Which ones sit at THIS station is a
 // per-device setting like the printer width — a station can work a box scale
-// AND a packaging scale at once, so it's a set, not a single pick. Names are
-// the crew's words for each machine; the IP only shows in the hover text.
+// AND a packaging scale at once, so it's a set, not a single pick. The crew
+// calls them Scale 1/2/3; the number→IP mapping below is a PLACEHOLDER —
+// Charlie is confirming which physical scale is which IP, then these three
+// `ip` values get set to match (the `name` numbers stay). The IP shows only
+// in the hover text.
 const SCALE_KEY = 'scannerScaleIps'
 const SCALES = [
-  { ip: '192.168.1.190', name: '.190' },
-  { ip: '192.168.1.191', name: '.191' },
-  { ip: '192.168.1.192', name: '.192' },
+  { ip: '192.168.1.190', name: '1' },
+  { ip: '192.168.1.191', name: '2' },
+  { ip: '192.168.1.192', name: '3' },
 ]
 const SCALE_DEFAULT_NAME = 'COWBOY MEAT CO'
 const ROLL_LABEL: Record<LabelRoll, string> = { '4in': '4in', '62mm': 'Brother 2.4in' }
