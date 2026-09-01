@@ -16,8 +16,17 @@ export const dynamic = 'force-dynamic'
 type Line = ExpectedLine & { card: number }
 
 // GET /api/processing/expected?customer_name=X&date=YYYY-MM-DD
+//   ?all=1 → every link, no session — the cut card prints a call-up barcode on
+//   each packaging-sheet line whose cut resolves to exactly one PLU.
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
+  if (searchParams.get('all')) {
+    const links = await supabaseAdmin
+      .from('plu_cut_links')
+      .select('species, cut_key, plu_number, item_name')
+    return NextResponse.json({ links: links.data ?? [] })
+  }
+
   const customerName = searchParams.get('customer_name')
   const date         = searchParams.get('date')
   if (!customerName || !date) {
