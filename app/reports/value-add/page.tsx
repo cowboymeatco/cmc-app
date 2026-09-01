@@ -62,9 +62,13 @@ const TAG_COL: Record<string, string> = {
 const tagsFor = (s: Sheet, col: string) =>
   (s.cure_tags ?? []).filter(t => (TAG_COL[t.product] ?? t.product) === col)
 
-// "🏷 0341981✓ · 0341982" — done gets the check, in-cure rides bare
-const tagText = (tags: { tag_number: string; status: string }[]) =>
-  tags.map(t => `${t.tag_number}${t.status === 'done' ? '✓' : ''}`).join(' · ')
+// "🏷 0341981✓ · 0341982" — done gets the check, in-cure rides bare. A tag
+// drawn on more than one sheet carries a * : it isn't pinned to an animal, so
+// it prints on EVERY sheet its customer has, and without the mark a two-hog
+// customer reads four bacon seals on each hog's row (Charlie, 2026-09-01 —
+// "how are some hogs having more than 2 bacons scanned in?").
+const tagText = (tags: { tag_number: string; status: string }[], seen?: Map<string, number>) =>
+  tags.map(t => `${t.tag_number}${t.status === 'done' ? '✓' : ''}${(seen?.get(t.tag_number) ?? 0) > 1 ? '*' : ''}`).join(' · ')
 
 const HAM_COL = 'Cured & Smoked Ham'
 
@@ -189,6 +193,15 @@ export default function ValueAddReport() {
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [from, to])
+
+  // How many sheets each seal is drawn on — over the whole fetch, not the
+  // filtered rows, so flipping the species filter doesn't change what a tag
+  // claims about itself. >1 sighting = unpinned on a multi-sheet customer.
+  const tagSeen = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const s of sheets) for (const t of s.cure_tags ?? []) m.set(t.tag_number, (m.get(t.tag_number) ?? 0) + 1)
+    return m
+  }, [sheets])
 
   const speciesList = useMemo(
     () => [...new Set(sheets.map(s => s.species).filter(Boolean))].sort() as string[],
@@ -414,7 +427,7 @@ export default function ValueAddReport() {
       for (const c of cols) {
         const items = itemsFor(s, c)
         const tags  = tagsFor(s, c)
-        base[c] = [items.length ? cellText(items) : '', tags.length ? `🏷 ${tagText(tags)}` : ''].filter(Boolean).join('  ')
+        base[c] = [items.length ? cellText(items) : '', tags.length ? `🏷 ${tagText(tags, tagSeen)}` : ''].filter(Boolean).join('  ')
       }
       base.total = rowQty(s)
       return base
@@ -492,7 +505,7 @@ export default function ValueAddReport() {
       const cells = cols.map(c => {
         const items = itemsFor(s, c)
         const tags  = tagsFor(s, c)
-        const tagLine = tags.length ? `<div class="tags">🏷 ${escHtml(tagText(tags))}</div>` : ''
+        const tagLine = tags.length ? `<div class="tags">🏷 ${escHtml(tagText(tags, tagSeen))}</div>` : ''
         return `<td class="ctr${items.some(it => it.detail) ? ' det' : ''}">${items.length ? escHtml(cellText(items)) : ''}${tagLine}</td>`
       }).join('')
       return `<tr><td class="cust">${escHtml(s.customer_name)}</td><td class="date">${escHtml(fmtDay(s.date ?? ''))}</td><td class="ctr hang">${escHtml(hangText(s))}</td>${cells}<td class="ctr tot">${rowQty(s)}</td></tr>`
@@ -537,7 +550,7 @@ export default function ValueAddReport() {
     <tbody>${bodyRows}</tbody>
     <tfoot><tr class="totals"><td>Total · ${rows.length}</td><td></td><td class="ctr">${hangTotal ? `${fmtLbs(hangTotal)} lbs` : ''}</td>${totalsRow}<td class="ctr">${rows.reduce((n, s) => n + rowQty(s), 0)}</td></tr></tfoot>
   </table>
-  <div class="foot">Hanging weight is the whole carcass (½ / ¾ / ¼ marks a partial share) · Built from the cut sheets · Generated ${escHtml(generated)}</div>
+  <div class="foot">Hanging weight is the whole carcass (½ / ¾ / ¼ marks a partial share) · 🏷* = seal not pinned to an animal, shown on every sheet its customer has · Built from the cut sheets · Generated ${escHtml(generated)}</div>
   <script>window.onload = () => setTimeout(() => window.print(), 200)</script>
 </body></html>`
 
@@ -726,8 +739,8 @@ export default function ValueAddReport() {
                                 ? null
                                 : <span style={{ color: 'rgba(166,120,90,0.18)' }}>·</span>}
                             {tags.length > 0 && (
-                              <div style={{ fontFamily: 'monospace', fontSize: '0.66rem', color: C.amber, marginTop: 2 }} title="Seal tags in cure for this customer (✓ = out of cure)">
-                                🏷 {tagText(tags)}
+                              <div style={{ fontFamily: 'monospace', fontSize: '0.66rem', color: C.amber, marginTop: 2 }} title="Seal tags in cure for this customer (✓ = out of cure · * = not pinned to an animal, so it shows on every sheet this customer has)">
+                                🏷 {tagText(tags, tagSeen)}
                               </div>
                             )}
                           </td>
@@ -815,8 +828,13 @@ export default function ValueAddReport() {
           carcass is linked to that sheet yet. The column total counts each carcass once, so a split animal isn&apos;t
           doubled. An amber <strong style={{ color: C.amber }}>🏷 line</strong> under a cell is the actual seal tag
           in the cure cooler for that customer — <strong style={{ color: C.amber }}>✓</strong> means it&apos;s out of
-          cure — so an ordered ham with no tag under it hasn&apos;t been tagged in yet. Beef &amp; lamb currently show
-          the shared smokehouse and ground-sausage items only.
+          cure — so an ordered ham with no tag under it hasn&apos;t been tagged in yet. A seal knows whose piece it is,
+          not which of their animals — so a tag marked <strong style={{ color: C.amber }}>*</strong> isn&apos;t pinned to
+          an animal and prints on <strong style={{ color: C.tan }}>every</strong> sheet its customer has: a two-hog
+          customer reads all four bacon seals on each hog&apos;s row, and the * is what says the count is the
+          customer&apos;s, not that animal&apos;s. Pin a tag to its animal on
+          {' '}<strong style={{ color: C.cream }}>Processing → In Cure</strong> and it moves to that animal&apos;s row
+          alone. Beef &amp; lamb currently show the shared smokehouse and ground-sausage items only.
         </p>
         )}
 
