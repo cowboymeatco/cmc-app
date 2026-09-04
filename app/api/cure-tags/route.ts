@@ -4,10 +4,21 @@ import { supabase } from '@/lib/supabase'
 import { extractValueAdd } from '@/lib/valueAdd'
 import { aliasMap, nameKeyWith, type CustomerNameAlias } from '@/lib/nameKey'
 import { buildSheetCarcassIndex, sheetSlots, type AssignmentRow, type CarcassRow } from '@/lib/sheetCarcasses'
-import { cureProductFitsSpecies, SHEET_PRODUCT } from '@/lib/cureLoad'
+import { cureProductFitsSpecies } from '@/lib/cureLoad'
 import { CureTag } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
+
+// A tag's product → the product name extractValueAdd emits, so the tag list can
+// show what the customer's cut sheet says to do with the piece once it's cured.
+const SHEET_PRODUCT: Record<string, string> = {
+  'Ham':            'Cured & Smoked Ham',
+  'Bacon':          'Bacon',
+  'Shoulder Bacon': 'Shoulder Bacon',
+  'Bone-In Loin':   'Smoked Chops',
+  'Hocks':          'Cured & Smoked Hocks',
+  'Fresh Side':     'Fresh Side Pork',
+}
 
 // GET /api/cure-tags?status=curing|done&instructions=1
 //     /api/cure-tags?tag=0036013 — one tag by its printed number (or null), so

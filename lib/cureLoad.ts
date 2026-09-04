@@ -32,30 +32,6 @@ export function cureProductFitsSpecies(product: string, species: string | null |
   return species === 'Pork' || species === 'Hog'
 }
 
-// The seal picker's products, in the order the buttons sit. Fresh Side is here
-// even though it never cures — the slab leaves the table for the slicer the way
-// bacon leaves for the cooler, and the seal is how it's tracked back to its
-// owner (Charlie, 2026-09-01).
-export const CURE_PICKER_PRODUCTS = ['Ham', 'Bacon', 'Shoulder Bacon', 'Fresh Side', 'Bone-In Loin', 'Hocks', 'Jowl', 'Other']
-
-// A tag's product → the product name extractValueAdd emits, so the tag list can
-// show what the customer's cut sheet says to do with the piece once it's cured,
-// and the picker can lead with what the sheet actually orders.
-export const SHEET_PRODUCT: Record<string, string> = {
-  'Ham':            'Cured & Smoked Ham',
-  'Bacon':          'Bacon',
-  'Shoulder Bacon': 'Shoulder Bacon',
-  'Bone-In Loin':   'Smoked Chops',
-  'Hocks':          'Cured & Smoked Hocks',
-  'Fresh Side':     'Fresh Side Pork',
-}
-
-// Which picker products a sheet's value-add lines call for, in picker order.
-export function cureProductsOnSheet(sheetProducts: Iterable<string>): string[] {
-  const ordered = new Set(sheetProducts)
-  return CURE_PICKER_PRODUCTS.filter(p => SHEET_PRODUCT[p] && ordered.has(SHEET_PRODUCT[p]))
-}
-
 /** Below this many weighed pieces, a per-piece average is noise, not evidence. */
 export const MIN_WEIGHED_FOR_ESTIMATE = 5
 
