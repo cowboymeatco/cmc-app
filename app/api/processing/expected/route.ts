@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { resolveCuttingInstruction } from '@/lib/cutCardLookup'
 import { buildPackList, expectedLines, packSpecies, ExpectedLine } from '@/lib/packList'
+import { extractValueAdd } from '@/lib/valueAdd'
+import { cureProductsOnSheet } from '@/lib/cureLoad'
 
 export const dynamic = 'force-dynamic'
 
@@ -29,12 +31,17 @@ export async function GET(req: NextRequest) {
 
   const lines: Line[] = []
   const speciesSeen = new Set<string>()
+  // What the sheet sends to cure, so a fresh seal's picker can lead with the
+  // pieces this customer actually ordered (Jill, 2026-09-04).
+  const sheetProducts = new Set<string>()
   match.cards.forEach((card, i) => {
-    const species = packSpecies((card.data?.species as string) ?? card.species ?? 'Beef')
+    const rawSpecies = (card.data?.species as string) ?? card.species ?? 'Beef'
+    const species = packSpecies(rawSpecies)
     speciesSeen.add(species)
     for (const l of expectedLines(buildPackList(card.data, species), species)) {
       lines.push({ ...l, card: i })
     }
+    for (const it of extractValueAdd(rawSpecies, card.data)) sheetProducts.add(it.product)
   })
 
   // Every link for the species on the bench — the packer may be about to scan a
@@ -52,6 +59,7 @@ export async function GET(req: NextRequest) {
     species: [...speciesSeen],
     lines,
     links:   links.data ?? [],
+    cure:    cureProductsOnSheet(sheetProducts),
   })
 }
 
