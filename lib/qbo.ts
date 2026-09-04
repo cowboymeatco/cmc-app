@@ -1,15 +1,38 @@
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // QuickBooks Online OAuth2 + API client (server-only).
-// Tokens live in the qbo_tokens single-row table (RLS: service role only).
+// Tokens live in the qbo_tokens table (RLS: service role only), one row per
+// connection: id 1 is the original accounting connection, id 2 the payroll
+// one. They are separate consents on purpose — payroll needs a restricted
+// scope Intuit may refuse, and a refused consent must never disturb the
+// accounting connection that the register sync and QuickBooks tab run on.
 // Access tokens last 1 hour; refresh tokens ~100 days and ROTATE on every
 // refresh, so the newest refresh_token must always be persisted.
 
 const AUTHORIZE_URL = 'https://appcenter.intuit.com/connect/oauth2'
 const TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer'
 const API_BASE = 'https://quickbooks.api.intuit.com/v3/company'
-export const QBO_SCOPE = 'com.intuit.quickbooks.accounting'
+const GRAPHQL_URL = 'https://qb.api.intuit.com/graphql'
 const MINOR_VERSION = '75'
+
+export type QboConnection = 'accounting' | 'payroll'
+export const QBO_CONNECTIONS: QboConnection[] = ['accounting', 'payroll']
+const TOKEN_ROW: Record<QboConnection, number> = { accounting: 1, payroll: 2 }
+
+export const QBO_SCOPE = 'com.intuit.quickbooks.accounting'
+// The payroll connection carries the accounting scope too, so the one consent
+// can answer both APIs. qb.payroll.compensation.read is the Workforce API's
+// payslip scope; Intuit lists it under "Restricted scopes" and only enables it
+// for an app on a paid partner tier (see lib/qboPayroll.ts).
+export const QBO_SCOPES: Record<QboConnection, string> = {
+  accounting: QBO_SCOPE,
+  payroll: `${QBO_SCOPE} qb.payroll.compensation.read`,
+}
+
+const CONNECT_HINT: Record<QboConnection, string> = {
+  accounting: 'use Connect QuickBooks on the /processing QuickBooks tab',
+  payroll: 'use Connect QuickBooks Payroll on /exec',
+}
 
 function creds() {
   const clientId = process.env.QBO_CLIENT_ID
@@ -22,13 +45,13 @@ export function qboConfigured(): boolean {
   return Boolean(process.env.QBO_CLIENT_ID && process.env.QBO_CLIENT_SECRET && process.env.SUPABASE_SERVICE_ROLE_KEY)
 }
 
-export function authorizeUrl(redirectUri: string, state: string): string {
+export function authorizeUrl(redirectUri: string, state: string, connection: QboConnection = 'accounting'): string {
   const { clientId } = creds()
   const q = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
-    scope: QBO_SCOPE,
+    scope: QBO_SCOPES[connection],
     state,
   })
   return `${AUTHORIZE_URL}?${q}`
@@ -59,10 +82,10 @@ async function tokenRequest(body: URLSearchParams): Promise<TokenResponse> {
   return res.json()
 }
 
-async function saveTokens(realmId: string, t: TokenResponse): Promise<void> {
+async function saveTokens(realmId: string, t: TokenResponse, connection: QboConnection): Promise<void> {
   const now = Date.now()
   const { error } = await supabaseAdmin.from('qbo_tokens').upsert({
-    id: 1,
+    id: TOKEN_ROW[connection],
     realm_id: realmId,
     access_token: t.access_token,
     refresh_token: t.refresh_token,
@@ -74,13 +97,15 @@ async function saveTokens(realmId: string, t: TokenResponse): Promise<void> {
 }
 
 // OAuth callback: exchange the authorization code and persist tokens.
-export async function exchangeCode(code: string, redirectUri: string, realmId: string): Promise<void> {
+export async function exchangeCode(
+  code: string, redirectUri: string, realmId: string, connection: QboConnection = 'accounting',
+): Promise<void> {
   const t = await tokenRequest(new URLSearchParams({
     grant_type: 'authorization_code',
     code,
     redirect_uri: redirectUri,
   }))
-  await saveTokens(realmId, t)
+  await saveTokens(realmId, t, connection)
 }
 
 interface TokenRow {
@@ -98,9 +123,13 @@ export interface QboStatus {
   refreshExpiresAt: string | null
 }
 
-export async function qboStatus(): Promise<QboStatus> {
+export async function qboStatus(connection: QboConnection = 'accounting'): Promise<QboStatus> {
   if (!qboConfigured()) return { configured: false, connected: false, realmId: null, refreshExpiresAt: null }
-  const { data } = await supabaseAdmin.from('qbo_tokens').select('realm_id, refresh_expires_at').eq('id', 1).maybeSingle()
+  const { data } = await supabaseAdmin
+    .from('qbo_tokens')
+    .select('realm_id, refresh_expires_at')
+    .eq('id', TOKEN_ROW[connection])
+    .maybeSingle()
   if (!data || new Date(data.refresh_expires_at) < new Date()) {
     return { configured: true, connected: false, realmId: null, refreshExpiresAt: null }
   }
@@ -109,13 +138,14 @@ export async function qboStatus(): Promise<QboStatus> {
 
 // Valid access token + realm, refreshing (and persisting the rotated
 // refresh token) when the access token is within 5 minutes of expiry.
-export async function getQboAccess(): Promise<{ accessToken: string; realmId: string }> {
-  const { data, error } = await supabaseAdmin.from('qbo_tokens').select('*').eq('id', 1).maybeSingle()
+export async function getQboAccess(connection: QboConnection = 'accounting'): Promise<{ accessToken: string; realmId: string }> {
+  const { data, error } = await supabaseAdmin.from('qbo_tokens').select('*').eq('id', TOKEN_ROW[connection]).maybeSingle()
   if (error) throw new Error(error.message)
   const row = data as TokenRow | null
-  if (!row) throw new Error('QuickBooks is not connected — use Connect QuickBooks on the /processing QuickBooks tab')
+  const label = connection === 'payroll' ? 'QuickBooks Payroll' : 'QuickBooks'
+  if (!row) throw new Error(`${label} is not connected — ${CONNECT_HINT[connection]}`)
   if (new Date(row.refresh_expires_at) < new Date()) {
-    throw new Error('QuickBooks connection expired — reconnect from the /processing QuickBooks tab')
+    throw new Error(`${label} connection expired — reconnect: ${CONNECT_HINT[connection]}`)
   }
   if (new Date(row.access_expires_at).getTime() - Date.now() > 5 * 60_000) {
     return { accessToken: row.access_token, realmId: row.realm_id }
@@ -124,7 +154,7 @@ export async function getQboAccess(): Promise<{ accessToken: string; realmId: st
     grant_type: 'refresh_token',
     refresh_token: row.refresh_token,
   }))
-  await saveTokens(row.realm_id, t)
+  await saveTokens(row.realm_id, t, connection)
   return { accessToken: t.access_token, realmId: row.realm_id }
 }
 
@@ -149,4 +179,36 @@ export async function qboFetch<T = unknown>(path: string, init?: RequestInit): P
     throw new Error(`QBO API ${path} failed (${res.status}, intuit_tid=${tid}): ${body}`)
   }
   return res.json()
+}
+
+// Intuit's GraphQL API (the "Workforce" API that carries payroll). One
+// endpoint for every entity; the realm is implied by the token. GraphQL
+// reports most failures as 200 + `errors`, so those are raised too.
+export async function qboGraphql<T = unknown>(
+  query: string, variables: Record<string, unknown> = {}, connection: QboConnection = 'payroll',
+): Promise<T> {
+  const { accessToken } = await getQboAccess(connection)
+  const res = await fetch(GRAPHQL_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ query, variables }),
+  })
+  const tid = res.headers.get('intuit_tid') ?? 'n/a'
+  const text = await res.text()
+  if (!res.ok) {
+    console.error(`QBO GraphQL error: status=${res.status} intuit_tid=${tid} body=${text}`)
+    throw new Error(`QBO GraphQL failed (${res.status}, intuit_tid=${tid}): ${text.slice(0, 300)}`)
+  }
+  const body = JSON.parse(text) as { data?: T; errors?: { message?: string }[] }
+  if (body.errors?.length) {
+    const msg = body.errors.map(e => e.message ?? 'unknown error').join('; ')
+    console.error(`QBO GraphQL errors (intuit_tid=${tid}): ${msg}`)
+    throw new Error(`QBO GraphQL: ${msg}`)
+  }
+  if (body.data === undefined) throw new Error('QBO GraphQL returned no data')
+  return body.data
 }

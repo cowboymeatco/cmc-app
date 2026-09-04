@@ -158,8 +158,15 @@ interface TurnoverData {
 interface LaborWeek {
   week_start: string; week_end: string
   labor_dollars: number; labor_hours: number; headcount: number; avg_hours: number; over40: number
-  total_sales: number; custom_sales: number; retail_sales: number; throughput_lbs: number
-  labor_pct: number; dollars_per_lb: number
+  throughput_lbs: number | null; dollars_per_lb: number | null
+  // Only the hand-entered rows from before the payroll feed carry sales; the
+  // feed reads payroll and the pack floor, not invoices.
+  total_sales: number | null; custom_sales: number | null; retail_sales: number | null; labor_pct: number | null
+}
+interface LaborData {
+  weeks: LaborWeek[]
+  payroll: { connected: boolean; refreshExpiresAt: string | null }
+  sync: { written: number; error: string | null }
 }
 
 interface SmokehouseWeek { week: string; cooks: number; hours: number; daysRun: number; utilPct: number }
@@ -330,6 +337,65 @@ function SmokehouseBars({ series, weekHours }: { series: SmokehouseWeek[]; weekH
         {series.map((w, i) => (
           <div key={w.week} style={{ flex: 1, textAlign: 'center', fontSize: '0.6rem', color: C.lightBrown }}>
             {i % 2 === 0 ? label(w.week) : ''}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Labor cost per pound packed, 13 weeks ────────────────────────────────────
+// One bar per pay week, oldest on the left. The thirteen slots are fixed to the
+// calendar, not to the rows that exist: a week the payroll feed has not written
+// is drawn as an empty dashed slot, so a gap in the feed looks like a gap and
+// never like a cheap week.
+function laborSlots(weeks: LaborWeek[], count = 13): string[] {
+  // Mondays, ending with the most recent pay week on file (or the last
+  // completed calendar week when there are no rows yet).
+  const day = 86_400_000
+  const today = new Date()
+  const todayUtc = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())
+  const dow = (new Date(todayUtc).getUTCDay() + 6) % 7 // Monday = 0
+  let last = todayUtc - dow * day - 7 * day
+  const newest = weeks[0]?.week_start
+  if (newest) last = Math.max(last, Date.UTC(+newest.slice(0, 4), +newest.slice(5, 7) - 1, +newest.slice(8, 10)))
+  return Array.from({ length: count }, (_, i) => new Date(last - (count - 1 - i) * 7 * day).toISOString().slice(0, 10))
+}
+
+function LaborBars({ weeks }: { weeks: LaborWeek[] }) {
+  const byWeek = useMemo(() => new Map(weeks.map(w => [w.week_start, w])), [weeks])
+  const slots = useMemo(() => laborSlots(weeks), [weeks])
+  const peak = Math.max(...weeks.map(w => Number(w.dollars_per_lb) || 0), 0.01)
+  const label = (iso: string) =>
+    new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' })
+
+  return (
+    <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '1rem 1.25rem', marginBottom: '1rem' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 120 }}>
+        {slots.map(iso => {
+          const w = byWeek.get(iso)
+          const v = w ? Number(w.dollars_per_lb) || 0 : 0
+          const title = w
+            ? `Week of ${label(iso)} — ${usd(w.labor_dollars)} payroll over ${fmt(w.throughput_lbs ?? 0)} lb packed (${fmt(w.labor_hours)} h, ${w.headcount} on payroll)`
+            : `Week of ${label(iso)} — no payroll run on file`
+          return (
+            <div key={iso} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+              <div style={{ fontSize: '0.6rem', color: C.lightBrown }}>{w && v > 0 ? `$${v.toFixed(2)}` : ''}</div>
+              <div title={title} style={{
+                width: '100%',
+                height: `${w && v > 0 ? Math.max((v / peak) * 92, 2) : 92}px`,
+                background: w && v > 0 ? COST_COLOR : 'transparent',
+                border: w && v > 0 ? 'none' : '1px dashed rgba(166,120,90,0.35)',
+                borderRadius: 2,
+              }} />
+            </div>
+          )
+        })}
+      </div>
+      <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+        {slots.map((iso, i) => (
+          <div key={iso} style={{ flex: 1, textAlign: 'center', fontSize: '0.6rem', color: C.lightBrown }}>
+            {i % 2 === 0 ? label(iso) : ''}
           </div>
         ))}
       </div>
@@ -723,7 +789,7 @@ export default function ExecPage() {
   const [overview, setOverview] = useState<OverviewData | null>(null)
   const [receivables, setReceivables] = useState<ReceivablesData | null>(null)
   const [war, setWar] = useState<WarData | null>(null)
-  const [labor, setLabor] = useState<LaborWeek[] | null>(null)
+  const [labor, setLabor] = useState<LaborData | null>(null)
   const [turnover, setTurnover] = useState<TurnoverData | null>(null)
   const [smoke, setSmoke] = useState<SmokehouseData | null>(null)
   const [revenue, setRevenue] = useState<RevenueData | null>(null)
@@ -757,7 +823,7 @@ export default function ExecPage() {
     grab<OverviewData>('/api/exec/overview', setOverview, 'overview')
     grab<ReceivablesData>('/api/exec/receivables', setReceivables, 'receivables')
     grab<WarData>('/api/exec/war', setWar, 'war')
-    grab<{ weeks: LaborWeek[] }>('/api/exec/labor', d => setLabor(d.weeks), 'labor')
+    grab<LaborData>('/api/exec/labor', setLabor, 'labor')
     grab<TurnoverData>('/api/exec/turnover?months=12', setTurnover, 'turnover')
     grab<SmokehouseData>('/api/exec/smokehouse?weeks=12', setSmoke, 'smokehouse')
   }
@@ -809,7 +875,7 @@ export default function ExecPage() {
     setAuthed(false); setPnl(null); setOverview(null); setWar(null); setLabor(null); setRevenue(null); setErrors({})
   }
 
-  const latestLabor = labor?.[0] ?? null
+  const latestLabor = labor?.weeks[0] ?? null
 
   return (
     <div style={{ minHeight: '100vh', background: C.darkBrown }}>
@@ -1279,57 +1345,88 @@ export default function ExecPage() {
             </>
           )}
 
-          <SectionLabel>Labor efficiency — weekly</SectionLabel>
+          <SectionLabel>Labor — payroll per pound packed, 13 weeks</SectionLabel>
           {errors.labor ? <ErrorBox msg={errors.labor} /> : !labor ? (
             <div style={{ color: C.lightBrown, fontSize: '0.85rem' }}>Loading…</div>
-          ) : labor.length === 0 ? (
-            <div style={{ color: C.lightBrown, fontSize: '0.85rem' }}>
-              No labor weeks recorded yet — the Thursday labor report fills this in.
-            </div>
           ) : (
             <>
-              {latestLabor && (
-                <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-                  <StatTile hero label="Labor % of invoiced" value={`${Math.round(latestLabor.labor_pct)}%`}
-                    accent={latestLabor.labor_pct <= 33 ? INCOME_COLOR : COST_COLOR}
-                    sub={`target 33% · week of ${latestLabor.week_start}`} />
-                  <StatTile label="Labor $/lb processed" value={`$${Number(latestLabor.dollars_per_lb).toFixed(2)}`} />
-                  <StatTile label="Payroll" value={usd(latestLabor.labor_dollars)} sub={`${fmt(latestLabor.labor_hours)} hours`} />
-                  <StatTile label="Invoiced" value={usd(latestLabor.total_sales)}
-                    sub={`custom ${usd(latestLabor.custom_sales)} · retail ${usd(latestLabor.retail_sales)}`} />
-                  <StatTile label="Crew" value={String(latestLabor.headcount)}
-                    sub={`avg ${Math.round(latestLabor.avg_hours)} hr · ${latestLabor.over40} over 40`} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.75rem', fontSize: '0.78rem', color: C.lightBrown }}>
+                {labor.payroll.connected ? (
+                  <span style={{ color: INCOME_COLOR }}>✓ QuickBooks Payroll connected</span>
+                ) : (
+                  <>
+                    <span>QuickBooks Payroll is not connected, so no new pay weeks can be pulled.</span>
+                    <a href="/api/qbo/oauth/start?connection=payroll&back=/exec" style={{
+                      color: C.cream, background: C.medBrown, border: '1px solid rgba(166,120,90,0.4)',
+                      borderRadius: 4, padding: '0.3rem 0.8rem', textDecoration: 'none', fontWeight: 600,
+                    }}>
+                      Connect QuickBooks Payroll
+                    </a>
+                  </>
+                )}
+                {labor.sync.written > 0 && (
+                  <span>· {labor.sync.written} pay week{labor.sync.written === 1 ? '' : 's'} added just now</span>
+                )}
+                {labor.sync.error && <span style={{ color: WARN_COLOR }}>· payroll sync failed: {labor.sync.error}</span>}
+              </div>
+              {labor.weeks.length === 0 ? (
+                <div style={{ color: C.lightBrown, fontSize: '0.85rem' }}>
+                  No pay weeks on file yet. Each Thursday morning the last pay run is pulled from QuickBooks Payroll and matched to the pounds packed that week.
                 </div>
-              )}
-              {labor.length > 1 && (
-                <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '0.75rem 1.25rem', overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', color: C.tan }}>
-                    <thead>
-                      <tr style={{ color: C.lightBrown, textTransform: 'uppercase', fontSize: '0.65rem', letterSpacing: '0.08em' }}>
-                        <th style={{ textAlign: 'left', padding: '0.35rem 0.5rem' }}>Week</th>
-                        <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Invoiced</th>
-                        <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Payroll</th>
-                        <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Labor %</th>
-                        <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>$/lb</th>
-                        <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Lbs</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {labor.map(w => (
-                        <tr key={w.week_start} style={{ borderTop: '1px solid rgba(166,120,90,0.12)' }}>
-                          <td style={{ padding: '0.35rem 0.5rem' }}>{w.week_start}</td>
-                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>{usd(w.total_sales)}</td>
-                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>{usd(w.labor_dollars)}</td>
-                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', color: w.labor_pct <= 33 ? INCOME_COLOR : COST_COLOR, fontWeight: 600 }}>
-                            {Math.round(w.labor_pct)}%
-                          </td>
-                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>${Number(w.dollars_per_lb).toFixed(2)}</td>
-                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>{fmt(w.throughput_lbs)}</td>
+              ) : (
+                <>
+                  {latestLabor && (
+                    <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+                      <StatTile hero label="Payroll per lb packed"
+                        value={latestLabor.dollars_per_lb != null ? `$${Number(latestLabor.dollars_per_lb).toFixed(2)}` : '—'}
+                        accent={COST_COLOR}
+                        sub={`week of ${latestLabor.week_start}${latestLabor.throughput_lbs != null ? ` · ${fmt(latestLabor.throughput_lbs)} lb packed` : ''}`} />
+                      <StatTile label="Payroll" value={usd(latestLabor.labor_dollars)} sub={`${fmt(latestLabor.labor_hours)} hours`} />
+                      <StatTile label="Crew" value={String(latestLabor.headcount)}
+                        sub={`avg ${Math.round(latestLabor.avg_hours)} hr · ${latestLabor.over40} over 40`} />
+                      {latestLabor.labor_pct != null && (
+                        <StatTile label="Labor % of invoiced" value={`${Math.round(latestLabor.labor_pct)}%`}
+                          accent={latestLabor.labor_pct <= 33 ? INCOME_COLOR : COST_COLOR}
+                          sub="target 33% · hand-entered week" />
+                      )}
+                    </div>
+                  )}
+                  <LaborBars weeks={labor.weeks} />
+                  <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '0.75rem 1.25rem', overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', color: C.tan }}>
+                      <thead>
+                        <tr style={{ color: C.lightBrown, textTransform: 'uppercase', fontSize: '0.65rem', letterSpacing: '0.08em' }}>
+                          <th style={{ textAlign: 'left', padding: '0.35rem 0.5rem' }}>Week</th>
+                          <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Payroll</th>
+                          <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Hours</th>
+                          <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Crew</th>
+                          <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Over 40</th>
+                          <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Lb packed</th>
+                          <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>$/lb</th>
+                          <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Labor %</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {labor.weeks.map(w => (
+                          <tr key={w.week_start} style={{ borderTop: '1px solid rgba(166,120,90,0.12)' }}>
+                            <td style={{ padding: '0.35rem 0.5rem' }}>{w.week_start}</td>
+                            <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>{usd(w.labor_dollars)}</td>
+                            <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>{fmt(w.labor_hours)}</td>
+                            <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>{w.headcount}</td>
+                            <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', color: w.over40 >= 3 ? WARN_COLOR : C.tan }}>{w.over40}</td>
+                            <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>{w.throughput_lbs != null ? fmt(w.throughput_lbs) : '—'}</td>
+                            <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', fontWeight: 600, color: C.cream }}>
+                              {w.dollars_per_lb != null ? `$${Number(w.dollars_per_lb).toFixed(2)}` : '—'}
+                            </td>
+                            <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', color: w.labor_pct == null ? C.lightBrown : w.labor_pct <= 33 ? INCOME_COLOR : COST_COLOR }}>
+                              {w.labor_pct != null ? `${Math.round(w.labor_pct)}%` : '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
               )}
             </>
           )}
