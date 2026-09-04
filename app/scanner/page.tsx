@@ -2,6 +2,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { isCureTagNumber, type ProcessingInput, type CureTag } from '@/lib/types'
+import { CURE_PICKER_PRODUCTS } from '@/lib/cureLoad'
 import { isoDate } from '@/lib/dates'
 import { speciesIcon, speciesFromDescription } from '@/lib/cutSchedule'
 
@@ -121,6 +122,11 @@ interface ExpectedLine {
   card:    number
 }
 interface PluLink { species: string; cut_key: string; plu_number: string; item_name: string | null }
+// packSpecies vocabulary ('pork', not 'Hog') → the banner over that card's
+// lines when two cards share the bench.
+const PACK_SPECIES_BANNER: Record<string, string> = {
+  beef: '🐄 BEEF CARD', pork: '🐷 HOG CARD', lamb: '🐑 LAMB CARD', goat: '🐐 GOAT CARD',
+}
 interface ExpectedCard {
   found:   boolean
   via:     string
@@ -129,6 +135,7 @@ interface ExpectedCard {
   species: string[]
   lines:   ExpectedLine[]
   links:   PluLink[]
+  cure:    string[]   // seal-picker products the sheet(s) order, in picker order
 }
 
 interface ScanLine {
@@ -601,6 +608,8 @@ export default function ScannerPage() {
   // the piece leaves with the customer's name riding on the tag.
   const [cureModal,   setCureModal]   = useState<{ tagNumber: string; existing: CureTag | null } | null>(null)
   const [cureProduct, setCureProduct] = useState<string | null>(null)
+  // The picker leads with the card's own products; this opens the full list.
+  const [cureShowAll, setCureShowAll] = useState(false)
   const [cureWeight,  setCureWeight]  = useState('')
   const [cureSaving,  setCureSaving]  = useState(false)
   // The server counted this piece against the sheet and it's one more than the
@@ -871,6 +880,27 @@ export default function ScannerPage() {
   const expectedKeys   = useMemo(() => [...new Set((expected?.lines ?? []).map(l => l.key))], [expected])
   const packedKeyCount = expectedKeys.filter(k => (packedByKey.get(k)?.pkgs ?? 0) > 0).length
 
+  // ── A scan the card never asked for ───────────────────────────────────────
+  // A PLU that has been linked to a line, none of whose lines are on THIS
+  // card, is a package headed into the wrong customer's box — a fresh side in
+  // a Manning Roofing box when Manning Roofing ordered none (Jill, 2026-09-04).
+  // The scan is already saved by the time this fires, so the pop-up offers to
+  // pull it back out. A PLU nobody has linked yet says nothing either way and
+  // stays on the quiet "not on the list" tally instead.
+  const [offCard, setOffCard] = useState<{ scanId: string; plu: string; name: string; keys: string[] } | null>(null)
+  const offCardRef = useRef<{ keysForPlu: Map<string, string[]>; expectedKeys: Set<string>; hasCard: boolean }>({ keysForPlu: new Map(), expectedKeys: new Set(), hasCard: false })
+  useEffect(() => {
+    offCardRef.current = { keysForPlu, expectedKeys: new Set(expectedKeys), hasCard: !!expected }
+  }, [keysForPlu, expectedKeys, expected])
+  function checkOffCard(scan: ScanLine, plu: string, itemName: string): boolean {
+    const ex = offCardRef.current
+    if (!ex.hasCard) return false
+    const keys = ex.keysForPlu.get(plu) ?? []
+    if (!keys.length || keys.some(k => ex.expectedKeys.has(k))) return false
+    setOffCard({ scanId: scan.id, plu, name: itemName, keys })
+    return true
+  }
+
   // Linking is the one moment a person tells the system something it could not
   // work out for itself, so it happens on the bench, in two taps: the PLU, then
   // the line it belongs to.
@@ -1031,6 +1061,7 @@ export default function ScannerPage() {
 
     processingRef.current = true
     setProcessing(true)
+    setOffCard(null)
 
     try {
       const res  = await fetch('/api/boxes/scans', {
@@ -1049,6 +1080,11 @@ export default function ScannerPage() {
         // the app — the scale should no longer have it.
         setLastKind('warn')
         setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb  —  DELETED PLU ${plu}: remove it from the scale`)
+        setFlash('warn')
+        setTimeout(() => setFlash(null), 4000)
+      } else if (checkOffCard(scan, plu, itemName)) {
+        setLastKind('warn')
+        setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb  —  NOT ON THIS CARD`)
         setFlash('warn')
         setTimeout(() => setFlash(null), 4000)
       } else {
@@ -1844,6 +1880,7 @@ export default function ScannerPage() {
     setWeightEntry('')
     processingRef.current = true
     setProcessing(true)
+    setOffCard(null)
 
     try {
       const res = await fetch('/api/boxes/scans', {
@@ -1858,6 +1895,11 @@ export default function ScannerPage() {
       if (!pluMapRef.current[plu]) {
         setLastKind('warn')
         setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb  —  DELETED PLU ${plu}: remove it from the scale`)
+        setFlash('warn')
+        setTimeout(() => setFlash(null), 4000)
+      } else if (checkOffCard(scan, plu, itemName)) {
+        setLastKind('warn')
+        setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb  —  NOT ON THIS CARD`)
         setFlash('warn')
         setTimeout(() => setFlash(null), 4000)
       } else {
@@ -1885,6 +1927,7 @@ export default function ScannerPage() {
     setCureWeight('')
     setCureWeighSrc(null)
     setCureProduct(null)
+    setCureShowAll(false)
     setCureWarn(null)
     let existing: CureTag | null = null
     try {
@@ -3467,10 +3510,20 @@ export default function ScannerPage() {
               // nothing to read past to find it (Charlie, 2026-08-18).
               const remaining = expected.lines.filter(l => (packedByKey.get(l.key)?.pkgs ?? 0) === 0)
               let section = ''
+              let card = -1
               return remaining.map((l, i) => {
+                // A beef card and a hog card on one bench read as one list
+                // without a banner between them — "roasts" under which
+                // animal? (Jill, 2026-09-04). One card needs no banner.
+                const cardHead = expected.cards > 1 && l.card !== card ? (card = l.card, section = '', true) : false
                 const head = l.section !== section ? (section = l.section) : null
                 return (
                   <div key={`${l.card}-${l.key}-${i}`}>
+                    {cardHead && (
+                      <div style={{ color: C.cream, fontSize: '0.78rem', fontWeight: 700, letterSpacing: '0.16em', margin: `${i === 0 ? '0.3rem' : '1.1rem'} 0 0.1rem`, padding: '0.3rem 0.4rem', background: 'rgba(201,168,130,0.16)', border: '1px solid rgba(201,168,130,0.45)', borderRadius: 4 }}>
+                        {PACK_SPECIES_BANNER[l.species] ?? `🏷 ${l.species.toUpperCase()}`}
+                      </div>
+                    )}
                     {head && (
                       <div style={{ color: C.tan, fontSize: '0.64rem', fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', margin: '0.7rem 0 0.25rem', borderBottom: '1px solid rgba(166,120,90,0.2)', paddingBottom: '0.15rem' }}>
                         {head}
@@ -3733,6 +3786,41 @@ export default function ScannerPage() {
       )}
 
       {/* ── Cure tag modal (seal scanned — pick what the tag is riding on) ── */}
+      {/* ── A package the card never ordered ──
+          The scan is already in the box; the packer holding it decides whether
+          it stays. Scanning the next label closes this on its own. */}
+      {offCard && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}>
+          <div style={{ background: C.darkBrown, border: `2px solid ${C.yellow}`, borderRadius: 8, padding: '2rem', width: '100%', maxWidth: 420 }}>
+            <div style={{ color: C.yellow, fontFamily: 'Georgia, serif', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '0.6rem' }}>
+              ⚠ Not on this card
+            </div>
+            <div style={{ color: C.cream, fontWeight: 700, fontSize: '1.2rem', marginBottom: '0.4rem' }}>
+              {offCard.name}
+            </div>
+            <div style={{ color: C.lightBrown, fontSize: '0.85rem', lineHeight: 1.5, marginBottom: '1.4rem' }}>
+              This PLU packs <strong style={{ color: C.cream }}>{offCard.keys.join(', ')}</strong> and{' '}
+              <strong style={{ color: C.cream }}>{customer}</strong>&apos;s cut card doesn&apos;t order it.
+              Check the package against the card before it goes in the box.
+            </div>
+            <div style={{ display: 'flex', gap: '0.6rem' }}>
+              <button
+                onClick={() => { const id = offCard.scanId; setOffCard(null); removeScan(id); scanRef.current?.focus() }}
+                style={{ flex: 1, background: 'transparent', border: `1px solid #e05555`, color: '#e05555', borderRadius: 4, padding: '0.85rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer' }}
+              >
+                Take it out of the box
+              </button>
+              <button
+                onClick={() => { setOffCard(null); scanRef.current?.focus() }}
+                style={{ flex: 1, background: C.tan, color: C.dark, border: 'none', borderRadius: 4, padding: '0.85rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer' }}
+              >
+                It&apos;s right — keep it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {cureModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}>
           <div style={{ background: C.darkBrown, border: '1px solid rgba(166,120,90,0.4)', borderRadius: 8, padding: '2rem', width: '100%', maxWidth: 380 }}>
@@ -3869,20 +3957,24 @@ export default function ScannerPage() {
                   What&apos;s the tag on?
                 </div>
                 {/* Pick, then confirm — a one-tap save closed the modal before the
-                    weight could go in (Charlie feedback, 2026-08-11). */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '1.25rem' }}>
-                  {/* Fresh Side is here even though it never cures — the slab
-                      leaves the table for the slicer the way bacon leaves for
-                      the cooler, and the seal is how it's tracked back to its
-                      owner (Charlie, 2026-09-01). */}
-                  {['Ham', 'Bacon', 'Shoulder Bacon', 'Fresh Side', 'Bone-In Loin', 'Hocks', 'Jowl', 'Other'].map(p => (
+                    weight could go in (Charlie feedback, 2026-08-11).
+                    The card's own products come first and alone; everything
+                    else waits behind "Something else" so a fresh seal is
+                    offered what this customer ordered, not the whole menu
+                    (Jill, 2026-09-04). No card, or a card that cures
+                    nothing, shows the full list as before. */}
+                {(() => {
+                  const onCard = expected?.cure ?? []
+                  const narrow = onCard.length > 0 && !cureShowAll
+                  const shown  = narrow ? onCard : CURE_PICKER_PRODUCTS
+                  const btn = (p: string) => (
                     <button
                       key={p}
                       disabled={cureSaving}
                       onClick={() => { setCureProduct(p); setCureWarn(null) }}
                       style={{
                         background: cureProduct === p ? C.tan : 'rgba(255,255,255,0.06)',
-                        border: `1px solid ${cureProduct === p ? C.tan : 'rgba(166,120,90,0.4)'}`,
+                        border: `1px solid ${cureProduct === p ? C.tan : onCard.includes(p) && !narrow ? 'rgba(201,168,130,0.7)' : 'rgba(166,120,90,0.4)'}`,
                         color: cureProduct === p ? C.dark : C.cream,
                         borderRadius: 4, padding: '0.85rem 0.5rem', fontSize: '0.95rem', fontWeight: 700,
                         cursor: cureSaving ? 'default' : 'pointer', opacity: cureSaving ? 0.5 : 1,
@@ -3890,8 +3982,30 @@ export default function ScannerPage() {
                     >
                       {p}
                     </button>
-                  ))}
-                </div>
+                  )
+                  return (
+                    <>
+                      {onCard.length > 0 && (
+                        <div style={{ color: C.lightBrown, fontSize: '0.7rem', marginBottom: '0.45rem' }}>
+                          {narrow ? 'On the cut card' : 'Outlined = on the cut card'}
+                        </div>
+                      )}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '1.25rem' }}>
+                        {shown.map(btn)}
+                        {narrow && (
+                          <button
+                            key="__more"
+                            disabled={cureSaving}
+                            onClick={() => setCureShowAll(true)}
+                            style={{ background: 'transparent', border: '1px dashed rgba(166,120,90,0.5)', color: C.lightBrown, borderRadius: 4, padding: '0.85rem 0.5rem', fontSize: '0.85rem', fontWeight: 700, cursor: cureSaving ? 'default' : 'pointer' }}
+                          >
+                            Something else…
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )
+                })()}
                 {/* The server counted this piece against the sheet and it's one
                     more than ordered. Warn, never block: the person holding the
                     piece knows things the sheet doesn't — a belly split into
