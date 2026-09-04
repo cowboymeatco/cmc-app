@@ -143,6 +143,21 @@ async function fetchPayerPrediction(customer: string, producer: string): Promise
   } catch { return null }
 }
 
+function normalizeQuery(s: string): string[] {
+  return s.toLowerCase().split(/\s+/).filter(Boolean)
+}
+// Every word typed has to land somewhere on the appointment — producer, any
+// customer, contact, notes, species, status, or the harvest date.
+function matchesQuery(a: HarvestAppointment, words: string[]): boolean {
+  const hay = [
+    a.source, a.producer_contact, a.notes, a.species, a.status, STATUS_LABELS[a.status],
+    a.harvest_date, a.receive_date,
+    new Date(a.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+    ...(a.customers ?? []).flatMap(c => [c.customer_name, c.contact_value, c.portion]),
+  ].filter(Boolean).join(' ').toLowerCase()
+  return words.every(w => hay.includes(w))
+}
+
 function blankCustomer() {
   return { id: crypto.randomUUID(), customer_name: '', portion: 'Whole', payment_responsibility: 'producer' as const, contact_preference: 'Email', contact_value: '', linked_cutting_instruction_id: '', reminder_last_sent_at: null, reminder_count: 0 }
 }
@@ -169,6 +184,7 @@ export default function SchedulePage() {
   const [editing,      setEditing]      = useState<Partial<HarvestAppointment> | null>(null)
   const [saving,       setSaving]       = useState(false)
   const [filter,       setFilter]       = useState<'upcoming'|'complete'|'all'>('upcoming')
+  const [query,        setQuery]        = useState('')
   const [view,         setView]         = useState<'list'|'calendar'>('calendar')
   const [calYear,      setCalYear]      = useState(new Date().getFullYear())
   const [calMonth,     setCalMonth]     = useState(new Date().getMonth())
@@ -205,9 +221,16 @@ export default function SchedulePage() {
     .filter(a => a.status === 'PendingRequest')
     .sort((a, b) => a.harvest_date.localeCompare(b.harvest_date))
 
-  const filtered = appointments
+  // A search spans every status — last year's producer is findable without
+  // flipping the list to "Complete" first.
+  const words     = normalizeQuery(query)
+  const searching = words.length > 0
+  const hits      = searching ? appointments.filter(a => a.status !== 'PendingRequest' && matchesQuery(a, words)) : null
+
+  const filtered = (hits ?? appointments)
     .filter(a => {
       if (a.status === 'PendingRequest') return false   // handled separately above
+      if (searching) return true
       if (filter === 'upcoming') return a.status !== 'Complete'
       if (filter === 'complete') return a.status === 'Complete'
       return true
@@ -307,8 +330,14 @@ export default function SchedulePage() {
     setShowForm(true)
   }
 
+  function jumpTo(ds: string) {
+    const dt = new Date(ds + 'T12:00:00')
+    setCalYear(dt.getFullYear()); setCalMonth(dt.getMonth())
+    setSelectedDay(ds); setMultiSel(new Set()); setRangeAnchor(ds)
+  }
+
   const apptByDate: Record<string, HarvestAppointment[]> = {}
-  for (const a of appointments) {
+  for (const a of (hits ?? appointments)) {
     if (!apptByDate[a.harvest_date]) apptByDate[a.harvest_date] = []
     apptByDate[a.harvest_date].push(a)
   }
@@ -468,7 +497,24 @@ export default function SchedulePage() {
             <button onClick={() => setView('list')}     style={{ ...btnStyle(view==='list'     ? 'var(--med-brown)':'transparent', view==='list'     ? 'var(--cream)':'var(--tan)'), borderRadius:0, padding:'0.45rem 1rem', borderLeft:'1px solid rgba(166,120,90,0.3)' }}>☰ List</button>
           </div>
 
-          {view === 'list' && (['upcoming','complete','all'] as const).map(f => (
+          <div style={{ position: 'relative', flex: '1 1 220px', minWidth: 180, maxWidth: 360 }}>
+            <input
+              value={query} onChange={e => setQuery(e.target.value)}
+              placeholder="Search producer, customer, notes…"
+              style={{ ...inputStyle(), padding: '0.45rem 2rem 0.45rem 0.75rem', fontSize: '0.82rem' }}
+            />
+            {query && (
+              <button onClick={() => setQuery('')} title="Clear search"
+                style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: 'var(--tan)', cursor: 'pointer', fontSize: '0.9rem', lineHeight: 1 }}>✕</button>
+            )}
+          </div>
+          {searching && (
+            <span style={{ fontSize: '0.78rem', color: 'var(--tan)' }}>
+              {(hits ?? []).length} match{(hits ?? []).length === 1 ? '' : 'es'} across all appointments
+            </span>
+          )}
+
+          {view === 'list' && !searching && (['upcoming','complete','all'] as const).map(f => (
             <button key={f} onClick={() => setFilter(f)} style={btnStyle(filter===f ? 'var(--light-brown)':'rgba(166,120,90,0.15)', filter===f ? 'var(--dark)':'var(--tan)')}>
               {f.charAt(0).toUpperCase()+f.slice(1)}
             </button>
@@ -527,6 +573,30 @@ export default function SchedulePage() {
               style={{ ...btnStyle('transparent', 'var(--tan)'), fontSize: '0.78rem', padding: '0.35rem 0.7rem', border: '1px solid rgba(166,120,90,0.3)' }}>
               Clear
             </button>
+          </div>
+        )}
+
+        {searching && !loading && view === 'calendar' && (
+          <div style={{ marginBottom: '0.9rem', background: 'var(--dark)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '0.6rem 0.85rem' }}>
+            {(hits ?? []).length === 0 ? (
+              <span style={{ color: 'var(--tan)', fontSize: '0.82rem' }}>No appointments match “{query.trim()}”.</span>
+            ) : (
+              <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                <span style={{ fontSize: '0.7rem', color: 'rgba(166,120,90,0.6)', textTransform: 'uppercase', letterSpacing: '0.1em', marginRight: '0.25rem' }}>Jump to</span>
+                {[...(hits ?? [])].sort((a, b) => a.harvest_date.localeCompare(b.harvest_date)).slice(0, 24).map(a => (
+                  <button key={a.id} onClick={() => jumpTo(a.harvest_date)} style={{
+                    background: `${speciesColor(a.species)}22`, border: `1px solid ${speciesColor(a.species)}66`,
+                    color: 'var(--cream)', borderRadius: 3, padding: '0.25rem 0.6rem', fontSize: '0.75rem', cursor: 'pointer',
+                    boxShadow: a.harvest_date === selectedDay ? 'inset 0 0 0 1px var(--cream)' : undefined,
+                  }}>
+                    {new Date(a.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    {' · '}{a.source || a.customers?.[0]?.customer_name || '?'}
+                    {' · '}{a.head_count} {a.species}
+                  </button>
+                ))}
+                {(hits ?? []).length > 24 && <span style={{ fontSize: '0.75rem', color: 'var(--tan)' }}>+{(hits ?? []).length - 24} more — narrow the search</span>}
+              </div>
+            )}
           </div>
         )}
 
