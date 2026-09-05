@@ -254,11 +254,13 @@ export async function GET(req: NextRequest) {
   //   1. ?usda / ?nfs URL params — an explicit per-print override, always win.
   //   2. A carcass scanned as Custom — custom-exempt meat can't be sold, so this
   //      is a legal floor: NOT FOR SALE even if the session was tagged USDA/CMC.
-  //   3. The session's declared Box Type (USDA / Custom / CMC).
+  //   3. The session's declared Box Type (USDA / Retail Exempt / Custom / Pet Food).
   //   4. The scanned carcass USDA kill type.
   //   5. Default: USDA on (Charlie's rule for the unresolved case).
-  // USDA and CMC both carry the USDA bug (both are inspected, for sale); only
-  // Custom reads NOT FOR SALE, and Pet Food carries no mark at all.
+  // Only Custom reads NOT FOR SALE; Retail Exempt and Pet Food carry no mark.
+  // Sessions typed before 2026-09-04 may still say 'CMC' — that was the
+  // ownership flag riding in this column and it reads as USDA (inspected, for
+  // sale); ownership now lives in processing_sessions.cmc and prints nothing.
   const kt = animal?.killType
   const isCustom =
     kt === 'Custom' ? true :          // legal floor — can't be sold
@@ -271,12 +273,16 @@ export async function GET(req: NextRequest) {
   const usdaParam = searchParams.get('usda')
   const nfsParam  = searchParams.get('nfs')
   const petParam  = searchParams.get('pet')
+  const exemptParam = searchParams.get('exempt')
   const notForHuman = petParam != null ? petParam === '1' : isPetFood
   const flags: LabelFlags = {
     usda_bug:      usdaParam != null ? usdaParam !== '0' : (!isCustom && !notForHuman),
     not_for_sale:  nfsParam  != null ? nfsParam === '1'  : isCustom,
     not_for_human: notForHuman,
-    retail_exempt: searchParams.get('exempt') === '1',
+    // Retail Exempt is a session type since 2026-09-04 (it used to be a toggle
+    // on top of USDA, which promised a mark the label could not carry). The
+    // per-print param still wins; absent, the session type decides.
+    retail_exempt: exemptParam != null ? exemptParam === '1' : sessionType === 'Retail Exempt',
   }
 
   const format = searchParams.get('format')
