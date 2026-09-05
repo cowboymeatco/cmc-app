@@ -1,7 +1,8 @@
 'use client'
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { HACCP_CATEGORIES, formatBytes, type HaccpDocument } from '@/lib/haccpDocs'
+import { HACCP_BUCKET, HACCP_CATEGORIES, HACCP_MAX_BYTES, formatBytes, type HaccpDocument } from '@/lib/haccpDocs'
+import { supabase } from '@/lib/supabase'
 
 const C = {
   dark:       '#1A0A04',
@@ -316,22 +317,40 @@ function UploadCard({ onUploaded }: { onUploaded: (msg: string) => void }) {
 
   async function submit() {
     if (!file) { setErr('Choose a file first'); return }
+    if (file.size > HACCP_MAX_BYTES) { setErr(`That file is ${formatBytes(file.size)} — the limit is ${HACCP_MAX_BYTES / 1024 / 1024} MB`); return }
     setBusy(true); setErr('')
-    const fd = new FormData()
-    fd.append('file', file)
-    fd.append('title', title || file.name)
-    fd.append('category', category)
-    fd.append('version_date', version)
-    fd.append('uploaded_by', who)
-    fd.append('notes', notes)
+    try {
+      // 1. Ask the server for a one-shot signed slot in the bucket.
+      const signRes = await fetch('/api/haccp/documents', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ intent: 'sign', filename: file.name, size: file.size, category }),
+      })
+      const sign = await signRes.json().catch(() => ({}))
+      if (!signRes.ok) throw new Error(sign.error ?? 'Could not start the upload')
 
-    const res = await fetch('/api/haccp/documents', { method: 'POST', body: fd })
-    setBusy(false)
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}))
-      setErr(body.error ?? 'Upload failed')
+      // 2. Send the bytes straight to storage — never through our own API,
+      //    which can't take bodies over a few MB on Vercel.
+      const { error: upErr } = await supabase.storage
+        .from(HACCP_BUCKET)
+        .uploadToSignedUrl(sign.path, sign.token, file, { contentType: file.type || 'application/octet-stream' })
+      if (upErr) throw new Error(upErr.message)
+
+      // 3. Write the library row now that the file is in place.
+      const regRes = await fetch('/api/haccp/documents', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          intent: 'register', path: sign.path, filename: file.name, size: file.size, mime: file.type,
+          title: title || file.name, category, version_date: version, uploaded_by: who, notes,
+        }),
+      })
+      const reg = await regRes.json().catch(() => ({}))
+      if (!regRes.ok) throw new Error(reg.error ?? 'Upload failed')
+    } catch (e) {
+      setBusy(false)
+      setErr(e instanceof Error ? e.message : 'Upload failed')
       return
     }
+    setBusy(false)
     setFile(null); setTitle(''); setVersion(''); setNotes('')
     onUploaded(`Uploaded ${title || file.name}`)
   }
@@ -348,7 +367,7 @@ function UploadCard({ onUploaded }: { onUploaded: (msg: string) => void }) {
 
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1.2fr 1fr', gap: '0.75rem', marginBottom: '0.75rem' }}>
         <div>
-          <label style={LABEL}>File · PDF, Word or Excel, up to 25 MB</label>
+          <label style={LABEL}>File · PDF, Word or Excel, up to 50 MB</label>
           <input
             type="file"
             onChange={e => {

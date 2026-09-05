@@ -3,6 +3,10 @@
 
 export const HACCP_BUCKET = 'haccp-docs'
 
+// Supabase's project-wide per-file ceiling (50 MB on this plan). Raise it in
+// the Supabase dashboard first if a bigger document ever needs to go in.
+export const HACCP_MAX_BYTES = 50 * 1024 * 1024
+
 export const HACCP_CATEGORIES = [
   'HACCP Plan',
   'Hazard Analysis',
