@@ -1,6 +1,7 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { isoDate } from '@/lib/dates'
 
 export const dynamic = 'force-dynamic'
@@ -117,6 +118,18 @@ export async function DELETE(req: NextRequest) {
   const id = searchParams.get('id')
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
 
+  // An order that came in through the portal lives on there after its retail
+  // copy is gone — the customer can still open it. The status trigger only
+  // mirrors UPDATEs, so a plain delete left the portal saying "filling" for
+  // good (Charlie, 2026-09-04: "Jennifer Kamstra's order was a dud. How do I
+  // get rid of it."). Read the link first; cancel the portal side only once
+  // the delete has actually gone through.
+  const { data: existing } = await supabase
+    .from('retail_orders')
+    .select('portal_order_id')
+    .eq('id', id)
+    .maybeSingle()
+
   const { error } = await supabase
     .from('retail_orders')
     .delete()
@@ -129,5 +142,18 @@ export async function DELETE(req: NextRequest) {
       : error.message
     return NextResponse.json({ error: msg }, { status: blocked ? 409 : 500 })
   }
-  return NextResponse.json({ ok: true })
+
+  const portalId = (existing?.portal_order_id as string | null | undefined) ?? null
+  if (portalId) {
+    // `orders` is under RLS, so this goes through the service role;
+    // trg_log_order_event writes the cancellation onto the customer's timeline.
+    const { error: portalErr } = await supabaseAdmin
+      .from('orders')
+      .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+      .eq('id', portalId)
+    if (portalErr) {
+      return NextResponse.json({ ok: true, warning: `Deleted here, but the portal order could not be cancelled: ${portalErr.message}` })
+    }
+  }
+  return NextResponse.json({ ok: true, portal_cancelled: Boolean(portalId) })
 }

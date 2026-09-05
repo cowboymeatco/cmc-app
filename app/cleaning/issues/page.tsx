@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
 import { dateLabel } from '@/lib/dates'
-import { C, useCrewMember, CleaningHeader, Banner, BigButton, inputStyle, cardStyle } from '../ui'
+import { C, useCrewMember, CleaningHeader, Banner, BigButton, StepVideo, inputStyle, cardStyle } from '../ui'
 
 // The shared inbox. Day crew files problems here; the night crew pulls them
 // onto a list and closes them out.
@@ -16,6 +16,8 @@ interface Issue {
   area_name: string | null
   equipment_name: string | null
   photo_url: string | null
+  photo_urls: string[] | null
+  video_url: string | null
   status: 'open' | 'scheduled' | 'resolved' | 'declined'
   resolved_by: string | null
   resolution_note: string | null
@@ -123,6 +125,9 @@ function IssueCard({ issue, busy, onAct }: {
   const [resolving, setResolving] = useState(false)
   const [note,      setNote]      = useState('')
 
+  // Older rows carry one photo_url; newer ones a list with the same first entry.
+  const photos = issue.photo_urls?.length ? issue.photo_urls : issue.photo_url ? [issue.photo_url] : []
+
   const tone =
     issue.status === 'resolved'  ? C.green :
     issue.status === 'declined'  ? C.lightBrown :
@@ -156,15 +161,30 @@ function IssueCard({ issue, busy, onAct }: {
         {issue.description}
       </div>
 
-      {issue.photo_url && (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={issue.photo_url} alt=""
-          style={{
-            width: '100%', borderRadius: 8, marginBottom: 8,
-            border: `1px solid ${C.medBrown}`,
-          }}
-        />
+      {photos.length > 0 && (
+        // One photo gets the full width; several sit two across so the crew
+        // can see them all without scrolling past a column of full-size shots.
+        <div style={{
+          display: 'grid', gap: 6, marginBottom: 8,
+          gridTemplateColumns: photos.length === 1 ? '1fr' : '1fr 1fr',
+        }}>
+          {photos.map(url => (
+            <a key={url} href={url} target="_blank" rel="noreferrer">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={url} alt=""
+                style={{
+                  width: '100%', borderRadius: 8, display: 'block',
+                  border: `1px solid ${C.medBrown}`,
+                  aspectRatio: photos.length === 1 ? 'auto' : '4 / 3', objectFit: 'cover',
+                }}
+              />
+            </a>
+          ))}
+        </div>
+      )}
+      {issue.video_url && (
+        <StepVideo src={issue.video_url} style={{ marginTop: 0, marginBottom: 8 }} />
       )}
 
       <div style={{ color: C.tan, fontSize: 12, marginBottom: 12 }}>

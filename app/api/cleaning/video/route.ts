@@ -15,7 +15,7 @@ import { CLEANING_PHOTO_BUCKET, CLEANING_VIDEO_MAX_BYTES, CLEANING_VIDEO_TYPES }
 // expires. The caller picks nothing.
 
 export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => ({})) as { filename?: string; size?: number; type?: string }
+  const body = await req.json().catch(() => ({})) as { filename?: string; size?: number; type?: string; kind?: string }
 
   const type = (body.type ?? '').split(';')[0].trim().toLowerCase()
   if (type && !CLEANING_VIDEO_TYPES.includes(type)) {
@@ -34,7 +34,10 @@ export async function POST(req: NextRequest) {
 
   const ext = (body.filename ?? '').split('.').pop()?.toLowerCase().replace(/[^a-z0-9]/g, '')
     || (type === 'video/quicktime' ? 'mov' : 'mp4')
-  const path = `reference/video/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
+  // Foldered by what the clip belongs to, like the photos: a procedure step's
+  // reference clip, or a clip on a reported issue (the 💬 Cleaning tab).
+  const folder = body.kind === 'issue' ? 'issues/video' : 'reference/video'
+  const path = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
 
   const { data, error } = await supabase.storage
     .from(CLEANING_PHOTO_BUCKET)
@@ -52,7 +55,7 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const path = new URL(req.url).searchParams.get('path')
   if (!path) return NextResponse.json({ error: 'path required' }, { status: 400 })
-  if (!path.startsWith('reference/video/')) {
+  if (!/^(reference|issues)\/video\//.test(path)) {
     return NextResponse.json({ error: 'not a clip path' }, { status: 400 })
   }
   const { error } = await supabase.storage.from(CLEANING_PHOTO_BUCKET).remove([path])

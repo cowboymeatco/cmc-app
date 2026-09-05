@@ -181,6 +181,22 @@ interface SmokehouseData {
   feedStale: boolean
 }
 
+// Inventory at sales price — see /api/exec/inventory.
+interface InventoryWeek { week: string; packedLbs: number; packedRetail: number; soldRetail: number | null }
+interface InventoryData {
+  asOf: string; weeks: number
+  series: InventoryWeek[]
+  last4: { weeks: number; packedLbs: number; packedRetail: number; soldRetail: number | null }
+  hanging: {
+    head: number; lbs: number; estRetail: number; unratedLbs: number
+    species: { name: string; head: number; lbs: number; estRetail: number | null }[]
+  }
+  rates: Record<string, { sessions: number; head: number; hangLbs: number; retail: number; retailPerHangLb: number }>
+  unpricedScans: number
+  unpriced: { plu: string; item: string; scans: number; lbs: number }[]
+  booksError: string | null
+}
+
 // Revenue recognition — see /api/exec/revenue and lib/revenueRecognition.
 type EnterpriseKey = 'harvest' | 'processing' | 'valueAdd' | 'retail' | 'wholesale'
 interface RevenueDay {
@@ -288,6 +304,66 @@ function ErrorBox({ msg }: { msg: string }) {
   return (
     <div style={{ background: C.dark, border: '1px solid #E8883A', borderRadius: 4, padding: '1rem', color: '#E8883A', fontSize: '0.85rem' }}>
       {msg}
+    </div>
+  )
+}
+
+// ── Inventory flow bars ───────────────────────────────────────────────────────
+// Week by week, retail value packed into CMC boxes beside retail value rung up
+// at the case. Two bars rather than a net line: a net hides which side moved.
+function InventoryBars({ series }: { series: InventoryWeek[] }) {
+  const SOLD_COLOR = C.tan
+  const peak = Math.max(...series.map(w => Math.max(w.packedRetail, w.soldRetail ?? 0)), 1)
+  const label = (iso: string) =>
+    new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' })
+  const short = (n: number) => n >= 1000 ? usdK(n) : usd(n)
+
+  return (
+    <div style={{
+      background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4,
+      padding: '1rem 1.25rem',
+    }}>
+      <div style={{ display: 'flex', gap: '1rem', fontSize: '0.68rem', color: C.lightBrown, marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+        <span><span style={{ display: 'inline-block', width: 10, height: 10, background: INCOME_COLOR, borderRadius: 2, marginRight: 5, verticalAlign: 'middle' }} />packed, at label price</span>
+        <span><span style={{ display: 'inline-block', width: 10, height: 10, background: SOLD_COLOR, borderRadius: 2, marginRight: 5, verticalAlign: 'middle' }} />rung up at retail</span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
+        {series.map((w, i) => {
+          const partial = i === series.length - 1
+          const bar = (v: number | null, color: string, what: string) => (
+            <div
+              title={`Week of ${label(w.week)} — ${what} ${v == null ? 'unknown (QuickBooks did not answer)' : usd(v)}${partial ? ' · week still running' : ''}`}
+              style={{
+                flex: 1,
+                height: `${Math.max(((v ?? 0) / peak) * 100, v ? 2 : 1)}px`,
+                // The running week is drawn hollow — a short solid bar would
+                // read as a bad week; a dotted one is a number nobody has.
+                background: partial || v == null ? 'transparent' : color,
+                border: partial ? `1px dashed ${color}` : v == null ? `1px dotted ${color}` : 'none',
+                borderRadius: 2,
+              }}
+            />
+          )
+          return (
+            <div key={w.week} style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ fontSize: '0.6rem', color: C.lightBrown, textAlign: 'center', minHeight: '0.8rem' }}>
+                {w.packedRetail > 0 ? short(w.packedRetail) : ''}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 104 }}>
+                {bar(w.packedRetail, INCOME_COLOR, 'packed')}
+                {bar(w.soldRetail, SOLD_COLOR, 'rung up')}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+        {series.map(w => (
+          <div key={w.week} style={{ flex: 1, textAlign: 'center', fontSize: '0.6rem', color: C.lightBrown }}>
+            {label(w.week)}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -793,6 +869,7 @@ export default function ExecPage() {
   const [turnover, setTurnover] = useState<TurnoverData | null>(null)
   const [smoke, setSmoke] = useState<SmokehouseData | null>(null)
   const [revenue, setRevenue] = useState<RevenueData | null>(null)
+  const [inventory, setInventory] = useState<InventoryData | null>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
 
   const [period, setPeriod] = useState<PeriodKey>('ttm')
@@ -826,6 +903,7 @@ export default function ExecPage() {
     grab<LaborData>('/api/exec/labor', setLabor, 'labor')
     grab<TurnoverData>('/api/exec/turnover?months=12', setTurnover, 'turnover')
     grab<SmokehouseData>('/api/exec/smokehouse?weeks=12', setSmoke, 'smokehouse')
+    grab<InventoryData>('/api/exec/inventory?weeks=8', setInventory, 'inventory')
   }
 
   const changePeriod = (p: PeriodKey) => {
@@ -981,6 +1059,52 @@ export default function ExecPage() {
               </div>
               <RiskTable rows={receivables.atRisk} caption="At risk — released, still unpaid (biggest first)" />
               <RiskTable rows={receivables.unknownTop} caption="Unmatched — no processing session found for this name" />
+            </>
+          )}
+
+          {/* Our own meat at the price on the label (Charlie, 2026-09-04, filed
+              on this page: "Can we add an inventory valuation at sales price
+              here?"). Own animals only — a producer's custom animal is their
+              inventory, and its value to us is the fee above. These are flows
+              off the scanner and the register, not a freezer count; the note
+              under the chart says what it would take to make it one. */}
+          <SectionLabel>Inventory at sales price — our own animals only</SectionLabel>
+          {errors.inventory ? <ErrorBox msg={errors.inventory} /> : !inventory ? (
+            <div style={{ color: C.lightBrown, fontSize: '0.85rem' }}>Pricing the scans…</div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                <StatTile hero label="Packed for the case" value={usd(inventory.last4.packedRetail)} accent={INCOME_COLOR}
+                  sub={`last ${inventory.last4.weeks} whole weeks · ${fmt(inventory.last4.packedLbs)} lb into CMC boxes, at label price`} />
+                <StatTile label="Rung up at retail" value={inventory.last4.soldRetail == null ? '—' : usd(inventory.last4.soldRetail)}
+                  sub={inventory.booksError ? 'QuickBooks did not answer' : `same ${inventory.last4.weeks} weeks · retail income accounts in QuickBooks`} />
+                <StatTile label="Hanging, not yet cut"
+                  value={inventory.hanging.head ? usd(inventory.hanging.estRetail) : '$0'}
+                  accent={inventory.hanging.head ? COST_COLOR : undefined}
+                  sub={inventory.hanging.head
+                    ? `${inventory.hanging.head} head · ${fmt(inventory.hanging.lbs)} lb hanging, at the measured rate below${inventory.hanging.unratedLbs ? ` · ${fmt(inventory.hanging.unratedLbs)} lb of a species with no measured rate yet` : ''}`
+                    : 'every own carcass is through the cutting room'} />
+                {Object.entries(inventory.rates).map(([sp, r]) => (
+                  <StatTile key={sp} label={`Retail $ per hanging lb · ${sp}`} value={`$${r.retailPerHangLb.toFixed(2)}`}
+                    sub={`measured on ${r.head} head over ${r.sessions} finished session${r.sessions === 1 ? '' : 's'}`} />
+                ))}
+              </div>
+              <div style={{ marginTop: '0.75rem' }}>
+                <InventoryBars series={inventory.series} />
+              </div>
+              <div style={{ fontSize: '0.75rem', color: C.lightBrown, marginTop: '0.6rem' }}>
+                Packed is every scan into a CMC session&apos;s box times the price on its label; rung up is what the retail
+                income accounts took in. Both are flows. Nothing counts a package out of the freezer when it sells, so this
+                is not a freezer balance — one physical count would anchor it, and from then on packed minus sold carries
+                it forward.
+              </div>
+              {inventory.unpricedScans > 0 && (
+                <div style={{ fontSize: '0.75rem', color: WARN_COLOR, marginTop: '0.4rem' }}>
+                  {fmt(inventory.unpricedScans)} scan{inventory.unpricedScans === 1 ? '' : 's'} in this window sit on a PLU with no
+                  price and counted as $0 — {inventory.unpriced.map(u => `${u.item || 'PLU ' + u.plu} (#${u.plu}, ${fmt(u.scans)} scans, ${fmt(u.lbs)} lb)`).join('; ')}.
+                  Put a price on the PLU and they price themselves.
+                </div>
+              )}
             </>
           )}
 

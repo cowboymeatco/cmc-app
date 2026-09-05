@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react'
 import { usePathname } from 'next/navigation'
 import { installTelemetry, addBreadcrumb, getTelemetry } from '@/lib/feedbackTelemetry'
-import { PhotoButton } from '@/app/cleaning/ui'
+import { PhotoButton, VideoButton } from '@/app/cleaning/ui'
 import { feedbackSpec, type FeedbackType } from '@/lib/feedbackTypes'
 
 const C = {
@@ -46,7 +46,11 @@ export default function FeedbackButton() {
   // but this widget is the only way an issue is ever filed, so until now the
   // column was always null and that <img> was dead code (Charlie, 2026-08-25:
   // "Can the cleaning module have a photo addition to it also?").
-  const [photoUrl, setPhotoUrl]     = useState<string | null>(null)
+  // Several photos and one clip since 2026-09-04 (Camron Reilly: "Add videos and
+  // a selection for multiple pictures for cleaning crew for more details on
+  // things missed") — a miss is often three angles and a pan, not one frame.
+  const [photoUrls, setPhotoUrls]   = useState<string[]>([])
+  const [videoUrl, setVideoUrl]     = useState<string | null>(null)
 
   // Install client telemetry once (console errors, click/fetch/nav breadcrumbs).
   useEffect(() => { installTelemetry() }, [])
@@ -79,7 +83,9 @@ export default function FeedbackButton() {
             reported_by: submitter.trim(),
             intent,
             severity:    urgent ? 'urgent' : 'normal',
-            photo_url:   photoUrl,
+            photo_url:   photoUrls[0] ?? null,
+            photo_urls:  photoUrls,
+            video_url:   videoUrl,
             page_url:    pathname,
           }),
         })
@@ -97,7 +103,8 @@ export default function FeedbackButton() {
           setType('bug')
           setIntent('heads_up')
           setUrgent(false)
-          setPhotoUrl(null)
+          setPhotoUrls([])
+          setVideoUrl(null)
         }, 1500)
       } catch {
         setError("Didn't send — check your connection and try again.")
@@ -315,17 +322,43 @@ export default function FeedbackButton() {
                     kind=reference: the URL comes back for us to save on the
                     issue, rather than becoming a shift-documentation row that
                     belongs to a night nobody has worked yet. */}
-                {photoUrl
+                {photoUrls.length > 0 && (
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', padding: '4px 4px 0 0' }}>
+                    {photoUrls.map(url => (
+                      <div key={url} style={{ position: 'relative' }}>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={url} alt="Attached"
+                          style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 6, border: `1px solid ${C.medBrown}`, display: 'block' }}
+                        />
+                        <button
+                          onClick={() => setPhotoUrls(p => p.filter(u => u !== url))}
+                          title="Remove this photo"
+                          style={{
+                            position: 'absolute', top: -7, right: -7, width: 22, height: 22, borderRadius: 11,
+                            border: `1px solid ${C.medBrown}`, background: C.dark, color: C.tan,
+                            fontSize: 11, lineHeight: '20px', padding: 0, cursor: 'pointer',
+                          } as React.CSSProperties}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <PhotoButton
+                  label={photoUrls.length ? 'Add another photo' : 'Add a photo'}
+                  extra={{ kind: 'reference' }}
+                  onUploaded={url => setPhotoUrls(p => [...p, url])}
+                />
+                {/* A clip goes straight to storage on a signed URL — see
+                    VideoButton — so a pan across a whole room fits. */}
+                {videoUrl
                   ? (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={photoUrl} alt="Attached"
-                        style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 6, border: `1px solid ${C.medBrown}` }}
-                      />
-                      <span style={{ color: C.tan, fontSize: 12, flex: 1 }}>Photo attached</span>
+                      <span style={{ color: C.tan, fontSize: 12, flex: 1 }}>🎥 Video attached</span>
                       <button
-                        onClick={() => setPhotoUrl(null)}
+                        onClick={() => setVideoUrl(null)}
                         style={{
                           background: 'transparent', border: `1px solid ${C.medBrown}`,
                           borderRadius: 6, padding: '4px 10px', color: C.tan,
@@ -337,10 +370,10 @@ export default function FeedbackButton() {
                     </div>
                   )
                   : (
-                    <PhotoButton
-                      label="Add a photo"
-                      extra={{ kind: 'reference' }}
-                      onUploaded={url => setPhotoUrl(url)}
+                    <VideoButton
+                      label="Add a video"
+                      kind="issue"
+                      onUploaded={url => setVideoUrl(url)}
                     />
                   )}
               </>

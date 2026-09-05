@@ -378,10 +378,12 @@ export function PhotoButton({ label, onUploaded, extra, disabled }: {
  * so PhotoButton opens the camera; a clip of the auger going back in is usually
  * one somebody already shot, and forcing the camera would hide it.
  */
-export function VideoButton({ label, onUploaded, disabled }: {
+export function VideoButton({ label, onUploaded, disabled, kind }: {
   label:      string
   onUploaded: (url: string, path: string) => void
   disabled?:  boolean
+  /** Where the clip belongs — a procedure step (default) or a reported issue. */
+  kind?:      'reference' | 'issue'
 }) {
   const [busy, setBusy]     = useState(false)
   const [error, setError]   = useState<string | null>(null)
@@ -393,7 +395,7 @@ export function VideoButton({ label, onUploaded, disabled }: {
       const signRes = await fetch('/api/cleaning/video', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: file.name, size: file.size, type: file.type }),
+        body: JSON.stringify({ filename: file.name, size: file.size, type: file.type, kind }),
       })
       const sign = await signRes.json()
       if (!signRes.ok) { setError(sign?.error ?? 'Upload failed'); return }

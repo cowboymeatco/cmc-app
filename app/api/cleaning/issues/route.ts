@@ -37,6 +37,14 @@ export async function POST(req: NextRequest) {
     description, reported_by, intent, area_id, asset_id,
     severity, photo_url, page_url,
   } = body as Record<string, string | undefined>
+  // Several photos and a clip per issue (Camron Reilly, 2026-09-04: "Add videos
+  // and a selection for multiple pictures for cleaning crew for more details on
+  // things missed"). photo_url keeps carrying the first one so older readers
+  // of the row keep working.
+  const photoUrls = (Array.isArray(body.photo_urls) ? body.photo_urls as unknown[] : [])
+    .filter((u): u is string => typeof u === 'string' && u.length > 0)
+  if (photo_url && !photoUrls.includes(photo_url)) photoUrls.unshift(photo_url)
+  const videoUrl = typeof body.video_url === 'string' && body.video_url ? body.video_url : null
 
   if (!description?.trim()) {
     return NextResponse.json({ error: 'Say what the problem is.' }, { status: 400 })
@@ -75,7 +83,9 @@ export async function POST(req: NextRequest) {
       asset_id:   asset_id ?? null,
       area_name:      areaName,
       equipment_name: equipName,
-      photo_url:      photo_url ?? null,
+      photo_url:      photoUrls[0] ?? null,
+      photo_urls:     photoUrls,
+      video_url:      videoUrl,
       page_url:       page_url ?? null,
     }])
     .select().single()
