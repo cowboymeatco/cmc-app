@@ -31,10 +31,12 @@ import { addDaysISO, mondayOfISO } from '@/lib/dates'
 // it is said on the page rather than faked here.
 
 const OWN_PRODUCER = /cowboy\s*meat|^\s*cmc\b/i
-// Session names the crew uses for our own product: "CMC", "CMC 2", "CMC Retail
-// 659", "26188 CMC Retail", "Retail 26153", "Lamb CMC Retail". A customer whose
-// surname happens to contain these letters ("Cmcarthy") does not match — the
-// token has to stand alone.
+// The scanner's CMC checkbox (processing_sessions.cmc) is the ownership signal
+// since 2026-09-04. The name pattern stays as a fallback for sessions packed
+// before it existed and for a box the crew named "CMC Retail 659" but forgot to
+// tick: "CMC", "CMC 2", "26188 CMC Retail", "Retail 26153", "Lamb CMC Retail".
+// A surname that happens to contain the letters ("Cmcarthy") does not match —
+// the token has to stand alone.
 const OWN_SESSION = /(^|\s)(cmc|retail)(\s|$|\d)/i
 
 // Label price is what the package rings up at. `price` is the scale's price;
@@ -101,10 +103,10 @@ export async function GET(req: NextRequest) {
     const rateStart = addDaysISO(today, -180)
 
     // ── Own sessions, and the boxes + scans inside them ───────────────────────
-    const sessions = await all<{ customer_name: string; session_date: string; status: string }>((a, b) =>
-      supabaseAdmin.from('processing_sessions').select('customer_name, session_date, status')
+    const sessions = await all<{ customer_name: string; session_date: string; status: string; cmc: boolean | null }>((a, b) =>
+      supabaseAdmin.from('processing_sessions').select('customer_name, session_date, status, cmc')
         .gte('session_date', rateStart).range(a, b))
-    const own = sessions.filter(s => OWN_SESSION.test(s.customer_name ?? ''))
+    const own = sessions.filter(s => s.cmc || OWN_SESSION.test(s.customer_name ?? ''))
     const key = (name: string, date: string) => `${name}|${date}`
     const ownKeys = new Set(own.map(s => key(s.customer_name, s.session_date)))
 

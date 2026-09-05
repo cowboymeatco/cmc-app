@@ -74,6 +74,7 @@ interface SessionWithStats {
   status:         SessionStatus
   notes:          string
   box_type?:      BoxType | null
+  cmc?:           boolean
   pickup_date?:   string | null
   box_count:      number
   closed_count:   number
@@ -178,37 +179,44 @@ const SCALES = [
 const SCALE_DEFAULT_NAME = 'COWBOY MEAT CO'
 const ROLL_LABEL: Record<LabelRoll, string> = { '4in': '4in', '62mm': 'Brother 2.4in' }
 
-// A session's compliance/ownership type, picked once up front and sticky for
-// every box in it. USDA + CMC print the USDA bug (both inspected, for sale);
-// Custom (custom-exempt) prints NOT FOR SALE; Pet Food prints NOT FOR HUMAN
-// CONSUMPTION and no mark of inspection. Drives the label mark server-side.
-type BoxType = 'USDA' | 'Custom' | 'CMC' | 'Pet Food'
-const BOX_TYPES: BoxType[] = ['USDA', 'Custom', 'CMC', 'Pet Food']
-// Map a box type onto the compliance-mark flags, leaving retail_exempt (picked
-// separately, and able to suppress this type's mark) untouched.
+// A session's compliance type, picked once up front and sticky for every box
+// in it. One of four, never two at once: USDA prints the mark of inspection;
+// Retail Exempt prints RETAIL EXEMPT and no mark (the exemption is why the
+// product was not inspected — Chris/Charlie, 2026-08-12); Custom (custom-exempt)
+// prints NOT FOR SALE; Pet Food prints NOT FOR HUMAN CONSUMPTION and no mark.
+// Drives the label mark server-side.
+//
+// CMC used to sit in this list, with Retail Exempt as a toggle on top. Neither
+// fit: a label can't be USDA and retail exempt, and CMC isn't a mark at all —
+// it says the product goes back into our own inventory for sale, which can be
+// USDA or retail exempt. So CMC is its own checkbox now (Charlie, 2026-09-04:
+// "A label cannot have USDA and Retail Exempt… CMC being like a standalone
+// checkbox").
+type BoxType = 'USDA' | 'Retail Exempt' | 'Custom' | 'Pet Food'
+const BOX_TYPES: BoxType[] = ['USDA', 'Retail Exempt', 'Custom', 'Pet Food']
+// Sessions typed before the split can still carry 'CMC' on the record — that
+// was an inspected, for-sale box, so it reads as USDA.
+function normalizeBoxType(t: string | null | undefined): BoxType {
+  return (BOX_TYPES as string[]).includes(t ?? '') ? (t as BoxType) : 'USDA'
+}
+// Every label flag follows from the type.
 function flagsForType(t: BoxType, prev: LabelFlags): LabelFlags {
   return {
     ...prev,
-    usda_bug:      t !== 'Custom' && t !== 'Pet Food',
+    usda_bug:      t === 'USDA',
+    retail_exempt: t === 'Retail Exempt',
     not_for_sale:  t === 'Custom',
     not_for_human: t === 'Pet Food',
   }
 }
 // What each type does to the label, in one line — used by both pickers.
 const BOX_TYPE_HELP: Record<BoxType, string> = {
-  USDA:       'USDA — labels print the USDA mark of inspection.',
-  CMC:        'CMC — labels print the USDA mark of inspection.',
-  Custom:     'Custom-exempt — labels print NOT FOR SALE.',
-  'Pet Food': 'Animal food — labels print NOT FOR HUMAN CONSUMPTION and no USDA mark.',
+  USDA:            'USDA — labels print the USDA mark of inspection.',
+  'Retail Exempt': 'Retail exempt — labels print RETAIL EXEMPT and no USDA mark.',
+  Custom:          'Custom-exempt — labels print NOT FOR SALE.',
+  'Pet Food':      'Animal food — labels print NOT FOR HUMAN CONSUMPTION and no USDA mark.',
 }
-// Retail exempt is the reason the product was not inspected, so it overrides
-// what the type would otherwise print. The picker has to say so, or it promises
-// a mark the label will not carry (Chris/Charlie, 2026-08-12).
-function boxTypeHelp(t: BoxType, retailExempt: boolean): string {
-  return retailExempt && (t === 'USDA' || t === 'CMC')
-    ? `${t}, retail exempt — labels print RETAIL EXEMPT and no USDA mark.`
-    : BOX_TYPE_HELP[t]
-}
+const CMC_HELP = 'CMC — this product goes back into our own inventory for sale. Ownership, not a mark: it can be USDA or retail exempt.'
 
 const LBL: React.CSSProperties = {
   display: 'block', fontSize: '0.68rem', color: C.lightBrown,
@@ -509,6 +517,9 @@ export default function ScannerPage() {
   const [labelFlags,  setLabelFlags]  = useState<LabelFlags>(DEFAULT_FLAGS)
   // Session box type — declared up front, sticky for every box in the session.
   const [boxType,     setBoxType]     = useState<BoxType>('USDA')
+  // CMC — ours, going back into inventory for sale. Ownership beside the type,
+  // not one of its values; sticky on the session like the type.
+  const [cmc,         setCmc]         = useState(false)
   // Per-device, so it can't be read during SSR — starts at the 4in bench
   // printer and picks up this station's own setting after mount.
   const [labelRoll,   setLabelRoll]   = useState<LabelRoll>('4in')
@@ -1124,13 +1135,17 @@ export default function ScannerPage() {
   }, [scanValue])
 
   // ── Session record helpers ───────────────────────────────────────────────────
-  async function upsertSession(custName: string, sessDate: string, status = 'scanning', bt?: BoxType): Promise<string | null> {
+  async function upsertSession(custName: string, sessDate: string, status = 'scanning', bt?: BoxType, own?: boolean): Promise<string | null> {
     try {
       const res  = await fetch('/api/processing/sessions', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        // Only send box_type when starting fresh — reopens omit it so a type set
-        // earlier is preserved (the API drops null/undefined on upsert).
-        body: JSON.stringify({ customer_name: custName, session_date: sessDate, status, ...(bt ? { box_type: bt } : {}) }),
+        // Only send box_type / cmc when starting fresh — reopens omit them so a
+        // type set earlier is preserved (the API drops null/undefined on upsert).
+        body: JSON.stringify({
+          customer_name: custName, session_date: sessDate, status,
+          ...(bt ? { box_type: bt } : {}),
+          ...(own != null ? { cmc: own } : {}),
+        }),
       })
       const data = await res.json()
       return data.id ?? null
@@ -1146,6 +1161,17 @@ export default function ScannerPage() {
     await fetch('/api/processing/sessions', {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ customer_name: customer, session_date: date, box_type: t }),
+    })
+  }
+
+  // Tick or untick CMC on the open session. Nothing on the label changes — it
+  // is the inventory side that reads this.
+  async function applyCmc(own: boolean) {
+    setCmc(own)
+    if (!customer) return
+    await fetch('/api/processing/sessions', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customer_name: customer, session_date: date, cmc: own }),
     })
   }
 
@@ -1237,6 +1263,7 @@ export default function ScannerPage() {
   function openNewSession() {
     setCustomer('')
     setBoxType('USDA')
+    setCmc(false)
     setDate(isoDate())
     setShowNewForm(true)
   }
@@ -1259,7 +1286,7 @@ export default function ScannerPage() {
     setScans([])
     setCurrentStatus('scanning')
     setLabelFlags(flagsForType(boxType, DEFAULT_FLAGS))
-    const sid = await upsertSession(cust, date, 'scanning', boxType)
+    const sid = await upsertSession(cust, date, 'scanning', boxType, cmc)
     setCurrentSessionId(sid)
     setSharedYield(null)
     fetch(`/api/processing/inputs?customer_name=${encodeURIComponent(cust)}&session_date=${date}`)
@@ -1279,12 +1306,13 @@ export default function ScannerPage() {
     sessionCiRef.current = null
     const existing = sessions.find(s => s.customer_name === cust && s.session_date === dt)
     const existingStatus = existing?.status ?? 'scanning'
-    const existingType   = (existing?.box_type as BoxType) ?? 'USDA'
+    const existingType   = normalizeBoxType(existing?.box_type)
     setCustomer(cust)
     setDate(dt)
     enterSession()
     setCurrentStatus(existingStatus)
     setBoxType(existingType)
+    setCmc(existing?.cmc ?? false)
     setLabelFlags(flagsForType(existingType, DEFAULT_FLAGS))
     // A hung or failing box/scan fetch here used to leave the session screen up
     // with no boxes and nothing to scan into — dead in the water with no error
@@ -1428,17 +1456,19 @@ export default function ScannerPage() {
     if (!pluLoaded) return
     const cust = order.customer_name
     const dt   = isoDate()   // pack date = today
-    const storedType = sessions.find(s => s.customer_name === cust && s.session_date === dt)?.box_type as BoxType | null | undefined
+    const stored = sessions.find(s => s.customer_name === cust && s.session_date === dt)
+    const storedType = stored?.box_type ? normalizeBoxType(stored.box_type) : undefined
     const uiType = storedType ?? 'USDA'
     setCustomer(cust)
     setDate(dt)
     enterSession()
     setCurrentStatus('scanning')
     setBoxType(uiType)
+    setCmc(stored?.cmc ?? false)
     setLabelFlags(flagsForType(uiType, DEFAULT_FLAGS))
     // Pass through only a stored type — never force USDA onto a session that may
-    // already be tagged Custom/CMC in a list we haven't refreshed.
-    const sid = await upsertSession(cust, dt, 'scanning', storedType ?? undefined)
+    // already be tagged Custom in a list we haven't refreshed.
+    const sid = await upsertSession(cust, dt, 'scanning', storedType, stored?.cmc)
     setCurrentSessionId(sid)
 
     // Reuse an existing session's boxes for this customer+date if any, else make Box 1.
@@ -2704,8 +2734,18 @@ export default function ScannerPage() {
                   ))}
                 </div>
                 <div style={{ fontSize: '0.66rem', color: C.lightBrown, marginTop: '0.4rem', lineHeight: 1.35 }}>
-                  {boxTypeHelp(boxType, labelFlags.retail_exempt)}
+                  {BOX_TYPE_HELP[boxType]}
                 </div>
+                {/* Ownership, beside the type rather than in it: our own product
+                    can be USDA or retail exempt, and the inventory page reads this. */}
+                <label
+                  title={CMC_HELP}
+                  style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', marginTop: '0.7rem', cursor: 'pointer', color: cmc ? C.cream : C.lightBrown, fontSize: '0.85rem', fontWeight: cmc ? 700 : 500 }}
+                >
+                  <input type="checkbox" checked={cmc} onChange={e => setCmc(e.target.checked)}
+                    style={{ width: 18, height: 18, accentColor: C.tan, cursor: 'pointer' }} />
+                  CMC — back into our inventory for sale
+                </label>
               </div>
               <div style={{ marginBottom: '1.5rem' }}>
                 <label style={LBL}>Pack Date</label>
@@ -3068,7 +3108,7 @@ export default function ScannerPage() {
                 <button
                   key={t}
                   onClick={() => applyBoxType(t)}
-                  title={boxTypeHelp(t, labelFlags.retail_exempt)}
+                  title={BOX_TYPE_HELP[t]}
                   style={{
                     background: boxType === t ? 'rgba(201,168,130,0.28)' : 'rgba(255,255,255,0.03)',
                     border: `1px solid ${boxType === t ? 'rgba(201,168,130,0.6)' : 'rgba(166,120,90,0.2)'}`,
@@ -3080,20 +3120,19 @@ export default function ScannerPage() {
                   {boxType === t ? '✓ ' : ''}{t}
                 </button>
               ))}
-              {/* Retail Exempt — an add-on to any box type, but NOT orthogonal:
-                  it suppresses the mark of inspection on whatever type is picked. */}
+              {/* CMC — ownership, not a mark. Any type above can be ours. */}
               <button
-                title="Retail exemption — labels print RETAIL EXEMPT and no USDA mark of inspection."
-                onClick={() => setLabelFlags(f => ({ ...f, retail_exempt: !f.retail_exempt }))}
+                title={CMC_HELP}
+                onClick={() => applyCmc(!cmc)}
                 style={{
-                  background: labelFlags.retail_exempt ? 'rgba(201,168,130,0.2)' : 'rgba(255,255,255,0.03)',
-                  border: `1px solid ${labelFlags.retail_exempt ? 'rgba(201,168,130,0.45)' : 'rgba(166,120,90,0.2)'}`,
+                  background: cmc ? 'rgba(201,168,130,0.2)' : 'rgba(255,255,255,0.03)',
+                  border: `1px solid ${cmc ? 'rgba(201,168,130,0.45)' : 'rgba(166,120,90,0.2)'}`,
                   borderRadius: 3, padding: '0.2rem 0.6rem', marginLeft: '0.5rem',
-                  color: labelFlags.retail_exempt ? C.cream : C.lightBrown,
-                  fontSize: '0.72rem', cursor: 'pointer', fontWeight: labelFlags.retail_exempt ? 700 : 400,
+                  color: cmc ? C.cream : C.lightBrown,
+                  fontSize: '0.72rem', cursor: 'pointer', fontWeight: cmc ? 700 : 400,
                 }}
               >
-                {labelFlags.retail_exempt ? '✓ ' : ''}Retail Exempt
+                {cmc ? '☑' : '☐'} CMC
               </button>
               {/* Printer width — this station's setting, not this session's, so
                   it stays put when the next customer's boxes start. */}
