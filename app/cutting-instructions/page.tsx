@@ -1039,24 +1039,24 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
       const pl  = pr.isAddon ? '18px' : '8px'
       const clr = pr.isAddon ? '#8a6200' : '#1A0A04'
       tbody += `<tr style="background:${bg}">
-        <td style="padding:6px ${pl} 6px 8px;font-size:22px;font-weight:${fw};font-style:${fi};color:${clr};vertical-align:top">${pr.cut ?? ''}</td>
-        <td style="padding:6px 8px;font-size:18px;color:#555;vertical-align:top">${pr.spec ?? ''}</td>
-        <td style="padding:6px 4px;width:58px;border-left:1px solid #ddd;text-align:center">${pr.writeIn ? '<span style="color:#bbb;font-size:16px">—</span>' : ' '}</td>
-        <td style="padding:6px 4px;width:68px;border-left:1px solid #ddd;text-align:center">${
+        <td class="pkcut" style="padding:6px ${pl} 6px 8px;font-weight:${fw};font-style:${fi};color:${clr};vertical-align:top"><div class="pkline"><span>${pr.cut ?? ''}</span><span class="pkspec-in">${pr.spec ?? ''}</span></div></td>
+        <td class="pkspec" style="padding:6px 8px;color:#555;vertical-align:top">${pr.spec ?? ''}</td>
+        <td class="pknum" style="padding:6px 4px;width:58px;border-left:1px solid #ddd;text-align:center">${pr.writeIn ? '<span style="color:#bbb;font-size:16px">—</span>' : ' '}</td>
+        <td class="pkwt" style="padding:6px 4px;width:68px;border-left:1px solid #ddd;text-align:center">${
           // A ruled blank, so the raw weight has an obvious place to land
-          pr.writeIn ? '<span style="display:inline-block;width:56px;border-bottom:1.5px solid #1A0A04">&nbsp;</span>' : ' '
+          pr.writeIn ? '<span class="pkrule" style="display:inline-block;width:56px;border-bottom:1.5px solid #1A0A04">&nbsp;</span>' : ' '
         }</td>
-        <td style="padding:6px 4px;width:36px;border-left:1px solid #ddd;text-align:center;font-size:20px;color:#999">☐</td>
+        <td class="pkchk" style="padding:6px 4px;width:36px;border-left:1px solid #ddd;text-align:center;font-size:20px;color:#999">☐</td>
       </tr>`
     }
     const thStyle = 'padding:6px 8px;text-align:left;color:#F2E8D9;font-size:13px;letter-spacing:0.08em;text-transform:uppercase'
     return `<table style="width:100%;border-collapse:collapse;border:1px solid #ddd">
       <thead><tr style="background:#1A0A04">
-        <th style="${thStyle}">Cut</th>
-        <th style="${thStyle}">Style / Spec</th>
-        <th style="${thStyle};text-align:center;width:48px">Pkgs</th>
-        <th style="${thStyle};text-align:center;width:56px">Wt (lbs)</th>
-        <th style="${thStyle};text-align:center;width:30px">✓</th>
+        <th class="pkcut" style="${thStyle}">Cut<span class="pkspec-in"> / Style</span></th>
+        <th class="pkspec" style="${thStyle}">Style / Spec</th>
+        <th class="pknum" style="${thStyle};text-align:center;width:48px">Pkgs</th>
+        <th class="pkwt" style="${thStyle};text-align:center;width:56px">Wt (lbs)</th>
+        <th class="pkchk" style="${thStyle};text-align:center;width:30px">✓</th>
       </tr></thead>
       <tbody>${tbody}</tbody>
     </table>`
@@ -1213,16 +1213,27 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
   ${/* Scanning this at the packing scanner opens the customer's session under
        this exact name — no typing, and the slip in hand is the check that the
        right session is open (Charlie, 2026-08-27). Same code as page 1's. */''}
-  <div class="slipcode" style="float:right;width:180px;text-align:center;margin:0 0 6px 14px">
-    ${ciBarcode}
-    <div style="font-size:10px;color:#75471B;letter-spacing:0.06em;margin-top:2px">SCAN TO OPEN PACKING SESSION</div>
-  </div>
-  <div style="font-size:16px;color:#555;margin-bottom:8px">
-    <strong>${d.customerName ?? '—'}</strong>${secondaryName ? ` <span style="color:#777">(${secondaryName})</span>` : ''}${d.portion ? ' · ' + fmt(d.portion) : ''} · Harvest Date: ${harvestDate}
-    <span style="margin-left:14px">Producer: <span style="font-weight:bold">${carcass.producer || wline(110)}</span></span>
-    <span style="margin-left:14px">Lot # <span style="font-weight:bold">${carcass.lot || wline(46)}</span> · Tag # <span style="font-weight:bold">${carcass.tag || wline(38)}</span></span>
-    <span style="margin-left:14px">Hanging Wt: <span style="font-weight:bold">${carcass.hcw != null ? `${carcass.hcw} lbs` : wline(58)}</span></span>
-    ${d.steakPack ? `<span style="margin-left:14px">Steaks: <span style="font-weight:bold">${esc(String(d.steakPack))} per pack</span></span>` : ''}
+  ${/* The name is what the packager matches the sheet to the rail and the box
+       by, so it headlines at the size page 1 gives it, with the animal beside
+       it and everything else on one line underneath. The barcode sits at the
+       end of the same row: the sheet is a flex column, so a float would not
+       take, and a barcode of its own line left a dead band beside it. */''}
+  <div style="display:flex;align-items:flex-start;gap:14px;margin-bottom:8px;line-height:1.15">
+    <div style="flex:1;min-width:0">
+      <div style="font-size:30px;font-weight:bold">${d.customerName ?? '—'}${secondaryName ? ` <span style="font-size:18px;font-weight:normal;color:#666">(${secondaryName})</span>` : ''}
+        <span style="font-size:22px;font-weight:bold;color:#75471B;margin-left:12px;white-space:nowrap">${species}${d.portion ? ' · ' + fmt(d.portion) : ''}</span></div>
+      <div style="font-size:16px;color:#555;margin-top:5px;display:flex;flex-wrap:wrap;column-gap:12px;row-gap:2px">
+        <span style="white-space:nowrap">Harvested <span style="font-weight:bold;color:#1A0A04">${harvestDate}</span></span>
+        <span style="white-space:nowrap">Producer: <span style="font-weight:bold;color:#1A0A04">${carcass.producer || wline(110)}</span></span>
+        <span style="white-space:nowrap">Lot # <span style="font-weight:bold;color:#1A0A04">${carcass.lot || wline(46)}</span> · Tag # <span style="font-weight:bold;color:#1A0A04">${carcass.tag || wline(38)}</span></span>
+        <span style="white-space:nowrap">Hanging Wt: <span style="font-weight:bold;color:#1A0A04">${carcass.hcw != null ? `${carcass.hcw} lbs` : wline(58)}</span></span>
+        ${d.steakPack ? `<span style="white-space:nowrap">Steaks: <span style="font-weight:bold;color:#1A0A04">${esc(String(d.steakPack))} per pack</span></span>` : ''}
+      </div>
+    </div>
+    <div class="slipcode" style="flex:none;width:160px;text-align:center">
+      ${ciBarcode}
+      <div style="font-size:10px;color:#75471B;letter-spacing:0.06em;margin-top:2px">SCAN TO OPEN PACKING SESSION</div>
+    </div>
   </div>
   <div class="packgrid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
     ${packCols.map(col => `<div class="packcol">${col.length ? buildPackTable(col) : ''}</div>`).join('')}
@@ -1281,6 +1292,28 @@ function cardDocument(title: string, body: string): string {
        the bars can be stretched taller without widening — a squat barcode is a
        hard target for the gun. */
     .slipcode svg { height: 44px !important; }
+    /* Packaging-sheet type. A light sheet — a hog, a lamb, a half of beef —
+       leaves most of the page empty at three columns while the cut names wrap
+       onto three lines. The fit pass below tries two columns first, at bigger
+       type and with wider write-in boxes; three columns are for the sheets
+       that need them (a whole beef). Half a page is still not enough for a
+       name AND its spec side by side at that size — the table splits the
+       width between them and both wrap — so in the wide tier the spec folds
+       into the name's cell: beside the name when the pair fits on one line,
+       under it when it doesn't. */
+    .pkcut  { font-size: 22px; }
+    .pkspec { font-size: 18px; }
+    .pkspec-in { display: none; }
+    .wide .pkcut  { font-size: 26px; }
+    .wide td.pkspec, .wide th.pkspec { display: none; }
+    .wide .pkline { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 12px; }
+    .wide td .pkspec-in { display: inline; font-size: 19px; font-weight: normal; font-style: normal; color: #555; }
+    .wide th .pkspec-in { display: inline; }
+    .wide .pkcut { padding-top: 7px !important; padding-bottom: 7px !important; }
+    .wide td.pknum, .wide th.pknum { width: 66px !important; }
+    .wide td.pkwt,  .wide th.pkwt  { width: 86px !important; }
+    .wide .pkrule { width: 72px !important; }
+    .wide td.pkchk { font-size: 24px !important; }
     @media print {
       body { padding: 0; background: none; }
       .pagebreak { page-break-after: always; }
@@ -1306,7 +1339,8 @@ ${body}
   // COUNT at build time, and rows are not the same height. So measure what
   // actually rendered and re-deal it, splitting a long section across columns
   // where it has to and repeating its header as "(cont.)".
-  function pack(groups, target, overhead, atomic) {
+  function pack(groups, target, overhead, atomic, ncols) {
+    ncols = ncols || NCOLS
     var cols = [[]], h = overhead
     for (var gi = 0; gi < groups.length; gi++) {
       var g = groups[gi], i = 0, first = true
@@ -1315,12 +1349,12 @@ ${body}
         // column — break before it, not after it.
         var need = g.hdrH + (i < g.rows.length ? g.rows[i].h : 0)
         if (atomic) for (var n = i + 1; n < g.rows.length; n++) need += g.rows[n].h
-        if (cols[cols.length - 1].length && h + need > target && cols.length < NCOLS) { cols.push([]); h = overhead }
+        if (cols[cols.length - 1].length && h + need > target && cols.length < ncols) { cols.push([]); h = overhead }
         var chunk = { g: g, rows: [], cont: !first }
         h += g.hdrH
         while (i < g.rows.length) {
           var rh = g.rows[i].h
-          if (!atomic && chunk.rows.length && h + rh > target && cols.length < NCOLS) break
+          if (!atomic && chunk.rows.length && h + rh > target && cols.length < ncols) break
           chunk.rows.push(g.rows[i]); h += rh; i++
         }
         cols[cols.length - 1].push(chunk)
@@ -1349,17 +1383,18 @@ ${body}
   // column height, so a light card keeps its short columns instead of being
   // stretched down the page to fill the budget.
   function colMax(cols, overhead) { return Math.max.apply(null, colHeights(cols, overhead)) }
-  function search(groups, budget, overhead, total, atomic) {
+  function search(groups, budget, overhead, total, atomic, ncols) {
     var lo = 0, hi = total, best = null
     for (var it = 0; it < 24; it++) {
       var mid  = (lo + hi) / 2
-      var cols = pack(groups, mid, overhead, atomic)
+      var cols = pack(groups, mid, overhead, atomic, ncols)
       var mx   = colMax(cols, overhead)
       if (mx <= mid + 0.5 && mx <= budget) { best = cols; hi = mid } else lo = mid
     }
     return best
   }
-  function bestPacking(groups, budget, overhead) {
+  function bestPacking(groups, budget, overhead, ncols) {
+    ncols = ncols || NCOLS
     var total = overhead
     for (var i = 0; i < groups.length; i++) {
       total += groups[i].hdrH
@@ -1369,12 +1404,12 @@ ${body}
     // half, so breaking one has to buy back real page — an inch of column, the
     // difference between a sheet that fits and a sheet that gets shrunk to fit.
     // Short of that the sections stay whole, even if a column ends up short.
-    var whole = search(groups, budget, overhead, total, true)
-    var split = search(groups, budget, overhead, total, false)
+    var whole = search(groups, budget, overhead, total, true, ncols)
+    var split = search(groups, budget, overhead, total, false, ncols)
     if (whole && (!split || colMax(whole, overhead) <= colMax(split, overhead) + 96)) return whole
     // Genuinely more than one sheet holds: balance it anyway, then let the
     // shrink pass below decide.
-    return split || pack(groups, total / NCOLS, overhead, false)
+    return split || pack(groups, total / ncols, overhead, false, ncols)
   }
 
   // "(cont.)" is added on the way out, never carried back in — so a second
@@ -1438,7 +1473,8 @@ ${body}
 
   // Page 2 — the packaging sheet. One table per column, section titles are
   // full-width rows inside the body.
-  function packSheetPass(page, box) {
+  function packSheetPass(page, box, ncols) {
+    ncols = ncols || NCOLS
     var cols0 = box.querySelectorAll('.packcol')
     var groups = [], tpl = null, thead = null, overhead = 0
     for (var c = 0; c < cols0.length; c++) {
@@ -1468,7 +1504,7 @@ ${body}
     var above  = br.top - pr.top
     var below  = pr.height - above - br.height          // notes + sign-off footer
     var budget = LIMIT - above - below - 2
-    var cols   = bestPacking(groups, budget, overhead)
+    var cols   = bestPacking(groups, budget, overhead, ncols)
     var made   = []
     for (var ci = 0; ci < cols.length; ci++) {
       var cd = document.createElement('div')
@@ -1491,7 +1527,7 @@ ${body}
       made.push(cd)
     }
     box.textContent = ''
-    box.style.gridTemplateColumns = 'repeat(' + NCOLS + ',1fr)'
+    box.style.gridTemplateColumns = 'repeat(' + ncols + ',1fr)'
     for (var m = 0; m < made.length; m++) box.appendChild(made[m])
     page.style.minHeight = minH
   }
@@ -1501,26 +1537,50 @@ ${body}
   // heights measured in one layout are only an estimate of the next one — a
   // re-deal can land taller than what it replaced, and this is what stops that
   // from ever reaching the paper.
+  function snap(box) { return { dom: box.cloneNode(true), css: box.style.cssText, h: box.getBoundingClientRect().height } }
+  function restore(box, s) {
+    box.textContent = ''
+    box.style.cssText = s.css
+    var dom = s.dom.cloneNode(true)
+    while (dom.firstChild) box.appendChild(dom.firstChild)
+  }
+  // fresh: the layout in the box was dealt to a different column count, so it
+  // is no baseline — the first pass at this count is.
+  function dealPasses(page, box, isPack, ncols, fresh) {
+    var best = fresh ? null : snap(box)
+    for (var pass = 0; pass < 3; pass++) {
+      if (isPack) packSheetPass(page, box, ncols); else cutCardPass(page, box)
+      var h = box.getBoundingClientRect().height
+      if (best && h >= best.h - 0.5) break
+      best = snap(box)
+    }
+    if (box.getBoundingClientRect().height > best.h + 0.5) restore(box, best)
+  }
   function repack(page) {
+    var box = null, built = null
     try {
-      var box = page.querySelector('.packgrid') || page.querySelector('.cutcols')
+      box = page.querySelector('.packgrid') || page.querySelector('.cutcols')
       if (!box) return
       var isPack = (box.className || '').indexOf('packgrid') >= 0
-      var best = { dom: box.cloneNode(true), cc: box.style.columnCount, h: box.getBoundingClientRect().height }
-      for (var pass = 0; pass < 3; pass++) {
-        if (isPack) packSheetPass(page, box); else cutCardPass(page, box)
-        var h = box.getBoundingClientRect().height
-        if (h >= best.h - 0.5) break
-        best = { dom: box.cloneNode(true), cc: box.style.columnCount, h: h }
-      }
-      if (box.getBoundingClientRect().height > best.h + 0.5) {
-        box.textContent = ''
-        box.style.columnCount = best.cc
-        while (best.dom.firstChild) box.appendChild(best.dom.firstChild)
-      }
+      if (!isPack) { dealPasses(page, box, false, NCOLS); return }
+      // The packaging sheet: two wide columns with the bigger type whenever
+      // that still fits the page, three narrow ones only when it doesn't. The
+      // rows measured in the built three-column layout are only an estimate
+      // of the two-column one, so the pass is repeated on its own result.
+      built = snap(box)
+      page.classList.add('wide')
+      dealPasses(page, box, true, 2, true)
+      if (page.getBoundingClientRect().height <= LIMIT) return
+      page.classList.remove('wide')
+      restore(box, built)
+      built = null
+      dealPasses(page, box, true, NCOLS)
     } catch (e) {
       // A card that prints its old, taller layout beats one that prints
       // nothing, so any failure in here leaves the page as it was built.
+      page.classList.remove('wide')
+      if (box && built) restore(box, built)
+      page.setAttribute('data-fit-error', String(e && e.message || e))
     }
   }
 
