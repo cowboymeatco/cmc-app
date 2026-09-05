@@ -6,6 +6,7 @@ import { HarvestAppointment, HarvestLog, ChillLog, AnimalReceivingLog, Correctiv
 import { setFeedbackContext, clearFeedbackContext } from '@/lib/feedbackTelemetry'
 import { isoDate, isoDateTime, addDaysISO } from '@/lib/dates'
 import { splitsIntoHalves, WHOLE_WEIGHT_LABEL } from '@/lib/carcass'
+import { LiveScale, useScaleReadings } from '@/components/LiveScale'
 
 type Tab = 'parta' | 'partb' | 'worksheet' | 'harvestlog' | 'chill'
 
@@ -298,6 +299,7 @@ function KillTypeBadge({ killType }: { killType: 'USDA' | 'Custom' | null | unde
 }
 
 function PartATab({ date, appt }: { date: string; appt: HarvestAppointment | null }) {
+  const scales                  = useScaleReadings()
   const [rows, setRows]         = useState<PartARow[]>([])
   const [loading, setLoading]   = useState(false)
   const [inspInitials, setInsp] = useState('')
@@ -678,6 +680,9 @@ Save anyway?`
                   <label style={LABEL}>Live Weight (lbs)</label>
                   <input type="number" step="1" style={INPUT} value={row.liveWeight}
                     onChange={e => upd(i, { liveWeight: e.target.value })} placeholder="e.g. 1245" />
+                  {/* Kiosk live-animal scale (D920C dynamometer) — shows only when the kiosk agent reports. */}
+                  <LiveScale reading={scales.live_animal} label="Live scale" decimals={0}
+                    onCapture={lb => upd(i, { liveWeight: String(Math.round(lb)) })} />
                 </div>
               </div>
               <div style={{ marginBottom: '0.85rem' }}>
@@ -759,6 +764,7 @@ interface PartBRow {
 // relevant once Part A assigned it a kill order, and drops off once it's been
 // checked into the cooler (initial cooler temp recorded).
 function PartBTab({ date }: { date: string }) {
+  const scales                  = useScaleReadings()
   const [rows, setRows]         = useState<PartBRow[]>([])
   const [loading, setLoading]   = useState(false)
   const [carModal, setCarModal] = useState<{ rowIdx: number; type: 'zero_tolerance' | 'hot_water' } | null>(null)
@@ -970,16 +976,22 @@ function PartBTab({ date }: { date: string }) {
                         <div>
                           <label style={LABEL}>Left Half (lbs)</label>
                           <input type="number" step="0.1" style={INPUT} value={row.fields.half1} onChange={e => updField(i, { half1: e.target.value })} placeholder="0.0" />
+                          <LiveScale reading={scales.rail} label="Rail" decimals={1}
+                            onCapture={lb => updField(i, { half1: lb.toFixed(1) })} />
                         </div>
                         <div>
                           <label style={LABEL}>Right Half (lbs)</label>
                           <input type="number" step="0.1" style={INPUT} value={row.fields.half2} onChange={e => updField(i, { half2: e.target.value })} placeholder="0.0" />
+                          <LiveScale reading={scales.rail} label="Rail" decimals={1}
+                            onCapture={lb => updField(i, { half2: lb.toFixed(1) })} />
                         </div>
                       </>
                     ) : (
                       <div>
                         <label style={LABEL}>{WHOLE_WEIGHT_LABEL}</label>
                         <input type="number" step="0.1" style={INPUT} value={row.fields.whole} onChange={e => updField(i, { whole: e.target.value })} placeholder="0.0" />
+                        <LiveScale reading={scales.rail} label="Rail" decimals={1}
+                          onCapture={lb => updField(i, { whole: lb.toFixed(1) })} />
                       </div>
                     )}
                     <div>
