@@ -235,7 +235,7 @@ export default function Dashboard() {
               <span style={{ fontSize: '1.1rem' }}>📋</span>
               <div>
                 <span style={{ color: C.cream, fontWeight: 600, fontSize: '0.88rem' }}>HACCP Compliance</span>
-                <span style={{ color: C.lightBrown, fontSize: '0.78rem', marginLeft: '0.75rem' }}>Forms 2, 5, 6b, 6c · Kill day reports &amp; daily logs</span>
+                <span style={{ color: C.lightBrown, fontSize: '0.78rem', marginLeft: '0.75rem' }}>Forms 1, 2, 5, 6b, 6c · Kill day reports &amp; daily logs</span>
               </div>
               <span style={{ marginLeft: 'auto', color: C.lightBrown, fontSize: '0.8rem' }}>Open ›</span>
             </div>

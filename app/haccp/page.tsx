@@ -1,8 +1,9 @@
 'use client'
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import Link from 'next/link'
-import { HarvestAppointment, AnimalReceivingLog, HarvestLog, ChillLog } from '@/lib/types'
-import { isoDate } from '@/lib/dates'
+import { HarvestAppointment, AnimalReceivingLog, HarvestLog, ChillLog, BoxReceivingLog } from '@/lib/types'
+import { isoDate, addDaysISO, mondayOfISO } from '@/lib/dates'
+import { printReceivingLog } from '@/lib/haccpReceivingLog'
 
 const C = {
   dark:       '#1A0A04',
@@ -516,6 +517,9 @@ export default function HACCPPage() {
           </p>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', marginBottom: '2rem' }}>
+          {/* Form 1 — Live. Filled in on /receiving (Box Product tab); printed here for the binder. */}
+          <ReceivingLogCard />
+
           {/* Form 6c — Live */}
           <Link href="/haccp/cold-storage" style={{ textDecoration: 'none' }}>
             <div style={{
@@ -657,6 +661,71 @@ function FormCard({ number, title, subtitle, desc, frequency, count, countLabel,
         }}
       >
         {disabled ? 'Load data first' : hasData ? '🖨 Generate PDF' : 'No data'}
+      </button>
+    </div>
+  )
+}
+
+// ── Form 1 — Receiving Program Log ────────────────────────────────────────────
+// The log itself is written on /receiving as boxes come in the door (vendor,
+// lot/invoice, temp, initials). This card only picks a date range and prints
+// the HACCP-format sheet, so the binder can be built from here alongside the
+// kill-day forms instead of walking back to the receiving screen.
+function ReceivingLogCard() {
+  const [logs,  setLogs]  = useState<BoxReceivingLog[] | null>(null)
+  const [range, setRange] = useState(() => {
+    const mon = mondayOfISO(isoDate())
+    return { start: mon, end: addDaysISO(mon, 6) }
+  })
+
+  useEffect(() => {
+    fetch('/api/receiving?type=box')
+      .then(r => r.json())
+      .then(d => setLogs(Array.isArray(d) ? d : []))
+      .catch(() => setLogs([]))
+  }, [])
+
+  const inRange = (logs ?? [])
+    .filter(l => l.received_at >= range.start && l.received_at <= range.end)
+    .sort((a, b) => a.received_at.localeCompare(b.received_at))
+  const n = inRange.length
+  const color = '#FBBF24'
+
+  return (
+    <div style={{
+      background: C.dark, border: '1px solid rgba(166,120,90,0.2)',
+      borderLeft: `4px solid ${color}`, borderRadius: 4,
+      padding: '1.1rem 1.25rem', height: '100%', boxSizing: 'border-box',
+      display: 'flex', flexDirection: 'column',
+    }}>
+      <div style={{ fontSize: '0.65rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.25rem' }}>
+        Form 1 &nbsp;·&nbsp; Each occurrence
+      </div>
+      <div style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '0.9rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.35rem' }}>
+        Receiving Log
+      </div>
+      <div style={{ fontSize: '0.77rem', color: C.tan, marginBottom: '0.35rem' }}>
+        Meat · Ingredients · Chemicals · Packaging
+      </div>
+      <div style={{ fontSize: '0.75rem', color: C.lightBrown, lineHeight: 1.4, flex: 1 }}>
+        Logged on the Receiving page as product comes in. Prints the HACCP sheet for any date range.
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', margin: '0.75rem 0 0.5rem' }}>
+        <input type="date" value={range.start} style={{ ...INPUT, padding: '0.35rem 0.5rem', fontSize: '0.8rem' }}
+          onChange={e => setRange(p => ({ ...p, start: e.target.value }))} />
+        <input type="date" value={range.end} style={{ ...INPUT, padding: '0.35rem 0.5rem', fontSize: '0.8rem' }}
+          onChange={e => setRange(p => ({ ...p, end: e.target.value }))} />
+      </div>
+      <div style={{ fontSize: '0.78rem', color: logs === null ? 'rgba(166,120,90,0.5)' : n > 0 ? color : 'rgba(166,120,90,0.4)', marginBottom: '0.6rem' }}>
+        {logs === null ? 'Loading…' : n > 0 ? `${n} entr${n !== 1 ? 'ies' : 'y'} · ${Math.ceil(n / 10)} page${Math.ceil(n / 10) !== 1 ? 's' : ''}` : 'No entries in this range'}
+      </div>
+      <button
+        onClick={() => printReceivingLog(inRange, range.start, range.end)}
+        disabled={n === 0}
+        style={{ ...BTN(n > 0 ? C.tan : 'rgba(166,120,90,0.15)', n > 0 ? C.dark : 'rgba(166,120,90,0.35)'), width: '100%' }}
+      >
+        {n > 0 ? '🖨 Generate PDF' : 'No data'}
       </button>
     </div>
   )
