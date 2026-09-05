@@ -165,10 +165,8 @@ const ROLL_KEY = 'scannerLabelRoll'
 // The Hobart HT scales on the shop LAN. Which ones sit at THIS station is a
 // per-device setting like the printer width — a station can work a box scale
 // AND a packaging scale at once, so it's a set, not a single pick. The crew
-// calls them Scale 1/2/3; the number→IP mapping below is a PLACEHOLDER —
-// Charlie is confirming which physical scale is which IP, then these three
-// `ip` values get set to match (the `name` numbers stay). The IP shows only
-// in the hover text.
+// calls them Scale 1/2/3; the number→IP mapping is Charlie-confirmed
+// (2026-09-04): 1=.190, 2=.191, 3=.192. The IP shows only in the hover text.
 const SCALE_KEY = 'scannerScaleIps'
 const SCALES = [
   { ip: '192.168.1.190', name: '1' },
