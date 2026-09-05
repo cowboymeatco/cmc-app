@@ -18,6 +18,12 @@ export const HACCP_CATEGORIES = [
 
 export type HaccpCategory = typeof HACCP_CATEGORIES[number]
 
+// What an inspector may see. Blank forms are staff working copies, not
+// records — Charlie's rule (2026-09-04): they never show on the portal, and
+// the open-file route refuses them even by id.
+export const INSPECTOR_HIDDEN_CATEGORIES: readonly string[] = ['Blank Form']
+export const inspectorMaySee = (category: string) => !INSPECTOR_HIDDEN_CATEGORIES.includes(category)
+
 export interface HaccpDocument {
   id:           string
   title:        string
@@ -31,6 +37,17 @@ export interface HaccpDocument {
   uploaded_by:  string | null
   uploaded_at:  string
   active:       boolean
+}
+
+// Library order: the plan first, blank forms and supporting papers last (the
+// HACCP_CATEGORIES order), and inside a category the forms count 1, 2, 3, 3a,
+// 4 … 10 — plain text sort put Form 10 and 11 right after Form 1 (Charlie,
+// 2026-09-04). Numeric collation reads the digits as a number.
+export function compareDocs(a: { category: string; title: string }, b: { category: string; title: string }): number {
+  const ca = HACCP_CATEGORIES.indexOf(a.category as HaccpCategory)
+  const cb = HACCP_CATEGORIES.indexOf(b.category as HaccpCategory)
+  if (ca !== cb) return (ca === -1 ? 99 : ca) - (cb === -1 ? 99 : cb)
+  return a.title.localeCompare(b.title, 'en', { numeric: true, sensitivity: 'base' })
 }
 
 export function formatBytes(n: number | null): string {

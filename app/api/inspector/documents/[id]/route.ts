@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
-import { HACCP_BUCKET } from '@/lib/haccpDocs'
+import { HACCP_BUCKET, inspectorMaySee } from '@/lib/haccpDocs'
 import { requireInspector, logActivity } from '@/lib/inspectorGate'
 
 type Ctx = { params: Promise<{ id: string }> }
@@ -14,10 +14,10 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params
   const { data: doc, error } = await supabaseAdmin
     .from('haccp_documents')
-    .select('storage_path, filename, title, active')
+    .select('storage_path, filename, title, category, active')
     .eq('id', id)
     .single()
-  if (error || !doc || !doc.active) return NextResponse.json({ error: 'not found' }, { status: 404 })
+  if (error || !doc || !doc.active || !inspectorMaySee(doc.category)) return NextResponse.json({ error: 'not found' }, { status: 404 })
 
   const { data, error: signErr } = await supabaseAdmin.storage
     .from(HACCP_BUCKET)

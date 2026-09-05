@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
-import { HACCP_BUCKET, HACCP_MAX_BYTES } from '@/lib/haccpDocs'
+import { HACCP_BUCKET, HACCP_MAX_BYTES, compareDocs } from '@/lib/haccpDocs'
 
 // The written HACCP plan, prerequisite programs, SSOPs and blank forms.
 // The table has RLS on and the bucket is private, so every read and write goes
@@ -15,17 +15,15 @@ import { HACCP_BUCKET, HACCP_MAX_BYTES } from '@/lib/haccpDocs'
 // comes back to write the row ('register'). The signed URL is single-path and
 // expires in two hours, so the anon key still can't write anywhere else.
 
-// GET /api/haccp/documents — every active document, newest upload first
+// GET /api/haccp/documents — every active document, in library order
 export async function GET() {
   const { data, error } = await supabaseAdmin
     .from('haccp_documents')
     .select('*')
     .eq('active', true)
-    .order('category', { ascending: true })
-    .order('title',    { ascending: true })
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json(data)
+  return NextResponse.json(data.sort(compareDocs))
 }
 
 // POST /api/haccp/documents  { intent: 'sign' | 'register', ... }

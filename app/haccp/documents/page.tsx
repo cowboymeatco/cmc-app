@@ -379,7 +379,7 @@ function UploadCard({ onUploaded }: { onUploaded: (msg: string) => void }) {
           />
         </div>
         <div>
-          <label style={LABEL}>Category</label>
+          <label style={LABEL}>Category <span style={{ opacity: 0.6 }}>· Blank Form stays off the inspector portal</span></label>
           <select value={category} onChange={e => setCategory(e.target.value)} style={{ ...INPUT, background: C.darkBrown }}>
             {HACCP_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
