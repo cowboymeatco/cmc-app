@@ -2,7 +2,8 @@
 import { useEffect, useState, useCallback } from 'react'
 import {
   FREQUENCIES, PRODUCTION_SIGNALS, SIGNAL_LABEL, SIGNAL_SOURCE, PHASES, PHASE_LABEL,
-  type Frequency, type ProductionSignal, type Phase, type CleaningStep,
+  PRIORITIES, PRIORITY_LABEL, PRIORITY_BLURB,
+  type Frequency, type ProductionSignal, type Phase, type CleaningStep, type Priority,
 } from '@/lib/cleaning'
 import { C, TAP, CleaningHeader, Banner, BigButton, PhotoButton, VideoButton, StepVideo, inputStyle, cardStyle } from '../ui'
 import MapEditor from './MapEditor'
@@ -21,6 +22,7 @@ interface Equip { id: string; name: string; make_model: string | null; area_id?:
 interface Task {
   id: string; area_id: string; asset_id: string | null
   title: string; detail: string | null; frequency: Frequency
+  priority: Priority
   weekday: number | null; day_of_month: number | null
   production_triggers: string[] | null; requires_photo: boolean
   input_type: 'none' | 'number' | 'text'
@@ -39,6 +41,9 @@ interface Suggestion {
 }
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+
+// Same tier colours the shift view uses.
+const PRIORITY_TONE: Record<Priority, string> = { 1: C.red, 2: C.amber, 3: C.blue }
 
 export default function AdminPage() {
   const [tab,   setTab]   = useState<Tab>('tasks')
@@ -148,7 +153,7 @@ function TasksTab({ areas, onError }: { areas: Area[]; onError: (e: string) => v
   return (
     <>
       <div style={{ marginBottom: 16 }}>
-        <BigButton label="+ Add a checklist item" onClick={() => setEditing({ frequency: 'daily' })} />
+        <BigButton label="+ Add a checklist item" onClick={() => setEditing({ frequency: 'daily', priority: 2 })} />
       </div>
 
       {[...byArea.entries()].map(([area, list]) => (
@@ -166,6 +171,7 @@ function TasksTab({ areas, onError }: { areas: Area[]; onError: (e: string) => v
                   <div style={{ flex: 1 }}>
                     <div style={{ color: C.cream, fontSize: 15, fontWeight: 600 }}>{t.title}</div>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 5 }}>
+                      <Chip tone={PRIORITY_TONE[t.priority] ?? C.amber}>P{t.priority}</Chip>
                       <Chip tone={C.blue}>{t.frequency}</Chip>
                       {t.frequency === 'weekly' && t.weekday !== null && (
                         <Chip tone={C.blue}>{WEEKDAYS[t.weekday]}</Chip>
@@ -259,6 +265,38 @@ function TaskEditor({ task, areas, onSave, onCancel }: {
           </select>
         </Field>
       )}
+
+      <Field label="Priority">
+        <div style={{ color: C.lightBrown, fontSize: 12, marginBottom: 8, lineHeight: 1.5 }}>
+          P1 has to be finished inside the shift. P2 is done as time allows. P3 rolls to the
+          first cutter in the morning. Changing this re-tiers the item on tonight&apos;s open
+          list too; closed nights keep the tier they were judged by.
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {PRIORITIES.map(p => {
+            const on = (t.priority ?? 2) === p
+            return (
+              <button
+                key={p}
+                onClick={() => set({ priority: p })}
+                style={{
+                  minHeight: 46, borderRadius: 8, textAlign: 'left', padding: '6px 12px',
+                  background: on ? C.medBrown : C.dark,
+                  border: `1px solid ${on ? PRIORITY_TONE[p] : C.medBrown}`,
+                  color: on ? C.cream : C.tan, fontSize: 14, cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', gap: 10,
+                }}
+              >
+                <span style={{ color: PRIORITY_TONE[p], fontWeight: 900, fontSize: 15, width: 28 }}>P{p}</span>
+                <span>
+                  {PRIORITY_LABEL[p]}
+                  <div style={{ fontSize: 11, color: C.lightBrown }}>{PRIORITY_BLURB[p]}</div>
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </Field>
 
       <Field label="How often">
         <div style={{ display: 'flex', gap: 6 }}>

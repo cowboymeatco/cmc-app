@@ -2,8 +2,8 @@ export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import {
-  FREQUENCIES, PRODUCTION_SIGNALS,
-  type Frequency, type ProductionSignal, type InputType,
+  FREQUENCIES, PRODUCTION_SIGNALS, PRIORITIES,
+  type Frequency, type ProductionSignal, type InputType, type Priority,
 } from '@/lib/cleaning'
 
 // The master checklist template.
@@ -45,6 +45,9 @@ function validate(b: Record<string, unknown>, partial: boolean): string | null {
   }
   if (has('input_type') && !INPUT_TYPES.includes(b.input_type as InputType)) {
     return `input_type must be one of ${INPUT_TYPES.join(', ')}`
+  }
+  if (has('priority') && !PRIORITIES.includes(b.priority as Priority)) {
+    return 'priority must be 1, 2 or 3'
   }
 
   const wd = b.weekday
@@ -91,6 +94,7 @@ export async function POST(req: NextRequest) {
       detail:       body.detail?.trim() || null,
       sort_order:   body.sort_order ?? 100,
       frequency:    body.frequency ?? 'daily',
+      priority:     body.priority ?? 2,
       weekday:      body.weekday ?? null,
       day_of_month: body.day_of_month ?? null,
       production_triggers: body.production_triggers?.length ? body.production_triggers : null,
@@ -110,6 +114,12 @@ export async function PATCH(req: NextRequest) {
   const { id, ...updates } = await req.json()
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
 
+  // The admin editor sends the row back as it was read, joins and all. Those
+  // are not columns, and PostgREST refuses the whole update over one of them —
+  // which is why "Save changes" on the checklist had been failing since the
+  // equipment table became `assets`.
+  for (const k of ['cleaning_areas', 'assets', 'cleaning_equipment', 'created_at']) delete updates[k]
+
   const bad = validate(updates, true)
   if (bad) return NextResponse.json({ error: bad }, { status: 400 })
 
@@ -118,6 +128,20 @@ export async function PATCH(req: NextRequest) {
   const { data, error } = await supabase
     .from('cleaning_tasks').update(updates).eq('id', id).select().single()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  // A tier change reaches tonight's list straight away — Jill re-tiering an
+  // item at 6pm means the crew should see it move. Only OPEN shifts: a closed
+  // night is a record of the tier it was judged by, and stays that way.
+  if (updates.priority !== undefined) {
+    const { data: open } = await supabase.from('cleaning_shifts').select('id').eq('status', 'open')
+    const ids = (open ?? []).map(s => s.id as string)
+    if (ids.length) {
+      await supabase.from('cleaning_shift_items')
+        .update({ priority: updates.priority })
+        .eq('task_id', id).in('shift_id', ids)
+    }
+  }
+
   return NextResponse.json(data)
 }
 
