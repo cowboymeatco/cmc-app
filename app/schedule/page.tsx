@@ -166,7 +166,7 @@ function blankAppt(date?: string): Partial<HarvestAppointment> {
 }
 
 // The receiving default — day before harvest. Some producers bring in the day
-// of slaughter, so this is only the starting value; the field is editable.
+// of harvest, so this is only the starting value; the field is editable.
 function dayBefore(iso: string): string {
   if (!iso) return ''
   const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() - 1)

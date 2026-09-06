@@ -2,141 +2,57 @@ export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { isoDate } from '@/lib/dates'
+import { shiftDateFor, defaultAssignments } from '@/lib/cleaning'
 import {
-  buildShiftItems, shiftDateFor,
-  type CleaningTask, type ProductionSignal, type BuiltItem,
-} from '@/lib/cleaning'
+  buildFor, startShift, closeShift, crewNamed, type ShiftRow,
+} from '@/lib/cleaningShiftServer'
 
 // GET  /api/cleaning/shift?date=YYYY-MM-DD  → the night's shift and its items,
-//                                             building it on first open
-// POST /api/cleaning/shift                  → close (or reopen) a shift
+//                                             or shift:null if nobody has
+//                                             started it
+// POST /api/cleaning/shift                  → start / update / close / reopen
 //
-// The list is built once, on the first open of the night, and then it is the
-// record. It is not recomputed on every load: if someone edits a task template
-// at 11pm, tonight's crew should not watch items appear and disappear under
-// their thumbs. `refresh=1` re-runs the builder and ADDS anything newly due
-// without touching what's already been answered — that's the escape hatch for
-// "we started grinding after the list was built".
+// A shift is opened by a person pressing "Start shift", and by nothing else.
+// The old behaviour — build the night the first time anyone loaded the page —
+// produced shifts stamped 6 AM, 10 AM, 3 PM, none of them ever closed, and a
+// started_at that meant nothing. Now started_at is when the crew clocked on,
+// which is the number the hours review is built on.
+//
+// The list is built once, at start, and then it is the record. `refresh=1`
+// re-runs the builder and ADDS anything newly due without touching what's
+// already been answered — the escape hatch for "we started grinding after
+// the list was built".
 
-/**
- * What kinds of production actually happened on `dateISO`.
- *
- * Each signal is a record the app already keeps, queried with a limit of 1 —
- * the question is only ever "did any of this happen", never how much.
- */
-async function getProductionSignals(dateISO: string): Promise<ProductionSignal[]> {
-  const [harvest, cut, pack, smoke] = await Promise.all([
-    supabase.from('harvest_log').select('id').eq('harvest_date', dateISO).limit(1),
-    supabase.from('cut_schedule_items').select('id').eq('schedule_date', dateISO).limit(1),
-    supabase.from('boxes').select('id').eq('pack_date', dateISO).limit(1),
-    supabase.from('smokehouse_cook').select('id')
-      .gte('started_at', `${dateISO}T00:00:00`)
-      .lt('started_at',  `${dateISO}T23:59:59`)
-      .limit(1),
+async function payload(shift: ShiftRow) {
+  const [itemsRes, photosRes, crew] = await Promise.all([
+    supabase.from('cleaning_shift_items').select('*')
+      .eq('shift_id', shift.id).order('sort_order', { ascending: true }),
+    supabase.from('cleaning_photos').select('*')
+      .eq('shift_id', shift.id).order('created_at', { ascending: true }),
+    crewNamed(shift.crew_ids),
   ])
-
-  const signals: ProductionSignal[] = []
-  if (harvest.data?.length) signals.push('harvest')
-  if (cut.data?.length)     signals.push('cut')
-  if (pack.data?.length)    signals.push('package')
-  if (smoke.data?.length)   signals.push('smoke')
-  return signals
-}
-
-/** task_id → the last date that task was completed on any earlier shift. */
-async function getLastDone(beforeISO: string): Promise<Record<string, string>> {
-  // Ordered oldest-first so the later assignment into the map wins, leaving the
-  // most recent completion per task.
-  const { data } = await supabase
-    .from('cleaning_shift_items')
-    .select('task_id, done_at, cleaning_shifts!inner(shift_date)')
-    .eq('status', 'done')
-    .not('task_id', 'is', null)
-    .lt('cleaning_shifts.shift_date', beforeISO)
-    .order('done_at', { ascending: true })
-    .limit(4000)
-
-  const last: Record<string, string> = {}
-  type Row = { task_id: string; cleaning_shifts: { shift_date: string } | { shift_date: string }[] }
-  for (const row of (data ?? []) as unknown as Row[]) {
-    const shift = Array.isArray(row.cleaning_shifts) ? row.cleaning_shifts[0] : row.cleaning_shifts
-    if (shift?.shift_date) last[row.task_id] = shift.shift_date
-  }
-  return last
-}
-
-async function buildFor(dateISO: string): Promise<{ items: BuiltItem[]; signals: ProductionSignal[] }> {
-  const [tasksRes, areasRes, equipRes, signals, lastDone] = await Promise.all([
-    supabase.from('cleaning_tasks').select('*').eq('active', true),
-    supabase.from('cleaning_areas').select('id, name, sort_order').eq('active', true),
-    supabase.from('assets').select('id, name').eq('active', true),
-    getProductionSignals(dateISO),
-    getLastDone(dateISO),
-  ])
-
-  const items = buildShiftItems({
-    dateISO,
-    tasks:     (tasksRes.data ?? []) as CleaningTask[],
-    areas:     areasRes.data ?? [],
-    equipment: equipRes.data ?? [],
-    signals,
-    lastDone,
-  })
-  return { items, signals }
+  return { shift, items: itemsRes.data ?? [], photos: photosRes.data ?? [], crew }
 }
 
 export async function GET(req: NextRequest) {
   const url     = new URL(req.url)
   const refresh = url.searchParams.get('refresh') === '1'
-  // Read-only mode. Opening a shift is a real event — it stamps the night and
-  // freezes its list — so callers that are only displaying a count (the
-  // dashboard tile) must not cause one just by rendering.
-  const peek    = url.searchParams.get('peek') === '1'
   // No date given means "the shift happening right now", which before 4am is
   // still yesterday's cleanup — see shiftDateFor.
   const dateISO = url.searchParams.get('date') || shiftDateFor(new Date(), isoDate())
 
-  const { data: existing, error: findErr } = await supabase
+  const { data: shift, error: findErr } = await supabase
     .from('cleaning_shifts')
     .select('*')
     .eq('shift_date', dateISO)
     .maybeSingle()
   if (findErr) return NextResponse.json({ error: findErr.message }, { status: 500 })
 
-  let shift = existing
-
-  if (!shift && peek) {
-    return NextResponse.json({ shift: null, items: [], photos: [] })
+  if (!shift) {
+    return NextResponse.json({ shift: null, items: [], photos: [], crew: [], date: dateISO })
   }
 
-  if (!shift) {
-    const { items, signals } = await buildFor(dateISO)
-
-    const { data: created, error: createErr } = await supabase
-      .from('cleaning_shifts')
-      .insert([{ shift_date: dateISO, production_seen: signals }])
-      .select()
-      .single()
-    // A unique-violation means another phone opened the same night a moment
-    // ago. That's a race, not an error — fall through to reading theirs.
-    if (createErr && createErr.code !== '23505') {
-      return NextResponse.json({ error: createErr.message }, { status: 500 })
-    }
-
-    if (created) {
-      shift = created
-      if (items.length) {
-        const { error: itemsErr } = await supabase
-          .from('cleaning_shift_items')
-          .insert(items.map(i => ({ ...i, shift_id: created.id })))
-        if (itemsErr) return NextResponse.json({ error: itemsErr.message }, { status: 500 })
-      }
-    } else {
-      const { data: raced } = await supabase
-        .from('cleaning_shifts').select('*').eq('shift_date', dateISO).single()
-      shift = raced
-    }
-  } else if (refresh && !peek) {
+  if (refresh && shift.status === 'open') {
     // Add what's newly due; never remove or reset what the crew already
     // answered. Matching on task_id is what makes this safe to hit twice.
     const { items } = await buildFor(dateISO)
@@ -146,63 +62,98 @@ export async function GET(req: NextRequest) {
     const fresh = items.filter(i => i.task_id && !seen.has(i.task_id))
     if (fresh.length) {
       await supabase.from('cleaning_shift_items')
-        .insert(fresh.map(i => ({ ...i, shift_id: shift!.id })))
+        .insert(fresh.map(i => ({ ...i, shift_id: shift.id })))
     }
   }
 
-  if (!shift) return NextResponse.json({ error: 'could not open a shift' }, { status: 500 })
-
-  const [itemsRes, photosRes] = await Promise.all([
-    supabase.from('cleaning_shift_items').select('*')
-      .eq('shift_id', shift.id).order('sort_order', { ascending: true }),
-    supabase.from('cleaning_photos').select('*')
-      .eq('shift_id', shift.id).order('created_at', { ascending: true }),
-  ])
-
-  return NextResponse.json({
-    shift,
-    items:  itemsRes.data  ?? [],
-    photos: photosRes.data ?? [],
-  })
+  return NextResponse.json(await payload(shift as ShiftRow))
 }
 
-// Close out the night, or reopen one that was closed too early.
 export async function POST(req: NextRequest) {
   const body = await req.json()
-  const { shift_id, action, by, notes } = body as {
-    shift_id?: string; action?: string; by?: string; notes?: string
+  const { shift_id, action, by, by_id, notes } = body as {
+    shift_id?: string; action?: string; by?: string; by_id?: string; notes?: string
   }
+
+  // ── Start ────────────────────────────────────────────────────────────
+  if (action === 'start') {
+    if (!by?.trim()) {
+      return NextResponse.json({ error: 'Pick your name before starting the shift.' }, { status: 400 })
+    }
+    const dateISO = (body as { date?: string }).date || shiftDateFor(new Date(), isoDate())
+    const raw     = (body as { crew_ids?: unknown }).crew_ids
+    const crewIds = Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : []
+    // Whoever pressed the button is on shift even if they forgot to tick
+    // themselves.
+    if (by_id && !crewIds.includes(by_id)) crewIds.unshift(by_id)
+
+    const res = await startShift(dateISO, by.trim(), crewIds)
+    if ('error' in res) return NextResponse.json({ error: res.error }, { status: 500 })
+    return NextResponse.json({ ...(await payload(res.shift)), created: res.created })
+  }
+
   if (!shift_id) return NextResponse.json({ error: 'shift_id required' }, { status: 400 })
 
+  // ── Update crew / split / pre-op ─────────────────────────────────────
+  if (action === 'update') {
+    const b = body as { crew_ids?: unknown; area_assignments?: unknown; preop_time?: unknown }
+    const updates: Record<string, unknown> = {}
+
+    if (Array.isArray(b.crew_ids)) {
+      updates.crew_ids = b.crew_ids.filter((x): x is string => typeof x === 'string')
+    }
+    if (b.area_assignments && typeof b.area_assignments === 'object') {
+      updates.area_assignments = b.area_assignments
+    }
+    if (typeof b.preop_time === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(b.preop_time)) {
+      updates.preop_time = b.preop_time
+    }
+    if (!Object.keys(updates).length) {
+      return NextResponse.json({ error: 'nothing to update' }, { status: 400 })
+    }
+
+    // A crew change without an explicit split re-deals the default split, so
+    // a second person checking in late gets the B side without another tap.
+    if (updates.crew_ids && !updates.area_assignments) {
+      const { data: rows } = await supabase
+        .from('cleaning_shift_items').select('area_name').eq('shift_id', shift_id)
+      const areas = [...new Set((rows ?? []).map(r => r.area_name as string))]
+      updates.area_assignments = defaultAssignments(updates.crew_ids as string[], areas)
+    }
+
+    const { data, error } = await supabase
+      .from('cleaning_shifts').update(updates).eq('id', shift_id).select().single()
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ ...data, crew: await crewNamed(data.crew_ids) })
+  }
+
+  // ── Reopen ───────────────────────────────────────────────────────────
   if (action === 'reopen') {
     const { data, error } = await supabase
       .from('cleaning_shifts')
       .update({ status: 'open', closed_at: null, closed_by: null })
       .eq('id', shift_id).select().single()
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-    return NextResponse.json(data)
+    // Anything that rolled at close and hasn't been picked up since comes
+    // back onto the night's list.
+    await supabase.from('cleaning_shift_items')
+      .update({ status: 'pending' }).eq('shift_id', shift_id).eq('status', 'rolled')
+    return NextResponse.json({ ...data, crew: await crewNamed(data.crew_ids) })
   }
 
+  // ── Close ────────────────────────────────────────────────────────────
   if (!by?.trim()) {
     return NextResponse.json({ error: 'who is closing the shift is required' }, { status: 400 })
   }
+  const res = await closeShift(shift_id, by.trim(), notes !== undefined ? { notes } : {})
+  if ('error' in res) return NextResponse.json({ error: res.error }, { status: 500 })
 
-  // Closing with items still unanswered is allowed but reported back, so the
-  // lead sees the number rather than discovering it in the morning.
-  const { data: items } = await supabase
-    .from('cleaning_shift_items').select('status').eq('shift_id', shift_id)
-  const pending = (items ?? []).filter(i => i.status === 'pending').length
-
-  const { data, error } = await supabase
-    .from('cleaning_shifts')
-    .update({
-      status:    'closed',
-      closed_at: new Date().toISOString(),
-      closed_by: by.trim(),
-      notes:     notes?.trim() || null,
-    })
-    .eq('id', shift_id).select().single()
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-
-  return NextResponse.json({ ...data, pending_at_close: pending })
+  // Closing with P1 still open is allowed but reported back, so the lead sees
+  // the number rather than discovering it in the morning.
+  return NextResponse.json({
+    ...res.shift,
+    crew:             await crewNamed(res.shift.crew_ids),
+    rolled_count:     res.rolled,
+    pending_at_close: res.pending_p1,
+  })
 }

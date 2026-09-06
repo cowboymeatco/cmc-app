@@ -132,7 +132,7 @@ function printAntemortem(data: HACCPData, date: string) {
       ${docHeader('Antemortem Pen Card', pNum, pTotal)}
       <h2>Live Animal Receiving Log
         <span style="font-size:10pt;font-weight:normal;margin-left:2in">
-          <strong>Slaughter Date:</strong> ${fmtDate(date)}
+          <strong>Harvest Date:</strong> ${fmtDate(date)}
         </span>
         <span style="font-size:10pt;font-weight:normal;float:right">
           Page ${pNum} of ${pTotal}
@@ -311,7 +311,7 @@ function printChillingForm(data: HACCPData, date: string) {
         </tr>
         <tr>
           <td colspan="3" style="border:1px solid #000;padding:3px 8px;text-align:center">
-            <strong>Frequency:</strong> 1–3 carcasses in the Drip Cooler within 24 hours of Slaughter
+            <strong>Frequency:</strong> 1–3 carcasses in the Drip Cooler within 24 hours of Harvest
             &nbsp;&nbsp; <strong>Harvest Date:</strong> ${new Date(date + 'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}
           </td>
         </tr>
@@ -497,8 +497,8 @@ export default function HACCPPage() {
             number="6b"
             title="Carcass Chilling"
             subtitle="Surface temp · Cooler temp · Zone"
-            desc="Post-slaughter chill readings — cooler temp, carcass surface temp by zone. Typically logged the day after kill."
-            frequency="Day after slaughter"
+            desc="Post-harvest chill readings — cooler temp, carcass surface temp by zone. Typically logged the day after kill."
+            frequency="Day after harvest"
             count={loaded && data ? data.chillLogs.length : null}
             countLabel="readings"
             color="#4CAF50"

@@ -2,6 +2,7 @@ export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import type { ItemStatus } from '@/lib/cleaning'
+import { stampP1 } from '@/lib/cleaningShiftServer'
 
 // PATCH /api/cleaning/shift-items — answer one item
 // POST  /api/cleaning/shift-items — add an ad-hoc item to tonight's list
@@ -10,6 +11,8 @@ import type { ItemStatus } from '@/lib/cleaning'
 // phone at 10pm. It has to be one round trip and it has to be idempotent, so
 // double-taps and flaky signal retries can't corrupt the record.
 
+// 'rolled' is deliberately absent: only close-out rolls an item. A phone can
+// finish a rolled item (done / na) but can never put one back to rolled.
 const VALID: ItemStatus[] = ['pending', 'done', 'na', 'issue']
 
 export async function PATCH(req: NextRequest) {
@@ -26,7 +29,7 @@ export async function PATCH(req: NextRequest) {
 
   const { data: item, error: findErr } = await supabase
     .from('cleaning_shift_items')
-    .select('id, shift_id, requires_photo, input_type, status')
+    .select('id, shift_id, requires_photo, input_type, status, priority')
     .eq('id', id)
     .single()
   if (findErr || !item) return NextResponse.json({ error: 'item not found' }, { status: 404 })
@@ -34,12 +37,22 @@ export async function PATCH(req: NextRequest) {
   // Refuse to write into a closed night. The record for a shift stops moving
   // when the shift is closed — reopening it is a deliberate act with a name on
   // it, not something a stale phone tab does by accident.
+  //
+  // The one exception is a rolled item: it was handed to the morning
+  // precisely so someone could finish it after close.
   const { data: shift } = await supabase
     .from('cleaning_shifts').select('status').eq('id', item.shift_id).single()
-  if (shift?.status === 'closed') {
+  const morning = item.status === 'rolled'
+  if (shift?.status === 'closed' && !morning) {
     return NextResponse.json(
       { error: 'This shift is closed. Reopen it before changing anything.' },
       { status: 409 },
+    )
+  }
+  if (morning && status && status !== 'done' && status !== 'na') {
+    return NextResponse.json(
+      { error: 'A rolled item can only be finished or marked not applicable.' },
+      { status: 400 },
     )
   }
 
@@ -86,15 +99,21 @@ export async function PATCH(req: NextRequest) {
     .from('cleaning_shift_items').update(updates).eq('id', id).select().single()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  return NextResponse.json(data)
+  // A P1 answer may have just finished (or un-finished) P1 for the night. The
+  // stamp lives on the shift so the record and the review read the same time.
+  const p1_complete_at = item.priority === 1 && status
+    ? await stampP1(item.shift_id)
+    : undefined
+
+  return NextResponse.json(p1_complete_at === undefined ? data : { ...data, p1_complete_at })
 }
 
 // Something that needs doing tonight but isn't on the template.
 export async function POST(req: NextRequest) {
   const body = await req.json()
-  const { shift_id, title, detail, area_name, asset_id, equipment_name, by } = body as {
+  const { shift_id, title, detail, area_name, asset_id, equipment_name, by, priority } = body as {
     shift_id?: string; title?: string; detail?: string; area_name?: string
-    asset_id?: string; equipment_name?: string; by?: string
+    asset_id?: string; equipment_name?: string; by?: string; priority?: number
   }
 
   if (!shift_id || !title?.trim()) {
@@ -119,6 +138,8 @@ export async function POST(req: NextRequest) {
       equipment_name: equipment_name ?? null,
       source:         'manual',
       sort_order:     ((last?.[0]?.sort_order as number) ?? 0) + 10,
+      // Added-tonight items default to P2 unless the adder says otherwise.
+      priority:       priority === 1 || priority === 3 ? priority : 2,
     }])
     .select().single()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

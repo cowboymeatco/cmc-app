@@ -181,6 +181,20 @@ interface SmokehouseData {
   feedStale: boolean
 }
 
+// Cleaning shifts — see /api/exec/cleaning.
+interface CleaningShiftRow {
+  shift_date: string; status: string
+  crew: string[]; started_by: string | null
+  started_at: string | null; closed_at: string | null; closed_by: string | null
+  auto_closed: boolean; hours: number | null
+  p1_complete_at: string | null
+  p1_done: number; p1_total: number
+  p2_done: number; p2_total: number; p2_pct: number | null
+  p3_done: number; p3_total: number
+  rolled: number
+}
+interface CleaningData { days: number; since: string; shifts: CleaningShiftRow[] }
+
 // Inventory at sales price — see /api/exec/inventory.
 interface InventoryWeek { week: string; packedLbs: number; packedRetail: number; soldRetail: number | null }
 interface InventoryData {
@@ -870,6 +884,7 @@ export default function ExecPage() {
   const [smoke, setSmoke] = useState<SmokehouseData | null>(null)
   const [revenue, setRevenue] = useState<RevenueData | null>(null)
   const [inventory, setInventory] = useState<InventoryData | null>(null)
+  const [cleaning, setCleaning] = useState<CleaningData | null>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
 
   const [period, setPeriod] = useState<PeriodKey>('ttm')
@@ -904,6 +919,7 @@ export default function ExecPage() {
     grab<TurnoverData>('/api/exec/turnover?months=12', setTurnover, 'turnover')
     grab<SmokehouseData>('/api/exec/smokehouse?weeks=12', setSmoke, 'smokehouse')
     grab<InventoryData>('/api/exec/inventory?weeks=8', setInventory, 'inventory')
+    grab<CleaningData>('/api/exec/cleaning?days=14', setCleaning, 'cleaning')
   }
 
   const changePeriod = (p: PeriodKey) => {
@@ -1353,7 +1369,7 @@ export default function ExecPage() {
           {/* Kill to invoice to cash. How long the plant's money sits inside an
               animal before anyone asks for it back, and then how long before it
               actually arrives (Charlie, 2026-08-22 and 2026-08-24). */}
-          <SectionLabel>Turnover — slaughter to invoice to paid{turnover ? `, last ${turnover.months} months` : ''}</SectionLabel>
+          <SectionLabel>Turnover — harvest to invoice to paid{turnover ? `, last ${turnover.months} months` : ''}</SectionLabel>
           {errors.turnover ? <ErrorBox msg={errors.turnover} /> : !turnover ? (
             <div style={{ color: C.lightBrown, fontSize: '0.85rem' }}>Reading invoices…</div>
           ) : turnover.coverage.matched === 0 ? (
@@ -1463,7 +1479,7 @@ export default function ExecPage() {
                 {turnover.coverage.ambiguous > 0 && (
                   <> {turnover.coverage.ambiguous} left out for being billed too often to tell which invoice was the animal.</>
                 )}
-                {' '}QuickBooks and the kill floor share no id, so buyers are matched by name —
+                {' '}QuickBooks and the harvest floor share no id, so buyers are matched by name —
                 linking a customer to QuickBooks on Processing → QuickBooks makes their animals count here exactly.
               </div>
             </>
@@ -1552,6 +1568,71 @@ export default function ExecPage() {
                   </div>
                 </>
               )}
+            </>
+          )}
+
+          {/* The night crew had been running 12+ hours with the app showing
+              near-zero completion and no shift ever closed. Start and close
+              are real events now, so this is the hours-on-shift number
+              (Charlie, 2026-09-05). */}
+          <SectionLabel>Cleaning — last {cleaning?.days ?? 14} nights</SectionLabel>
+          {errors.cleaning ? <ErrorBox msg={errors.cleaning} /> : !cleaning ? (
+            <div style={{ color: C.lightBrown, fontSize: '0.85rem' }}>Loading…</div>
+          ) : cleaning.shifts.length === 0 ? (
+            <div style={{ color: C.lightBrown, fontSize: '0.85rem' }}>No cleaning shifts in the window.</div>
+          ) : (
+            <>
+              <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '0.75rem 1.25rem', overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', color: C.tan }}>
+                  <thead>
+                    <tr style={{ color: C.lightBrown, textTransform: 'uppercase', fontSize: '0.65rem', letterSpacing: '0.08em' }}>
+                      <th style={{ textAlign: 'left', padding: '0.35rem 0.5rem' }}>Night</th>
+                      <th style={{ textAlign: 'left', padding: '0.35rem 0.5rem' }}>Crew</th>
+                      <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Start</th>
+                      <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Close</th>
+                      <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Hours</th>
+                      <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>P1 done</th>
+                      <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>P1 complete</th>
+                      <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>P2 %</th>
+                      <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Rolled</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cleaning.shifts.map(s => {
+                      const clock = (iso: string | null) => iso
+                        ? new Date(iso).toLocaleTimeString('en-US', { timeZone: 'America/Denver', hour: 'numeric', minute: '2-digit' })
+                        : '—'
+                      const p1ok = s.p1_total > 0 && s.p1_done === s.p1_total
+                      return (
+                        <tr key={s.shift_date} style={{ borderTop: '1px solid rgba(166,120,90,0.12)' }}>
+                          <td style={{ padding: '0.35rem 0.5rem', whiteSpace: 'nowrap' }}>{s.shift_date}{s.status === 'open' ? ' · open' : ''}</td>
+                          <td style={{ padding: '0.35rem 0.5rem' }}>{s.crew.length ? s.crew.join(', ') : (s.started_by ?? '—')}</td>
+                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', whiteSpace: 'nowrap' }}>{clock(s.started_at)}</td>
+                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', whiteSpace: 'nowrap', color: s.auto_closed ? WARN_COLOR : C.tan }}>
+                            {s.closed_at ? clock(s.closed_at) : s.status === 'closed' ? '—' : 'open'}{s.auto_closed && s.closed_at ? ' auto' : ''}
+                          </td>
+                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', fontWeight: 600, color: s.hours == null ? C.lightBrown : s.hours > 8.5 ? COST_COLOR : C.cream }}>
+                            {s.hours != null ? s.hours.toFixed(1) : '—'}
+                          </td>
+                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', color: p1ok ? INCOME_COLOR : s.p1_total ? COST_COLOR : C.lightBrown }}>
+                            {s.p1_total ? `${s.p1_done}/${s.p1_total}` : '—'}
+                          </td>
+                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', whiteSpace: 'nowrap', color: s.p1_complete_at ? INCOME_COLOR : C.lightBrown }}>
+                            {s.p1_complete_at ? clock(s.p1_complete_at) : '—'}
+                          </td>
+                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>{s.p2_pct != null ? `${s.p2_pct}%` : '—'}</td>
+                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', color: s.rolled ? WARN_COLOR : C.tan }}>{s.rolled}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ fontSize: '0.7rem', color: C.lightBrown, marginTop: '0.5rem' }}>
+                Hours = close minus Start. Shift is 5:00 PM to a 1:30 AM hard stop (8.0 h + unpaid lunch); anything over 8.5 is orange.
+                &quot;auto&quot; means nobody closed it and the 3:00 AM clock did, so those hours are a cap, not a measurement.
+                Nights before 2026-09-05 were closed in bulk and carry no close time.
+              </div>
             </>
           )}
 

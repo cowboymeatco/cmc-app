@@ -82,7 +82,7 @@ function HarvestDayRow({ day }: { day: HarvestDay }) {
         </span>
       )}
       <span style={{ color: C.lightBrown, fontSize: '0.64rem', fontStyle: 'italic', whiteSpace: 'nowrap' }}>
-        no cutting — crew is on the kill floor
+        no cutting — crew is on the harvest floor
       </span>
     </div>
   )
@@ -1391,7 +1391,7 @@ export default function CutScheduleTab() {
             <span>⠿ Drag to reorder</span>
             <span style={{ color: C.red }}>→ Drag a row onto the No Cut Day box to take its day off</span>
             <span style={{ color: C.amber }}>➕ Day Break = start of a cutting day; totals the carcasses below it (drag to move) · one per date</span>
-            <span style={{ color: C.tan }}>🔪 Harvest day = booked on the kill floor, nothing cut that day (from the harvest calendar — not editable here)</span>
+            <span style={{ color: C.tan }}>🔪 Harvest day = booked on the harvest floor, nothing cut that day (from the harvest calendar — not editable here)</span>
             <span>→ = days hung by the day it&apos;s scheduled to be cut</span>
             <span>🔒 Lock = pin when recalculating</span>
             <span style={{ color: C.red }}>⚠ Missing = named customer, cut sheet not in yet</span>

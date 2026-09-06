@@ -394,7 +394,7 @@ async function carcassInfoForAppt(ci: RawInstruction, appt: HarvestAppointment, 
   }
 }
 
-// Scheduled slaughter date, and whether anything has actually confirmed it.
+// Scheduled harvest date, and whether anything has actually confirmed it.
 //
 // A linked appointment carries the plant's own harvest date — that's fact. The
 // v2 form date is whatever the customer typed when they filled the sheet in,
@@ -402,7 +402,7 @@ async function carcassInfoForAppt(ci: RawInstruction, appt: HarvestAppointment, 
 // "Sat Aug 1" for animals harvested that Monday (Charlie, 2026-08-07). Both are
 // worth showing — Jill uses the customer's date to find the right animal — but
 // only one is worth reading as the harvest date, so callers get told which.
-function slaughterDateFor(
+function harvestDateFor(
   ci: RawInstruction,
   appointments: HarvestAppointment[],
 ): { date: string | null; scheduled: boolean } {
@@ -739,8 +739,8 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
   const carcasses   = carcassList.length ? carcassList : [EMPTY_CARCASS]
   const d = ci.data ?? {}
   // Prefer the plant's own harvest date over whatever the customer typed on
-  // the intake form — see slaughterDateFor for why the two disagree.
-  const harvestDate = slaughterDateFor(ci, appointments).date ?? d.killDate ?? '—'
+  // the intake form — see harvestDateFor for why the two disagree.
+  const harvestDate = harvestDateFor(ci, appointments).date ?? d.killDate ?? '—'
   const species = ci.data?.species ?? ci.species ?? 'Beef'
   const name = d.customerName ?? '—'
   const sp = species.toLowerCase()
@@ -1681,9 +1681,9 @@ export default function CuttingInstructionsPage() {
   const [selected, setSelected]         = useState<RawInstruction | null>(null)
   const [filterStatus, setFilterStatus] = useState<string>('all')
   const [filterSpecies, setFilterSpecies] = useState<string>('all')
-  // Slaughter (kill) date filter — Jill works a kill day at a time when linking
+  // Harvest (kill) date filter — Jill works a kill day at a time when linking
   // cut sheets to animals (Jill, 2026-07-29). '' = all dates.
-  const [filterSlaughter, setFilterSlaughter] = useState<string>('')
+  const [filterHarvest, setFilterHarvest] = useState<string>('')
   // Free-text search across the card (Charlie, 2026-08-11). 141 cards is already
   // more than the status/species/date chips can narrow to one row, and the thing
   // you know is usually a name, a phone number or a carcass tag.
@@ -1930,9 +1930,9 @@ export default function CuttingInstructionsPage() {
       const match = filterSpecies === 'Hog' ? (species === 'Hog' || species === 'Pork') : species === filterSpecies
       if (!match) return false
     }
-    if (filterSlaughter) {
-      const sd = slaughterDateFor(i, appointments).date
-      if (filterSlaughter === '__none__' ? !!sd : sd !== filterSlaughter) return false
+    if (filterHarvest) {
+      const sd = harvestDateFor(i, appointments).date
+      if (filterHarvest === '__none__' ? !!sd : sd !== filterHarvest) return false
     }
     return true
   })
@@ -1942,18 +1942,18 @@ export default function CuttingInstructionsPage() {
     ? instructions.filter(i => terms.every(t => haystack(i).includes(t))).length - filtered.length
     : 0
 
-  // Slaughter dates present in the active (non-archived) cards, newest first, for
+  // Harvest dates present in the active (non-archived) cards, newest first, for
   // the filter dropdown. A card with no scheduled kill date falls under "— none —".
-  const activeSlaughter = instructions
+  const activeHarvest = instructions
     .filter(i => i.status !== 'archived')
-    .map(i => slaughterDateFor(i, appointments))
-  const slaughterDates = Array.from(new Set(
-    activeSlaughter.map(s => s.date).filter((d): d is string => !!d)
+    .map(i => harvestDateFor(i, appointments))
+  const harvestDates = Array.from(new Set(
+    activeHarvest.map(s => s.date).filter((d): d is string => !!d)
   )).sort((a, b) => b.localeCompare(a))
   // A date nothing is linked to is a date only customers have vouched for —
   // the dropdown says so rather than offering it as a harvest day.
-  const scheduledDates = new Set(activeSlaughter.filter(s => s.scheduled).map(s => s.date))
-  const anyNoSlaughter = activeSlaughter.some(s => !s.date)
+  const scheduledDates = new Set(activeHarvest.filter(s => s.scheduled).map(s => s.date))
+  const anyNoHarvest = activeHarvest.some(s => !s.date)
 
   const pendingCount  = instructions.filter(i => i.status === 'pending').length
   const linkedCount   = instructions.filter(i => i.status === 'linked').length
@@ -2144,7 +2144,7 @@ export default function CuttingInstructionsPage() {
 
   // Null when there's nothing to check against yet (no tag in the name, or
   // this appointment's animals haven't been ear-tagged at receiving) — silence
-  // beats a false alarm on a booking that's still ahead of the kill floor.
+  // beats a false alarm on a booking that's still ahead of the harvest floor.
   function earTagMismatch(apptId: string, customerName: string): string | null {
     const named = embeddedEarTag(customerName)
     if (!named) return null
@@ -2252,25 +2252,25 @@ export default function CuttingInstructionsPage() {
             {/* Harvest date — Jill links a harvest day at a time. "Kill" is not
                 a word we put in front of anyone (Charlie, 2026-08-04). */}
             <select
-              value={filterSlaughter}
-              onChange={e => setFilterSlaughter(e.target.value)}
+              value={filterHarvest}
+              onChange={e => setFilterHarvest(e.target.value)}
               title="Filter by scheduled harvest date"
               style={{
-                background: filterSlaughter ? 'var(--med-brown)' : 'rgba(0,0,0,0.25)',
-                color: filterSlaughter ? 'var(--cream)' : 'var(--tan)',
+                background: filterHarvest ? 'var(--med-brown)' : 'rgba(0,0,0,0.25)',
+                color: filterHarvest ? 'var(--cream)' : 'var(--tan)',
                 border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3,
                 padding: '0.3rem 0.5rem', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer', outline: 'none',
               }}
             >
               <option value="">🔪 All harvest dates</option>
-              {slaughterDates.map(d => (
+              {harvestDates.map(d => (
                 <option key={d} value={d}>
                   {scheduledDates.has(d) ? '' : '~ '}
                   {new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
                   {scheduledDates.has(d) ? '' : ' (customer’s date)'}
                 </option>
               ))}
-              {anyNoSlaughter && <option value="__none__">— no harvest date —</option>}
+              {anyNoHarvest && <option value="__none__">— no harvest date —</option>}
             </select>
             <div style={{ position: 'relative', flex: '1 1 220px', minWidth: 180 }}>
               <span style={{ position: 'absolute', left: '0.5rem', top: '50%', transform: 'translateY(-50%)', fontSize: '0.8rem', pointerEvents: 'none', opacity: 0.7 }}>🔍</span>
@@ -2328,7 +2328,7 @@ export default function CuttingInstructionsPage() {
                 {terms.length > 0 && elsewhereCount > 0 ? (
                   <p style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>
                     {elsewhereCount} match{elsewhereCount === 1 ? 'es' : ''} outside these filters —{' '}
-                    <button onClick={() => { setFilterStatus('all'); setFilterSpecies('all'); setFilterSlaughter('') }}
+                    <button onClick={() => { setFilterStatus('all'); setFilterSpecies('all'); setFilterHarvest('') }}
                       style={{ background: 'none', border: 'none', color: 'var(--cream)', textDecoration: 'underline', cursor: 'pointer', font: 'inherit', padding: 0 }}>
                       clear the filters
                     </button>.
@@ -2350,7 +2350,7 @@ export default function CuttingInstructionsPage() {
                     title="Select all shown / none"
                     style={{ width: 15, height: 15, accentColor: 'var(--tan)', cursor: 'pointer' }}
                   />
-                  {['Customer','Species','Submitted','Slaughter','Status'].map(h => (
+                  {['Customer','Species','Submitted','Harvest','Status'].map(h => (
                     <div key={h} style={{ fontSize: '0.62rem', color: 'var(--light-brown)', textTransform: 'uppercase', letterSpacing: '0.1em', whiteSpace: 'nowrap' }}>{h}</div>
                   ))}
                 </div>
@@ -2359,7 +2359,7 @@ export default function CuttingInstructionsPage() {
                   const name      = d.customerName ?? '—'
                   const species   = speciesOf(ci)
                   const isSel     = selected?.id === ci.id
-                  const slaughter = slaughterDateFor(ci, appointments)
+                  const harvest = harvestDateFor(ci, appointments)
                   return (
                     <div key={ci.id} onClick={() => setSelected(isSel ? null : ci)}
                       style={{ display: 'grid', gridTemplateColumns: LIST_GRID_COLS, gap: '0.5rem', alignItems: 'center', padding: '0.7rem 1.1rem', borderBottom: '1px solid rgba(166,120,90,0.1)', cursor: 'pointer', background: isSel ? 'rgba(117,71,27,0.3)' : 'transparent', transition: 'background 0.15s' }}>
@@ -2392,15 +2392,15 @@ export default function CuttingInstructionsPage() {
                       {/* An unconfirmed date is dimmed and prefixed "~" so it
                           can't be read as the day the animal was killed. */}
                       <div
-                        title={slaughter.date && !slaughter.scheduled
+                        title={harvest.date && !harvest.scheduled
                           ? 'The date the customer wrote on their own form. This card is not linked to a harvest appointment yet, so nothing has confirmed it.'
                           : undefined}
                         style={{
                           fontSize: '0.78rem', whiteSpace: 'nowrap',
-                          color: !slaughter.date ? 'rgba(166,120,90,0.5)' : slaughter.scheduled ? 'var(--cream)' : 'var(--tan)',
-                          fontStyle: slaughter.date && !slaughter.scheduled ? 'italic' : undefined,
+                          color: !harvest.date ? 'rgba(166,120,90,0.5)' : harvest.scheduled ? 'var(--cream)' : 'var(--tan)',
+                          fontStyle: harvest.date && !harvest.scheduled ? 'italic' : undefined,
                         }}>
-                        {slaughter.date && !slaughter.scheduled ? '~' : ''}{fmtShortDate(slaughter.date)}
+                        {harvest.date && !harvest.scheduled ? '~' : ''}{fmtShortDate(harvest.date)}
                       </div>
                       <div><StatusBadge status={ci.status} needsCarcass={(carcassStates[ci.id] ?? []).some(s => s.state === 'ambiguous')} /></div>
                     </div>

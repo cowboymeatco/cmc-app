@@ -393,7 +393,7 @@ function UploadCard({ onUploaded }: { onUploaded: (msg: string) => void }) {
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '0.75rem', marginBottom: '0.75rem' }}>
         <div>
           <label style={LABEL}>Title</label>
-          <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Beef Slaughter HACCP Plan" style={INPUT} />
+          <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Beef Harvest HACCP Plan" style={INPUT} />
         </div>
         <div>
           <label style={LABEL}>Uploaded by</label>

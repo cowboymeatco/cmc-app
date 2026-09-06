@@ -2,7 +2,7 @@
 //
 // The P&L recognizes a job on its INVOICE date, which at a custom plant is
 // pickup day — often weeks after the work, and lumped in with everything else
-// on that invoice. So "how did the kill floor do this week against the cut
+// on that invoice. So "how did the harvest floor do this week against the cut
 // floor" has no answer in QuickBooks (Charlie, 2026-08-27).
 //
 // This recognizes each service on the day the work happens: the kill fee on
@@ -23,7 +23,7 @@ export type EnterpriseKey = 'harvest' | 'processing' | 'valueAdd' | 'retail' | '
 /** Where an enterprise's numbers come from. The two are not interchangeable and
  *  the page says which is which:
  *  - 'schedule': modelled from the plant's own records at the QBO service rates.
- *    The only way to separate the kill floor from the cut floor, because
+ *    The only way to separate the harvest floor from the cut floor, because
  *    QuickBooks posts both to one "CMC Custom … Processing" account. Carries a
  *    forward book.
  *  - 'books': the actual daily P&L. Nothing schedules a walk-in or a pallet
@@ -55,7 +55,7 @@ export const ENTERPRISES: { key: EnterpriseKey; label: string; source: Enterpris
 // Wild game sits with value add (Charlie, 2026-08-27) — it is the same
 // smokehouse, the same sausage kitchen and the same crew, billed off its own
 // rate card. $23k over the two years to Aug 2026, and it lands in the fall,
-// so it stops being a rounding error exactly when the kill floor slows down.
+// so it stops being a rounding error exactly when the harvest floor slows down.
 //
 // Deliberately unmapped, and reported separately underneath: the custom
 // kill & processing accounts (that money is what the schedule-fed harvest and
@@ -114,7 +114,7 @@ export interface HarvestRow {
   appointment_id: string | null
 }
 
-/** A booked harvest that hasn't (fully) reached the kill floor yet. */
+/** A booked harvest that hasn't (fully) reached the harvest floor yet. */
 export interface AppointmentRow {
   id: string
   harvest_date: string
@@ -371,7 +371,7 @@ export function buildRevenueRecognition(input: BuildInput): RevenueRecognition {
     const tag = h.carcass_tag || h.id.slice(0, 8)
 
     // Own animals never generate a service charge — their money shows up in
-    // retail when the cuts sell, not here. They still cost a kill-floor day,
+    // retail when the cuts sell, not here. They still cost a harvest-floor day,
     // so the head count stays visible.
     if (isExcludedProducer(h.producer ?? '')) {
       coverage.ownHead += 1
@@ -403,7 +403,7 @@ export function buildRevenueRecognition(input: BuildInput): RevenueRecognition {
         unpriced.add(`${species}: no kill rate${lbs ? '' : ' and no carcass weight'}`)
       }
     } else if (inWindow(h.harvest_date)) {
-      // Still a head through the kill floor, just not a separate charge.
+      // Still a head through the harvest floor, just not a separate charge.
       dayOf(h.harvest_date).headHarvested += 1
     }
 
@@ -434,7 +434,7 @@ export function buildRevenueRecognition(input: BuildInput): RevenueRecognition {
     }
   }
 
-  // ── Booked head that hasn't reached the kill floor ───────────────────────────
+  // ── Booked head that hasn't reached the harvest floor ───────────────────────────
   // head_count minus whatever the harvest log already holds for that booking,
   // so a part-killed day isn't counted twice.
   const harvestedByAppt = new Map<string, number>()
@@ -513,7 +513,7 @@ export function buildRevenueRecognition(input: BuildInput): RevenueRecognition {
     const earned = sum(d => d.earned[e.key])
     const scheduled = sum(d => d.scheduled[e.key])
     const total = earned + scheduled
-    // Head is a kill-floor / cut-floor count. Retail and the smokehouse are
+    // Head is a harvest-floor / cut-floor count. Retail and the smokehouse are
     // measured in dollars off the books, not in animals.
     const head = e.key === 'harvest' ? sum(d => d.headHarvested)
       : e.key === 'processing' ? sum(d => d.headCut)

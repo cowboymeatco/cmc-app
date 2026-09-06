@@ -16,6 +16,9 @@ interface HubState {
   urgent: number
   supplies: number
   out:    number
+  /** Items rolled from the last shift, still open for the first cutter. */
+  rolled: number
+  pastPreop: boolean
 }
 
 export default function CleaningHub() {
@@ -25,25 +28,29 @@ export default function CleaningHub() {
 
   useEffect(() => {
     Promise.allSettled([
-      // peek=1 — glancing at the hub must not open the night. Building the list
-      // freezes what's on it, and someone checking in at 9am would freeze it
-      // before the day's production had happened. Tapping through to the list
-      // is what starts the shift.
-      fetch('/api/cleaning/shift?peek=1').then(r => r.json()),
+      // Reading never opens a night any more — only "Start shift" does — so
+      // glancing at the hub at 9am is safe.
+      fetch('/api/cleaning/shift').then(r => r.json()),
       fetch('/api/cleaning/issues?status=open').then(r => r.json()),
       fetch('/api/cleaning/supply-requests?status=open').then(r => r.json()),
-    ]).then(([shiftRes, issuesRes, supplyRes]) => {
+      // Also closes anything still open past 3 AM, which is the right side
+      // effect for the first screen anyone opens in the morning.
+      fetch('/api/cleaning/morning').then(r => r.json()),
+    ]).then(([shiftRes, issuesRes, supplyRes, morningRes]) => {
       const shiftBody = shiftRes.status  === 'fulfilled' ? shiftRes.value  : null
       const issues    = issuesRes.status === 'fulfilled' && Array.isArray(issuesRes.value) ? issuesRes.value : []
       const supplies  = supplyRes.status === 'fulfilled' && Array.isArray(supplyRes.value) ? supplyRes.value : []
+      const morning   = morningRes.status === 'fulfilled' ? morningRes.value : null
 
       setState({
-        shift:    shiftBody?.shift ?? null,
-        items:    shiftBody?.items ?? [],
-        issues:   issues.length,
-        urgent:   issues.filter((i: { severity: string }) => i.severity === 'urgent').length,
-        supplies: supplies.length,
-        out:      supplies.filter((s: { urgency: string }) => s.urgency === 'out').length,
+        shift:     shiftBody?.shift ?? null,
+        items:     shiftBody?.items ?? [],
+        issues:    issues.length,
+        urgent:    issues.filter((i: { severity: string }) => i.severity === 'urgent').length,
+        supplies:  supplies.length,
+        out:       supplies.filter((s: { urgency: string }) => s.urgency === 'out').length,
+        rolled:    Array.isArray(morning?.rolled) ? morning.rolled.length : 0,
+        pastPreop: Boolean(morning?.past_preop),
       })
     })
   }, [])
@@ -121,7 +128,7 @@ export default function CleaningHub() {
             ) : (
               <div style={{ color: C.tan, fontSize: 14 }}>
                 {!state       ? 'Loading…'
-                 : !state.shift ? 'Not started yet — tap to build tonight’s list'
+                 : !state.shift ? 'Not started — tap to start the shift'
                  : 'Nothing came due tonight.'}
               </div>
             )}
@@ -130,6 +137,13 @@ export default function CleaningHub() {
 
         {/* The rest */}
         <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr 1fr' }}>
+          <HubTile
+            href="/cleaning/morning"
+            icon="🌅"
+            title="Morning list"
+            sub={!state ? '—' : state.rolled > 0 ? `${state.rolled} rolled from last night` : 'Nothing rolled over'}
+            alert={state ? state.pastPreop : false}
+          />
           <HubTile
             href="/cleaning/map"
             icon="🗺️"

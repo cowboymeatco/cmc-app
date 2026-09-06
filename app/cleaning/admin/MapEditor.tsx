@@ -239,7 +239,7 @@ export default function MapEditor({ onError }: { onError: (e: string) => void })
             // 2026-08-23). Long names now break at a space and shrink until
             // they fit the room they belong to, with a clip as the guarantee.
             const px    = (n: number) => n / scale
-            // A closet can't spare the same margin a kill floor can.
+            // A closet can't spare the same margin a harvest floor can.
             const pad   = Math.min(px(10), r.w * 0.12)
             const inner = Math.max(px(14), r.w - pad * 2)
             const fit   = (text: string) =>

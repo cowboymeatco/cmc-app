@@ -633,7 +633,7 @@ function AnimalCard({ index, total, species, slot, onChange, onPhotoChange, appo
             {/* Over/Under 30 months — Beef only */}
             {species === 'Beef' && (
               <div>
-                <label style={LABEL}>Age at Slaughter</label>
+                <label style={LABEL}>Age at Harvest</label>
                 <div style={{ display: 'flex', gap: '0.4rem' }}>
                   <button
                     onClick={() => onChange({ over_30_months: false })}

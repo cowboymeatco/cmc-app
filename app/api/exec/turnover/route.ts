@@ -9,10 +9,10 @@ import { nameKey } from '@/lib/nameKey'
 // GET /api/exec/turnover — how long a carcass takes to turn into a bill, and
 // then into money.
 //
-// Charlie's question (2026-08-22): "days from slaughter (first labor) to
+// Charlie's question (2026-08-22): "days from harvest (first labor) to
 // invoice (asking for money) … per species". That's how long the plant's
 // money sits in an animal, which is the denominator under profit per head.
-// Then (2026-08-24) "can we add a slaughter til invoice paid? That way we know
+// Then (2026-08-24) "can we add a harvest til invoice paid? That way we know
 // when we are getting paid?" — so each animal is followed one step further, to
 // the day the invoice that covers it finished being paid.
 //

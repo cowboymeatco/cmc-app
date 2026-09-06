@@ -12,6 +12,14 @@
     {
       "path": "/api/exec/labor",
       "schedule": "0 12 * * 4"
+    },
+    {
+      "path": "/api/cron/cleaning-close",
+      "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/cleaning-close",
+      "schedule": "0 10 * * *"
     }
   ]
 }

@@ -140,7 +140,7 @@ export default function Dashboard() {
     {
       href: '/harvest',   icon: '🐄', color: '#A78BFA',
       title: 'Harvest',
-      desc:  'Kill floor · CCP · Chill log',
+      desc:  'Harvest floor · CCP · Chill log',
       when:  'Kill day — weights & temps',
       count: harvest,
     },

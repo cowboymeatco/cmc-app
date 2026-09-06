@@ -31,7 +31,7 @@ export const PRODUCTION_SIGNALS = ['harvest', 'cut', 'package', 'smoke'] as cons
 export type ProductionSignal = typeof PRODUCTION_SIGNALS[number]
 
 export const SIGNAL_LABEL: Record<ProductionSignal, string> = {
-  harvest: 'Harvest / kill floor',
+  harvest: 'Harvest floor',
   cut:     'Cutting & breaking',
   package: 'Packaging',
   smoke:   'Smokehouse',
@@ -50,6 +50,29 @@ export const SIGNAL_SOURCE: Record<ProductionSignal, string> = {
 export const FREQUENCIES = ['daily', 'weekly', 'monthly', 'quarterly'] as const
 export type Frequency = typeof FREQUENCIES[number]
 
+// ── Priority tiers ──────────────────────────────────────────────────────
+//
+// The list is a forcing function, not a wish list. P1 is what the plant
+// cannot open without; it has to be finished inside the shift. P2 is done as
+// time allows. P3 is restoration work that is allowed to spill over to the
+// first cutter in the morning. The tier lives on the task AND is copied to
+// every shift item, so the night's record keeps the tier it was judged by.
+
+export type Priority = 1 | 2 | 3
+export const PRIORITIES: Priority[] = [1, 2, 3]
+
+export const PRIORITY_LABEL: Record<Priority, string> = {
+  1: 'Must finish tonight',
+  2: 'As time allows',
+  3: 'Rolls to the morning',
+}
+
+export const PRIORITY_BLURB: Record<Priority, string> = {
+  1: 'Anything product touches, the defect check, building secure.',
+  2: 'Floors, drains, walls, sinks, coolers, trash, bathrooms.',
+  3: 'Pens, skid steer, rugs, shelves, sidewalk, office, tidy-up.',
+}
+
 export const PHASES = ['teardown', 'clean', 'reassemble'] as const
 export type Phase = typeof PHASES[number]
 
@@ -59,7 +82,9 @@ export const PHASE_LABEL: Record<Phase, string> = {
   reassemble: 'Put back together',
 }
 
-export type ItemStatus  = 'pending' | 'done' | 'na' | 'issue'
+// 'rolled' is what a P2/P3 item becomes when the shift closes around it: not
+// done, not skipped, handed to the first cutter in the morning.
+export type ItemStatus  = 'pending' | 'done' | 'na' | 'issue' | 'rolled'
 export type ItemSource  = 'scheduled' | 'production' | 'issue' | 'manual'
 export type InputType   = 'none' | 'number' | 'text'
 export type IssueIntent = 'heads_up' | 'miss'
@@ -114,6 +139,7 @@ export interface CleaningTask {
   input_unit: string | null
   input_min: number | null
   input_max: number | null
+  priority: Priority
 }
 
 export interface CleaningShiftItem {
@@ -133,6 +159,7 @@ export interface CleaningShiftItem {
   input_max: number | null
   source: ItemSource
   sort_order: number
+  priority: Priority
   status: ItemStatus
   done_by_id: string | null
   done_by: string | null
@@ -292,6 +319,10 @@ export function buildShiftItems(input: BuildInput): BuiltItem[] {
     // so a crew member who doesn't recognise an item can tell why it's there.
     source:         (t.production_triggers?.length ? 'production' : 'scheduled') as ItemSource,
     sort_order:     (i + 1) * 10,
+    // Copied, not joined: the tier an item was on the night it was (or wasn't)
+    // done is part of the record, and Jill re-tiering a task next week must
+    // not rewrite it.
+    priority:       (PRIORITIES.includes(t.priority) ? t.priority : 2) as Priority,
   }))
 }
 
@@ -303,6 +334,8 @@ export interface ShiftProgress {
   na: number
   issue: number
   pending: number
+  /** Handed to the morning at close-out. Not answered, not open either. */
+  rolled: number
   /** Everything has an answer — not necessarily that everything is 'done'. */
   complete: boolean
   pct: number
@@ -314,9 +347,10 @@ export function shiftProgress(items: Pick<CleaningShiftItem, 'status'>[]): Shift
   const na      = items.filter(i => i.status === 'na').length
   const issue   = items.filter(i => i.status === 'issue').length
   const pending = items.filter(i => i.status === 'pending').length
+  const rolled  = items.filter(i => i.status === 'rolled').length
   return {
-    total, done, na, issue, pending,
-    complete: total > 0 && pending === 0,
+    total, done, na, issue, pending, rolled,
+    complete: total > 0 && pending === 0 && rolled === 0,
     // Answered, not completed: an item marked N/A or flagged is dealt with, and
     // a bar that refuses to fill because of an honest "can't do this one"
     // teaches people to stop being honest.
@@ -450,4 +484,154 @@ export function areasInUse(
     }
   }
   return used
+}
+
+// ── P1 completion ───────────────────────────────────────────────────────
+
+/**
+ * Is P1 finished? Every P1 item is done or didn't apply. A flagged P1 item
+ * keeps P1 open on purpose — a saw that couldn't be cleaned is not a clean
+ * saw, and the banner must not say otherwise.
+ */
+export function p1Complete(items: Pick<CleaningShiftItem, 'status' | 'priority'>[]): boolean {
+  const p1 = items.filter(i => i.priority === 1)
+  return p1.length > 0 && p1.every(i => i.status === 'done' || i.status === 'na')
+}
+
+// ── The shift clock ─────────────────────────────────────────────────────
+//
+// Shift starts 5:00 PM, hard stop 1:30 AM (8 hours worked + 30 min unpaid
+// lunch), and anything still open at 3:00 AM is closed by the system. All
+// three are shop wall-clock times; the hard stop and auto-close fall on the
+// morning AFTER shift_date.
+
+export const SHOP_TZ = 'America/Denver'
+export const SHIFT_START = { h: 17, m: 0 }
+export const HARD_STOP   = { h: 1,  m: 30 }
+export const AUTO_CLOSE  = { h: 3,  m: 0 }
+
+/** The instant that is `h:m` on the shop clock on `dateISO`, DST and all. */
+export function shopTime(dateISO: string, h: number, m: number): Date {
+  const [y, mo, d] = dateISO.split('-').map(Number)
+  // Treat the wall-clock as if it were UTC, then shift by however far the
+  // shop clock sits from UTC at that moment. Exact except inside the one
+  // hour a year that doesn't exist, which no shift boundary lands in.
+  const guess = Date.UTC(y, mo - 1, d, h, m)
+  return new Date(guess - shopOffsetMs(new Date(guess)))
+}
+
+function shopOffsetMs(at: Date): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: SHOP_TZ, hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(at)
+  const get = (t: string) => Number(parts.find(p => p.type === t)?.value ?? 0)
+  const wall = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour') % 24, get('minute'), get('second'))
+  return wall - at.getTime()
+}
+
+export function hardStopFor(shiftDate: string): Date {
+  return shopTime(addDaysISO(shiftDate, 1), HARD_STOP.h, HARD_STOP.m)
+}
+
+export function autoCloseFor(shiftDate: string): Date {
+  return shopTime(addDaysISO(shiftDate, 1), AUTO_CLOSE.h, AUTO_CLOSE.m)
+}
+
+/** FSIS pre-op the morning after — `preopTime` is Postgres 'HH:MM:SS' or 'HH:MM'. */
+export function preopFor(shiftDate: string, preopTime: string): Date {
+  const [h, m] = preopTime.split(':').map(Number)
+  return shopTime(addDaysISO(shiftDate, 1), h || 0, m || 0)
+}
+
+/** '9:52 PM' on the shop clock. */
+export function fmtShopTime(d: Date | string | null | undefined): string {
+  if (!d) return '—'
+  return new Date(d).toLocaleTimeString('en-US', { timeZone: SHOP_TZ, hour: 'numeric', minute: '2-digit' })
+}
+
+/** '3h 14m'. Negative spans come back as '0m' — the caller says "over". */
+export function fmtSpan(ms: number): string {
+  const mins = Math.max(0, Math.round(ms / 60000))
+  const h = Math.floor(mins / 60), m = mins % 60
+  return h > 0 ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`
+}
+
+/** Hours between two stamps, one decimal; null when either is missing. */
+export function hoursBetween(startISO: string | null, endISO: string | null): number | null {
+  if (!startISO || !endISO) return null
+  return Math.round((new Date(endISO).getTime() - new Date(startISO).getTime()) / 360000) / 10
+}
+
+// ── Breaks ──────────────────────────────────────────────────────────────
+//
+// Display only. Nothing here is enforced — the strip exists so nobody has to
+// remember the times, and so two people don't both leave the floor at once.
+
+export interface BreakSlot { label: string; start: string; end: string }   // 'HH:MM' shop clock
+
+const SOLO: BreakSlot[] = [
+  { label: 'Break', start: '19:00', end: '19:15' },
+  { label: 'Lunch', start: '21:15', end: '21:45' },
+  { label: 'Break', start: '23:45', end: '00:00' },
+]
+const STAGGER_A: BreakSlot[] = [
+  { label: 'Break', start: '18:45', end: '19:00' },
+  { label: 'Lunch', start: '21:00', end: '21:30' },
+  { label: 'Break', start: '23:30', end: '23:45' },
+]
+const STAGGER_B: BreakSlot[] = [
+  { label: 'Break', start: '19:00', end: '19:15' },
+  { label: 'Lunch', start: '21:30', end: '22:00' },
+  { label: 'Break', start: '23:45', end: '00:00' },
+]
+
+export interface BreakPlan { who: string; slots: BreakSlot[] }
+
+/**
+ * One line per person. Alone: the single schedule. Two or more: staggered,
+ * alternating A/B down the crew list so the floor is never empty.
+ */
+export function breakPlan(crewNames: string[]): BreakPlan[] {
+  if (crewNames.length <= 1) return [{ who: crewNames[0] ?? 'Crew', slots: SOLO }]
+  return crewNames.map((who, i) => ({ who, slots: i % 2 === 0 ? STAGGER_A : STAGGER_B }))
+}
+
+/** '19:15' → '7:15'. */
+export function fmtClock(hhmm: string): string {
+  const [h, m] = hhmm.split(':').map(Number)
+  const h12 = h % 12 === 0 ? 12 : h % 12
+  return `${h12}:${String(m).padStart(2, '0')}`
+}
+
+// ── Area split ──────────────────────────────────────────────────────────
+//
+// With two on shift the plant divides into a harvest-side walk and a
+// processing-side walk. This is the default only: the shift stores its own
+// copy (cleaning_shifts.area_assignments) and the crew can move any room.
+// Keyed by area NAME because shift items carry the name, not the id.
+
+const SPLIT_A = ['Harvest Room', 'Inedible Room', 'Carcass Hallway', 'Value Add', 'Old Cooler', 'New Cooler']
+const SPLIT_B = ['Processing Room', 'Packaging Area', 'Storage Room', 'Retail', 'Retail Bathroom']
+
+/** Which side a room falls on by default; null = shared, either person. */
+export function defaultSide(areaName: string): 'A' | 'B' | null {
+  if (SPLIT_A.includes(areaName)) return 'A'
+  if (SPLIT_B.includes(areaName)) return 'B'
+  // "Freezers" on the B list covers every freezer the plant has, by name.
+  if (/freezer/i.test(areaName)) return 'B'
+  return null
+}
+
+/** area name → crew id. Empty for a one-person shift: everything is theirs. */
+export function defaultAssignments(crewIds: string[], areaNames: string[]): Record<string, string> {
+  if (crewIds.length < 2) return {}
+  const out: Record<string, string> = {}
+  for (const name of areaNames) {
+    const side = defaultSide(name)
+    if (side === 'A') out[name] = crewIds[0]
+    if (side === 'B') out[name] = crewIds[1]
+  }
+  return out
 }

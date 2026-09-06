@@ -427,7 +427,7 @@ function KillDayView() {
 
       {harvest.length > 0 && (
         <>
-          <h2 style={SECTION_H}>Kill Floor · CCP · {harvest.length} carcass{harvest.length !== 1 ? 'es' : ''}</h2>
+          <h2 style={SECTION_H}>Harvest Floor · CCP · {harvest.length} carcass{harvest.length !== 1 ? 'es' : ''}</h2>
           <Panel>
             <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 0 }}>
               <thead>
