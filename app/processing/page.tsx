@@ -1884,6 +1884,7 @@ export default function ProcessingPage() {
           <span style={{ color: 'rgba(166,120,90,0.4)' }}>|</span>
           <Link href="/scanner" style={{ background: C.green, color: C.dark, textDecoration: 'none', fontSize: '0.78rem', fontWeight: 700, padding: '0.3rem 0.75rem', borderRadius: 3, letterSpacing: '0.04em' }}>🔍 Processing Scanner ↗</Link>
           <Link href="/plu-book" style={{ background: C.tan, color: C.dark, textDecoration: 'none', fontSize: '0.78rem', fontWeight: 700, padding: '0.3rem 0.75rem', borderRadius: 3, letterSpacing: '0.04em' }}>📖 Barcode Book ↗</Link>
+          <Link href="/plu-links" title="Every cut line beside the PLU it is linked to — fill it in one sitting" style={{ background: 'transparent', color: C.tan, border: `1px solid ${C.tan}`, textDecoration: 'none', fontSize: '0.78rem', fontWeight: 700, padding: '0.3rem 0.75rem', borderRadius: 3, letterSpacing: '0.04em' }}>🔗 Link Book ↗</Link>
         </div>
         {/* Day-to-day tabs stay flat; the catalog-plumbing tabs live behind two
             menus so the header is 5 controls wide instead of 9. */}
