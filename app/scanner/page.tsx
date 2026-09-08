@@ -668,6 +668,9 @@ export default function ScannerPage() {
   // hunt for where you'd been started over (Charlie, 2026-08-06).
   const listScrollY = useRef(0)
   const restoreList = useRef(false)
+  // One + Box at a time: a double-tap used to post two boxes with the same
+  // number before the first had come back (Manning Roofing, 2026-08-28).
+  const addBoxInFlight = useRef(false)
 
   // Every way into a session goes through here, so the spot in the list is
   // always taken before the screen changes.
@@ -1525,17 +1528,24 @@ export default function ScannerPage() {
   // Session and sibling boxes passed in, so a repack can open a box in the same
   // tick it sets the customer — before that state has flushed.
   async function addBoxTo(cust: string, dt: string, siblings: BoxRecord[], isFinal = false) {
-    if (!cust) return
-    const nextNum = siblings.length > 0 ? Math.max(...siblings.map(b => b.box_number)) + 1 : 1
-    const res = await fetch('/api/boxes', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ customer_name: cust, pack_date: dt, box_number: nextNum, is_final: isFinal }),
-    })
-    const box: BoxRecord = await res.json()
-    setBoxes(prev => [...prev, box])
-    setScans([])
-    setActiveBox(box)
+    if (!cust || addBoxInFlight.current) return
+    addBoxInFlight.current = true
+    try {
+      // The server numbers the box off the database; this is only a floor.
+      const nextNum = siblings.length > 0 ? Math.max(...siblings.map(b => b.box_number)) + 1 : 1
+      const res = await fetch('/api/boxes', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ customer_name: cust, pack_date: dt, box_number: nextNum, is_final: isFinal }),
+      })
+      if (!res.ok) { window.alert('Could not add a box — try again.'); return }
+      const box: BoxRecord = await res.json()
+      setBoxes(prev => [...prev, box])
+      setScans([])
+      setActiveBox(box)
+    } finally {
+      addBoxInFlight.current = false
+    }
   }
 
   // ── Switch active box (loads its scans) ──────────────────────────────────────

@@ -572,22 +572,25 @@ export function loinFields(loin: any, f: (v: string) => string, t: (v: string) =
   return out.filter(([, v]) => v)
 }
 
-// Merge the two sides of a split primal row-by-row: a row that comes out the
-// same on both sides prints once, unsuffixed; only rows that actually differ
-// get labelled (1) / (2). Two loins both yielding a 2" filet is one line.
-// Merge the two sides of a split primal row-by-row: a row that comes out the
-// same on both sides prints once, unsuffixed; only rows that actually differ
-// get labelled (1) / (2). Two loins both yielding a 2" filet is one line.
+// Merge the two sides of a split primal row-by-row. Sides that come out
+// identical print once, unsuffixed — the split changed nothing. Sides that
+// differ print each side's own rows first, labelled (1) / (2), and only then
+// the rows the two sides share, labelled (1 & 2). A shared row used to sit
+// unsuffixed in the middle of side 1's block with "Cut (2)" trailing after it,
+// so a whole-hog loin split chops / grind with the tenderloin whole on both
+// read as if cut 2 had no tenderloin at all (Jill, Lisa Mosher, 2026-09-08).
 export function mergeSides(a: Array<[string, string]>, b: Array<[string, string]>): Array<[string, string]> {
-  const out: Array<[string, string]> = []
+  const shared: Array<[string, string]> = []
+  const only1:  Array<[string, string]> = []
   const usedB = new Set<number>()
   for (const [la, va] of a) {
     const j = b.findIndex(([lb, vb], i) => !usedB.has(i) && lb === la && vb === va)
-    if (j >= 0) { usedB.add(j); out.push([la, va]) }
-    else out.push([`${la} (1)`, va])
+    if (j >= 0) { usedB.add(j); shared.push([la, va]) }
+    else only1.push([`${la} (1)`, va])
   }
-  b.forEach(([lb, vb], i) => { if (!usedB.has(i)) out.push([`${lb} (2)`, vb]) })
-  return out
+  const only2: Array<[string, string]> = b.filter((_, i) => !usedB.has(i)).map(([lb, vb]) => [`${lb} (2)`, vb])
+  if (!only1.length && !only2.length) return shared
+  return [...only1, ...only2, ...shared.map(([l, v]): [string, string] => [`${l} (1 & 2)`, v])]
 }
 
 export function buildPackList(d: any, species: string): PackRow[] {

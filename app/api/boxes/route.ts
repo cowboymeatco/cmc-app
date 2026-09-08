@@ -26,11 +26,26 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await req.json()
+  // Trim: a stray trailing space would key this box to a phantom session
+  const customer_name = (body.customer_name ?? '').trim()
+  const pack_date     = body.pack_date ?? isoDate()
+  // The box number comes off the database, not the browser's copy of the box
+  // list. A tab that missed a sibling — another device packing the same
+  // customer, a double-tap on + Box — used to send the same number twice, and
+  // the session then showed two Box 3s (Charlie, Manning Roofing, 2026-09-08).
+  // The browser's number still counts as a floor so a deliberate gap survives.
+  const { data: top } = await supabase
+    .from('boxes')
+    .select('box_number')
+    .eq('customer_name', customer_name)
+    .eq('pack_date', pack_date)
+    .order('box_number', { ascending: false })
+    .limit(1)
+  const dbNext = (Number(top?.[0]?.box_number) || 0) + 1
   const res = await createBox({
-    // Trim: a stray trailing space would key this box to a phantom session
-    customer_name: (body.customer_name ?? '').trim(),
-    pack_date:     body.pack_date ?? isoDate(),
-    box_number:    body.box_number ?? 1,
+    customer_name,
+    pack_date,
+    box_number:    Math.max(Number(body.box_number) || 1, dbNext),
     is_final:      body.is_final ?? false,
     serial_number: body.serial_number ?? null,
   })
