@@ -155,6 +155,20 @@ function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Reco
   const [barcodes, setBarcodes] = useState<{ barcode: string; scannedAt: string }[]>([])
   const [barcodeInput, setBarcodeInput] = useState('')
   const [lastAdded, setLastAdded] = useState('')
+  // The delivery row the last Save wrote — its packing slip prints off the
+  // record; before Save the slip is a preview of what's been scanned
+  // (Charlie, 2026-09-09: "add the packing slip to the New Delivery tab too").
+  const [savedId, setSavedId] = useState<string | null>(null)
+
+  function openPackingSlip(id?: string | null) {
+    if (id) { window.open(`/api/delivery/packing-slip?id=${encodeURIComponent(id)}`, '_blank'); return }
+    const p = new URLSearchParams({ barcodes: barcodes.map(b => b.barcode).join(',') })
+    if (derivedCustomer)      p.set('customer', derivedCustomer)
+    if (form.driver.trim())   p.set('driver', form.driver.trim())
+    if (form.notes.trim())    p.set('notes', form.notes.trim())
+    if (destination === 'baker_storage') p.set('destination', 'baker_storage')
+    window.open(`/api/delivery/packing-slip?${p}`, '_blank')
+  }
 
   const f = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm(p => ({ ...p, [k]: e.target.value }))
@@ -236,6 +250,7 @@ function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Reco
       return
     }
     const moved = saved?.sessions_updated ?? 0
+    setSavedId((saved?.id as string | undefined) ?? null)
     setSuccess(moved > 0
       ? `✓ Delivery saved — ${moved} session${moved !== 1 ? 's' : ''} moved to ${DEST_CFG[destination].label}`
       : '✓ Delivery saved')
@@ -269,6 +284,13 @@ function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Reco
             color: success.startsWith('⚠') ? C.yellow : C.green, fontSize: '0.85rem',
           }}>
             {success}
+            {savedId && !success.startsWith('⚠') && (
+              <div style={{ marginTop: '0.55rem' }}>
+                <button onClick={() => openPackingSlip(savedId)} style={{ ...BTN(C.tan, C.dark), padding: '0.4rem 0.9rem', fontSize: '0.8rem' }}>
+                  🖨 Print Packing Slip
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -494,12 +516,20 @@ function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Reco
         {barcodes.length > 0 && (
           <div style={{ padding: '0.75rem 1.25rem', borderTop: '1px solid rgba(166,120,90,0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: '0.8rem', color: C.tan }}>{barcodes.length} item{barcodes.length !== 1 ? 's' : ''} ready to save</span>
-            <button
-              onClick={() => setBarcodes([])}
-              style={{ background: 'none', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, color: C.lightBrown, cursor: 'pointer', fontSize: '0.78rem', padding: '0.3rem 0.75rem' }}
-            >
-              Clear All
-            </button>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button
+                onClick={() => openPackingSlip()}
+                style={{ background: 'none', border: '1px solid rgba(201,168,130,0.45)', borderRadius: 3, color: C.tan, cursor: 'pointer', fontSize: '0.78rem', padding: '0.3rem 0.75rem' }}
+              >
+                🖨 Packing Slip
+              </button>
+              <button
+                onClick={() => setBarcodes([])}
+                style={{ background: 'none', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, color: C.lightBrown, cursor: 'pointer', fontSize: '0.78rem', padding: '0.3rem 0.75rem' }}
+              >
+                Clear All
+              </button>
+            </div>
           </div>
         )}
       </div>

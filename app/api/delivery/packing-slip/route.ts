@@ -8,6 +8,7 @@ export const dynamic = 'force-dynamic'
 
 // GET /api/delivery/packing-slip?id=<delivery_scans.id>
 // GET /api/delivery/packing-slip?serials=CMC2607...,CMC2607...&driver=&customer=&notes=
+// GET /api/delivery/packing-slip?barcodes=<any mix of box serials and package barcodes>&...
 //
 // The printable sheet for a delivery: every box on it, contents and weights,
 // a line to sign. By delivery id it is the record — Load Out stamps each box
@@ -104,11 +105,20 @@ export async function GET(req: NextRequest) {
     }
     loose = await looseItems(((d.barcodes ?? []) as { barcode?: string }[]).map(b => String(b.barcode ?? '')))
   } else {
-    const serials = [...new Set((searchParams.get('serials') ?? '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean))]
-    if (!serials.length) return NextResponse.json({ error: 'id or serials required' }, { status: 400 })
-    const { data, error } = await supabase.from('boxes').select(BOX_COLS).in('serial_number', serials)
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-    rows = (data ?? []) as BoxRow[]
+    // ?serials= is box serials only (Load Out); ?barcodes= is whatever the New
+    // Delivery gun read — serials print as boxes, the rest as loose packages.
+    const codes = [...new Set(
+      ((searchParams.get('serials') ?? '') + ',' + (searchParams.get('barcodes') ?? ''))
+        .split(',').map(s => s.trim()).filter(Boolean)
+    )]
+    if (!codes.length) return NextResponse.json({ error: 'id, serials or barcodes required' }, { status: 400 })
+    const serials = codes.map(c => c.toUpperCase()).filter(c => SERIAL_RE.test(c))
+    if (serials.length) {
+      const { data, error } = await supabase.from('boxes').select(BOX_COLS).in('serial_number', serials)
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+      rows = (data ?? []) as BoxRow[]
+    }
+    loose = await looseItems(codes)
     const customer = (searchParams.get('customer') ?? '').trim()
       || [...new Set(rows.map(r => r.customer_name))].join(' / ')
     delivery = {
