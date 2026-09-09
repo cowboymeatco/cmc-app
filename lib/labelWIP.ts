@@ -1,4 +1,4 @@
-import { makeCode39Barcode, julianYYDDD, displayCustomerName, LabelFlags, DEFAULT_FLAGS, LabelAnimal, BoxRecord, BoxScan, USDA_EST_NUMBER, marksInspection, LabelRoll, rollFrameCSS, rollPrintScript } from './label'
+import { makeCode39Barcode, julianYYDDD, LabelFlags, DEFAULT_FLAGS, LabelAnimal, BoxRecord, BoxScan, USDA_EST_NUMBER, marksInspection, LabelRoll, rollFrameCSS, rollPrintScript } from './label'
 
 // Work-in-progress tag — rides with the box from the processing room to value
 // add. Replaces the handwritten WIP sheet (WEIGHT / CUSTOMER / INTENT / LABEL /
@@ -108,7 +108,8 @@ export function wipDataFromBox(box: BoxRecord, scans: BoxScan[], animal?: LabelA
   const rawLabel = (box.box_label || '').trim()
   const intent = rawLabel.replace(WIP_LABEL_RE, '').replace(/^[\s—–\-:·]+|[\s—–\-:·]+$/g, '').trim()
 
-  const customer = displayCustomerName(box.customer_name, animal?.hangingWeightLbs)
+  // Verbatim — the crew's own session name, weight and all (see nameCarriesWeight).
+  const customer = (box.customer_name || '').trim()
   const isStock  = /^cmc\b/i.test(customer)
 
   // total_weight_lbs is only written when the box is closed, but a WIP tub gets

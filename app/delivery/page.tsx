@@ -297,7 +297,7 @@ function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Reco
           </div>
           <div style={{ fontSize: '0.75rem', color: C.lightBrown, marginTop: '0.35rem' }}>
             {destination === 'baker_storage'
-              ? 'Hauled to the locker in Baker — still ours, still on storage fee.'
+              ? 'Hauled to Baker Storage in Billings — still ours, still on storage fee.'
               : 'Into the customer’s hands — closes the session out.'}
           </div>
         </div>
@@ -774,6 +774,11 @@ function ScheduleTab() {
   const [loading, setLoading] = useState(true)
   const [busy,    setBusy]    = useState('')
   const [adding,  setAdding]  = useState(false)
+  // The run the form is editing, or null when it's scheduling a new one. A
+  // scheduled run is a plan, and plans change — the driver, the day, a stop
+  // that got added — so every field is editable, not just the status
+  // (Charlie, 2026-09-09: "make this editable").
+  const [editing, setEditing] = useState<DeliveryRun | null>(null)
 
   // The new-run form. Kept flat rather than in one object so a half-typed run
   // survives a re-render of the list behind it.
@@ -796,20 +801,39 @@ function ScheduleTab() {
 
   function resetForm() {
     setDate(''); setRoute(''); setDriver(''); setDepart(''); setNotes(''); setStops([emptyStop()])
+    setEditing(null)
+  }
+
+  // Load a run into the form. Same form as scheduling — the only difference is
+  // that Save PATCHes the run instead of POSTing a new one.
+  function startEdit(run: DeliveryRun) {
+    setEditing(run)
+    setDate(run.run_date)
+    setRoute(run.route || '')
+    setDriver(run.driver || '')
+    setDepart(run.depart_time ? run.depart_time.slice(0, 5) : '')
+    setNotes(run.notes || '')
+    setStops(run.stops?.length ? run.stops.map(st => ({ customer: st.customer || '', town: st.town || '', note: st.note || '' })) : [emptyStop()])
+    setAdding(true)
+  }
+
+  function closeForm() {
+    resetForm()
+    setAdding(false)
   }
 
   async function save() {
     if (!date || !route.trim()) return
-    setBusy('new')
+    setBusy(editing ? editing.id : 'new')
+    const payload = { run_date: date, route, driver, depart_time: depart, notes, stops }
     const res = await fetch('/api/delivery/runs', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ run_date: date, route, driver, depart_time: depart, notes, stops }),
+      method: editing ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(editing ? { id: editing.id, ...payload } : payload),
     })
     const j = await res.json().catch(() => ({}))
     setBusy('')
-    if (j?.error) { alert(`Could not schedule the run: ${j.error}`); return }
-    resetForm()
-    setAdding(false)
+    if (j?.error) { alert(`Could not ${editing ? 'save' : 'schedule'} the run: ${j.error}`); return }
+    closeForm()
     load()
   }
 
@@ -850,7 +874,7 @@ function ScheduleTab() {
           <Link href="/calendar" style={{ color: C.tan, fontSize: '0.78rem', textDecoration: 'none' }}>
             see it on the calendar →
           </Link>
-          <button onClick={() => setAdding(a => !a)} style={{ ...BTN(adding ? C.medBrown : C.tan, adding ? C.cream : C.dark), padding: '0.4rem 1rem', fontSize: '0.8rem' }}>
+          <button onClick={() => (adding ? closeForm() : setAdding(true))} style={{ ...BTN(adding ? C.medBrown : C.tan, adding ? C.cream : C.dark), padding: '0.4rem 1rem', fontSize: '0.8rem' }}>
             {adding ? 'Cancel' : '+ Schedule a Run'}
           </button>
         </div>
@@ -858,6 +882,11 @@ function ScheduleTab() {
 
       {adding && (
         <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(201,168,130,0.4)', borderRadius: 4, padding: '1.1rem', marginBottom: '1.25rem' }}>
+          {editing && (
+            <div style={{ color: C.tan, fontSize: '0.78rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.8rem' }}>
+              ✎ Editing the {runDay(editing.run_date)} run{editing.route ? ` to ${editing.route}` : ''}
+            </div>
+          )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.9rem' }}>
             <div>
               <label style={LABEL}>Date *</label>
@@ -909,9 +938,9 @@ function ScheduleTab() {
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
-            <button onClick={save} disabled={!date || !route.trim() || busy === 'new'}
-              style={{ ...BTN(C.green, C.dark), opacity: !date || !route.trim() || busy === 'new' ? 0.5 : 1 }}>
-              {busy === 'new' ? 'Saving…' : 'Schedule Run'}
+            <button onClick={save} disabled={!date || !route.trim() || busy !== ''}
+              style={{ ...BTN(C.green, C.dark), opacity: !date || !route.trim() || busy !== '' ? 0.5 : 1 }}>
+              {busy !== '' ? 'Saving…' : editing ? 'Save Changes' : 'Schedule Run'}
             </button>
           </div>
         </div>
@@ -926,13 +955,13 @@ function ScheduleTab() {
         </p>
       ) : (
         <>
-          <RunList runs={upcoming} busy={busy} onStatus={setStatus} onDelete={remove} empty="Nothing scheduled ahead." />
+          <RunList runs={upcoming} busy={busy} onStatus={setStatus} onEdit={startEdit} onDelete={remove} empty="Nothing scheduled ahead." />
           {past.length > 0 && (
             <>
               <div style={{ color: C.lightBrown, fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.14em', margin: '1.4rem 0 0.5rem', borderBottom: '1px solid rgba(166,120,90,0.2)', paddingBottom: '0.2rem' }}>
                 THE PAST WEEK
               </div>
-              <RunList runs={past} busy={busy} onStatus={setStatus} onDelete={remove} empty="" />
+              <RunList runs={past} busy={busy} onStatus={setStatus} onEdit={startEdit} onDelete={remove} empty="" />
             </>
           )}
         </>
@@ -941,9 +970,10 @@ function ScheduleTab() {
   )
 }
 
-function RunList({ runs, busy, onStatus, onDelete, empty }: {
+function RunList({ runs, busy, onStatus, onEdit, onDelete, empty }: {
   runs: DeliveryRun[]; busy: string; empty: string
   onStatus: (r: DeliveryRun, status: string) => void
+  onEdit:   (r: DeliveryRun) => void
   onDelete: (r: DeliveryRun) => void
 }) {
   if (runs.length === 0) {
@@ -980,6 +1010,10 @@ function RunList({ runs, busy, onStatus, onDelete, empty }: {
                     {RUN_STATUS[st].label}
                   </button>
                 ))}
+                <button onClick={() => onEdit(r)} disabled={busy === r.id} title="Edit this run"
+                  style={{ background: 'transparent', border: '1px solid rgba(201,168,130,0.45)', borderRadius: 3, color: C.tan, fontSize: '0.68rem', padding: '0.15rem 0.5rem', cursor: 'pointer' }}>
+                  ✎ Edit
+                </button>
                 <button onClick={() => onDelete(r)} disabled={busy === r.id}
                   style={{ background: 'transparent', border: 'none', color: '#e05555', fontSize: '0.85rem', cursor: 'pointer' }}>×</button>
               </div>
@@ -1005,7 +1039,7 @@ function RunList({ runs, busy, onStatus, onDelete, empty }: {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// BAKER STORAGE TAB — what's on the shelf in Baker right now
+// BAKER STORAGE TAB — what's on the shelf at Baker Storage (Billings) right now
 // ══════════════════════════════════════════════════════════════════════════════
 function BakerStorageTab() {
   const [sessions, setSessions] = useState<SessionLite[]>([])
@@ -1047,7 +1081,7 @@ function BakerStorageTab() {
     <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1.5rem', overflowY: 'auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
         <h3 style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0 }}>
-          🚚 On the shelf in Baker
+          🚚 On the shelf at Baker Storage
         </h3>
         <div style={{ fontSize: '0.82rem', color: C.tan }}>
           {inBaker.length} customer{inBaker.length !== 1 ? 's' : ''} · {totalBoxes} box{totalBoxes !== 1 ? 'es' : ''}

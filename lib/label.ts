@@ -150,6 +150,18 @@ export function displayCustomerName(name: string, weightLbs?: number | null): st
   return n
 }
 
+// The crew writes the hanging weight into the session name on purpose —
+// "JC EXCAVATION 198.5" — and that is the name they want on the box, exactly
+// as typed (Jill, 2026-09-08: "if the box name is edited, need to edit it on
+// the box label"). The label used to run the name through displayCustomerName
+// and print "JC EXCAVATION" with its own rounded "Hanging Wt: 199 lb" line, so
+// an edit to the name never showed up. Now the name prints verbatim, and the
+// label's own weight line only appears when the name doesn't already carry it.
+export function nameCarriesWeight(name: string, weightLbs?: number | null): boolean {
+  if (!weightLbs) return false
+  return displayCustomerName(name, weightLbs) !== (name || '').trim()
+}
+
 // Batch code: YYDDD off the pack/processing date (Julian day-of-year). This is
 // the number the floor recognizes, not the calendar date.
 export function julianYYDDD(dateStr: string): string {
@@ -200,7 +212,8 @@ export function generateLabel(box: BoxRecord, scans: BoxScan[], flags: LabelFlag
     : ''
   const exemptHTML   = flags.retail_exempt ? `<div class="badge">RETAIL EXEMPT</div>` : ''
   const producerHTML = animal?.producer ? `<div class="producer">Producer: <b>${escLabel(animal.producer)}</b></div>` : ''
-  const weightHTML   = animal?.hangingWeightLbs ? `<div class="hangwt">Hanging Wt: ${animal.hangingWeightLbs} lb</div>` : ''
+  const weightHTML   = animal?.hangingWeightLbs && !nameCarriesWeight(box.customer_name, animal.hangingWeightLbs)
+    ? `<div class="hangwt">Hanging Wt: ${animal.hangingWeightLbs} lb</div>` : ''
 
   const barcodeHTML = box.serial_number ? `
   <hr>
@@ -271,7 +284,7 @@ ${roll !== '62mm' ? '' : `
   <img class="logo" src="/cmc-logo.png" alt="Cowboy Meat Co">
   ${petHTML}
   ${exemptHTML ? `<div style="text-align:center">${exemptHTML}</div>` : ''}
-  <div class="customer">${escLabel(displayCustomerName(box.customer_name, animal?.hangingWeightLbs)).toUpperCase()}</div>
+  <div class="customer">${escLabel((box.customer_name || '').trim()).toUpperCase()}</div>
   ${producerHTML}
   ${weightHTML}
   ${box.box_label ? `<div class="box-for">FOR: ${escLabel(box.box_label).toUpperCase()}</div>` : ''}
