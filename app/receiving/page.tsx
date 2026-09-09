@@ -6,6 +6,7 @@ import { HarvestAppointment, BoxReceivingLog } from '@/lib/types'
 import GameIntakeForm from '@/app/game/IntakeTab'
 import { isoDate, isoDateTime, addDaysISO, mondayOfISO } from '@/lib/dates'
 import { printReceivingLog } from '@/lib/haccpReceivingLog'
+import { prepareImage, undecodableNote } from '@/lib/imageResize'
 
 type Tab = 'animal' | 'box' | 'game'
 
@@ -83,18 +84,6 @@ function blankSlot(species: string): AnimalSlot {
   return { ear_tag: '', sex: sexOpts[0], breed: '', over_30_months: false, photo_url: '', uploading: false, upload_error: '', no_show: false }
 }
 
-async function resizeImage(file: File, maxPx = 1920, quality = 0.82): Promise<File> {
-  const bitmap = await createImageBitmap(file)
-  const scale  = Math.min(1, maxPx / Math.max(bitmap.width, bitmap.height))
-  const w = Math.round(bitmap.width  * scale)
-  const h = Math.round(bitmap.height * scale)
-  const canvas = Object.assign(document.createElement('canvas'), { width: w, height: h })
-  canvas.getContext('2d')!.drawImage(bitmap, 0, 0, w, h)
-  bitmap.close()
-  return new Promise(resolve =>
-    canvas.toBlob(blob => resolve(new File([blob!], file.name, { type: 'image/jpeg' })), 'image/jpeg', quality)
-  )
-}
 
 // ── Box receiving label printer — 2.4" Brother DK label ──────────────────────
 function printReceivingLabel(log: BoxReceivingLog) {
@@ -251,21 +240,28 @@ function AnimalTab() {
     setSlots(prev => prev.map((s, i) => i === idx ? { ...s, ...updates } : s))
   }
 
+  // Shrinks the photo when the browser can read it, sends the original when it
+  // can't (a HEIC opened on Windows) — the decode step used to throw before
+  // any request left the page, which read as "trouble uploading pictures"
+  // (Charlie, 2026-09-09). See lib/imageResize.ts.
   async function uploadPhoto(idx: number, file: File) {
     if (!selected) return
     updateSlot(idx, { uploading: true, upload_error: '' })
     try {
-      const resized = await resizeImage(file)
+      const prepared = await prepareImage(file)
       const fd = new FormData()
-      fd.append('file', resized)
+      fd.append('file', prepared.file)
       fd.append('appointment_id', selected.id)
       fd.append('animal_index', String(idx + 1))
       const res  = await fetch('/api/receiving/photo', { method: 'POST', body: fd })
-      const json = await res.json()
-      if (json.url) updateSlot(idx, { photo_url: json.url, uploading: false })
-      else updateSlot(idx, { uploading: false, upload_error: json.error ?? 'Upload failed' })
+      const json = await res.json().catch(() => ({} as { url?: string; error?: string }))
+      if (json.url) {
+        updateSlot(idx, { photo_url: json.url, uploading: false, upload_error: prepared.undecodable ? undecodableNote(file) : '' })
+      } else {
+        updateSlot(idx, { uploading: false, upload_error: json.error ?? `Upload failed (HTTP ${res.status})` })
+      }
     } catch (e) {
-      updateSlot(idx, { uploading: false, upload_error: e instanceof Error ? e.message : 'Upload failed' })
+      updateSlot(idx, { uploading: false, upload_error: `Upload failed — ${e instanceof Error ? e.message : 'check the connection and try again'}` })
     }
   }
 

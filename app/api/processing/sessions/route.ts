@@ -18,29 +18,28 @@ export async function GET() {
   }>
   const sessionMap = new Map(sessions.map(s => [`${s.customer_name}|${s.session_date}`, s]))
 
-  // 2. Fetch box stats (recent 500 to cover all sessions)
-  const { data: boxRows } = await supabase
-    .from('boxes')
-    .select('customer_name, pack_date, is_closed, total_weight_lbs, total_cuts')
-    .order('created_at', { ascending: false })
-    .limit(500)
+  // 2. Box stats per session, summed in the database over EVERY box
+  //    (v_box_session_stats). This used to add up the newest 500 boxes only,
+  //    so any session older than about two weeks read "0 boxes" on the
+  //    scanner and on Load Out (Jill, 2026-09-09). A year back is as far as
+  //    the list itself reaches.
+  const since = new Date(Date.now() - 365 * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Denver' })
+  const { data: statRows } = await supabase
+    .from('v_box_session_stats')
+    .select('customer_name, session_date, box_count, closed_count, total_weight, total_cuts')
+    .gte('session_date', since)
+    .limit(5000)
 
   const boxGroups = new Map<string, {
     customer_name: string; session_date: string
     box_count: number; closed_count: number; total_weight: number; total_cuts: number
   }>()
-  for (const b of (boxRows ?? [])) {
-    const key = `${b.customer_name}|${b.pack_date}`
-    if (!boxGroups.has(key)) {
-      boxGroups.set(key, { customer_name: b.customer_name, session_date: b.pack_date, box_count: 0, closed_count: 0, total_weight: 0, total_cuts: 0 })
-    }
-    const g = boxGroups.get(key)!
-    g.box_count++
-    if (b.is_closed) {
-      g.closed_count++
-      g.total_weight += Number(b.total_weight_lbs) || 0
-      g.total_cuts   += Number(b.total_cuts) || 0
-    }
+  for (const r of (statRows ?? [])) {
+    boxGroups.set(`${r.customer_name}|${r.session_date}`, {
+      customer_name: r.customer_name, session_date: r.session_date,
+      box_count: Number(r.box_count) || 0, closed_count: Number(r.closed_count) || 0,
+      total_weight: Number(r.total_weight) || 0, total_cuts: Number(r.total_cuts) || 0,
+    })
   }
 
   // 3. Carcass inputs per session — so the freezer list shows which animals
