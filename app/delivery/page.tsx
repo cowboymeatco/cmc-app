@@ -540,11 +540,56 @@ function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Reco
 // ══════════════════════════════════════════════════════════════════════════════
 // DELIVERY LOG TAB
 // ══════════════════════════════════════════════════════════════════════════════
+// What a box serial on a logged delivery actually is (from /api/delivery/boxes).
+interface LoggedBox { box_number: number; customer_name: string; pack_date: string; weight_lbs: number; contents: string }
+
 function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
   const [deliveries, setDeliveries] = useState<DeliveryScan[]>([])
   const [selected, setSelected] = useState<DeliveryScan | null>(null)
   const [filter, setFilter] = useState<LogFilter>('all')
   const [marking, setMarking] = useState(false)
+  // Box serial → what's in it, for the selected delivery. A serial reads as
+  // "Box · packed Aug 7" on its own, which can't answer "which three are the
+  // kidney fat" (Charlie, 2026-09-09).
+  const [boxInfo, setBoxInfo] = useState<Record<string, LoggedBox>>({})
+  const [pulling, setPulling] = useState<string | null>(null)
+
+  useEffect(() => {
+    const serials = (selected?.barcodes ?? []).map(b => b.barcode).filter(b => identifyBarcode(b) === 'box_serial')
+    if (!serials.length) { setBoxInfo({}); return }
+    let live = true
+    fetch(`/api/delivery/boxes?serials=${encodeURIComponent(serials.join(','))}`)
+      .then(r => r.json())
+      .then((d: unknown) => { if (live && d && typeof d === 'object') setBoxInfo(d as Record<string, LoggedBox>) })
+      .catch(() => {})
+    return () => { live = false }
+  }, [selected?.id, selected?.barcodes])
+
+  // One line that says what an item on the delivery is, for the list and the audit note.
+  function describe(barcode: string): string {
+    const info = boxInfo[barcode.toUpperCase()]
+    if (info) return `Box ${info.box_number} · ${info.customer_name}${info.contents ? ` · ${info.contents}` : ''}`
+    const l = barcodeLabel(barcode, pluMap)
+    return `${l.primary}${l.secondary ? ` · ${l.secondary}` : ''}`
+  }
+
+  // Pull one item off a logged delivery: the record shrinks, the notes say
+  // what came off and when, and a Load-Out-stamped box is back in the freezer.
+  async function pullOff(d: DeliveryScan, barcode: string) {
+    const what = describe(barcode)
+    if (!window.confirm(`Pull this off the ${new Date(d.delivered_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} load?\n\n${what}\n\nThe delivery record and its packing slip will no longer include it.`)) return
+    setPulling(barcode)
+    const res = await fetch('/api/delivery/pull', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: d.id, barcodes: [barcode], labels: [what] }),
+    }).catch(() => null)
+    const j = await res?.json().catch(() => null)
+    setPulling(null)
+    if (!res?.ok || !j) { alert(`Could not pull it off: ${j?.error ?? 'network error'}`); return }
+    const updated: DeliveryScan = { ...d, barcodes: j.barcodes, notes: j.notes }
+    setSelected(updated)
+    setDeliveries(prev => prev.map(x => x.id === updated.id ? updated : x))
+  }
 
   const load = useCallback(async () => {
     const res = await fetch('/api/delivery')
@@ -698,7 +743,7 @@ function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
             </div>
 
             {selected.notes && (
-              <div style={{ background: 'rgba(166,120,90,0.08)', border: '1px solid rgba(166,120,90,0.2)', borderRadius: 4, padding: '0.85rem 1.25rem', marginBottom: '1.25rem', fontSize: '0.85rem', color: C.tan, fontStyle: 'italic' }}>
+              <div style={{ background: 'rgba(166,120,90,0.08)', border: '1px solid rgba(166,120,90,0.2)', borderRadius: 4, padding: '0.85rem 1.25rem', marginBottom: '1.25rem', fontSize: '0.85rem', color: C.tan, fontStyle: 'italic', whiteSpace: 'pre-wrap' }}>
                 {selected.notes}
               </div>
             )}
@@ -738,22 +783,33 @@ function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                   {selected.barcodes.map((b, i) => {
                     const label = barcodeLabel(b.barcode, pluMap)
+                    const info  = boxInfo[b.barcode.toUpperCase()]
+                    const primary   = info ? `Box ${info.box_number}` : label.primary
+                    const secondary = info
+                      ? [info.contents, info.weight_lbs > 0 ? `${info.weight_lbs.toFixed(1)} lb` : '', label.secondary].filter(Boolean).join(' · ')
+                      : label.secondary
                     return (
-                      <div key={i} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: 3, padding: '0.55rem 0.85rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                      <div key={i} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: 3, padding: '0.55rem 0.85rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0 }}>
                           <span style={{ fontSize: '1.15rem', lineHeight: 1 }}>{label.icon}</span>
-                          <div>
+                          <div style={{ minWidth: 0 }}>
                             <div style={{ color: C.cream, fontWeight: 600, fontSize: '0.88rem' }}>
-                              {label.primary}
-                              {label.secondary && <span style={{ color: C.tan, fontWeight: 400, marginLeft: '0.5rem', fontSize: '0.82rem' }}>{label.secondary}</span>}
+                              {primary}
+                              {secondary && <span style={{ color: C.tan, fontWeight: 400, marginLeft: '0.5rem', fontSize: '0.82rem' }}>{secondary}</span>}
                             </div>
                             <div style={{ fontFamily: 'monospace', color: C.lightBrown, fontSize: '0.7rem', marginTop: '0.1rem' }}>
-                              {b.barcode}
+                              {b.barcode}{info && info.customer_name !== selected.customer ? ` · ${info.customer_name}` : ''}
                             </div>
                           </div>
                         </div>
-                        <div style={{ fontSize: '0.72rem', color: C.lightBrown, flexShrink: 0, marginLeft: '1rem' }}>
-                          {new Date(b.scannedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexShrink: 0 }}>
+                          <span style={{ fontSize: '0.72rem', color: C.lightBrown }}>
+                            {new Date(b.scannedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}
+                          </span>
+                          <button onClick={() => pullOff(selected, b.barcode)} disabled={pulling !== null} title="Take this off the delivery record"
+                            style={{ background: 'transparent', border: '1px solid rgba(229,62,62,0.4)', borderRadius: 3, color: '#e05555', fontSize: '0.7rem', padding: '0.2rem 0.55rem', cursor: 'pointer', opacity: pulling === b.barcode ? 0.5 : 1 }}>
+                            {pulling === b.barcode ? 'Pulling…' : 'Pull off load'}
+                          </button>
                         </div>
                       </div>
                     )
