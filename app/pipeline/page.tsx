@@ -66,6 +66,18 @@ function segments(r: PipelineRow, now: number) {
 }
 
 type Filter = 'all' | AnimalStage
+type BillFilter = 'all' | 'paid' | 'open' | 'none'
+
+const money = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+
+// The QuickBooks word on this animal, as a chip.
+function BillingChip({ b }: { b: PipelineRow['billing'] }) {
+  const base: React.CSSProperties = { display: 'inline-block', fontSize: '0.68rem', fontWeight: 700, borderRadius: 99, padding: '1px 8px', whiteSpace: 'nowrap' }
+  if (b.status === 'paid')    return <span title={`Invoice ${b.doc_numbers.join(', ')} · ${money(b.total)}`} style={{ ...base, color: C.green, border: `1px solid ${C.green}66` }}>💵 Paid {money(b.total)}</span>
+  if (b.status === 'open')    return <span title={`Invoice ${b.doc_numbers.join(', ')} · ${money(b.total)} total`} style={{ ...base, color: C.yellow, border: `1px solid ${C.yellow}66` }}>💵 {money(b.balance)} due · #{b.doc_numbers[b.doc_numbers.length - 1]}</span>
+  if (b.status === 'unknown') return <span style={{ ...base, color: C.lightBrown, border: '1px solid rgba(166,120,90,0.35)' }}>QuickBooks unavailable</span>
+  return <span style={{ ...base, color: C.lightBrown, border: '1px solid rgba(166,120,90,0.35)' }}>Not invoiced</span>
+}
 
 export default function PipelinePage() {
   const [rows, setRows] = useState<PipelineRow[] | null>(null)
@@ -73,6 +85,7 @@ export default function PipelinePage() {
   const [q, setQ] = useState('')
   const [species, setSpecies] = useState('all')
   const [stage, setStage] = useState<Filter>('all')
+  const [bill, setBill] = useState<BillFilter>('all')
   const [showCold, setShowCold] = useState(false)
 
   useEffect(() => {
@@ -87,8 +100,17 @@ export default function PipelinePage() {
   const shown = useMemo(() => live.filter(r =>
     (species === 'all' || r.species === species)
     && (stage === 'all' || r.stage === stage)
+    && (bill === 'all' || r.billing.status === bill)
     && (!q.trim() || `${r.account} ${r.customers.join(' ')}`.toLowerCase().includes(q.trim().toLowerCase()))
-  ), [live, species, stage, q])
+  ), [live, species, stage, bill, q])
+
+  // Money still out on animals in the building — the number the Gantt exists for.
+  const toCollect = useMemo(() => live.filter(r => r.billing.status === 'open').reduce((s, r) => s + r.billing.balance, 0), [live])
+  const billCounts = useMemo(() => {
+    const c: Record<BillFilter, number> = { all: live.length, paid: 0, open: 0, none: 0 }
+    for (const r of live) if (r.billing.status === 'paid' || r.billing.status === 'open' || r.billing.status === 'none') c[r.billing.status]++
+    return c
+  }, [live])
 
   // Time axis: from the oldest arrival on screen to today, in whole weeks.
   const axisStart = useMemo(() => {
@@ -135,6 +157,14 @@ export default function PipelinePage() {
           ))}
         </div>
 
+        {/* Money — invoiced or not, paid or not, straight from QuickBooks */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginBottom: '1rem', alignItems: 'center' }}>
+          <button onClick={() => setBill(bill === 'open' ? 'all' : 'open')} style={chip(bill === 'open', C.yellow)}>💵 Unpaid · {billCounts.open}{toCollect > 0 ? ` · ${money(toCollect)} to collect` : ''}</button>
+          <button onClick={() => setBill(bill === 'paid' ? 'all' : 'paid')} style={chip(bill === 'paid', C.green)}>Paid · {billCounts.paid}</button>
+          <button onClick={() => setBill(bill === 'none' ? 'all' : 'none')} style={chip(bill === 'none', C.lightBrown)}>Not invoiced · {billCounts.none}</button>
+          <span style={{ color: C.lightBrown, fontSize: '0.7rem', marginLeft: '0.5rem' }}>QuickBooks invoices dated after each animal's harvest, matched by customer</span>
+        </div>
+
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap' }}>
           <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search account or customer"
             style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.35)', borderRadius: 3, padding: '0.45rem 0.7rem', color: C.cream, fontSize: '0.85rem', outline: 'none', width: 260 }} />
@@ -162,7 +192,7 @@ export default function PipelinePage() {
         {rows && (
           <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflowX: 'auto' }}>
             {/* Axis */}
-            <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr 190px', borderBottom: '1px solid rgba(166,120,90,0.25)', position: 'sticky', top: 0, background: C.dark, zIndex: 2 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr 230px', borderBottom: '1px solid rgba(166,120,90,0.25)', position: 'sticky', top: 0, background: C.dark, zIndex: 2 }}>
               <div style={{ padding: '0.5rem 0.9rem', color: C.lightBrown, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.12em' }}>Account</div>
               <div style={{ position: 'relative', height: 30 }}>
                 {weeks.map(t => (
@@ -172,7 +202,7 @@ export default function PipelinePage() {
                 ))}
                 <span style={{ position: 'absolute', left: pct(now), top: 6, transform: 'translateX(-50%)', color: C.cream, fontSize: '0.66rem', fontWeight: 700 }}>today</span>
               </div>
-              <div style={{ padding: '0.5rem 0.9rem', color: C.lightBrown, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.12em' }}>Next</div>
+              <div style={{ padding: '0.5rem 0.9rem', color: C.lightBrown, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.12em' }}>Next · Money</div>
             </div>
 
             {shown.length === 0 && <p style={{ color: C.lightBrown, padding: '2rem', textAlign: 'center', margin: 0 }}>Nothing matches.</p>}
@@ -186,7 +216,7 @@ export default function PipelinePage() {
                 : r.received_at
               const stageDays = daysAgo(stageSince)
               return (
-                <div key={r.id} style={{ display: 'grid', gridTemplateColumns: '300px 1fr 190px', borderBottom: '1px solid rgba(166,120,90,0.12)', alignItems: 'center', opacity: r.trail_cold ? 0.55 : 1 }}>
+                <div key={r.id} style={{ display: 'grid', gridTemplateColumns: '300px 1fr 230px', borderBottom: '1px solid rgba(166,120,90,0.12)', alignItems: 'center', opacity: r.trail_cold ? 0.55 : 1 }}>
                   <div style={{ padding: '0.55rem 0.9rem', minWidth: 0 }}>
                     <div style={{ color: C.cream, fontWeight: 700, fontSize: '0.88rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.account}</div>
                     <div style={{ color: C.lightBrown, fontSize: '0.72rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -211,6 +241,7 @@ export default function PipelinePage() {
                       {r.trail_cold ? 'Records stop' : lab.label}{stageDays != null && !r.trail_cold ? ` · ${stageDays}d` : ''}
                     </span>
                     <div style={{ color: C.lightBrown, fontSize: '0.7rem', lineHeight: 1.3 }}>{nextStep(r)}</div>
+                    <div style={{ marginTop: 3 }}><BillingChip b={r.billing} /></div>
                   </div>
                 </div>
               )
