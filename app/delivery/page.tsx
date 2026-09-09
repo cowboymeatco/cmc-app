@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { DeliveryScan } from '@/lib/types'
 import { isoDateTime } from '@/lib/dates'
+import { shortItemName } from '@/lib/itemName'
 
 type Tab = 'schedule' | 'new' | 'loadout' | 'log' | 'baker'
 type LogFilter = 'all' | 'pending' | 'reviewed'
@@ -62,7 +63,7 @@ function barcodeLabel(barcode: string, pluMap: Record<string, string>): { icon: 
   if (type === 'ean13') {
     const dec = decodeBarcode(barcode)
     if (dec) {
-      const name = pluMap[dec.plu] ?? `PLU ${dec.plu}`
+      const name = pluMap[dec.plu] ? shortItemName(pluMap[dec.plu]) : `PLU ${dec.plu}`
       return { icon: '🥩', primary: name, secondary: `${dec.weightLbs.toFixed(2)} lb` }
     }
   }

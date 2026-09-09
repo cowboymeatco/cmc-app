@@ -8,6 +8,8 @@
 // paper, grouped by the packing session each box came from so a multi-stop
 // haul reads one customer at a time.
 
+import { shortItemName } from './itemName'
+
 export interface SlipBox {
   id:               string
   serial_number:    string | null
@@ -50,7 +52,7 @@ const SHOP = { name: 'Cowboy Meat Co', line1: '1109 Front St', line2: 'Forsyth, 
 function rollUp(scans: SlipBox['scans']) {
   const grouped: Record<string, { count: number; weight: number }> = {}
   for (const s of scans) {
-    const key = (s.item_name || s.plu_number || 'Unknown').trim()
+    const key = shortItemName(s.item_name) || (s.plu_number || 'Unknown').trim()
     if (!grouped[key]) grouped[key] = { count: 0, weight: 0 }
     grouped[key].count  += s.quantity ?? 1
     grouped[key].weight += Number(s.weight_lbs) || 0

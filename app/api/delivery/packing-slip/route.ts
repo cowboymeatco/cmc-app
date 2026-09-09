@@ -2,6 +2,7 @@ export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { generatePackingSlip, SlipBox, SlipDelivery, SlipLoose } from '@/lib/packingSlip'
+import { shortItemName } from '@/lib/itemName'
 
 export const dynamic = 'force-dynamic'
 
@@ -57,7 +58,7 @@ async function looseItems(barcodes: string[]): Promise<SlipLoose[]> {
   const names: Record<string, string> = {}
   if (plus.size) {
     const { data } = await supabase.from('plu_items').select('plu_number, item_name').in('plu_number', [...plus])
-    for (const r of data ?? []) if (r.plu_number) names[String(r.plu_number)] = r.item_name ?? ''
+    for (const r of data ?? []) if (r.plu_number) names[String(r.plu_number)] = shortItemName(r.item_name)
   }
 
   const grouped: Record<string, SlipLoose> = {}
