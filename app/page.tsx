@@ -317,10 +317,10 @@ export default function Dashboard() {
               display: 'flex', alignItems: 'center', gap: '0.75rem',
               cursor: 'pointer',
             }}>
-              <span style={{ fontSize: '1.1rem' }}>📤</span>
+              <span style={{ fontSize: '1.1rem' }}>📊</span>
               <div>
-                <span style={{ color: C.cream, fontWeight: 600, fontSize: '0.88rem' }}>Reports &amp; Exports</span>
-                <span style={{ color: C.lightBrown, fontSize: '0.78rem', marginLeft: '0.75rem' }}>Download CSVs for Power BI · Harvest · Processing · Orders · Receiving</span>
+                <span style={{ color: C.cream, fontWeight: 600, fontSize: '0.88rem' }}>Reports</span>
+                <span style={{ color: C.lightBrown, fontSize: '0.78rem', marginLeft: '0.75rem' }}>In the Building (every account, by stage) · Producer &amp; Customer · Value-Add Output</span>
               </div>
               <span style={{ marginLeft: 'auto', color: C.lightBrown, fontSize: '0.8rem' }}>Open ›</span>
             </div>
