@@ -659,6 +659,10 @@ function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
                     {marking ? 'Saving…' : '✓ Mark Reviewed'}
                   </button>
                 )}
+                <button style={{ ...BTN('transparent', C.tan), border: '1px solid rgba(201,168,130,0.45)' }}
+                  onClick={() => window.open(`/api/delivery/packing-slip?id=${encodeURIComponent(selected.id)}`, '_blank')}>
+                  🖨 Packing Slip
+                </button>
               </div>
             </div>
 
@@ -1184,6 +1188,21 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
   const [sessions, setSessions] = useState<Record<string, LoadOutSession>>({})
   const [flash,    setFlash]    = useState<ScanFlash | null>(null)
   const [done,     setDone]     = useState<ScanFlash | null>(null)
+  // The delivery_scans row the last Release wrote — the packing slip prints
+  // off it (Charlie, 2026-09-09: "a packing slip ... after they are scanned in").
+  const [lastDeliveryId, setLastDeliveryId] = useState<string | null>(null)
+
+  // Before Release the slip is a preview of what's scanned; after, it's the record.
+  function openPackingSlip() {
+    if (lastDeliveryId && scanned.length === 0) {
+      window.open(`/api/delivery/packing-slip?id=${encodeURIComponent(lastDeliveryId)}`, '_blank')
+      return
+    }
+    const p = new URLSearchParams({ serials: scanned.map(s => s.box.serial_number).filter(Boolean).join(',') })
+    if (releasedBy.trim()) p.set('driver', releasedBy.trim())
+    if (notes.trim())      p.set('notes',  notes.trim())
+    window.open(`/api/delivery/packing-slip?${p}`, '_blank')
+  }
 
   // The gun fires into whatever has focus — keep that the scan box.
   useEffect(() => { scanRef.current?.focus() }, [])
@@ -1310,6 +1329,7 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
 
     const closed  = (data.sessions_closed  ?? []) as { customer_name: string }[]
     const partial = (data.sessions_partial ?? []) as { customer_name: string; remaining: number }[]
+    setLastDeliveryId((data.delivery?.id as string | undefined) ?? null)
     // Leaving boxes behind is a normal pickup, not a problem — report it plainly.
     setDone({
       kind: 'ok',
@@ -1357,6 +1377,11 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
             <div style={{ background: c.bg, border: `1px solid ${c.bd}`, borderRadius: 4, padding: '0.85rem 1rem', marginBottom: '1rem' }}>
               <div style={{ color: c.fg, fontSize: '0.88rem', fontWeight: 700 }}>{done.title}</div>
               {done.detail && <div style={{ color: C.tan, fontSize: '0.78rem', marginTop: '0.3rem', lineHeight: 1.5 }}>{done.detail}</div>}
+              {lastDeliveryId && (
+                <button onClick={openPackingSlip} style={{ ...BTN(C.tan, C.dark), marginTop: '0.6rem', padding: '0.45rem 0.9rem', fontSize: '0.8rem' }}>
+                  🖨 Print Packing Slip
+                </button>
+              )}
             </div>
           )
         })()}
@@ -1421,6 +1446,12 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
           <div style={{ color: C.yellow, fontSize: '0.76rem', marginTop: '0.5rem', textAlign: 'center' }}>
             Enter who&rsquo;s releasing it first.
           </div>
+        )}
+        {scanned.length > 0 && (
+          <button onClick={openPackingSlip}
+            style={{ ...BTN('transparent', C.tan), width: '100%', padding: '0.55rem', fontSize: '0.82rem', marginTop: '0.6rem', border: '1px solid rgba(201,168,130,0.45)' }}>
+            🖨 Packing Slip for {scanned.length} box{scanned.length !== 1 ? 'es' : ''}
+          </button>
         )}
       </div>
 
