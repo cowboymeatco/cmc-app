@@ -138,7 +138,7 @@ export default function MorningPage() {
 
             {shift.status === 'open' && (
               <Banner tone="warn">
-                Last night&apos;s shift is still open — it closes itself at 3:00 AM and rolls whatever is left here.
+                Last night&apos;s shift is still open — it closes itself at 5:00 AM and rolls whatever is left here.
               </Banner>
             )}
 

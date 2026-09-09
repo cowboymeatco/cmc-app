@@ -11,7 +11,7 @@ import { hoursBetween, type Priority } from '@/lib/cleaning'
 // P2 got done, and how many items rolled to the morning.
 //
 // Hours is closed_at − started_at, and both stamps are real events now (a
-// person pressing Start, a person or the 3 AM clock closing). A row closed by
+// person pressing Start, a person or the 5 AM clock closing). A row closed by
 // 'system' is flagged: its hours are a cap, not a measurement.
 
 interface ShiftRow {

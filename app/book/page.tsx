@@ -230,7 +230,7 @@ export default function BookPage() {
             )}
 
             <p style={{ color: C.lightBrown, fontSize: '0.75rem', marginTop: '0.75rem', marginBottom: 0, fontStyle: 'italic' }}>
-              We&apos;ll confirm your exact kill day (typically Monday or Thursday) when we call.
+              We&apos;ll confirm your exact harvest day (typically Monday or Thursday) when we call.
             </p>
           </section>
 

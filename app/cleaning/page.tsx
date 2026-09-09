@@ -33,7 +33,7 @@ export default function CleaningHub() {
       fetch('/api/cleaning/shift').then(r => r.json()),
       fetch('/api/cleaning/issues?status=open').then(r => r.json()),
       fetch('/api/cleaning/supply-requests?status=open').then(r => r.json()),
-      // Also closes anything still open past 3 AM, which is the right side
+      // Also closes anything still open past 5 AM, which is the right side
       // effect for the first screen anyone opens in the morning.
       fetch('/api/cleaning/morning').then(r => r.json()),
     ]).then(([shiftRes, issuesRes, supplyRes, morningRes]) => {

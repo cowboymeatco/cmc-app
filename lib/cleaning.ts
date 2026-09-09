@@ -376,9 +376,10 @@ export function outOfSpec(
  * The crew works after production, often past midnight. At 1am they are
  * cleaning up after YESTERDAY, and the record has to say so or the night's
  * work lands on a day the plant hadn't run yet. Anything before the cutoff
- * belongs to the previous day.
+ * belongs to the previous day. Kept at the auto-close hour so a crew still
+ * on at 4 AM sees last night's list, not an empty "today".
  */
-export const SHIFT_ROLLOVER_HOUR = 4
+export const SHIFT_ROLLOVER_HOUR = 5
 
 export function shiftDateFor(now: Date, todayISO: string): string {
   const shopHour = Number(
@@ -500,15 +501,15 @@ export function p1Complete(items: Pick<CleaningShiftItem, 'status' | 'priority'>
 
 // ── The shift clock ─────────────────────────────────────────────────────
 //
-// Shift starts 5:00 PM, hard stop 1:30 AM (8 hours worked + 30 min unpaid
-// lunch), and anything still open at 3:00 AM is closed by the system. All
+// Shift starts 5:00 PM, hard stop 3:30 AM (10 hours worked + 30 min unpaid
+// lunch), and anything still open at 5:00 AM is closed by the system. All
 // three are shop wall-clock times; the hard stop and auto-close fall on the
 // morning AFTER shift_date.
 
 export const SHOP_TZ = 'America/Denver'
 export const SHIFT_START = { h: 17, m: 0 }
-export const HARD_STOP   = { h: 1,  m: 30 }
-export const AUTO_CLOSE  = { h: 3,  m: 0 }
+export const HARD_STOP   = { h: 3,  m: 30 }
+export const AUTO_CLOSE  = { h: 5,  m: 0 }
 
 /** The instant that is `h:m` on the shop clock on `dateISO`, DST and all. */
 export function shopTime(dateISO: string, h: number, m: number): Date {
@@ -571,32 +572,33 @@ export function hoursBetween(startISO: string | null, endISO: string | null): nu
 
 export interface BreakSlot { label: string; start: string; end: string }   // 'HH:MM' shop clock
 
-const SOLO: BreakSlot[] = [
-  { label: 'Break', start: '19:00', end: '19:15' },
-  { label: 'Lunch', start: '21:15', end: '21:45' },
-  { label: 'Break', start: '23:45', end: '00:00' },
-]
-const STAGGER_A: BreakSlot[] = [
-  { label: 'Break', start: '18:45', end: '19:00' },
-  { label: 'Lunch', start: '21:00', end: '21:30' },
-  { label: 'Break', start: '23:30', end: '23:45' },
-]
-const STAGGER_B: BreakSlot[] = [
-  { label: 'Break', start: '19:00', end: '19:15' },
-  { label: 'Lunch', start: '21:30', end: '22:00' },
-  { label: 'Break', start: '23:45', end: '00:00' },
+// One schedule for the whole crew regardless of headcount — no staggering.
+// Everyone breaks together; the plant is empty for fifteen minutes and that
+// is fine at night.
+const SCHEDULE: BreakSlot[] = [
+  { label: 'Break', start: '19:30', end: '19:45' },
+  { label: 'Lunch', start: '22:00', end: '22:30' },
+  { label: 'Break', start: '01:00', end: '01:15' },
 ]
 
 export interface BreakPlan { who: string; slots: BreakSlot[] }
 
-/**
- * One line per person. Alone: the single schedule. Two or more: staggered,
- * alternating A/B down the crew list so the floor is never empty.
- */
+/** Everyone shares the same times, so this is always one line. */
 export function breakPlan(crewNames: string[]): BreakPlan[] {
-  if (crewNames.length <= 1) return [{ who: crewNames[0] ?? 'Crew', slots: SOLO }]
-  return crewNames.map((who, i) => ({ who, slots: i % 2 === 0 ? STAGGER_A : STAGGER_B }))
+  return [{ who: crewNames[0] ?? 'Crew', slots: SCHEDULE }]
 }
+
+/**
+ * The suggested shape of the night, for the header strip. Advisory only —
+ * nothing moves an item because the clock crossed a block boundary.
+ */
+export const TIME_BLOCKS: BreakSlot[] = [
+  { label: 'Dry pickup', start: '17:00', end: '17:45' },
+  { label: 'P1',         start: '17:45', end: '00:00' },
+  { label: 'P2',         start: '00:00', end: '02:30' },
+  { label: 'P3',         start: '02:30', end: '03:30' },
+  { label: 'Close',      start: '03:30', end: '05:00' },
+]
 
 /** '19:15' → '7:15'. */
 export function fmtClock(hhmm: string): string {

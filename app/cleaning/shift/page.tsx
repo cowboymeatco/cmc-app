@@ -4,7 +4,7 @@ import { dateLabel, addDaysISO } from '@/lib/dates'
 import {
   shiftProgress, outOfSpec, itemSourceLabel, p1Complete,
   hardStopFor, shopTime, fmtShopTime, fmtSpan, breakPlan, fmtClock,
-  PRIORITIES, PRIORITY_LABEL, PRIORITY_BLURB,
+  PRIORITIES, PRIORITY_LABEL, PRIORITY_BLURB, TIME_BLOCKS,
   type CleaningShiftItem, type ItemStatus, type Priority, type BreakSlot,
 } from '@/lib/cleaning'
 import {
@@ -17,7 +17,7 @@ import {
 // The list is a forcing function. P1 is what the plant can't open without and
 // it has to be finished inside the shift; P2 and P3 are visible overflow. So
 // the screen is tiered P1 → P2 → P3, the clock is always in view, and the
-// hard stop at 1:30 AM turns the close button into the biggest thing on the
+// hard stop at 3:30 AM turns the close button into the biggest thing on the
 // page. Nothing is blocked at the hard stop — they may be finishing one — but
 // the record shows what the clock said.
 
@@ -375,7 +375,7 @@ export default function ShiftPage() {
 
         {closed && (
           <Banner tone="ok">
-            Closed by {shift.closed_by === 'system' ? 'the 3:00 AM clock' : shift.closed_by}
+            Closed by {shift.closed_by === 'system' ? 'the 5:00 AM clock' : shift.closed_by}
             {rolledNow > 0 && <> — {rolledNow} item{rolledNow === 1 ? '' : 's'} rolled to the morning list</>}.
             {' '}
             {reopening ? (
@@ -689,7 +689,7 @@ function StartShift({ member, onStart }: { member: CrewMember; onStart: (ids: st
       <div>
         <div style={{ color: C.cream, fontSize: 20, fontWeight: 800 }}>Start tonight&apos;s shift</div>
         <div style={{ color: C.tan, fontSize: 14, marginTop: 4 }}>
-          Tick everyone on tonight. The clock starts when you press Start; hard stop is 1:30 AM.
+          Tick everyone on tonight. The clock starts when you press Start; hard stop is 3:30 AM.
         </div>
       </div>
 
@@ -744,25 +744,27 @@ function slotRange(shiftDate: string, slot: BreakSlot): [number, number] {
 
 function BreakStrip({ shiftDate, crew, now }: { shiftDate: string; crew: Crew[]; now: number }) {
   const plan = breakPlan(crew.map(c => c.name))
+  const line = (slots: BreakSlot[], tone?: string) => (
+    <div style={{ display: 'flex', gap: 8, fontSize: 12, color: C.lightBrown, flexWrap: 'wrap' }}>
+      {tone && <span style={{ color: C.tan, fontWeight: 700, minWidth: 44 }}>{tone}</span>}
+      {slots.map((s, j) => {
+        const [a, b] = slotRange(shiftDate, s)
+        const live = now >= a && now < b
+        return (
+          <span key={j} style={{ color: live ? C.cream : undefined, fontWeight: live ? 700 : 400 }}>
+            {live ? '● ' : ''}{s.label} {fmtClock(s.start)}–{fmtClock(s.end)}
+            {j < slots.length - 1 ? ' ·' : ''}
+          </span>
+        )
+      })}
+    </div>
+  )
   return (
     <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 2 }}>
-      {plan.map(({ who, slots }, i) => (
-        <div key={who + i} style={{ display: 'flex', gap: 8, fontSize: 12, color: C.lightBrown, flexWrap: 'wrap' }}>
-          {plan.length > 1 && (
-            <span style={{ color: C.tan, fontWeight: 700, minWidth: 60 }}>{firstName(who)}</span>
-          )}
-          {slots.map((s, j) => {
-            const [a, b] = slotRange(shiftDate, s)
-            const live = now >= a && now < b
-            return (
-              <span key={j} style={{ color: live ? C.cream : undefined, fontWeight: live ? 700 : 400 }}>
-                {live ? '● ' : ''}{s.label} {fmtClock(s.start)}–{fmtClock(s.end)}
-                {j < slots.length - 1 ? ' ·' : ''}
-              </span>
-            )
-          })}
-        </div>
-      ))}
+      {/* The shape of the night — where the crew should roughly be by now. */}
+      {line(TIME_BLOCKS, 'Plan')}
+      {/* Same break times for everyone, whatever the headcount. */}
+      {line(plan[0].slots, 'Breaks')}
     </div>
   )
 }

@@ -12,7 +12,7 @@ import { closeStaleShifts, crewNamed, type ShiftRow } from '@/lib/cleaningShiftS
 // Returns the most recent shift on file with everything the morning needs:
 // how the night went (P1 time, hours, who), the items that rolled, and the
 // pre-op deadline they have to beat. Loading this also closes any shift still
-// open past 3 AM, so the morning view never shows a night as "still going"
+// open past 5 AM, so the morning view never shows a night as "still going"
 // because a cron didn't fire.
 
 export async function GET() {

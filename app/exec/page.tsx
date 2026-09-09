@@ -1611,7 +1611,7 @@ export default function ExecPage() {
                           <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', whiteSpace: 'nowrap', color: s.auto_closed ? WARN_COLOR : C.tan }}>
                             {s.closed_at ? clock(s.closed_at) : s.status === 'closed' ? '—' : 'open'}{s.auto_closed && s.closed_at ? ' auto' : ''}
                           </td>
-                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', fontWeight: 600, color: s.hours == null ? C.lightBrown : s.hours > 8.5 ? COST_COLOR : C.cream }}>
+                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', fontWeight: 600, color: s.hours == null ? C.lightBrown : s.hours > 10.5 ? COST_COLOR : C.cream }}>
                             {s.hours != null ? s.hours.toFixed(1) : '—'}
                           </td>
                           <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', color: p1ok ? INCOME_COLOR : s.p1_total ? COST_COLOR : C.lightBrown }}>
@@ -1629,8 +1629,8 @@ export default function ExecPage() {
                 </table>
               </div>
               <div style={{ fontSize: '0.7rem', color: C.lightBrown, marginTop: '0.5rem' }}>
-                Hours = close minus Start. Shift is 5:00 PM to a 1:30 AM hard stop (8.0 h + unpaid lunch); anything over 8.5 is orange.
-                &quot;auto&quot; means nobody closed it and the 3:00 AM clock did, so those hours are a cap, not a measurement.
+                Hours = close minus Start. Shift is 5:00 PM to a 3:30 AM hard stop (10.0 h + unpaid lunch); anything over 10.5 is orange.
+                &quot;auto&quot; means nobody closed it and the 5:00 AM clock did, so those hours are a cap, not a measurement.
                 Nights before 2026-09-05 were closed in bulk and carry no close time.
               </div>
             </>

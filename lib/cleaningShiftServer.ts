@@ -5,7 +5,7 @@ import {
 } from '@/lib/cleaning'
 
 // Server-side shift lifecycle. Shared by the shift API, the morning view, and
-// the 3 AM auto-close cron, so a shift closes the same way no matter who
+// the 5 AM auto-close cron, so a shift closes the same way no matter who
 // closes it — a person, the first cutter's phone loading the morning list, or
 // the clock.
 
@@ -185,7 +185,7 @@ export interface CloseResult { shift: ShiftRow; rolled: number; pending_p1: numb
  * Close out the night. Open P2/P3 items roll to the morning; open P1 items
  * stay 'pending' so the miss is visible in the record rather than laundered
  * into a roll. `closedAt` is only ever supplied by the auto-close, which
- * stamps the 3 AM cutoff rather than whenever the cron happened to run.
+ * stamps the 5 AM cutoff rather than whenever the cron happened to run.
  */
 export async function closeShift(
   shiftId: string, by: string, opts: { closedAt?: Date; notes?: string } = {},
@@ -218,7 +218,7 @@ export async function closeShift(
 }
 
 /**
- * Close anything still open past its 3 AM cutoff, as 'system'. Idempotent and
+ * Close anything still open past its 5 AM cutoff, as 'system'. Idempotent and
  * cheap, so it runs from the cron AND from the morning view's load — the
  * cutter's phone at 6 AM is a perfectly good clock if the cron never fired.
  */
