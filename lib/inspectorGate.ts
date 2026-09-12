@@ -45,6 +45,14 @@ function ipv4ToInt(ip: string): number | null {
   return n
 }
 
+/**
+ * How wide a range the allowlist will accept. A plant is one WAN address or a
+ * small block; anything broader is a mistake or an attack, and `0.0.0.0/0` —
+ * which used to validate cleanly and match every address on earth — would have
+ * quietly turned "only from the plant" into "from anywhere".
+ */
+export const MIN_PREFIX_BITS = 24
+
 /** Does `ip` fall inside `network`, written as a bare address or IPv4 CIDR? */
 export function ipMatches(ip: string, network: string): boolean {
   const net = network.trim()
@@ -53,7 +61,9 @@ export function ipMatches(ip: string, network: string): boolean {
 
   const [base, bitsRaw] = net.split('/')
   const bits = Number(bitsRaw)
-  if (!Number.isInteger(bits) || bits < 0 || bits > 32) return false
+  // Enforced here too, not just on the way in: a row wide enough to match the
+  // whole internet must not open the door even if it somehow got stored.
+  if (!Number.isInteger(bits) || bits < MIN_PREFIX_BITS || bits > 32) return false
 
   const a = ipv4ToInt(ip)
   const b = ipv4ToInt(base)
@@ -76,7 +86,7 @@ export function isValidNetwork(network: string): boolean {
   if (net.includes('/')) {
     const [base, bitsRaw] = net.split('/')
     const bits = Number(bitsRaw)
-    return ipv4ToInt(base) !== null && /^\d+$/.test(bitsRaw) && bits >= 0 && bits <= 32
+    return ipv4ToInt(base) !== null && /^\d+$/.test(bitsRaw) && bits >= MIN_PREFIX_BITS && bits <= 32
   }
   if (ipv4ToInt(net) !== null) return true
   // Bare IPv6 is matched literally, so only check it looks like an address.
