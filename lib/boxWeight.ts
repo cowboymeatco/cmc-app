@@ -56,8 +56,6 @@ export interface WeightOutProposal {
   boundedByNextJob: boolean
   /** Boxes were named by a person rather than found by PLU and date. */
   manual:         boolean
-  /** Hand-linked boxes held none of the job's PLU, so everything in them counts. */
-  countedWholeBox: boolean
 }
 
 // Strip the ticket numbers and hanging weights the packing screen tacks onto a
@@ -205,32 +203,40 @@ export function proposeWeightOut(
     boundedByNextJob: !!nextSamePluDate &&
       to < shiftDays(jobBaseDate(job), Math.abs(settings.match_window_days)),
     manual:          false,
-    countedWholeBox: false,
   }
 }
 
 /**
  * Weight from boxes a person named, ignoring dates entirely.
  *
- * Within those boxes we still prefer the job's own PLU — a customer's box holds
- * their whole order, and only the sticks in it came out of a stick cook. But if
- * the job's PLU appears nowhere in the boxes chosen, that is usually the very
- * reason somebody linked by hand (product went out under a different PLU, or
- * the job never had one). In that case everything in the boxes counts, and the
- * caller is told so rather than being handed a silent zero.
+ * A customer's box holds their whole order, so only some lines in it belong to
+ * the job. Which ones is a person's call, stored per link as `plus`; when
+ * nobody has ticked anything it's just the job's own output PLU.
+ *
+ * Only ticked lines of the job's output PLU are finished weight. Anything else
+ * ticked is what went INTO the cook; the box picker offers that as weight in.
+ * The first linked boxes were raw carcass boxes for a pulled-beef job — only
+ * the chuck rolls in them were used — and the old rule, "no output PLU here, so
+ * count the whole box as finished weight", proposed brisket and plate as 68 lb
+ * of pulled beef (Charlie, 2026-09-12).
  */
 export function proposeFromLinkedBoxes(
   job:   { output_plu: string | null; customer_name: string | null },
-  scans: BoxScanRow[]
+  scans: BoxScanRow[],
+  picks: Map<string, string[] | null> = new Map()
 ): WeightOutProposal | null {
   if (scans.length === 0) return null
 
-  const ofPlu = job.output_plu ? scans.filter(s => s.plu_number === job.output_plu) : []
-  const countedWholeBox = ofPlu.length === 0
-  const counted = countedWholeBox ? scans : ofPlu
+  if (!job.output_plu) return null
+  const outScans = scans.filter(s => {
+    if (s.plu_number !== job.output_plu) return false
+    const ticked = picks.get(s.box_id)
+    return ticked ? ticked.includes(lineKey(s)) : true
+  })
+  if (outScans.length === 0) return null
 
   const byBox = new Map<string, BoxContribution>()
-  for (const s of counted) {
+  for (const s of outScans) {
     const cur = byBox.get(s.box_id) ?? {
       box_id: s.box_id, box_label: s.box_label, customer_name: s.customer_name,
       pack_date: s.pack_date, lbs: 0, packages: 0,
@@ -255,7 +261,11 @@ export function proposeFromLinkedBoxes(
     windowFrom: dates[0] ?? '',
     windowTo:   dates[dates.length - 1] ?? '',
     boundedByNextJob: false,
-    manual:          true,
-    countedWholeBox,
+    manual:     true,
   }
+}
+
+/** What a tick on a linked box stores for one line: its PLU, or its name when it has none. */
+export function lineKey(s: { plu_number: string | null; item_name: string | null }): string {
+  return String(s.plu_number ?? s.item_name ?? '?')
 }

@@ -137,8 +137,10 @@ interface BoxSummary {
   pack_date:     string | null
   total_lbs:     number
   packages:      number
-  items:         { plu_number: string | null; item_name: string | null; lbs: number }[]
+  items:         { key: string; plu_number: string | null; item_name: string | null; lbs: number; packages: number }[]
   linked:        boolean
+  /** Ticked lines on a linked box; null = just the job's output PLU. */
+  plus:          string[] | null
 }
 
 // The automatic match works off PLU and pack date. When it can't find the
@@ -146,7 +148,9 @@ interface BoxSummary {
 // was packed off way after the cook — this is how a person says which boxes
 // hold the job's output. Linking any box switches the job off the automatic
 // search entirely.
-function BoxPicker({ job, onChanged }: { job: ValueAddJob; onChanged: () => void }) {
+function BoxPicker({ job, onChanged, onUseWeightIn }: {
+  job: ValueAddJob; onChanged: () => void; onUseWeightIn: (lbs: number) => Promise<void>
+}) {
   const [linked,  setLinked]  = useState<BoxSummary[]>([])
   const [results, setResults] = useState<BoxSummary[]>([])
   const [q,       setQ]       = useState('')
@@ -187,6 +191,32 @@ function BoxPicker({ job, onChanged }: { job: ValueAddJob; onChanged: () => void
     onChanged()
   }
 
+  // A customer's box holds their whole order; only some of it is this job.
+  // Untouched, a box counts just the job's output PLU.
+  const ticked = (box: BoxSummary) =>
+    new Set(box.plus ?? box.items.filter(i => !!job.output_plu && i.plu_number === job.output_plu).map(i => i.key))
+
+  async function toggleItem(box: BoxSummary, key: string) {
+    const next = ticked(box)
+    if (next.has(key)) next.delete(key); else next.add(key)
+    const plus = Array.from(next)
+    setLinked(prev => prev.map(b => b.box_id === box.box_id ? { ...b, plus } : b))
+    await fetch('/api/value-add/box-link', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: job.id, box_id: box.box_id, plus }),
+    })
+    onChanged()
+  }
+
+  // Ticked raw product (anything that isn't the job's output PLU) is what went in.
+  const isOutput = (i: BoxSummary['items'][number]) => !!job.output_plu && i.plu_number === job.output_plu
+  const rawIn = linked.flatMap(b => { const t = ticked(b); return b.items.filter(i => t.has(i.key) && !isOutput(i)) })
+  const inLbs = Math.round(rawIn.reduce((s, i) => s + i.lbs, 0) * 10) / 10
+  const inPkgs = rawIn.reduce((s, i) => s + i.packages, 0)
+  const outTicked = linked.some(b => { const t = ticked(b); return b.items.some(i => t.has(i.key) && isOutput(i)) })
+  const [usingIn, setUsingIn] = useState(false)
+
   async function unlink(box: BoxSummary) {
     setBusy(box.box_id)
     await fetch(`/api/value-add/box-link?job_id=${job.id}&box_id=${box.box_id}`, { method: 'DELETE' })
@@ -211,11 +241,30 @@ function BoxPicker({ job, onChanged }: { job: ValueAddJob; onChanged: () => void
         </div>
         <div style={{ color: C.lightBrown, fontSize: '0.7rem' }}>
           {box.pack_date} · {box.total_lbs.toFixed(1)} lbs · {box.packages} pkg
-          {box.items.length > 0 && (
+          {action === 'link' && box.items.length > 0 && (
             <> · {box.items.slice(0, 3).map(i => `${i.item_name ?? i.plu_number} ${i.lbs.toFixed(1)}`).join(', ')}
               {box.items.length > 3 ? ` +${box.items.length - 3} more` : ''}</>
           )}
         </div>
+        {action === 'unlink' && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem', marginTop: '0.3rem' }}>
+            {box.items.map(i => {
+              const on = ticked(box).has(i.key)
+              return (
+                <button key={i.key} type="button" onClick={() => toggleItem(box, i.key)}
+                  title={on ? 'Counts toward this job — tap to leave it out' : 'Tap if this job used it'}
+                  style={{
+                    background: on ? `${isOutput(i) ? C.blue : C.green}26` : 'transparent',
+                    border: `1px solid ${on ? (isOutput(i) ? C.blue : C.green) : 'rgba(166,120,90,0.3)'}`,
+                    color: on ? C.cream : C.lightBrown, borderRadius: 99, cursor: 'pointer',
+                    fontSize: '0.68rem', padding: '0.12rem 0.55rem',
+                  }}>
+                  {on ? '✓ ' : ''}{i.item_name ?? i.plu_number} · {i.packages} · {i.lbs.toFixed(1)} lb
+                </button>
+              )
+            })}
+          </div>
+        )}
       </div>
       <button
         onClick={() => (action === 'link' ? link(box) : unlink(box))}
@@ -244,9 +293,27 @@ function BoxPicker({ job, onChanged }: { job: ValueAddJob; onChanged: () => void
       {linked.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginBottom: '0.6rem' }}>
           {linked.map(b => <Row key={b.box_id} box={b} action="unlink" />)}
-          <div style={{ fontSize: '0.68rem', color: C.blue }}>
-            These boxes set this job&apos;s finished weight. The automatic PLU and date search is switched off while any box is linked.
+          <div style={{ fontSize: '0.68rem', color: C.lightBrown }}>
+            Tap what this job used. Raw product you tick (green) is <strong>weight in</strong>;
+            {job.output_plu ? <> PLU {job.output_plu} (blue) is <strong>weight out</strong>.</> : ' this job has no output PLU for weight out.'}
+            {' '}The automatic PLU and date search is off while any box is linked.
           </div>
+          {inLbs > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', fontSize: '0.78rem', color: C.green }}>
+              <strong>{inLbs.toFixed(1)} lbs in</strong>
+              <span style={{ color: C.lightBrown, fontSize: '0.72rem' }}>{inPkgs} package{inPkgs === 1 ? '' : 's'} ticked</span>
+              {Math.abs(Number(job.weight_in_lbs ?? NaN) - inLbs) >= 0.1 || job.weight_in_lbs == null ? (
+                <button disabled={usingIn}
+                  style={{ ...BTN(C.green), fontSize: '0.72rem', padding: '0.25rem 0.7rem' }}
+                  onClick={async () => { setUsingIn(true); await onUseWeightIn(inLbs); setUsingIn(false) }}>
+                  {usingIn ? '…' : `Use ${inLbs.toFixed(1)} lbs as weight in`}
+                </button>
+              ) : <span style={{ fontSize: '0.72rem' }}>✓ is the weight in</span>}
+            </div>
+          )}
+          {!outTicked && inLbs === 0 && (
+            <div style={{ fontSize: '0.7rem', color: C.yellow }}>Nothing ticked yet — these boxes aren&apos;t counting toward any weight.</div>
+          )}
         </div>
       )}
 
@@ -320,6 +387,17 @@ function JobCard({ job, proposal, onUpdated, onBoxLinksChanged, cardLabels }: {
     const updated = await res.json()
     setApplying(false)
     if (!updated?.error) { setWOut(String(proposal.lbs)); onUpdated(updated) }
+  }
+
+  // Raw product ticked in the linked boxes — what went into the cook.
+  async function useWeightIn(lbs: number) {
+    const res = await fetch('/api/value-add', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: job.id, weight_in_lbs: lbs }),
+    })
+    const updated = await res.json()
+    if (!updated?.error) { setWIn(String(lbs)); onUpdated(updated) }
   }
 
   async function advance() {
@@ -517,15 +595,6 @@ function JobCard({ job, proposal, onUpdated, onBoxLinksChanged, cardLabels }: {
             </div>
           )}
 
-          {proposal.countedWholeBox && (
-            <div style={{ fontSize: '0.7rem', color: C.yellow, marginTop: '0.35rem' }}>
-              ⚠️ {proposal.plu
-                ? <>None of the linked boxes hold PLU {proposal.plu}, so <strong>everything in them</strong> is counted.</>
-                : <>This job has no output PLU, so <strong>everything in the linked boxes</strong> is counted.</>}
-              {' '}Check the box contents before using this.
-            </div>
-          )}
-
           <div style={{ fontSize: '0.68rem', color: C.lightBrown, marginTop: '0.35rem' }}>
             {proposal.manual
               ? `From ${proposal.boxes.length} hand-linked box${proposal.boxes.length === 1 ? '' : 'es'}`
@@ -548,7 +617,7 @@ function JobCard({ job, proposal, onUpdated, onBoxLinksChanged, cardLabels }: {
         </div>
       )}
 
-      {picking && <BoxPicker job={job} onChanged={onBoxLinksChanged} />}
+      {picking && <BoxPicker job={job} onChanged={onBoxLinksChanged} onUseWeightIn={useWeightIn} />}
 
       {job.notes && (
         <div style={{ fontSize: '0.78rem', color: C.tan, fontStyle: 'italic', marginBottom: '0.6rem' }}>{job.notes}</div>

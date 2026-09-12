@@ -136,11 +136,15 @@ export async function GET(req: NextRequest) {
   // one of those filters is what went wrong.
   const { data: linkRows } = await supabase
     .from('value_add_job_box')
-    .select('job_id, box_id')
+    .select('job_id, box_id, plus')
     .in('job_id', jobs.map(j => j.id))
 
   const linkedBoxesByJob = new Map<string, string[]>()
+  const picksByJob = new Map<string, Map<string, string[] | null>>()
   for (const l of linkRows ?? []) {
+    const picks = picksByJob.get(l.job_id as string) ?? new Map()
+    picks.set(l.box_id as string, (l.plus as string[] | null) ?? null)
+    picksByJob.set(l.job_id as string, picks)
     const list = linkedBoxesByJob.get(l.job_id as string) ?? []
     list.push(l.box_id as string)
     linkedBoxesByJob.set(l.job_id as string, list)
@@ -179,7 +183,7 @@ export async function GET(req: NextRequest) {
   const proposals = jobs.flatMap(job => {
     const manual = linkedScans.get(job.id)
     const p = manual?.length
-      ? proposeFromLinkedBoxes(job, manual)
+      ? proposeFromLinkedBoxes(job, manual, picksByJob.get(job.id))
       : proposeWeightOut(job, scans, windowSettings, nextDateFor(job))
     if (!p) return []
     return [{
