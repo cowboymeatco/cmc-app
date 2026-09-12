@@ -117,7 +117,13 @@ export async function fetchAnimalProgress(
       .filter((w): w is number => w != null)
       .reduce<number | null>((sum, w) => (sum ?? 0) + w, null)
 
-    const carcassStages = mine.harvests.map<AnimalStage>(h => (str(h.status) === 'cut' ? 'cutting' : 'aging'))
+    // A carcass that left hanging is as done as this pipeline gets — it was
+    // never going to be cut here (Charlie, 2026-09-11).
+    const carcassStages = mine.harvests.map<AnimalStage>(h => {
+      const st = str(h.status)
+      if (st === 'delivered') return 'picked_up'
+      return st === 'cut' ? 'cutting' : 'aging'
+    })
 
     const pairKeys = [...new Set(mine.inputs.map(i => `${str(i.customer_name)}|${str(i.session_date)}`))]
     const sessionRows = pairKeys.map(k => sessionByPair.get(k)).filter((s): s is Row => !!s)

@@ -1,8 +1,10 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
-import { generatePackingSlip, SlipBox, SlipDelivery, SlipLoose } from '@/lib/packingSlip'
+import { generatePackingSlip, SlipBox, SlipDelivery, SlipLoose, SlipCarcass } from '@/lib/packingSlip'
 import { shortItemName } from '@/lib/itemName'
+import { resolveCarcasses } from '@/lib/carcassDelivery'
+import { isCarcassTag } from '@/lib/carcassTag'
 
 export const dynamic = 'force-dynamic'
 
@@ -43,13 +45,13 @@ async function looseItems(barcodes: string[]): Promise<SlipLoose[]> {
   for (const raw of barcodes) {
     const b = raw.trim()
     if (!b || SERIAL_RE.test(b.toUpperCase())) continue
+    // Carcass tags get their own section with the animal behind them.
+    if (isCarcassTag(b)) continue
     if (/^2\d{12}$/.test(b)) {
       const plu = String(parseInt(b.substring(1, 6), 10))
       const w   = parseInt(b.substring(7, 12), 10) / 100
       plus.add(plu)
       decoded.push({ key: `plu:${plu}`, label: `PLU ${plu}`, weight: w > 0 ? w : null })
-    } else if (/^CT-[0-9a-f-]{36}$/i.test(b)) {
-      decoded.push({ key: 'carcass', label: 'Carcass (tag scanned)', weight: null })
     } else {
       decoded.push({ key: `raw:${b}`, label: b, weight: null })
     }
@@ -82,6 +84,9 @@ export async function GET(req: NextRequest) {
   let delivery: SlipDelivery
   let rows: BoxRow[] = []
   let loose: SlipLoose[] = []
+  // Every code on the load, whichever way we were called — carcass tags are
+  // picked back out of it below.
+  let allCodes: string[] = []
 
   if (id) {
     const { data: d, error } = await supabase.from('delivery_scans').select('*').eq('id', id).maybeSingle()
@@ -103,7 +108,8 @@ export async function GET(req: NextRequest) {
       const { data: extra } = await supabase.from('boxes').select(BOX_COLS).in('serial_number', missing)
       rows = rows.concat((extra ?? []) as BoxRow[])
     }
-    loose = await looseItems(((d.barcodes ?? []) as { barcode?: string }[]).map(b => String(b.barcode ?? '')))
+    allCodes = ((d.barcodes ?? []) as { barcode?: string }[]).map(b => String(b.barcode ?? ''))
+    loose = await looseItems(allCodes)
   } else {
     // ?serials= is box serials only (Load Out); ?barcodes= is whatever the New
     // Delivery gun read — serials print as boxes, the rest as loose packages.
@@ -118,6 +124,7 @@ export async function GET(req: NextRequest) {
       if (error) return NextResponse.json({ error: error.message }, { status: 500 })
       rows = (data ?? []) as BoxRow[]
     }
+    allCodes = codes
     loose = await looseItems(codes)
     const customer = (searchParams.get('customer') ?? '').trim()
       || [...new Set(rows.map(r => r.customer_name))].join(' / ')
@@ -132,7 +139,14 @@ export async function GET(req: NextRequest) {
   }
 
   const boxes = await boxesWithScans(rows)
-  return new NextResponse(generatePackingSlip(delivery, boxes, loose), {
+  const carcasses: SlipCarcass[] = (await resolveCarcasses(allCodes))
+    .filter(c => c.harvest_log_id)
+    .map(c => ({
+      code: c.code, species: c.species, carcass_tag: c.carcass_tag,
+      producer: c.producer, owner: c.owner, harvest_date: c.harvest_date,
+      side: c.side, weightLbs: c.weight_lbs,
+    }))
+  return new NextResponse(generatePackingSlip(delivery, boxes, loose, carcasses), {
     headers: { 'Content-Type': 'text/html;charset=utf-8', 'Cache-Control': 'no-store' },
   })
 }

@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { DeliveryScan } from '@/lib/types'
 import { isoDateTime } from '@/lib/dates'
 import { shortItemName } from '@/lib/itemName'
+import { parseCarcassTag, carcassTagLabel } from '@/lib/carcassTag'
 
 type Tab = 'schedule' | 'new' | 'loadout' | 'log' | 'baker'
 type LogFilter = 'all' | 'pending' | 'reviewed'
@@ -40,9 +41,11 @@ const BOX_SERIAL_RE = /^CMC\d{6}[A-Z0-9]{4}$/i
 
 function identifyBarcode(raw: string): BarcodeType {
   if (/^\d{13}$/.test(raw) && raw[0] === '2') return 'ean13'
-  if (/^CT-[0-9a-f-]{36}$/i.test(raw))        return 'carcass'
   if (/^CMC-\d{8}-\d{3}$/.test(raw))          return 'cmc_box'
   if (BOX_SERIAL_RE.test(raw))                return 'box_serial'
+  // Carcass tags last: the printed half tag is YYMMDD-TAG-SIDE / YYDDD-TAG,
+  // loose enough that it has to be asked after the fixed formats above.
+  if (parseCarcassTag(raw))                   return 'carcass'
   return 'unknown'
 }
 
@@ -68,9 +71,8 @@ function barcodeLabel(barcode: string, pluMap: Record<string, string>): { icon: 
     }
   }
   if (type === 'carcass') {
-    // CT-{uuid} — show short tag
-    const short = barcode.slice(0, 11) + '…'
-    return { icon: '🐄', primary: 'Carcass', secondary: short }
+    const p = parseCarcassTag(barcode)
+    return { icon: '🐄', primary: 'Carcass', secondary: p ? carcassTagLabel(p) : barcode }
   }
   if (type === 'box_serial') {
     // CMC260724373E → 📦 Box · packed Jul 24
@@ -1261,6 +1263,21 @@ interface LoadOutSession {
 
 type ScanFlash = { kind: 'ok' | 'warn' | 'err'; title: string; detail?: string }
 
+// A hanging carcass on the load — the animal behind a scanned carcass tag.
+interface LoadOutCarcass {
+  code:           string
+  harvest_log_id: string | null
+  species:        string | null
+  carcass_tag:    string | null
+  producer:       string | null
+  owner:          string | null
+  harvest_date:   string | null
+  kill_type:      string | null
+  side:           'L' | 'R' | null
+  weight_lbs:     number | null
+  status:         string | null
+}
+
 function LoadOutTab({ onSaved }: { onSaved: () => void }) {
   const scanRef = useRef<HTMLInputElement>(null)
   const [scanInput, setScanInput] = useState('')
@@ -1273,6 +1290,8 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
   // Boxes on the truck, in scan order, plus a live snapshot of each box's session.
   const [scanned,  setScanned]  = useState<{ box: LoadOutBox; scannedAt: string }[]>([])
   const [sessions, setSessions] = useState<Record<string, LoadOutSession>>({})
+  // Carcasses ride alongside the boxes — same load, no session behind them.
+  const [carcasses, setCarcasses] = useState<{ carcass: LoadOutCarcass; scannedAt: string }[]>([])
   const [flash,    setFlash]    = useState<ScanFlash | null>(null)
   const [done,     setDone]     = useState<ScanFlash | null>(null)
   // The delivery_scans row the last Release wrote — the packing slip prints
@@ -1281,11 +1300,12 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
 
   // Before Release the slip is a preview of what's scanned; after, it's the record.
   function openPackingSlip() {
-    if (lastDeliveryId && scanned.length === 0) {
+    if (lastDeliveryId && scanned.length === 0 && carcasses.length === 0) {
       window.open(`/api/delivery/packing-slip?id=${encodeURIComponent(lastDeliveryId)}`, '_blank')
       return
     }
     const p = new URLSearchParams({ serials: scanned.map(s => s.box.serial_number).filter(Boolean).join(',') })
+    if (carcasses.length) p.set('barcodes', carcasses.map(c => c.carcass.code).join(','))
     if (releasedBy.trim()) p.set('driver', releasedBy.trim())
     if (notes.trim())      p.set('notes',  notes.trim())
     window.open(`/api/delivery/packing-slip?${p}`, '_blank')
@@ -1306,6 +1326,13 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
 
     if (scanned.some(s => (s.box.serial_number ?? '').toUpperCase() === serial)) {
       say({ kind: 'warn', title: 'Already on this load', detail: serial })
+      return
+    }
+
+    // A carcass tag, not a box label — the customer is taking the animal
+    // hanging (Charlie, 2026-09-11).
+    if (identifyBarcode(serial) === 'carcass') {
+      await scanCarcass(serial)
       return
     }
 
@@ -1353,14 +1380,63 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
     scanRef.current?.focus()
   }
 
+  async function scanCarcass(code: string) {
+    if (carcasses.some(c => c.carcass.code === code)) {
+      say({ kind: 'warn', title: 'Already on this load', detail: code })
+      return
+    }
+    setLooking(true)
+    let res: Response
+    try {
+      res = await fetch(`/api/delivery/carcass?code=${encodeURIComponent(code)}`)
+    } catch {
+      setLooking(false)
+      say({ kind: 'err', title: 'Lookup failed — check the connection', detail: code }, 6000)
+      return
+    }
+    const data = await res.json().catch(() => null)
+    setLooking(false)
+
+    if (!res.ok) {
+      say({
+        kind: 'err',
+        title: data?.error === 'carcass_not_found' ? 'No animal with that tag' : 'Not a carcass tag',
+        detail: code,
+      }, 6000)
+      return
+    }
+
+    const carcass = data.carcass as LoadOutCarcass
+    setCarcasses(prev => [...prev, { carcass, scannedAt: new Date().toISOString() }])
+    // An animal that already left, or one that went to the cut floor, is worth
+    // a second look before it goes on the truck again.
+    const odd = carcass.status && carcass.status !== 'chilling' && carcass.status !== 'complete'
+    say({
+      kind: odd ? 'warn' : 'ok',
+      title: `${carcass.species ?? 'Carcass'} · Tag ${carcass.carcass_tag ?? '—'}${carcass.side ? ` ${carcass.side} half` : ''}`,
+      detail: [
+        carcass.weight_lbs != null ? `${carcass.weight_lbs.toFixed(1)} lb hanging` : 'no hanging weight on record',
+        carcass.owner ?? carcass.producer ?? '',
+        odd ? `rail says "${carcass.status}"` : '',
+      ].filter(Boolean).join(' · '),
+    }, odd ? 8000 : 4000)
+    scanRef.current?.focus()
+  }
+
   function removeScan(id: string) {
     setScanned(prev => prev.filter(s => s.box.id !== id))
+    scanRef.current?.focus()
+  }
+
+  function removeCarcass(code: string) {
+    setCarcasses(prev => prev.filter(c => c.carcass.code !== code))
     scanRef.current?.focus()
   }
 
   function clearAll() {
     setScanned([])
     setSessions({})
+    setCarcasses([])
     setFlash(null)
     scanRef.current?.focus()
   }
@@ -1383,9 +1459,10 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
     })
   })()
 
-  const totalWeight = scanned.reduce((sum, s) => sum + (Number(s.box.total_weight_lbs) || 0), 0)
+  const carcassWeight = carcasses.reduce((sum, c) => sum + (Number(c.carcass.weight_lbs) || 0), 0)
+  const totalWeight = scanned.reduce((sum, s) => sum + (Number(s.box.total_weight_lbs) || 0), 0) + carcassWeight
   const freshBoxes  = scanned.filter(s => !s.box.picked_up_at).length
-  const canRelease  = scanned.length > 0 && !!releasedBy.trim()
+  const canRelease  = (scanned.length > 0 || carcasses.length > 0) && !!releasedBy.trim()
 
   async function release() {
     if (!canRelease) return
@@ -1399,6 +1476,7 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
           released_by: releasedBy.trim(),
           notes,
           serials: scanned.map(s => s.box.serial_number).filter(Boolean),
+          carcass_codes: carcasses.map(c => c.carcass.code),
         }),
       })
     } catch {
@@ -1418,16 +1496,22 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
     const partial = (data.sessions_partial ?? []) as { customer_name: string; remaining: number }[]
     setLastDeliveryId((data.delivery?.id as string | undefined) ?? null)
     // Leaving boxes behind is a normal pickup, not a problem — report it plainly.
+    const carcassCount = (data.carcasses ?? []).length as number
     setDone({
       kind: 'ok',
-      title: `✓ ${data.boxes_picked_up} box${data.boxes_picked_up !== 1 ? 'es' : ''} released to ${releasedBy.trim()}`,
+      title: [
+        `✓ ${data.boxes_picked_up} box${data.boxes_picked_up !== 1 ? 'es' : ''}`,
+        carcassCount ? `${carcassCount} carcass${carcassCount !== 1 ? 'es' : ''}` : '',
+      ].filter(Boolean).join(' + ') + ` released to ${releasedBy.trim()}`,
       detail: [
         closed.length  ? `Marked picked up: ${closed.map(c => c.customer_name).join(', ')}` : '',
         partial.length ? `Still in the freezer: ${partial.map(p => `${p.customer_name} (${p.remaining} box${p.remaining !== 1 ? 'es' : ''})`).join(', ')}` : '',
+        carcassCount ? `Off the rail: ${(data.carcasses as { carcass_tag: string | null }[]).map(c => `Tag ${c.carcass_tag ?? '—'}`).join(', ')}` : '',
       ].filter(Boolean).join(' · '),
     })
     setScanned([])
     setSessions({})
+    setCarcasses([])
     setNotes('')
     onSaved()
     scanRef.current?.focus()
@@ -1455,7 +1539,8 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
           Load Out
         </h3>
         <p style={{ color: C.lightBrown, fontSize: '0.78rem', margin: '0 0 1.25rem', lineHeight: 1.5 }}>
-          Scan every box as it goes in the customer&rsquo;s vehicle. Releasing moves them out of the freezer and marks the order picked up.
+          Scan every box as it goes in the customer&rsquo;s vehicle &mdash; or a carcass tag if they&rsquo;re taking the
+          animal hanging. Releasing moves them out of the freezer and marks the order picked up.
         </p>
 
         {done && (() => {
@@ -1475,7 +1560,7 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
 
         {/* Scan field — big, monospace, always the focus target */}
         <div style={{ marginBottom: '0.9rem' }}>
-          <label style={LABEL}>Scan Box Label *</label>
+          <label style={LABEL}>Scan Box Label or Carcass Tag *</label>
           <input
             ref={scanRef}
             style={{ ...INPUT, fontFamily: 'monospace', fontSize: '1.15rem', padding: '0.7rem 0.75rem', letterSpacing: '0.05em' }}
@@ -1495,7 +1580,7 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
             spellCheck={false}
           />
           <div style={{ fontSize: '0.74rem', color: C.lightBrown, marginTop: '0.3rem' }}>
-            The serial under the barcode on every CMC box label.
+            The serial under the barcode on every CMC box label &mdash; or the tag on a hanging carcass.
           </div>
         </div>
 
@@ -1527,17 +1612,22 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
           onClick={release}
           disabled={releasing || !canRelease}
         >
-          {releasing ? 'Releasing…' : `📦 Release ${scanned.length || ''} Box${scanned.length !== 1 ? 'es' : ''} to Customer`}
+          {releasing ? 'Releasing…' : carcasses.length && !scanned.length
+            ? `🐄 Release ${carcasses.length} Carcass${carcasses.length !== 1 ? 'es' : ''} to Customer`
+            : `📦 Release ${scanned.length || ''} Box${scanned.length !== 1 ? 'es' : ''}${carcasses.length ? ` + ${carcasses.length} Carcass${carcasses.length !== 1 ? 'es' : ''}` : ''} to Customer`}
         </button>
-        {scanned.length > 0 && !releasedBy.trim() && (
+        {(scanned.length > 0 || carcasses.length > 0) && !releasedBy.trim() && (
           <div style={{ color: C.yellow, fontSize: '0.76rem', marginTop: '0.5rem', textAlign: 'center' }}>
             Enter who&rsquo;s releasing it first.
           </div>
         )}
-        {scanned.length > 0 && (
+        {(scanned.length > 0 || carcasses.length > 0) && (
           <button onClick={openPackingSlip}
             style={{ ...BTN('transparent', C.tan), width: '100%', padding: '0.55rem', fontSize: '0.82rem', marginTop: '0.6rem', border: '1px solid rgba(201,168,130,0.45)' }}>
-            🖨 Packing Slip for {scanned.length} box{scanned.length !== 1 ? 'es' : ''}
+            🖨 Packing Slip for {[
+              scanned.length ? `${scanned.length} box${scanned.length !== 1 ? 'es' : ''}` : '',
+              carcasses.length ? `${carcasses.length} carcass${carcasses.length !== 1 ? 'es' : ''}` : '',
+            ].filter(Boolean).join(' + ')}
           </button>
         )}
       </div>
@@ -1550,16 +1640,68 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
           </span>
           <span style={{ fontSize: '0.82rem', color: C.tan }}>
             {scanned.length} box{scanned.length !== 1 ? 'es' : ''}
+            {carcasses.length > 0 && ` · ${carcasses.length} carcass${carcasses.length !== 1 ? 'es' : ''}`}
             {totalWeight > 0 && ` · ${totalWeight.toFixed(1)} lbs`}
           </span>
         </div>
 
-        <div style={{ overflowY: 'auto', flex: 1, padding: cards.length ? '0.85rem 1.25rem' : 0 }}>
-          {cards.length === 0 && (
+        <div style={{ overflowY: 'auto', flex: 1, padding: cards.length || carcasses.length ? '0.85rem 1.25rem' : 0 }}>
+          {cards.length === 0 && carcasses.length === 0 && (
             <p style={{ color: C.lightBrown, fontSize: '0.88rem', padding: '2.5rem 1.5rem', textAlign: 'center', lineHeight: 1.6 }}>
               Nothing scanned yet.<br />
               <span style={{ fontSize: '0.8rem' }}>Pull the trigger on the first box — the order it belongs to appears here.</span>
             </p>
+          )}
+
+          {/* Hanging carcasses — one card, since there's no session to group
+              them under. Weight is the hanging weight off the kill floor. */}
+          {carcasses.length > 0 && (
+            <div style={{
+              border: '1px solid rgba(201,168,130,0.4)', borderRadius: 4, marginBottom: '0.85rem',
+              overflow: 'hidden', background: 'rgba(255,255,255,0.03)',
+            }}>
+              <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid rgba(166,120,90,0.15)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
+                <div>
+                  <div style={{ color: C.cream, fontWeight: 700, fontSize: '0.95rem' }}>🐄 Hanging carcasses</div>
+                  <div style={{ color: C.lightBrown, fontSize: '0.75rem', marginTop: '0.15rem' }}>
+                    going out on the rail, not in a box
+                    {carcassWeight > 0 && ` · ${carcassWeight.toFixed(1)} lbs hanging`}
+                  </div>
+                </div>
+                <span style={{
+                  flexShrink: 0, fontSize: '0.72rem', fontWeight: 700, borderRadius: 99, padding: '3px 10px',
+                  background: 'rgba(201,168,130,0.18)', color: C.tan,
+                }}>
+                  {carcasses.length} PIECE{carcasses.length !== 1 ? 'S' : ''}
+                </span>
+              </div>
+              <div style={{ padding: '0.5rem 0.35rem' }}>
+                {carcasses.map(({ carcass }) => (
+                  <div key={carcass.code} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.4rem 0.75rem' }}>
+                    <span style={{ fontSize: '0.95rem', lineHeight: 1, color: C.green }}>☑</span>
+                    <span style={{ color: C.cream, fontSize: '0.85rem', fontWeight: 600, minWidth: 62 }}>
+                      Tag {carcass.carcass_tag ?? '—'}
+                    </span>
+                    <span style={{ color: C.tan, fontSize: '0.78rem' }}>
+                      {carcass.species ?? 'Carcass'}{carcass.side ? ` · ${carcass.side} half` : ' · whole'}
+                    </span>
+                    <span style={{ color: C.tan, fontSize: '0.76rem' }}>
+                      {carcass.weight_lbs != null ? `${carcass.weight_lbs.toFixed(1)} lb` : 'no weight'}
+                    </span>
+                    {(carcass.owner ?? carcass.producer) && (
+                      <span style={{ color: C.lightBrown, fontSize: '0.74rem' }}>{carcass.owner ?? carcass.producer}</span>
+                    )}
+                    <button
+                      onClick={() => removeCarcass(carcass.code)}
+                      style={{ marginLeft: 'auto', background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '1rem', padding: '0 0.25rem', lineHeight: 1 }}
+                      title="Take back off the load"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
 
           {cards.map(({ key, sess, onThisLoad, scannedIds, remaining, weight }) => {
@@ -1635,7 +1777,7 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
           })}
         </div>
 
-        {scanned.length > 0 && (
+        {(scanned.length > 0 || carcasses.length > 0) && (
           <div style={{ padding: '0.75rem 1.25rem', borderTop: '1px solid rgba(166,120,90,0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: '0.8rem', color: C.tan }}>
               {freshBoxes} new{scanned.length !== freshBoxes && ` · ${scanned.length - freshBoxes} already gone`}

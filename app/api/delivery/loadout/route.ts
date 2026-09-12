@@ -1,6 +1,7 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { resolveCarcasses, markCarcassesDelivered } from '@/lib/carcassDelivery'
 
 export const dynamic = 'force-dynamic'
 
@@ -82,11 +83,16 @@ export async function GET(req: NextRequest) {
 }
 
 // POST /api/delivery/loadout — the customer drove off with these boxes.
-// Body: { released_by, customer?, notes?, serials: string[], picked_up_at? }
+// Body: { released_by, customer?, notes?, serials: string[], carcass_codes?: string[], picked_up_at? }
 //
 // Stamps each box, logs one delivery_scans row so the run shows in the Delivery
 // Log like any other, and closes out a session only once every box it holds has
 // left. A partial pickup leaves the session open — the rest is still in the freezer.
+//
+// A load can also carry hanging carcasses (Charlie, 2026-09-11) — scanned by
+// carcass tag, with no boxes and no session behind them. They ride in the same
+// barcode manifest, carrying the status they were pulled out of so a later pull
+// off the load can put them back on the rail.
 export async function POST(req: NextRequest) {
   const body = await req.json()
   const releasedBy: string = (body.released_by ?? body.driver ?? '').trim()
@@ -99,24 +105,43 @@ export async function POST(req: NextRequest) {
       .filter((s: string) => s.length > 0)
   )] as string[]
 
+  const carcassCodes: string[] = [...new Set(
+    (Array.isArray(body.carcass_codes) ? body.carcass_codes : [])
+      .map((s: unknown) => String(s ?? '').trim().toUpperCase())
+      .filter((s: string) => s.length > 0)
+  )] as string[]
+
   if (!releasedBy) return NextResponse.json({ error: 'released_by required' }, { status: 400 })
-  if (!serials.length) return NextResponse.json({ error: 'no boxes scanned' }, { status: 400 })
-
-  const { data: boxRows, error: bErr } = await supabase
-    .from('boxes')
-    .select(BOX_COLS)
-    .in('serial_number', serials)
-  if (bErr) return NextResponse.json({ error: bErr.message }, { status: 500 })
-
-  const boxes = (boxRows ?? []) as BoxRow[]
-  const found = new Set(boxes.map(b => (b.serial_number ?? '').toUpperCase()))
-  const unknown = serials.filter(s => !found.has(s))
-  if (!boxes.length) {
-    return NextResponse.json({ error: 'none of those serials match a box', unknown }, { status: 404 })
+  if (!serials.length && !carcassCodes.length) {
+    return NextResponse.json({ error: 'nothing scanned' }, { status: 400 })
   }
 
+  let boxes: BoxRow[] = []
+  let unknown: string[] = []
+  if (serials.length) {
+    const { data: boxRows, error: bErr } = await supabase
+      .from('boxes')
+      .select(BOX_COLS)
+      .in('serial_number', serials)
+    if (bErr) return NextResponse.json({ error: bErr.message }, { status: 500 })
+
+    boxes = (boxRows ?? []) as BoxRow[]
+    const found = new Set(boxes.map(b => (b.serial_number ?? '').toUpperCase()))
+    unknown = serials.filter(s => !found.has(s))
+    if (!boxes.length && !carcassCodes.length) {
+      return NextResponse.json({ error: 'none of those serials match a box', unknown }, { status: 404 })
+    }
+  }
+
+  const carcasses = carcassCodes.length ? await resolveCarcasses(carcassCodes) : []
+  const knownCarcasses = carcasses.filter(c => c.harvest_log_id)
+  unknown = unknown.concat(carcasses.filter(c => !c.harvest_log_id).map(c => c.code))
+
   const customer: string = (body.customer ?? '').trim()
-    || [...new Set(boxes.map(b => b.customer_name))].join(' / ')
+    || [...new Set([
+      ...boxes.map(b => b.customer_name),
+      ...knownCarcasses.map(c => c.owner ?? c.producer ?? '').filter(Boolean),
+    ])].join(' / ')
 
   // 1. Log the run first — if a stamp below fails the pickup is still on record.
   const { data: delivery, error: dErr } = await supabase
@@ -125,7 +150,12 @@ export async function POST(req: NextRequest) {
       delivered_at: pickedUpAt,
       driver:       releasedBy,
       customer,
-      barcodes:     boxes.map(b => ({ barcode: b.serial_number ?? '', scannedAt: pickedUpAt })),
+      barcodes: [
+        ...boxes.map(b => ({ barcode: b.serial_number ?? '', scannedAt: pickedUpAt })),
+        // prev_status is what the rail said before the truck left with it, so
+        // pulling the carcass back off this load restores it exactly.
+        ...knownCarcasses.map(c => ({ barcode: c.code, scannedAt: pickedUpAt, prev_status: c.status })),
+      ],
       notes,
       status:       'pending',
       destination:  'customer',
@@ -167,10 +197,17 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // 4. Carcasses that went out are off the rail.
+  const carcassesDelivered = await markCarcassesDelivered(
+    knownCarcasses.map(c => c.harvest_log_id as string),
+  )
+
   return NextResponse.json({
     delivery,
     boxes_picked_up: toStamp.length,
     already_gone:    boxes.length - toStamp.length,
+    carcasses:       knownCarcasses,
+    carcasses_delivered: carcassesDelivered,
     unknown,
     sessions_closed:  sessionsClosed,
     sessions_partial: sessionsPartial,

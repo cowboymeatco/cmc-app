@@ -27,6 +27,19 @@ export interface SlipBox {
 // box — listed as packages, rolled up by name.
 export interface SlipLoose { label: string; count: number; weightLbs: number | null }
 
+// A hanging carcass on the load — no boxes behind it, so it prints its own
+// line off the carcass tag the driver scanned (Charlie, 2026-09-11).
+export interface SlipCarcass {
+  code:         string
+  species:      string | null
+  carcass_tag:  string | null
+  producer:     string | null
+  owner:        string | null
+  harvest_date: string | null
+  side:         'L' | 'R' | null
+  weightLbs:    number | null
+}
+
 export interface SlipDelivery {
   id:           string | null
   delivered_at: string
@@ -62,7 +75,12 @@ function rollUp(scans: SlipBox['scans']) {
     .sort((a, b) => b.weight - a.weight)
 }
 
-export function generatePackingSlip(delivery: SlipDelivery, boxes: SlipBox[], loose: SlipLoose[] = []): string {
+export function generatePackingSlip(
+  delivery: SlipDelivery,
+  boxes: SlipBox[],
+  loose: SlipLoose[] = [],
+  carcasses: SlipCarcass[] = [],
+): string {
   // Group by packing session (customer + pack date), sessions in the order
   // their first box appears, boxes by number inside each.
   const order: string[] = []
@@ -130,6 +148,44 @@ export function generatePackingSlip(delivery: SlipDelivery, boxes: SlipBox[], lo
         <thead><tr><th>Item</th><th class="cuts">Pkgs</th><th class="wt">Lbs</th><th class="chk">Rec’d</th></tr></thead>
         <tbody>${loose.map(l => `
         <tr><td>${esc(l.label)}</td><td class="cuts">${l.count}</td><td class="wt">${l.weightLbs != null ? l.weightLbs.toFixed(2) : '—'}</td><td class="chk">☐</td></tr>`).join('')}
+        </tbody>
+      </table>
+    </section>`
+  }
+
+  // Carcasses hang first on the sheet: a whole animal is the biggest thing on
+  // the truck, and it's the line the customer signs for by weight.
+  let carcassHTML = ''
+  let grandCarcasses = 0
+  if (carcasses.length) {
+    const cWeight = carcasses.reduce((n, c) => n + (c.weightLbs ?? 0), 0)
+    grandCarcasses = carcasses.length
+    grandWeight += cWeight
+    carcassHTML = `
+    <section>
+      <div class="sess">
+        <div class="sess-name">Hanging carcasses</div>
+        <div class="sess-meta">${carcasses.length} piece${carcasses.length !== 1 ? 's' : ''}${cWeight > 0 ? ` · ${cWeight.toFixed(1)} lb hanging` : ''}</div>
+      </div>
+      <table>
+        <thead><tr><th class="num">Tag</th><th>Animal</th><th class="wt">Lbs</th><th class="chk">Rec’d</th></tr></thead>
+        <tbody>${carcasses.map(c => {
+          const what = [
+            c.species ?? 'Carcass',
+            c.side ? `${c.side} half` : 'whole carcass',
+          ].join(' · ')
+          const who = [c.owner, c.producer && c.producer !== c.owner ? `producer ${c.producer}` : '']
+            .filter(Boolean).join(' · ')
+          const killed = c.harvest_date ? `killed ${fmtPack(c.harvest_date)}` : ''
+          const detail = [who, killed].filter(Boolean).join(' · ')
+          return `
+        <tr>
+          <td class="num">${esc(c.carcass_tag ?? '—')}<div class="serial">${esc(c.code)}</div></td>
+          <td class="contents">${esc(what)}${detail ? `<div class="lb">${esc(detail)}</div>` : ''}</td>
+          <td class="wt">${c.weightLbs != null ? c.weightLbs.toFixed(1) : '—'}</td>
+          <td class="chk">☐</td>
+        </tr>`
+        }).join('')}
         </tbody>
       </table>
     </section>`
@@ -207,9 +263,10 @@ export function generatePackingSlip(delivery: SlipDelivery, boxes: SlipBox[], lo
     ${delivery.notes ? `<div class="notes"><div class="k">Notes</div><div class="v">${esc(delivery.notes)}</div></div>` : ''}
   </div>
 
-  ${sections}${looseHTML}${!sections && !looseHTML ? '<p><i>Nothing scanned on this delivery.</i></p>' : ''}
+  ${carcassHTML}${sections}${looseHTML}${!sections && !looseHTML && !carcassHTML ? '<p><i>Nothing scanned on this delivery.</i></p>' : ''}
 
   <div class="totals">
+    ${grandCarcasses ? `<span>Carcasses <b>${grandCarcasses}</b></span>` : ''}
     <span>Boxes <b>${grandBoxes}</b></span>
     <span>Packages <b>${grandCuts}</b></span>
     <span>Total <b>${grandWeight.toFixed(1)} lb</b></span>

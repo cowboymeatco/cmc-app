@@ -1,6 +1,8 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { parseCarcassTag } from '@/lib/carcassTag'
+import { resolveCarcasses } from '@/lib/carcassDelivery'
 
 export const dynamic = 'force-dynamic'
 
@@ -53,5 +55,29 @@ export async function POST(req: NextRequest) {
     .in('serial_number', [...pulledSet])
     .select('id')
 
-  return NextResponse.json({ ...updated, pulled: removed, boxes_returned: (unstamped ?? []).length })
+  // A carcass pulled off the load goes back on the rail as whatever it was
+  // before the truck took it — the manifest line carries that status.
+  const pulledCarcasses = before.filter(b => pulledSet.has(String(b.barcode ?? '').toUpperCase()))
+  let carcassesReturned = 0
+  for (const entry of pulledCarcasses) {
+    const parsed = parseCarcassTag(String(entry.barcode ?? ''))
+    if (!parsed) continue
+    const [carcass] = await resolveCarcasses([String(entry.barcode)])
+    if (!carcass?.harvest_log_id) continue
+    const back = (entry as { prev_status?: string }).prev_status || 'complete'
+    const { data: restored } = await supabase
+      .from('harvest_log')
+      .update({ status: back })
+      .eq('id', carcass.harvest_log_id)
+      .eq('status', 'delivered')
+      .select('id')
+    carcassesReturned += (restored ?? []).length
+  }
+
+  return NextResponse.json({
+    ...updated,
+    pulled: removed,
+    boxes_returned: (unstamped ?? []).length,
+    carcasses_returned: carcassesReturned,
+  })
 }
