@@ -695,6 +695,9 @@ export default function ScannerPage() {
   const [reassignBox,      setReassignBox]      = useState<BoxRecord | null>(null)
   const [reassignBusy,     setReassignBusy]     = useState(false)
   const [reassignNewName,  setReassignNewName]  = useState('')
+  // ── Merging one box into another (same session) ──────────────────────────────
+  const [mergeBox,         setMergeBox]         = useState<BoxRecord | null>(null)
+  const [boxMergeBusy,     setBoxMergeBusy]     = useState(false)
 
   // ── Starting a session from a box serial (New Session ▾ → Repack boxes) ──────
   const [newMenu,          setNewMenu]          = useState(false)
@@ -1797,6 +1800,50 @@ export default function ScannerPage() {
       setReassignBusy(false)
       setReassignBox(null)
       setReassignNewName('')
+      scanRef.current?.focus()
+    }
+  }
+
+  // ── Merge one box into another ───────────────────────────────────────────────
+  // Two half-full boxes become one on the pallet, so the scans move to the box
+  // that holds the meat and the emptied one goes away (Jill, 2026-09-10).
+  // Numbers aren't shuffled up — the other labels are already printed — so the
+  // session just loses a number, same as a reassign.
+  async function mergeBoxInto(source: BoxRecord, target: BoxRecord) {
+    setBoxMergeBusy(true)
+    try {
+      const res = await fetch('/api/boxes/merge', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_box_id: source.id, target_box_id: target.id }),
+      })
+      const data = await res.json().catch(() => ({} as { error?: string }))
+      if (!res.ok) {
+        window.alert(`Merge failed: ${(data as { error?: string }).error ?? res.statusText}`)
+        return
+      }
+      const merged = (data as { box: BoxRecord }).box
+      const moved  = (data as { moved_scans?: number }).moved_scans ?? 0
+
+      setBoxes(boxes.filter(b => b.id !== source.id).map(b => (b.id === merged.id ? merged : b)))
+      // Whichever box was open, the meat is in the target now — follow it.
+      if (activeBox?.id === source.id || activeBox?.id === merged.id) {
+        setActiveBox(merged)
+        const r = await fetch(`/api/boxes/scans?box_id=${merged.id}`)
+        const d = await r.json().catch(() => [])
+        setScans(Array.isArray(d) ? ([...d] as ScanLine[]).reverse() : [])
+      }
+      setLastKind('ok')
+      setLastItem(`Box ${source.box_number} tipped into Box ${merged.box_number} — ${moved} cut${moved !== 1 ? 's' : ''} moved · printing new label`)
+      setFlash('ok')
+      setTimeout(() => setFlash(null), 2500)
+      // The old box's label is wrong now and the target's is short — reprint it.
+      openPrintWindow(merged, [], labelFlags)
+      loadSessions()
+    } catch {
+      window.alert('Merge failed — network error')
+    } finally {
+      setBoxMergeBusy(false)
+      setMergeBox(null)
       scanRef.current?.focus()
     }
   }
@@ -3670,6 +3717,13 @@ export default function ScannerPage() {
               style={{ display: 'block', width: '100%', textAlign: 'left', background: 'transparent', border: 'none', color: C.cream, padding: '0.7rem 1.1rem', fontSize: '0.88rem', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
               ⇄ Reassign Box {boxMenu.box.box_number} to another session…
             </button>
+            {boxes.length > 1 && (
+              <button
+                onClick={e => { e.stopPropagation(); const b = boxMenu.box; setBoxMenu(null); setMergeBox(b) }}
+                style={{ display: 'block', width: '100%', textAlign: 'left', background: 'transparent', border: 'none', borderTop: '1px solid rgba(166,120,90,0.25)', color: C.cream, padding: '0.7rem 1.1rem', fontSize: '0.88rem', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                ⇉ Merge Box {boxMenu.box.box_number} into another box…
+              </button>
+            )}
             {boxMenu.box.is_closed && (
               <button
                 onClick={e => { e.stopPropagation(); const b = boxMenu.box; setBoxMenu(null); reopenBox(b) }}
@@ -3677,6 +3731,49 @@ export default function ScannerPage() {
                 ↩ Reopen Box {boxMenu.box.box_number}
               </button>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Merge box modal ── */}
+      {mergeBox && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: '1rem' }}
+          onClick={() => { if (!boxMergeBusy) setMergeBox(null) }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: C.darkBrown, border: '1px solid rgba(166,120,90,0.4)', borderRadius: 8, padding: '1.5rem', width: '100%', maxWidth: 470, maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ color: C.cream, fontWeight: 700, fontSize: '1.05rem', marginBottom: '0.35rem' }}>
+              Merge Box {mergeBox.box_number} into…
+            </div>
+            <div style={{ color: C.lightBrown, fontSize: '0.78rem', lineHeight: 1.5, marginBottom: '1rem' }}>
+              Everything scanned into Box {mergeBox.box_number} moves to the box you pick, and Box {mergeBox.box_number} goes
+              away. The other boxes keep their numbers — their labels are already printed — so this session will skip
+              number {mergeBox.box_number} from here on. The box you pick reprints its label with the new weight.
+            </div>
+            <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+              {boxes.filter(b => b.id !== mergeBox.id).map(b => (
+                <button
+                  key={b.id}
+                  disabled={boxMergeBusy}
+                  onClick={() => mergeBoxInto(mergeBox, b)}
+                  style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem',
+                    background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 5,
+                    color: C.cream, padding: '0.7rem 0.95rem', fontSize: '0.9rem', cursor: boxMergeBusy ? 'wait' : 'pointer',
+                    textAlign: 'left', opacity: boxMergeBusy ? 0.5 : 1,
+                  }}>
+                  <span style={{ fontWeight: 700 }}>Box {b.box_number}{b.is_closed ? ' ✓' : ''}</span>
+                  <span style={{ color: C.lightBrown, fontSize: '0.78rem' }}>
+                    {(Number(b.total_weight_lbs) || 0).toFixed(1)} lb
+                    {b.box_label ? ` · ${b.box_label}` : ''}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setMergeBox(null)}
+              disabled={boxMergeBusy}
+              style={{ marginTop: '1rem', background: 'transparent', border: '1px solid rgba(166,120,90,0.35)', borderRadius: 5, color: C.lightBrown, padding: '0.55rem', fontSize: '0.85rem', cursor: 'pointer' }}>
+              Cancel
+            </button>
           </div>
         </div>
       )}
