@@ -29,8 +29,21 @@ function printWIPTag(jobId: string) {
 }
 
 interface RetailOrderSummary { id: string; customer_name: string; due_date: string }
-interface CuttingInstructionSummary { id: string; label: string }
 interface PluItem { plu_number: string; item_name: string }
+// One cut card as the New Job picker searches it. `hay` is everything you'd
+// type to find it — name, business, species, kill date, phone.
+interface CuttingInstructionSummary {
+  id: string; name: string; business: string; species: string; killDate: string
+  status: string; created_at: string; label: string; hay: string
+}
+
+// Straight to that card on /cutting-instructions — the page opens ?id= itself.
+const cardHref = (id: string) => `/cutting-instructions?id=${encodeURIComponent(id)}`
+
+function fmtKill(d: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return d
+  return new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
 
 const C = {
   dark:       '#1A0A04',
@@ -270,12 +283,14 @@ function BoxPicker({ job, onChanged }: { job: ValueAddJob; onChanged: () => void
 // ══════════════════════════════════════════════════════════════════════════════
 // JOB CARD (in active list)
 // ══════════════════════════════════════════════════════════════════════════════
-function JobCard({ job, proposal, onUpdated, onBoxLinksChanged }: {
+function JobCard({ job, proposal, onUpdated, onBoxLinksChanged, cardLabels }: {
   job:      ValueAddJob
   proposal: WeightProposal | null
   onUpdated: (j: ValueAddJob) => void
   /** Re-pull the weight proposals — linking a box changes what they say. */
   onBoxLinksChanged: () => void
+  /** Cut card id → "Name · Species · kill date", so a job says which card it's off. */
+  cardLabels: Map<string, string>
 }) {
   const [advancing, setAdvancing]       = useState(false)
   const [editingWeights, setEditingWeights] = useState(false)
@@ -400,7 +415,12 @@ function JobCard({ job, proposal, onUpdated, onBoxLinksChanged }: {
       <div style={{ fontSize: '0.75rem', color: C.lightBrown, marginBottom: '0.6rem' }}>
         {job.source_type === 'general'          && '🗂 General / Shelf Stock'}
         {job.source_type === 'retail_order'     && '📋 Retail Order'}
-        {job.source_type === 'cutting_instruction' && '📝 Cutting Instruction'}
+        {job.source_type === 'cutting_instruction' && (job.linked_cutting_instruction_id
+          ? <a href={cardHref(job.linked_cutting_instruction_id)} target="_blank" rel="noreferrer"
+              style={{ color: C.tan }} title="Open the cut card">
+              📝 {cardLabels.get(job.linked_cutting_instruction_id) ?? 'Cutting Instruction'} ↗
+            </a>
+          : '📝 Cutting Instruction')}
         {job.assigned_to ? ` · ${job.assigned_to}` : ''}
         {' · '}{new Date(job.requested_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
         {job.tag_code && (
@@ -567,6 +587,70 @@ function JobCard({ job, proposal, onUpdated, onBoxLinksChanged }: {
   )
 }
 
+// Type-to-find cut card picker. The plain dropdown listed every card ever filed
+// (250+, no species) and the only way to find one was scrolling (Charlie,
+// 2026-09-12). Newest first, archived only when nothing live matches.
+function CuttingInstructionPicker({ cards, value, onPick }: {
+  cards: CuttingInstructionSummary[]; value: string; onPick: (ci: CuttingInstructionSummary | null) => void
+}) {
+  const [q, setQ] = useState('')
+  const chosen = value ? cards.find(c => c.id === value) : null
+
+  if (chosen) {
+    return (
+      <div style={{ ...INPUT, display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+        <span style={{ flex: 1, color: C.cream }}>📝 {chosen.label}</span>
+        <a href={cardHref(chosen.id)} target="_blank" rel="noreferrer"
+          style={{ color: C.tan, fontSize: '0.78rem', whiteSpace: 'nowrap' }}>Open card ↗</a>
+        <button type="button" onClick={() => onPick(null)}
+          style={{ background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '0.78rem', padding: 0 }}>
+          Change
+        </button>
+      </div>
+    )
+  }
+
+  const terms = q.toLowerCase().split(/\s+/).filter(Boolean)
+  const hits = terms.length ? cards.filter(c => terms.every(t => c.hay.includes(t))) : cards
+  const live = hits.filter(c => c.status !== 'archived')
+  const shown = (live.length ? live : hits).slice(0, 8)
+
+  return (
+    <div>
+      <input style={INPUT} value={q} onChange={e => setQ(e.target.value)} autoFocus
+        onKeyDown={e => { if (e.key === 'Enter' && shown.length) { e.preventDefault(); onPick(shown[0]) } }}
+        placeholder="Type a name, business, species or kill date…" />
+      <div style={{ marginTop: '0.3rem', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 3, maxHeight: 260, overflowY: 'auto' }}>
+        {shown.map(c => (
+          <div key={c.id} style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid rgba(166,120,90,0.1)' }}>
+            <button type="button" onClick={() => onPick(c)}
+              style={{ flex: 1, textAlign: 'left', background: 'none', border: 'none', color: C.cream, cursor: 'pointer', padding: '0.45rem 0.75rem', fontSize: '0.84rem' }}>
+              <strong>{c.name}</strong>
+              {c.business && <span style={{ color: C.tan }}> · {c.business}</span>}
+              <span style={{ color: C.lightBrown }}>
+                {c.species && ` · ${c.species}`}{c.killDate && ` · kill ${fmtKill(c.killDate)}`}
+                {c.status === 'archived' && ' · archived'}
+              </span>
+            </button>
+            <a href={cardHref(c.id)} target="_blank" rel="noreferrer" title="Read the card first"
+              style={{ color: C.lightBrown, fontSize: '0.75rem', padding: '0 0.75rem', textDecoration: 'none' }}>↗</a>
+          </div>
+        ))}
+        {shown.length === 0 && (
+          <div style={{ padding: '0.5rem 0.75rem', fontSize: '0.78rem', color: C.lightBrown }}>
+            {cards.length ? 'No card matches.' : 'No cutting instructions found yet.'}
+          </div>
+        )}
+      </div>
+      {hits.length > shown.length && (
+        <div style={{ fontSize: '0.7rem', color: C.lightBrown, marginTop: '0.25rem' }}>
+          Showing {shown.length} of {live.length || hits.length} — keep typing to narrow.
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // NEW JOB FORM
 // ══════════════════════════════════════════════════════════════════════════════
@@ -709,17 +793,16 @@ function NewJobTab({ onSaved, orders, cuttingInstructions, pluList }: { onSaved:
         {form.source_type === 'cutting_instruction' && (
           <div>
             <label style={LABEL}>Linked Cutting Instruction</label>
-            <select style={INPUT} value={form.linked_cutting_instruction_id} onChange={f('linked_cutting_instruction_id')}>
-              <option value="">— Select cutting instruction —</option>
-              {cuttingInstructions.map(ci => (
-                <option key={ci.id} value={ci.id}>{ci.label}</option>
-              ))}
-            </select>
-            {cuttingInstructions.length === 0 && (
-              <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.3rem' }}>
-                No cutting instructions found yet.
-              </div>
-            )}
+            <CuttingInstructionPicker
+              cards={cuttingInstructions}
+              value={form.linked_cutting_instruction_id}
+              onPick={ci => setForm(p => ({
+                ...p,
+                linked_cutting_instruction_id: ci?.id ?? '',
+                // The card already knows whose meat it is — don't make them type it twice.
+                customer_name: ci && !p.customer_name.trim() ? ci.name : p.customer_name,
+              }))}
+            />
           </div>
         )}
 
@@ -810,7 +893,7 @@ function NewJobTab({ onSaved, orders, cuttingInstructions, pluList }: { onSaved:
 // ══════════════════════════════════════════════════════════════════════════════
 // ACTIVE JOBS TAB
 // ══════════════════════════════════════════════════════════════════════════════
-function ActiveJobsTab() {
+function ActiveJobsTab({ cardLabels }: { cardLabels: Map<string, string> }) {
   const [jobs, setJobs] = useState<ValueAddJob[]>([])
   const [proposals, setProposals] = useState<Map<string, WeightProposal>>(new Map())
   const [loading, setLoading] = useState(true)
@@ -877,6 +960,7 @@ function ActiveJobsTab() {
                   proposal={proposals.get(j.id) ?? null}
                   onUpdated={handleUpdated}
                   onBoxLinksChanged={loadProposals}
+                  cardLabels={cardLabels}
                 />
               ))}
             </div>
@@ -967,14 +1051,19 @@ export default function ValueAddPage() {
       .then(r => r.json())
       .then((data: unknown) => {
         if (Array.isArray(data)) {
-          setCuttingInstructions((data as { id: string; data?: Record<string, unknown> }[])
+          setCuttingInstructions((data as { id: string; status: string; created_at: string; species?: string; data?: Record<string, unknown> }[])
             .map(ci => {
               const d = ci.data ?? {}
-              const name    = (d.customerName as string) || 'Unnamed'
-              const species = (d.species as string) || ''
-              const killDate = (d.killDate as string) || ''
-              const parts = [name, species, killDate].filter(Boolean)
-              return { id: ci.id, label: parts.join(' · ') }
+              const name     = String(d.customerName ?? '') || 'Unnamed'
+              const business = String(d.businessName ?? '')
+              // v2 cards carry species as a column, v1 inside data
+              const species  = String(d.species ?? ci.species ?? '')
+              const killDate = String(d.killDate ?? '')
+              const label = [name, business, species, killDate && `kill ${fmtKill(killDate)}`].filter(Boolean).join(' · ')
+              // Cards say Pork; the floor says hog
+              const alias = species === 'Pork' ? 'hog pig' : species === 'Beef' ? 'cow steer' : ''
+              const hay = [name, business, species, alias, killDate, fmtKill(killDate), String(d.customerPhone ?? '')].join(' ').toLowerCase()
+              return { id: ci.id, name, business, species, killDate, status: ci.status, created_at: ci.created_at, label, hay }
             })
           )
         }
@@ -994,6 +1083,8 @@ export default function ValueAddPage() {
       })
       .catch(() => {})
   }, [])
+
+  const cardLabels = new Map(cuttingInstructions.map(ci => [ci.id, ci.label]))
 
   const tabs = [
     { id: 'active'   as Tab, label: '⚙️ Active Jobs' },
@@ -1032,7 +1123,7 @@ export default function ValueAddPage() {
       </header>
 
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1200px', width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
-        {tab === 'active'   && <ActiveJobsTab key={newKey} />}
+        {tab === 'active'   && <ActiveJobsTab key={newKey} cardLabels={cardLabels} />}
         {tab === 'schedule' && <ScheduleTab />}
         {tab === 'cure'     && <CureTab key={newKey} />}
         {tab === 'new'      && <NewJobTab key={newKey} onSaved={() => { setNewKey(k => k + 1); setTab('active') }} orders={orders} cuttingInstructions={cuttingInstructions} pluList={pluList} />}

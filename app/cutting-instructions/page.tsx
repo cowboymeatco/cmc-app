@@ -1724,6 +1724,15 @@ export default function CuttingInstructionsPage() {
     setInstructions(cis)
     setAppointments(appts)
     setLoading(false)
+    // ?id=<card> opens that card — other pages (value add) link straight to the
+    // card they reference instead of dropping you on a list of 250.
+    const openId = new URLSearchParams(window.location.search).get('id')
+    const opened = openId ? cis.find((c: RawInstruction) => c.id === openId) : null
+    if (opened) {
+      setSelected(prev => prev ?? opened)
+      if (opened.data?.customerName) setSearch(prev => prev || String(opened.data.customerName))
+      if (opened.status === 'archived') setFilterStatus('archived')
+    }
     loadCarcassStates(cis, appts)
   }
 
