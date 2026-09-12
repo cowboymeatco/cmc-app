@@ -59,6 +59,15 @@ export async function POST(req: NextRequest) {
     .eq('session_date', source.session_date)
   if (iErr) return NextResponse.json({ error: iErr.message }, { status: 500 })
 
+  // Cure tags carry the same key — leave them behind and In Cure keeps naming a
+  // session that no longer exists.
+  const { error: cErr } = await supabase
+    .from('cure_tags')
+    .update({ customer_name: target.customer_name, session_date: target.session_date })
+    .eq('customer_name', source.customer_name)
+    .eq('session_date', source.session_date)
+  if (cErr) return NextResponse.json({ error: cErr.message }, { status: 500 })
+
   // Fold the source session record into the target before deleting it.
   // Either record may be missing (sessions can exist as boxes only).
   const { data: srcSession } = await supabase

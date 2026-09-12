@@ -6,9 +6,9 @@ export const dynamic = 'force-dynamic'
 
 // POST — rename a scanner session's customer, keeping the same date.
 // Boxes carry no session id — they're keyed by customer_name + pack_date — so a
-// rename is: re-point this session's boxes, processing_inputs, and the session
-// record from old_name to new_name for the one session_date. Scans hang off
-// box_id, so they follow their box automatically.
+// rename is: re-point this session's boxes, processing_inputs, cure_tags and the
+// session record from old_name to new_name for the one session_date. Scans hang
+// off box_id, so they follow their box automatically.
 //
 // If a session already exists under new_name on the same date this would collide
 // two distinct sessions into one key; that's what Merge is for, so we refuse and
@@ -66,6 +66,16 @@ export async function POST(req: NextRequest) {
     .eq('customer_name', old_name)
     .eq('session_date', session_date)
   if (iErr) return NextResponse.json({ error: iErr.message }, { status: 500 })
+
+  // Cure tags are the same customer_name + date key, snapshotted when the seal
+  // was scanned — so a rename that skipped them left Processing → In Cure still
+  // showing the name the floor first typed (Jill, 2026-09-10).
+  const { error: cErr } = await supabase
+    .from('cure_tags')
+    .update({ customer_name: new_name })
+    .eq('customer_name', old_name)
+    .eq('session_date', session_date)
+  if (cErr) return NextResponse.json({ error: cErr.message }, { status: 500 })
 
   // Re-key the session record (may not exist — sessions can be boxes-only)
   const { error: sErr } = await supabase

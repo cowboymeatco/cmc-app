@@ -43,6 +43,8 @@ export default function CureTagsTab() {
   const [statusFilter, setStatusFilter] = useState<'curing' | 'done' | 'all'>('curing')
   const [search,       setSearch]       = useState('')
   const [busyId,       setBusyId]       = useState<string | null>(null)
+  const [editId,       setEditId]       = useState<string | null>(null)
+  const [editName,     setEditName]     = useState('')
 
   const load = useCallback(async () => {
     setLoading(true); setErr('')
@@ -85,6 +87,30 @@ export default function CureTagsTab() {
         : t))
     } catch {
       setErr('Could not pin that tag to an animal.')
+    } finally { setBusyId(null) }
+  }
+
+  // The customer on a tag is whatever the session was called when the seal was
+  // scanned. The floor names a session before the office has settled the name,
+  // so a tag can be right about the meat and wrong about the person — this is
+  // where that gets corrected (Jill, 2026-09-10). Renaming the scanner session
+  // now carries its tags along too; this is for the ones already adrift.
+  async function saveName(tag: CureTag) {
+    const name = editName.trim()
+    setEditId(null)
+    if (!name || name === tag.customer_name) return
+    setBusyId(tag.id)
+    try {
+      const res = await fetch('/api/cure-tags', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: tag.id, customer_name: name }),
+      })
+      if (!res.ok) throw new Error()
+      // "Cut sheet says" and the animal candidates are both resolved from the
+      // name server-side, so the whole row has to come back fresh.
+      await load()
+    } catch {
+      setErr('Could not change the customer on that tag.')
     } finally { setBusyId(null) }
   }
 
@@ -159,7 +185,36 @@ export default function CureTagsTab() {
                 {rows.map(t => (
                   <tr key={t.id} style={{ borderTop: '1px solid rgba(166,120,90,0.1)', opacity: busyId === t.id ? 0.5 : 1 }}>
                     <td style={{ ...td, fontFamily: 'monospace', color: C.tan, fontWeight: 700 }}>🏷 {t.tag_number}</td>
-                    <td style={{ ...td, fontWeight: 600 }}>{t.customer_name}</td>
+                    <td style={{ ...td, fontWeight: 600 }}>
+                      {editId === t.id ? (
+                        <input
+                          autoFocus
+                          value={editName}
+                          onChange={e => setEditName(e.target.value)}
+                          onBlur={() => saveName(t)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') e.currentTarget.blur()
+                            // Escape puts the old name back, so the blur that
+                            // follows saves nothing.
+                            if (e.key === 'Escape') { setEditName(t.customer_name); e.currentTarget.blur() }
+                          }}
+                          style={{ ...INPUT, padding: '0.25rem 0.45rem', fontSize: '0.85rem', width: 210 }}
+                        />
+                      ) : (
+                        <button
+                          onClick={() => { setEditId(t.id); setEditName(t.customer_name) }}
+                          disabled={busyId === t.id}
+                          title="Click to correct the customer on this tag"
+                          style={{
+                            background: 'none', border: 'none', color: C.cream, font: 'inherit', fontWeight: 600,
+                            cursor: 'pointer', padding: 0, display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                          }}
+                        >
+                          {t.customer_name}
+                          <span style={{ color: C.lightBrown, fontSize: '0.7rem', fontWeight: 400 }}>✎</span>
+                        </button>
+                      )}
+                    </td>
                     <td style={td}>{t.product}</td>
                     {/* Three different answers, not two. "No sheet under this
                         name" is somebody typing the customer differently from
@@ -244,7 +299,9 @@ export default function CureTagsTab() {
         One row per <strong style={{ color: C.tan }}>numbered seal</strong> scanned on the cut floor — the tag rides the
         piece through the cure cooler, so the smokehouse can scan or read any tag and see whose it is.
         <strong style={{ color: C.tan }}> Cut sheet says</strong> is pulled live from that customer&apos;s cutting
-        instructions — how they want the piece finished once it&apos;s out of cure. Mark a tag
+        instructions — how they want the piece finished once it&apos;s out of cure. The
+        <strong style={{ color: C.tan }}> customer</strong> is whatever the scanner session was called when the seal was
+        scanned; click it to correct one that went on under the wrong name. Mark a tag
         <strong style={{ color: C.tan }}> Done</strong> when the piece is processed and packed; delete is only for mis-scans.
       </p>
     </>

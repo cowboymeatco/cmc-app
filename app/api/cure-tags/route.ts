@@ -246,14 +246,26 @@ export async function POST(req: NextRequest) {
 // PATCH /api/cure-tags — status flip (done stamps completed_at) or field edits
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
-  const { id, status, product, weight_lbs, notes, linked_harvest_id } = body as {
+  const { id, status, product, weight_lbs, notes, linked_harvest_id, customer_name } = body as {
     id: string; status?: 'curing' | 'done'; product?: string
     weight_lbs?: number | null; notes?: string | null
-    linked_harvest_id?: string | null
+    linked_harvest_id?: string | null; customer_name?: string
   }
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
 
   const updates: Record<string, unknown> = {}
+  // The name on a tag is a snapshot of the session it was scanned under, so a
+  // seal scanned on the wrong session — or under a name the office later
+  // corrected — had no way back. Both pins were resolved FROM that name, so
+  // they go with it: the row then re-reads the right customer's sheet, and the
+  // animal picker offers that customer's carcasses.
+  if (customer_name !== undefined) {
+    const name = String(customer_name).trim()
+    if (!name) return NextResponse.json({ error: 'customer_name cannot be blank' }, { status: 400 })
+    updates.customer_name = name
+    updates.linked_cutting_instruction_id = null
+    updates.linked_harvest_id = null
+  }
   if (status)                    { updates.status = status; updates.completed_at = status === 'done' ? new Date().toISOString() : null }
   if (product !== undefined)     updates.product = product
   if (weight_lbs !== undefined)  updates.weight_lbs = weight_lbs
