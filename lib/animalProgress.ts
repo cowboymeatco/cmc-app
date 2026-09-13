@@ -65,10 +65,14 @@ export async function fetchAnimalProgress(
   const ids = appointments.map(a => a.id)
   if (!ids.length) return out
 
-  const [receiving, harvests, inputs] = await Promise.all([
+  const [receiving, harvests, inputs, handLinked] = await Promise.all([
     supabase.from('animal_receiving_log').select('appointment_id, received_at, created_at').in('appointment_id', ids),
     supabase.from('harvest_log').select('id, appointment_id, status, created_at, harvest_date, hot_carcass_weight_lbs').in('appointment_id', ids),
     supabase.from('processing_inputs').select('linked_appointment_id, customer_name, session_date').in('linked_appointment_id', ids),
+    // Sessions a person tied to the appointment because no carcass was ever
+    // scanned against it (LeAnn Newman's three steers, 2026-09-13). Told, not
+    // inferred — nothing here matches on names. Missing column reads as none.
+    supabase.from('processing_sessions').select('customer_name, session_date, status, updated_at, linked_appointment_id').in('linked_appointment_id', ids),
   ])
 
   const harvestRows = (harvests.data ?? []) as Row[]
@@ -102,6 +106,7 @@ export async function fetchAnimalProgress(
 
   const recvRows = (receiving.data ?? []) as Row[]
   const inputRows = (inputs.data ?? []) as Row[]
+  const handLinkedRows = (handLinked.data ?? []) as Row[]
 
   for (const appt of appointments) {
     const mine = {
@@ -127,9 +132,13 @@ export async function fetchAnimalProgress(
 
     const pairKeys = [...new Set(mine.inputs.map(i => `${str(i.customer_name)}|${str(i.session_date)}`))]
     const sessionRows = pairKeys.map(k => sessionByPair.get(k)).filter((s): s is Row => !!s)
+    for (const s of handLinkedRows) {
+      if (str(s.linked_appointment_id) !== appt.id) continue
+      if (!pairKeys.includes(`${str(s.customer_name)}|${str(s.session_date)}`)) sessionRows.push(s)
+    }
     const sessionStages = sessionRows.map(s => SESSION_STAGE[str(s.status) ?? '']).filter(Boolean)
 
-    const actualCutDay = mine.inputs.map(i => str(i.session_date)).filter(Boolean).sort()[0] ?? null
+    const actualCutDay = [...mine.inputs, ...sessionRows].map(r => str(r.session_date)).filter(Boolean).sort()[0] ?? null
     const plannedCutDay = mine.harvests.map(h => cutDateByHarvest.get(String(h.id))).filter((d): d is string => !!d).sort().pop() ?? null
 
     let stage: AnimalStage = 'scheduled'
