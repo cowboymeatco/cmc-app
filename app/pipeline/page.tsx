@@ -33,7 +33,9 @@ const SEG_COLOR: Record<string, string> = {
 
 // What's next for this account, in the words the office would use.
 function nextStep(r: PipelineRow): string {
-  if (r.trail_cold) return 'Records stop after harvest — confirm it went home'
+  if (r.trail_cold) return r.harvested_at
+    ? 'Records stop after harvest — confirm it went home'
+    : 'No kill record — confirm it went home'
   switch (r.stage) {
     case 'received':   return 'Waiting on harvest'
     case 'harvested':

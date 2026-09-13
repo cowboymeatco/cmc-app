@@ -166,6 +166,13 @@ export async function GET() {
     const startIso = p.receivedAt ?? p.harvestedAt ?? (a.harvest_date ? a.harvest_date + 'T12:00:00' : null)
     const daysIn = startIso ? Math.max(0, Math.floor((now - Date.parse(startIso)) / 86400000)) : null
     const customers = (a.customers ?? []).map(c => (c.customer_name ?? '').trim()).filter(Boolean)
+    // Received, then nothing: no kill record, no session, and the harvest
+    // day is more than three weeks gone. Same records gap as trailCold, one
+    // step earlier (LeAnn Newman, Coffee Cattle, Clenora Quinlan, 2026-09-13:
+    // received 5/20, cut and picked up in June under sessions never scanned
+    // against the appointment). Staff view only — the portal keeps its rule.
+    const pastHarvestDays = a.harvest_date ? Math.floor((now - Date.parse(a.harvest_date + 'T12:00:00')) / 86400000) : 0
+    const receivedOnlyCold = p.stage === 'received' && !p.sessions.length && pastHarvestDays > 21
 
     rows.push({
       id: a.id,
@@ -185,7 +192,7 @@ export async function GET() {
       ready_at: p.readyAt,
       hanging_weight_lbs: p.hangingWeightLbs,
       days_in: daysIn,
-      trail_cold: p.trailCold,
+      trail_cold: p.trailCold || receivedOnlyCold,
       sessions: p.sessions,
       billing: billingFor(invoiceIdx, (a.source ?? '').trim(), customers, a.harvest_date),
     })
