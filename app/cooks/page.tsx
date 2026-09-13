@@ -21,6 +21,8 @@ interface Cook {
   id: string; started_at: string | null; ended_at: string | null
   hours: number | null; profile_key: string | null; recipe: string | null; operator: string | null
   rh_fault: RhFault | null
+  /** Value-add jobs marked in the house during this cook. */
+  jobs: { id: string; name: string; customer: string | null }[]
 }
 interface Profile { profile_key: string; display_name: string }
 
@@ -220,7 +222,14 @@ export default function CookTagging() {
                     {c.hours != null ? `${c.hours}h` : (c.ended_at ? '—' : 'running')}{c.operator ? ` · ${c.operator}` : ''}
                   </div>
                 </div>
-                <div style={{ flex: 1 }} />
+                <div style={{ flex: 1, display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
+                  {(c.jobs ?? []).map(j => (
+                    <Link key={j.id} href="/value-add" title="Marked in the smokehouse during this cook"
+                      style={{ fontSize: '0.72rem', color: C.cream, textDecoration: 'none', border: '1px solid rgba(251,146,60,0.45)', borderRadius: 99, padding: '0.1rem 0.55rem' }}>
+                      🔥 {j.name}{j.customer ? ` · ${j.customer}` : ''}
+                    </Link>
+                  ))}
+                </div>
                 {c.rh_fault && (
                   <span
                     title={`Humidity read exactly ${c.rh_fault.stuck_value}% for ${c.rh_fault.stuck_samples} straight readings (~${Math.round(c.rh_fault.stuck_samples / 60 * 10) / 10}h) while humidity control was active. A working sensor jitters; this one stopped moving.`}

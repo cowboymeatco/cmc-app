@@ -285,6 +285,10 @@ export interface ValueAddJob {
   batch_count:                   number | null
   resource:                      string | null
   schedule_locked:               boolean
+  // What actually happened, tapped by the crew — lib/cookMatch.ts pairs these
+  // with the Enviropak's own cook cycles.
+  smoke_in_at:                   string | null
+  smoke_out_at:                  string | null
 }
 
 // ── Cut Schedule ─────────────────────────────────────────────────────────────

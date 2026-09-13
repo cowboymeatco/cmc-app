@@ -1,6 +1,7 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { cookInJob } from '@/lib/cookMatch'
 
 export const dynamic = 'force-dynamic'
 
@@ -23,7 +24,7 @@ export async function GET(req: NextRequest) {
     .order('started_at', { ascending: false })
     .limit(300)
 
-  const [{ data: cooks, error }, { data: profiles }, { data: rhFaults }] = await Promise.all([
+  const [{ data: cooks, error }, { data: profiles }, { data: rhFaults }, { data: smokedJobs }, { data: lastImport }] = await Promise.all([
     q,
     supabase.from('cook_profile').select('profile_key, display_name').eq('active', true),
     // Humidity sensor health, derived from the readings themselves — this works
@@ -32,6 +33,15 @@ export async function GET(req: NextRequest) {
       .from('smokehouse_rh_fault_v')
       .select('cook_id, stuck_value, stuck_samples, stuck_started_at, mean_abs_rh_err')
       .eq('suspect', true),
+    // Jobs the crew marked in/out of the house — which of them rode in each cook.
+    supabase
+      .from('value_add_jobs')
+      .select('id, description, output_item_name, customer_name, smoke_in_at, smoke_out_at')
+      .not('smoke_in_at', 'is', null)
+      .gte('smoke_in_at', new Date(new Date(cutoff).getTime() - 2 * 86_400_000).toISOString()),
+    // The import fails silently (see ftp_server.py on the kiosk), so say when
+    // the last file actually landed.
+    supabase.from('smokehouse_cook').select('created_at').order('created_at', { ascending: false }).limit(1),
   ])
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
@@ -54,6 +64,9 @@ export async function GET(req: NextRequest) {
       profile_key:  (c.profile_key as string) ?? null,
       recipe:       c.profile_key ? nameByKey.get(String(c.profile_key)) ?? null : null,
       operator:     (c.operator as string) ?? null,
+      jobs:         (smokedJobs ?? [])
+        .filter(j => cookInJob({ id: String(c.id), started_at: c.started_at as string, ended_at: c.ended_at as string }, j))
+        .map(j => ({ id: j.id as string, name: (j.description || j.output_item_name || 'Job') as string, customer: (j.customer_name as string) ?? null })),
       rh_fault:     fault
         ? {
             stuck_value:     Number(fault.stuck_value),
@@ -65,7 +78,7 @@ export async function GET(req: NextRequest) {
     }
   })
 
-  return NextResponse.json({ cooks: rows, days })
+  return NextResponse.json({ cooks: rows, days, last_imported_at: (lastImport?.[0]?.created_at as string) ?? null })
 }
 
 // PATCH /api/cooks — tag a cook with its recipe. { id, profile_key } — a null or

@@ -9,6 +9,7 @@ import {
 } from '@/lib/types'
 import { fmtDayClock } from '@/lib/cookPredict'
 import { WeightOutProposal } from '@/lib/boxWeight'
+import { cookInJob } from '@/lib/cookMatch'
 import ScheduleTab from './ScheduleTab'
 import CureTab from './CureTab'
 
@@ -347,10 +348,133 @@ function BoxPicker({ job, onChanged, onUseWeightIn }: {
   )
 }
 
+// What /api/cooks hands back per Enviropak cycle, trimmed to what a job card shows.
+interface CookRow { id: string; started_at: string | null; ended_at: string | null; hours: number | null; recipe: string | null }
+
+const clock = (iso: string) => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+const dayClock = (iso: string) => {
+  const d = new Date(iso)
+  const today = new Date().toDateString() === d.toDateString()
+  return today ? clock(iso) : `${d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} ${clock(iso)}`
+}
+// In / out of the smokehouse. The taps only say WHICH job was in the house —
+// the Enviropak never records that. The times that count are the controller's
+// own cook cycles, because nobody can edit those (Charlie, 2026-09-13). So a
+// missed tap is fixed by picking the cook, which copies its start and end onto
+// the job; there is no typing a time. See lib/cookMatch.ts.
+function SmokeTimes({ job, cooks, lastImportedAt, onUpdated }: {
+  job: ValueAddJob; cooks: CookRow[]; lastImportedAt: string | null; onUpdated: (j: ValueAddJob) => void
+}) {
+  const [busy, setBusy]       = useState(false)
+  const [picking, setPicking] = useState(false)
+
+  async function save(fields: Partial<ValueAddJob>) {
+    setBusy(true)
+    const res = await fetch('/api/value-add', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: job.id, ...fields }),
+    })
+    const updated = await res.json().catch(() => null)
+    setBusy(false)
+    if (updated && !updated.error) onUpdated(updated)
+  }
+
+  const matched = cooks
+    .filter(c => cookInJob(c, job))
+    .sort((x, y) => String(x.started_at).localeCompare(String(y.started_at)))
+  const first = matched[0]
+  const last  = matched[matched.length - 1]
+  const cookHours = Math.round(matched.reduce((t, c) => t + (c.hours ?? 0), 0) * 10) / 10
+
+  const outMs = job.smoke_out_at ? new Date(job.smoke_out_at).getTime() : Date.now()
+  // A cook file only lands after the cycle ends, so silence is expected while
+  // the job is still in. An hour after "out" with nothing, say so.
+  const overdue = !!job.smoke_out_at && matched.length === 0 && Date.now() - outMs > 60 * 60000
+
+  const pill: React.CSSProperties = { ...BTN(C.orange), fontSize: '0.78rem', padding: '0.35rem 0.9rem' }
+
+  return (
+    <div style={{
+      background: 'rgba(232,136,58,0.07)', border: '1px solid rgba(232,136,58,0.28)',
+      borderRadius: 3, padding: '0.5rem 0.7rem', marginBottom: '0.75rem', fontSize: '0.8rem',
+    }}>
+      <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        {!job.smoke_in_at && (
+          <button style={pill} disabled={busy} onClick={() => save({
+            smoke_in_at: new Date().toISOString(),
+            ...(job.status === 'pending' ? { status: 'in_progress' as JobStatus } : {}),
+          })}>
+            {busy ? '…' : '🔥 Into smokehouse'}
+          </button>
+        )}
+
+        {/* The Enviropak's times, once its file is in — they're the record. */}
+        {first?.started_at && (
+          <span style={{ color: C.orange, fontWeight: 600 }}>
+            🌡️ Enviropak {dayClock(first.started_at)}
+            {last.ended_at ? ` → ${dayClock(last.ended_at)}` : ''}
+            {cookHours > 0 ? ` · ${cookHours}h` : ''}
+            {matched.length > 1 ? ` · ${matched.length} cooks` : first.recipe ? ` · ${first.recipe}` : ''}
+          </span>
+        )}
+        {/* Until then, the tap is all there is — labelled as a tap. */}
+        {job.smoke_in_at && !first && (
+          <span style={{ color: C.orange, fontWeight: 600 }}>
+            🔥 Tapped in {dayClock(job.smoke_in_at)}
+            {job.smoke_out_at ? ` → out ${dayClock(job.smoke_out_at)}` : ' · in the house'}
+          </span>
+        )}
+
+        {job.smoke_in_at && !job.smoke_out_at && (
+          <button style={{ ...pill, background: C.green }} disabled={busy}
+            onClick={() => save({ smoke_out_at: new Date().toISOString() })}>
+            {busy ? '…' : '✅ Out of smokehouse'}
+          </button>
+        )}
+        {first && <Link href="/cooks" style={{ color: C.lightBrown, fontSize: '0.72rem' }}>cook log ↗</Link>}
+        <button onClick={() => setPicking(p => !p)} title="Somebody forgot to tap? Pick the Enviropak cook this job was in."
+          style={{ marginLeft: 'auto', background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '0.72rem' }}>
+          {picking ? 'Cancel' : first ? 'Wrong cook?' : 'Pick the cook'}
+        </button>
+      </div>
+
+      {picking && (
+        <select style={{ ...INPUT, marginTop: '0.45rem' }} defaultValue="" disabled={busy}
+          onChange={async e => {
+            const c = cooks.find(x => x.id === e.target.value)
+            if (!c?.started_at) return
+            await save({
+              smoke_in_at:  c.started_at,
+              smoke_out_at: c.ended_at ?? null,
+              ...(job.status === 'pending' ? { status: 'in_progress' as JobStatus } : {}),
+            })
+            setPicking(false)
+          }}>
+          <option value="" disabled>— Enviropak cooks, newest first —</option>
+          {cooks.filter(c => c.started_at).map(c => (
+            <option key={c.id} value={c.id}>
+              {dayClock(c.started_at!)}{c.ended_at ? ` → ${clock(c.ended_at)}` : ''}{c.hours != null ? ` · ${c.hours}h` : ''}{c.recipe ? ` · ${c.recipe}` : ''}
+            </option>
+          ))}
+        </select>
+      )}
+
+      {job.smoke_in_at && !first && (
+        <div style={{ marginTop: '0.35rem', fontSize: '0.72rem', color: overdue ? C.yellow : C.lightBrown }}>
+          {overdue
+            ? <>⚠️ No Enviropak cook has come through for this window.{lastImportedAt && <> Last cook file imported {dayClock(lastImportedAt)} — check ftp_server.py on the kiosk.</>}</>
+            : 'The Enviropak times replace the tap once its file comes in after the cycle ends.'}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // JOB CARD (in active list)
 // ══════════════════════════════════════════════════════════════════════════════
-function JobCard({ job, proposal, onUpdated, onBoxLinksChanged, cardLabels }: {
+function JobCard({ job, proposal, onUpdated, onBoxLinksChanged, cardLabels, cooks, lastImportedAt }: {
   job:      ValueAddJob
   proposal: WeightProposal | null
   onUpdated: (j: ValueAddJob) => void
@@ -358,6 +482,8 @@ function JobCard({ job, proposal, onUpdated, onBoxLinksChanged, cardLabels }: {
   onBoxLinksChanged: () => void
   /** Cut card id → "Name · Species · kill date", so a job says which card it's off. */
   cardLabels: Map<string, string>
+  cooks: CookRow[]
+  lastImportedAt: string | null
 }) {
   const [advancing, setAdvancing]       = useState(false)
   const [editingWeights, setEditingWeights] = useState(false)
@@ -472,7 +598,7 @@ function JobCard({ job, proposal, onUpdated, onBoxLinksChanged, cardLabels }: {
           display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.4rem',
           fontSize: '0.78rem', color: C.orange, fontWeight: 600,
         }}>
-          <span>🔥 In {fmtDayClock(new Date(job.scheduled_start))}</span>
+          <span>📅 Planned in {fmtDayClock(new Date(job.scheduled_start))}</span>
           {job.predicted_minutes != null && (
             <span style={{ color: C.lightBrown, fontWeight: 400 }}>
               → out {fmtDayClock(new Date(new Date(job.scheduled_start).getTime() + job.predicted_minutes * 60000))}
@@ -505,6 +631,11 @@ function JobCard({ job, proposal, onUpdated, onBoxLinksChanged, cardLabels }: {
           <span style={{ fontFamily: 'monospace', color: C.tan, marginLeft: '0.5rem' }}>· {job.tag_code}</span>
         )}
       </div>
+
+      {/* Any job bound for the house — some smokehouse runs get filed as "Other". */}
+      {(job.job_type === 'smokehouse' || job.profile_key || job.scheduled_start || job.smoke_in_at) && (
+        <SmokeTimes job={job} cooks={cooks} lastImportedAt={lastImportedAt} onUpdated={onUpdated} />
+      )}
 
       {/* Weight in / out */}
       {editingWeights ? (
@@ -966,6 +1097,19 @@ function ActiveJobsTab({ cardLabels }: { cardLabels: Map<string, string> }) {
   const [jobs, setJobs] = useState<ValueAddJob[]>([])
   const [proposals, setProposals] = useState<Map<string, WeightProposal>>(new Map())
   const [loading, setLoading] = useState(true)
+  const [cooks, setCooks] = useState<CookRow[]>([])
+  const [lastImportedAt, setLastImportedAt] = useState<string | null>(null)
+
+  // Enviropak cycles, for matching against each job's in/out taps.
+  useEffect(() => {
+    fetch('/api/cooks?days=21')
+      .then(r => r.json())
+      .then((d: { cooks?: CookRow[]; last_imported_at?: string | null }) => {
+        if (Array.isArray(d?.cooks)) setCooks(d.cooks)
+        setLastImportedAt(d?.last_imported_at ?? null)
+      })
+      .catch(() => {})
+  }, [])
 
   // Scanned weights load after the list so a slow scan sweep never holds up the
   // jobs themselves; the cards fill in when it lands. Also re-run on its own
@@ -1030,6 +1174,8 @@ function ActiveJobsTab({ cardLabels }: { cardLabels: Map<string, string> }) {
                   onUpdated={handleUpdated}
                   onBoxLinksChanged={loadProposals}
                   cardLabels={cardLabels}
+                  cooks={cooks}
+                  lastImportedAt={lastImportedAt}
                 />
               ))}
             </div>
