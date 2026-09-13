@@ -65,7 +65,7 @@ export async function fetchAnimalProgress(
   const ids = appointments.map(a => a.id)
   if (!ids.length) return out
 
-  const [receiving, harvests, inputs, handLinked] = await Promise.all([
+  const [receiving, harvests, inputs, handLinked, handedOff] = await Promise.all([
     supabase.from('animal_receiving_log').select('appointment_id, received_at, created_at').in('appointment_id', ids),
     supabase.from('harvest_log').select('id, appointment_id, status, created_at, harvest_date, hot_carcass_weight_lbs').in('appointment_id', ids),
     supabase.from('processing_inputs').select('linked_appointment_id, customer_name, session_date').in('linked_appointment_id', ids),
@@ -73,6 +73,9 @@ export async function fetchAnimalProgress(
     // scanned against it (LeAnn Newman's three steers, 2026-09-13). Told, not
     // inferred — nothing here matches on names. Missing column reads as none.
     supabase.from('processing_sessions').select('customer_name, session_date, status, updated_at, linked_appointment_id').in('linked_appointment_id', ids),
+    // Left our hands with nothing else on file to say so — picked up, or
+    // handed to the customer's own Baker account (Coffee Cattle, 2026-09-13).
+    supabase.from('harvest_appointments').select('id').in('id', ids).not('handed_off_at', 'is', null),
   ])
 
   const harvestRows = (harvests.data ?? []) as Row[]
@@ -107,6 +110,7 @@ export async function fetchAnimalProgress(
   const recvRows = (receiving.data ?? []) as Row[]
   const inputRows = (inputs.data ?? []) as Row[]
   const handLinkedRows = (handLinked.data ?? []) as Row[]
+  const handedOffIds = new Set(((handedOff.data ?? []) as Row[]).map(r => str(r.id)))
 
   for (const appt of appointments) {
     const mine = {
@@ -148,6 +152,7 @@ export async function fetchAnimalProgress(
     if (carcass) stage = carcass
     const session = leastAdvanced(sessionStages)
     if (session) stage = session
+    if (handedOffIds.has(appt.id)) stage = 'picked_up'
 
     const sessionAt = sessionRows.map(s => str(s.updated_at)).filter(Boolean).sort().pop() ?? null
     const readyAt = stage === 'freezing' && sessionAt
@@ -173,7 +178,7 @@ export async function fetchAnimalProgress(
       hangingWeightLbs,
       daysHanging,
       daysHungAtCut,
-      trailCold: !sessionRows.length && mine.harvests.length > 0 && daysSinceHarvest > COLD_TRAIL_DAYS,
+      trailCold: stage !== 'picked_up' && !sessionRows.length && mine.harvests.length > 0 && daysSinceHarvest > COLD_TRAIL_DAYS,
       sessions: sessionRows.map(s => ({ customer_name: str(s.customer_name) ?? '', session_date: str(s.session_date) ?? '', status: str(s.status) ?? '' })),
     })
   }
