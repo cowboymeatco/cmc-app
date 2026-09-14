@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { isoDate } from '@/lib/dates'
 import { julianYYDDD } from '@/lib/label'
+import { cardsForAnimal, fillSessionLinks } from '@/lib/sessionLinks'
 
 export const dynamic = 'force-dynamic'
 
@@ -84,6 +85,9 @@ export async function POST(req: NextRequest) {
       weight_lbs  = harvest.hot_carcass_weight_lbs
       input_type  = 'carcass'
       linked_harvest_id = harvest.id
+      if (harvest.appointment_id && !body.linked_appointment_id) {
+        body.linked_appointment_id = harvest.appointment_id
+      }
     }
   }
 
@@ -205,6 +209,17 @@ export async function POST(req: NextRequest) {
     .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  // The first carcass scanned into a session names its animal, so an older
+  // session nobody started off a tag still gets its appointment — and its cut
+  // card, when that animal has exactly one (lib/sessionLinks.ts).
+  if (data.linked_appointment_id && data.customer_name && data.session_date) {
+    const cards = await cardsForAnimal(data.linked_appointment_id, linked_harvest_id)
+    await fillSessionLinks(data.customer_name, data.session_date, {
+      linked_appointment_id: data.linked_appointment_id,
+      linked_cutting_instruction_id: cards.length === 1 ? cards[0].id : null,
+    })
+  }
 
   // Pull the carcass off the cooler rail once every side is accounted for:
   // a whole-carcass tag pulls immediately; halves pull when both L and R

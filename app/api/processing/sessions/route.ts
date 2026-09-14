@@ -107,6 +107,10 @@ export async function POST(req: NextRequest) {
   if (body.box_type != null) row.box_type = body.box_type
   // Same rule for the CMC ownership flag — only when the caller actually says.
   if (body.cmc != null) row.cmc = Boolean(body.cmc)
+  // The animal this session works — sent when it was started off a carcass tag,
+  // a cut card or the cooler list (lib/sessionLinks.ts). Reopens omit them.
+  if (body.linked_appointment_id) row.linked_appointment_id = body.linked_appointment_id
+  if (body.linked_cutting_instruction_id) row.linked_cutting_instruction_id = body.linked_cutting_instruction_id
 
   const { data, error } = await supabase
     .from('processing_sessions')
