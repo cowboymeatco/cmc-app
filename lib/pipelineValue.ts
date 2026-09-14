@@ -161,6 +161,17 @@ export interface AccountValue {
   basis: string[]
 }
 
+/** Open smokehouse jobs on this account's cut cards (value_add_jobs not complete). */
+export interface SmokehouseJobs {
+  /** Smoked, no weight out yet — packaging is what's left. */
+  packaging: { item: string; lbs: number }[]
+  /** In the smokehouse now. */
+  smoking: { item: string; lbs: number }[]
+  /** Pulled for the smokehouse, not in yet. */
+  queued: { item: string; lbs: number }[]
+}
+export const openJobCount = (j: SmokehouseJobs) => j.packaging.length + j.smoking.length + j.queued.length
+
 export interface ValueInputs {
   account: string
   species: string
@@ -171,6 +182,7 @@ export interface ValueInputs {
   /** Pounds already boxed in this account's sessions. */
   boxed_lbs: number
   smoke: SmokeLine[]
+  jobs: SmokehouseJobs
 }
 
 const money = (n: number) => `$${n.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
@@ -183,9 +195,16 @@ export function valueAccount(v: ValueInputs, labor: LaborRate, smokeRates: Map<s
   const hcw = v.hanging_weight_lbs && v.hanging_weight_lbs > 0 ? v.hanging_weight_lbs : null
   const smokeLbs = v.smoke.reduce((s, l) => s + l.lbs, 0)
 
+  const jobLbs = [...v.jobs.packaging, ...v.jobs.smoking, ...v.jobs.queued].reduce((s, j) => s + j.lbs, 0)
+  const hasJobs = openJobCount(v.jobs) > 0
+
+  // Open smokehouse jobs mean the product is already pulled off the carcass:
+  // an account the scanner still calls "cutting" is in the smokehouse
+  // (Charlie, 2026-09-13 — MVML's brisket, chuck and pulled pork smoked all
+  // weekend, "we should just have packaging left").
   const stageBucket: MoneyBucket =
     v.stage === 'received' || v.stage === 'harvested' || v.stage === 'aging' ? 'aging'
-    : v.stage === 'cutting' ? 'cutting'
+    : v.stage === 'cutting' ? (hasJobs ? 'smokehouse' : 'cutting')
     : v.stage === 'smokehouse' ? 'smokehouse'
     : 'ready_unbilled'
 
@@ -194,16 +213,21 @@ export function valueAccount(v: ValueInputs, labor: LaborRate, smokeRates: Map<s
   if (stageBucket === 'aging') {
     workLbs = hcw
     if (hcw) basis.push(`${Math.round(hcw)} lb hanging still to cut and pack`)
-  } else if (stageBucket === 'cutting') {
+  } else if (v.stage === 'cutting') {
     if (hcw && labor.packOut) {
       const expected = hcw * labor.packOut
       const left = Math.max(0, 1 - v.boxed_lbs / expected)
       workLbs = hcw * left
       basis.push(`${Math.round(v.boxed_lbs)} of ~${Math.round(expected)} lb boxed — ${Math.round(left * 100)}% of the cut left`)
     } else workLbs = hcw
-  } else if (stageBucket === 'smokehouse') {
+  } else if (stageBucket === 'smokehouse' && !hasJobs) {
     workLbs = smokeLbs
     basis.push(smokeLbs ? `${smokeLbs} lb raw into the smokehouse` : 'no smokehouse pounds on the cut card')
+  }
+  if (hasJobs && workLbs != null) {
+    workLbs += jobLbs
+    const say = (what: string, list: { item: string }[]) => list.length ? `${what}: ${list.map(j => j.item.toLowerCase()).join(', ')}` : ''
+    basis.push(`Smokehouse ${Math.round(jobLbs * 10) / 10} lb — ${[say('packaging left', v.jobs.packaging), say('in the smokehouse', v.jobs.smoking), say('waiting to smoke', v.jobs.queued)].filter(Boolean).join('; ')}`)
   }
   const hours_left = hrsPerLb != null && workLbs != null ? r2(workLbs * hrsPerLb + office) : null
   basis.push(`+ ${officeMinutes} min office (invoice, pickup call)`)

@@ -5,7 +5,7 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { fetchAnimalProgress, STAGE_RANK, type AnimalStage } from '@/lib/animalProgress'
 import { getInvoicesSince, type DatedInvoice } from '@/lib/qboInvoices'
 import { nameKey } from '@/lib/nameKey'
-import { loadLaborRate, loadSmokeRates, smokeLines, valueAccount, type AccountValue, type LaborRate } from '@/lib/pipelineValue'
+import { loadLaborRate, loadSmokeRates, smokeLines, valueAccount, type AccountValue, type LaborRate, type SmokehouseJobs } from '@/lib/pipelineValue'
 
 export const dynamic = 'force-dynamic'
 
@@ -59,6 +59,7 @@ export interface PipelineRow {
   sessions: { customer_name: string; session_date: string; status: string }[]
   billing: PipelineBilling
   value: AccountValue
+  smokehouse_jobs: SmokehouseJobs
 }
 
 export interface PipelineResponse {
@@ -186,6 +187,29 @@ export async function GET() {
     return [...allCards.values()].filter(c => c.appointment_id === a.id || linked.has(String(c.id)))
   }
 
+  // Open smokehouse jobs, found through the cut card they're linked to.
+  type Job = { linked_cutting_instruction_id: string | null; output_item_name: string | null; weight_in_lbs: number | null; smoke_in_at: string | null; smoke_out_at: string | null; weight_out_lbs: number | null }
+  const cardIds = [...allCards.keys()]
+  const { data: jobRows } = cardIds.length
+    ? await supabase.from('value_add_jobs')
+        .select('linked_cutting_instruction_id, output_item_name, weight_in_lbs, smoke_in_at, smoke_out_at, weight_out_lbs')
+        .in('linked_cutting_instruction_id', cardIds)
+        .neq('status', 'complete')
+    : { data: [] as Job[] }
+  const jobsFor = (a: ApptRow): SmokehouseJobs => {
+    const mine = new Set(cardsFor(a).map(c => String(c.id)))
+    const out: SmokehouseJobs = { packaging: [], smoking: [], queued: [] }
+    for (const j of (jobRows ?? []) as Job[]) {
+      if (!mine.has(String(j.linked_cutting_instruction_id))) continue
+      const entry = { item: (j.output_item_name ?? 'job').trim(), lbs: Number(j.weight_in_lbs) || 0 }
+      if (j.smoke_out_at && j.weight_out_lbs == null) out.packaging.push(entry)
+      else if (j.smoke_in_at && !j.smoke_out_at) out.smoking.push(entry)
+      else if (!j.smoke_in_at) out.queued.push(entry)
+      else out.packaging.push(entry) // weighed out but not marked complete — still to box up
+    }
+    return out
+  }
+
   // Pounds boxed so far per session, for how much of a cut is left.
   const sessionNames = [...new Set([...progress.values()].flatMap(p => p.sessions.map(s => s.customer_name)))]
   const boxed = new Map<string, number>()
@@ -219,6 +243,7 @@ export async function GET() {
 
     const account = (a.source ?? '').trim() || customers[0] || 'Unnamed'
     const billing = billingFor(invoiceIdx, (a.source ?? '').trim(), customers, a.harvest_date)
+    const smokehouse_jobs = jobsFor(a)
     const value = valueAccount({
       account,
       species: a.species ?? '',
@@ -228,6 +253,7 @@ export async function GET() {
       billing,
       boxed_lbs: p.sessions.reduce((s, x) => s + (boxed.get(`${x.customer_name}|${x.session_date}`) ?? 0), 0),
       smoke: cardsFor(a).flatMap(c => smokeLines(c.data)),
+      jobs: smokehouse_jobs,
     }, labor, smokeRates, officeMinutes)
 
     rows.push({
@@ -252,6 +278,7 @@ export async function GET() {
       sessions: p.sessions,
       billing,
       value,
+      smokehouse_jobs,
     })
   }
 

@@ -48,6 +48,10 @@ function nextStep(r: PipelineRow): string {
     ? 'Records stop after harvest — confirm it went home'
     : 'No kill record — confirm it went home'
   if (r.value.kind === 'paid' && STAGE_RANK.indexOf(r.stage) >= STAGE_RANK.indexOf('freezing')) return 'Paid — call for pickup'
+  const jobs = r.smokehouse_jobs
+  if (jobs.packaging.length) return `Smoked — package ${jobs.packaging.map(j => j.item.toLowerCase()).join(', ')}`
+  if (jobs.smoking.length) return `In the smokehouse — ${jobs.smoking.map(j => j.item.toLowerCase()).join(', ')}`
+  if (jobs.queued.length) return `Waiting to smoke — ${jobs.queued.map(j => j.item.toLowerCase()).join(', ')}`
   if (r.value.bucket === 'ready_unbilled') return 'Done — send the invoice'
   switch (r.stage) {
     case 'received':   return 'Waiting on harvest'
@@ -283,7 +287,8 @@ export default function PipelinePage() {
 
             {shown.map((r, i) => {
               const { segs } = segments(r, now)
-              const lab = STAGE_LABEL[r.stage]
+              // Open smokehouse jobs put a "cutting" account in the smokehouse.
+              const lab = r.stage === 'cutting' && (r.smokehouse_jobs.packaging.length + r.smokehouse_jobs.smoking.length + r.smokehouse_jobs.queued.length) > 0 ? STAGE_LABEL.smokehouse : STAGE_LABEL[r.stage]
               const stageSince = r.stage === 'ready' || r.stage === 'freezing' || r.stage === 'at_baker' ? r.session_at
                 : r.stage === 'cutting' || r.stage === 'smokehouse' ? (r.cut_date_planned ? r.session_at : r.cut_date)
                 : r.stage === 'aging' || r.stage === 'harvested' ? (r.harvested_at ?? r.harvest_date)
