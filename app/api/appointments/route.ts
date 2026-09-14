@@ -189,6 +189,35 @@ async function resolveProducerId(source: unknown): Promise<string | null> {
   }
 }
 
+// A QuickBooks customer picked on a booking is a person saying "this name bills
+// to that customer". Keep it for the next booking under the same name — only
+// where no link exists yet, so a booking never silently re-points somebody
+// else's confirmed link (2026-09-14). Convenience only: never blocks the save.
+async function rememberQboLinks(appt: Record<string, unknown> | null) {
+  if (!appt) return
+  try {
+    const source = String(appt.source ?? '').trim()
+    if (source && appt.producer_qbo_customer_id) {
+      await supabaseAdmin.from('producer_qbo_links')
+        .upsert([{ producer_name: source, qbo_customer_id: String(appt.producer_qbo_customer_id) }], { onConflict: 'producer_name', ignoreDuplicates: true })
+      if (appt.producer_id) {
+        await supabaseAdmin.from('customers').update({ qbo_customer_id: String(appt.producer_qbo_customer_id) })
+          .eq('id', String(appt.producer_id)).or('qbo_customer_id.is.null,qbo_customer_id.eq.')
+      }
+    }
+    for (const c of (Array.isArray(appt.customers) ? appt.customers : []) as ApptCustomer[]) {
+      const name = (c.customer_name ?? '').trim()
+      const qbo = c.qbo_customer_id ? String(c.qbo_customer_id) : ''
+      if (!name || !qbo) continue
+      await supabaseAdmin.from('customer_qbo_links')
+        .upsert([{ customer_name: name, qbo_customer_id: qbo }], { onConflict: 'customer_name', ignoreDuplicates: true })
+      if (c.customer_id) {
+        await supabaseAdmin.from('customers').update({ qbo_customer_id: qbo }).eq('id', c.customer_id).or('qbo_customer_id.is.null,qbo_customer_id.eq.')
+      }
+    }
+  } catch { /* the booking saved; the link is a bonus */ }
+}
+
 // POST /api/appointments â€” create a new appointment
 export async function POST(req: NextRequest) {
   const body = await req.json()
@@ -207,11 +236,14 @@ export async function POST(req: NextRequest) {
       linked_carcass_id: body.linked_carcass_id ?? '',
       customers:         await linkCustomers(body.customers),
       producer_id:       body.producer_id ?? await resolveProducerId(body.source),
+      producer_qbo_customer_id: body.producer_qbo_customer_id ?? null,
+      producer_qbo_name:        body.producer_qbo_name ?? null,
     }])
     .select()
     .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  await rememberQboLinks(data)
   return NextResponse.json(data)
 }
 
@@ -343,6 +375,7 @@ export async function PATCH(req: NextRequest) {
     .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  await rememberQboLinks(data)
   if (rollFrom) {
     await recordRoll(id, rollFrom, updates.harvest_date)
     await moveCarcasses(id, updates.harvest_date)

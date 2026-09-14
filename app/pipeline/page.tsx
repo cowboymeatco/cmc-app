@@ -91,7 +91,7 @@ const hrs = (h: number) => (h < 1 ? `${Math.round(h * 60)} min` : `${h.toFixed(h
 // The QuickBooks word on this animal, as a chip.
 function BillingChip({ b }: { b: PipelineRow['billing'] }) {
   const base: React.CSSProperties = { display: 'inline-block', fontSize: '0.68rem', fontWeight: 700, borderRadius: 99, padding: '1px 8px', whiteSpace: 'nowrap' }
-  const how = b.matched_by === 'manual' ? ' · matched by hand' : b.matched_by === 'name' ? ' · matched by name — check it' : ''
+  const how = b.matched_by === 'manual' ? ' · matched by hand' : b.matched_by === 'booking' ? ' · QuickBooks customer on the booking' : b.matched_by === 'name' ? ' · matched by name — check it' : ''
   if (b.status === 'paid')    return <span title={`Invoice ${b.doc_numbers.join(', ')} · ${money(b.total)}${how}`} style={{ ...base, color: C.green, border: `1px solid ${C.green}66` }}>💵 Paid {money(b.total)}</span>
   if (b.status === 'open')    return <span title={`Invoice ${b.doc_numbers.join(', ')} · ${money(b.total)} total${how}`} style={{ ...base, color: C.yellow, border: `1px solid ${C.yellow}66` }}>💵 {money(b.balance)} due · #{b.doc_numbers[b.doc_numbers.length - 1]}</span>
   if (b.status === 'unknown') return <span style={{ ...base, color: C.lightBrown, border: '1px solid rgba(166,120,90,0.35)' }}>QuickBooks unavailable</span>

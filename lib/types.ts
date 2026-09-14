@@ -43,6 +43,9 @@ export interface AppointmentCustomer {
   linked_cutting_instruction_id: string
   reminder_last_sent_at:       string | null
   reminder_count:              number
+  /** QuickBooks customer billed when this customer pays (qbo_customers.qbo_id) — picked on the booking. */
+  qbo_customer_id?: string | null
+  qbo_display_name?: string | null
 }
 
 export interface HarvestAppointment {
@@ -58,6 +61,9 @@ export interface HarvestAppointment {
   status:           AppointmentStatus
   linked_carcass_id: string
   customers:        AppointmentCustomer[]
+  /** QuickBooks customer billed when the producer pays — picked on the booking. */
+  producer_qbo_customer_id?: string | null
+  producer_qbo_name?: string | null
 }
 
 // ── Cutting Instructions ──────────────────────────────────────────────────────

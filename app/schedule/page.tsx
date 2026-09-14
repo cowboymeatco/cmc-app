@@ -5,6 +5,7 @@ import type { HarvestAppointment, AppointmentCustomer, Customer } from '@/lib/ty
 import { isoDate, addDaysISO, dayOfWeekISO } from '@/lib/dates'
 import { SPECIES_CLR, SPECIES_EMOJI } from '@/lib/cutSchedule'
 import BookedDollars from './BookedDollars'
+import QboPicker from './QboPicker'
 
 const SPECIES  = ['Beef', 'Hog', 'Lamb', 'Goat']
 const PORTIONS = ['Whole', 'Half', 'Quarter']
@@ -1063,6 +1064,15 @@ function Modal({ editing, saving, onChange, onSave, onClose }: {
         <Field label="Source / Ranch / Producer">
           <SourceInput value={editing.source??''} onChange={v=>onChange({...editing,source:v})} />
         </Field>
+        {/* Who the producer's share is invoiced to in QuickBooks — so In the
+            Building finds the invoice by customer, not spelling (2026-09-14). */}
+        <QboPicker
+          label="Producer's QuickBooks customer"
+          scope="producer"
+          name={editing.source ?? ''}
+          value={editing.producer_qbo_customer_id ? { id: editing.producer_qbo_customer_id, name: editing.producer_qbo_name ?? editing.producer_qbo_customer_id } : null}
+          onChange={v=>onChange(prev=>prev ? {...prev, producer_qbo_customer_id: v?.id ?? null, producer_qbo_name: v?.name ?? null} : prev)}
+        />
         <div style={{height:'0.75rem'}}/>
         <Field label="Producer Phone / Email">
           <input value={editing.producer_contact??''} onChange={e=>onChange({...editing,producer_contact:e.target.value})} style={inputStyle()} placeholder="Phone or email — for scheduling contact" />
@@ -1108,6 +1118,14 @@ function Modal({ editing, saving, onChange, onSave, onClose }: {
                   <input value={c.contact_value} onChange={e=>{const cs=[...(editing.customers??[])];cs[idx]={...c,contact_value:e.target.value};onChange({...editing,customers:cs})}} style={inputStyle()} placeholder="email or phone" />
                 </Field>
               </div>
+              {/* The buyer on a fair animal, or any customer billed for their own share. */}
+              <QboPicker
+                label={c.payment_responsibility === 'customer' ? "This customer's QuickBooks customer — billed here" : "QuickBooks customer (if they're billed)"}
+                scope="customer"
+                name={c.customer_name ?? ''}
+                value={c.qbo_customer_id ? { id: c.qbo_customer_id, name: c.qbo_display_name ?? c.qbo_customer_id } : null}
+                onChange={v=>onChange(prev=>{if(!prev)return prev;const cs=[...(prev.customers??[])];cs[idx]={...cs[idx],qbo_customer_id:v?.id??null,qbo_display_name:v?.name??null};return {...prev,customers:cs}})}
+              />
               {(editing.customers??[]).length > 1 && (
                 <button onClick={()=>onChange({...editing,customers:(editing.customers??[]).filter((_,i)=>i!==idx)})} style={{...smallBtn('rgba(180,60,60,0.2)','#f08080'),marginTop:'0.5rem',fontSize:'0.75rem'}}>Remove customer</button>
               )}

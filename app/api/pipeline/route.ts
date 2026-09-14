@@ -35,7 +35,7 @@ export interface PipelineBilling {
   open_balances: Record<string, number>
   latest_date: string | null
   /** 'manual' = a person matched it on this page (appointment_invoice_links); 'link' = saved QBO customer; 'name' = spelling. */
-  matched_by: 'manual' | 'link' | 'name' | null
+  matched_by: 'manual' | 'booking' | 'link' | 'name' | null
 }
 
 export interface PipelineRow {
@@ -113,6 +113,8 @@ function billingFor(
   manual: string[],
   /** Invoice ids matched by hand to some OTHER appointment — never name-matched here. */
   claimedElsewhere: Set<string>,
+  /** QuickBooks customers picked on the booking as the payers. */
+  bookingPayers: string[] = [],
 ): PipelineBilling {
   const none: PipelineBilling = { status: idx.ok ? 'none' : 'unknown', invoices: 0, total: 0, balance: 0, doc_numbers: [], open_balances: {}, latest_date: null, matched_by: null }
   if (!idx.ok) return none
@@ -134,8 +136,14 @@ function billingFor(
     ...(names.map(n => idx.linkByCustomer.get(n)).filter(Boolean) as string[]),
   ])]
 
-  let hits: DatedInvoice[] = linked.flatMap(id => idx.byId.get(id) ?? [])
-  let matchedBy: PipelineBilling['matched_by'] = hits.length ? 'link' : null
+  // The payers picked on the booking come first — exact, whatever the spelling.
+  let hits: DatedInvoice[] = bookingPayers.flatMap(id => idx.byId.get(id) ?? [])
+    .filter(h => (!floor || h.txnDate >= floor) && !claimedElsewhere.has(h.id))
+  let matchedBy: PipelineBilling['matched_by'] = hits.length ? 'booking' : null
+  if (!hits.length) {
+    hits = linked.flatMap(id => idx.byId.get(id) ?? [])
+    matchedBy = hits.length ? 'link' : null
+  }
   if (!hits.length) {
     hits = names.flatMap(n => idx.byName.get(n) ?? [])
     matchedBy = hits.length ? 'name' : null
@@ -163,8 +171,10 @@ function summarize(hits: DatedInvoice[], matchedBy: PipelineBilling['matched_by'
 
 type ApptRow = {
   id: string; harvest_date: string | null; species: string | null; head_count: number | null
-  source: string | null; status: string | null; customers: { customer_name?: string; portion?: string; linked_cutting_instruction_id?: string }[] | null
+  source: string | null; status: string | null
+  customers: { customer_name?: string; portion?: string; linked_cutting_instruction_id?: string; payment_responsibility?: string; qbo_customer_id?: string | null }[] | null
   no_invoice_reason: string | null
+  producer_qbo_customer_id: string | null
 }
 
 export async function GET() {
@@ -173,7 +183,7 @@ export async function GET() {
   const since = new Date(Date.now() - 180 * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Denver' })
   const { data, error } = await supabase
     .from('harvest_appointments')
-    .select('id, harvest_date, species, head_count, source, status, customers, no_invoice_reason')
+    .select('id, harvest_date, species, head_count, source, status, customers, no_invoice_reason, producer_qbo_customer_id')
     .in('status', ['AnimalIn', 'Processing', 'Complete'])
     .gte('harvest_date', since)
     .order('harvest_date', { ascending: true })
@@ -269,7 +279,14 @@ export async function GET() {
 
     const account = (a.source ?? '').trim() || customers[0] || 'Unnamed'
     const claimedElsewhere = new Set([...claimedBy].filter(([, appt]) => appt !== a.id).map(([inv]) => inv))
-    const billing = billingFor(invoiceIdx, (a.source ?? '').trim(), customers, a.harvest_date, manualFor.get(a.id) ?? [], claimedElsewhere)
+    // Payers picked on the booking: each customer billed for their own share,
+    // and the producer's customer when anyone's share rolls to the producer.
+    const bookedRows = a.customers ?? []
+    const bookingPayers = [...new Set([
+      ...bookedRows.filter(c => c.payment_responsibility === 'customer' && c.qbo_customer_id).map(c => String(c.qbo_customer_id)),
+      ...(a.producer_qbo_customer_id && (!bookedRows.length || bookedRows.some(c => c.payment_responsibility !== 'customer')) ? [a.producer_qbo_customer_id] : []),
+    ])]
+    const billing = billingFor(invoiceIdx, (a.source ?? '').trim(), customers, a.harvest_date, manualFor.get(a.id) ?? [], claimedElsewhere, bookingPayers)
     const smokehouse_jobs = jobsFor(a)
     const value = valueAccount({
       account,
