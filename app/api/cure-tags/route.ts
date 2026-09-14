@@ -6,6 +6,7 @@ import { aliasMap, nameKeyWith, type CustomerNameAlias } from '@/lib/nameKey'
 import { buildSheetCarcassIndex, sheetSlots, type AssignmentRow, type CarcassRow } from '@/lib/sheetCarcasses'
 import { cureProductFitsSpecies, SHEET_PRODUCT } from '@/lib/cureLoad'
 import { CureTag } from '@/lib/types'
+import { getSessionLinks } from '@/lib/sessionLinks'
 
 export const dynamic = 'force-dynamic'
 
@@ -164,7 +165,10 @@ export async function POST(req: NextRequest) {
     .from('cure_tags').select('*').eq('tag_number', tag_number).maybeSingle()
   if (existing) return NextResponse.json(existing, { status: 409 })
 
-  const ciId = linked_cutting_instruction_id || null
+  // The session's own cut card wins: it was set off the animal, where the
+  // client's id can be left over from the last card scanned (lib/sessionLinks.ts).
+  const sessionCi = session_date ? (await getSessionLinks(customer_name, session_date)).linked_cutting_instruction_id : null
+  const ciId = sessionCi || linked_cutting_instruction_id || null
 
   // The count check needs a single sheet to be the denominator. A scanned card
   // names it outright; a typed name gets one only when exactly one live sheet
@@ -223,6 +227,15 @@ export async function POST(req: NextRequest) {
       .select('harvest_log_id')
       .eq('linked_cutting_instruction_id', ciId)
     const heads = [...new Set((asg ?? []).map(a => String(a.harvest_log_id ?? '')).filter(Boolean))]
+    if (heads.length === 1) linked_harvest_id = heads[0]
+  }
+  // Or the session only ever had one carcass scanned into it — same arithmetic.
+  if (!linked_harvest_id && session_date) {
+    const { data: carcasses } = await supabase
+      .from('processing_inputs').select('linked_harvest_id')
+      .eq('customer_name', customer_name.trim()).eq('session_date', session_date)
+      .not('linked_harvest_id', 'is', null)
+    const heads = [...new Set((carcasses ?? []).map(c => String(c.linked_harvest_id)))]
     if (heads.length === 1) linked_harvest_id = heads[0]
   }
 

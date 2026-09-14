@@ -32,6 +32,22 @@ export async function resolveCuttingInstruction(customerName: string, packDate: 
       ? { cards: [{ data: row.data as Record<string, unknown>, customerId: row.customer_id ?? null, species: row.species ?? null }], via, name: row.customer_name ?? '' }
       : null
 
+  // 0. The session was started off (or scanned against) its animal and knows
+  //    its card outright (lib/sessionLinks.ts, 2026-09-13). Nothing below —
+  //    least of all a name — gets a vote.
+  const sess = await supabase
+    .from('processing_sessions')
+    .select('linked_cutting_instruction_id')
+    .eq('customer_name', customerName.trim())
+    .eq('session_date', packDate)
+    .maybeSingle()
+  const sessionCi = sess.data?.linked_cutting_instruction_id as string | null | undefined
+  if (sessionCi) {
+    const ci = await supabase.from('cutting_instructions').select('data, customer_name, customer_id, species').eq('id', sessionCi).maybeSingle()
+    const hit = pick(ci.data, 'session')
+    if (hit) return hit
+  }
+
   // 1. Carcass scanned into this session → the assignment made at check-in.
   const inputs = await supabase
     .from('processing_inputs')

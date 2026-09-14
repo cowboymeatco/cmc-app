@@ -7,6 +7,8 @@ import { isoDate } from '@/lib/dates'
 import { speciesIcon, speciesFromDescription } from '@/lib/cutSchedule'
 
 import CustomerPicker, { resolveCiScan, type CustomerName } from './CustomerPicker'
+import AnimalStart, { type AnimalPick } from './AnimalStart'
+import { isCarcassTag } from '@/lib/carcassTag'
 const C = {
   dark:       '#1A0A04',
   darkBrown:  '#351E0E',
@@ -83,6 +85,8 @@ interface SessionWithStats {
   total_cuts:     number
   animals?:       string[]   // carcass input descriptions, e.g. "Beef — Tag 06 (Holdbrook)"
   carcass_weight?: number    // summed hanging weight of the session's carcass inputs
+  linked_appointment_id?:         string | null   // the animal it's working (lib/sessionLinks.ts)
+  linked_cutting_instruction_id?: string | null
 }
 
 interface BoxRecord {
@@ -666,6 +670,12 @@ export default function ScannerPage() {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
   const [currentStatus,    setCurrentStatus]    = useState<SessionStatus>('scanning')
   const [showNewForm,      setShowNewForm]      = useState(false)
+  // The animal New Session was started from — carries its appointment and cut
+  // card onto the session, so the typed name is only a label (2026-09-13).
+  const [newPick,          setNewPick]          = useState<AnimalPick | null>(null)
+  const [newPickCode,      setNewPickCode]      = useState<string | null>(null)
+  const [sessionLinked,    setSessionLinked]    = useState(false)
+  const carcassHomeRef = useRef<((code: string) => void) | null>(null)
   const [showAllFreezer,   setShowAllFreezer]   = useState(false)
   const [showAllBaker,     setShowAllBaker]     = useState(false)
   const [showAllPickedUp,  setShowAllPickedUp]  = useState(false)
@@ -961,6 +971,12 @@ export default function ScannerPage() {
       .finally(() => setPluLoaded(true))
   }, [])
 
+  // A carcass tag scanned on the sessions screen opens New Session already
+  // looked up — the fastest way to start from the animal (2026-09-13).
+  useEffect(() => {
+    carcassHomeRef.current = (code: string) => { if (pluLoaded && !showNewForm) openNewSession(code) }
+  })
+
   // ── Global key redirect: digits → scan input ─────────────────────────────────
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -979,6 +995,7 @@ export default function ScannerPage() {
           const code = sealBufRef.current
           sealBufRef.current = ''
           if (isCureTagNumber(code)) traySealRef.current?.(code)
+          else if (isCarcassTag(code)) carcassHomeRef.current?.(code)
           else ciScanRef.current?.(code)
           return
         }
@@ -1181,7 +1198,8 @@ export default function ScannerPage() {
   }, [scanValue])
 
   // ── Session record helpers ───────────────────────────────────────────────────
-  async function upsertSession(custName: string, sessDate: string, status = 'scanning', bt?: BoxType, own?: boolean): Promise<string | null> {
+  async function upsertSession(custName: string, sessDate: string, status = 'scanning', bt?: BoxType, own?: boolean,
+    links?: { linked_appointment_id: string | null; linked_cutting_instruction_id: string | null }): Promise<string | null> {
     try {
       const res  = await fetch('/api/processing/sessions', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1191,6 +1209,8 @@ export default function ScannerPage() {
           customer_name: custName, session_date: sessDate, status,
           ...(bt ? { box_type: bt } : {}),
           ...(own != null ? { cmc: own } : {}),
+          ...(links?.linked_appointment_id ? { linked_appointment_id: links.linked_appointment_id } : {}),
+          ...(links?.linked_cutting_instruction_id ? { linked_cutting_instruction_id: links.linked_cutting_instruction_id } : {}),
         }),
       })
       const data = await res.json()
@@ -1306,7 +1326,9 @@ export default function ScannerPage() {
   // can only ever start at today. Backdating stays possible — the field is
   // still editable, and a session genuinely packed yesterday needs it — but it
   // now has to be chosen rather than inherited.
-  function openNewSession() {
+  function openNewSession(carcassCode: string | null = null) {
+    setNewPick(null)
+    setNewPickCode(carcassCode)
     setCustomer('')
     setBoxType('USDA')
     setCmc(false)
@@ -1332,13 +1354,36 @@ export default function ScannerPage() {
     setScans([])
     setCurrentStatus('scanning')
     setLabelFlags(flagsForType(boxType, DEFAULT_FLAGS))
-    const sid = await upsertSession(cust, date, 'scanning', boxType, cmc)
+    // The animal it was started from, if any. Clearing the card ref here too:
+    // a typed session used to inherit the last scanned card's id, and its cure
+    // seals linked to the previous customer's sheet.
+    const pick = newPick
+    setNewPick(null)
+    sessionCiRef.current = pick?.ci_id ?? null
+    setSessionLinked(!!pick?.appointment_id)
+    const sid = await upsertSession(cust, date, 'scanning', boxType, cmc, pick
+      ? { linked_appointment_id: pick.appointment_id, linked_cutting_instruction_id: pick.ci_id }
+      : undefined)
     setCurrentSessionId(sid)
     setSharedYield(null)
-    fetch(`/api/processing/inputs?customer_name=${encodeURIComponent(cust)}&session_date=${date}`)
-      .then(r => r.json())
-      .then((data: unknown) => { if (Array.isArray(data)) setInputs(data as ProcessingInput[]) })
-      .catch(() => {})
+    let existingInputs: ProcessingInput[] = []
+    try {
+      const data: unknown = await fetch(`/api/processing/inputs?customer_name=${encodeURIComponent(cust)}&session_date=${date}`).then(r => r.json())
+      if (Array.isArray(data)) existingInputs = data as ProcessingInput[]
+    } catch { /* the list reloads on the next scan */ }
+    // Started off a carcass tag: that tag is the session's first input, so
+    // nobody scans it twice (and the rail pull happens now).
+    const code = pick?.carcass_code ?? null
+    if (code && !existingInputs.some(i => (i.box_identifier ?? '').toUpperCase() === code)) {
+      try {
+        const inp: ProcessingInput = await fetch('/api/processing/inputs', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_date: date, customer_name: cust, pack_date: date, box_identifier: code, input_type: 'carcass', source_type: 'general' }),
+        }).then(r => r.json())
+        if (inp?.id) existingInputs = [...existingInputs, inp]
+      } catch { /* scan the tag in the session instead */ }
+    }
+    setInputs(existingInputs)
     loadSharedYield(cust, date)
   }
 
@@ -1353,6 +1398,8 @@ export default function ScannerPage() {
     const existing = sessions.find(s => s.customer_name === cust && s.session_date === dt)
     const existingStatus = existing?.status ?? 'scanning'
     const existingType   = normalizeBoxType(existing?.box_type)
+    setSessionLinked(!!existing?.linked_appointment_id)
+    if (existing?.linked_cutting_instruction_id) sessionCiRef.current = existing.linked_cutting_instruction_id
     setCustomer(cust)
     setDate(dt)
     enterSession()
@@ -1447,6 +1494,15 @@ export default function ScannerPage() {
     const dt = isoDate()
     const sorted = await startSessionFromExisting(hit.name, dt)
     sessionCiRef.current = hit.ciId
+    // The card names the animal: keep it on the session, so the card on screen,
+    // the box label and the cure seals all answer from the same place. A card
+    // scanned mid-cut moves the session to that animal (Charlie, 2026-09-01).
+    fetch(`/api/scanner/animal?code=${encodeURIComponent(raw)}`).then(r => r.json()).then((a: { appointment_id?: string | null }) =>
+      fetch('/api/processing/sessions', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customer_name: hit.name, session_date: dt, linked_cutting_instruction_id: hit.ciId, ...(a.appointment_id ? { linked_appointment_id: a.appointment_id } : {}) }),
+      }).then(() => { if (a.appointment_id) setSessionLinked(true) }),
+    ).catch(() => {})
     if (!sorted.some(b => !b.is_closed)) await addBoxTo(hit.name, dt, sorted)
     setLastKind('ok')
     setLastItem(`📋 ${hit.name} — session open off the cut card · scan packages`)
@@ -2183,6 +2239,7 @@ export default function ScannerPage() {
       const inp: ProcessingInput = await res.json()
       setInputs(prev => [...prev, inp])
       setShowInputs(true)
+      if (inp.linked_appointment_id) setSessionLinked(true)
       loadSharedYield(customer, date)
       // Show what the scan resolved to (weight, producer, cooler pull)
       const resolved = inp.description || identifier
@@ -2593,7 +2650,7 @@ export default function ScannerPage() {
           {/* New Session — split button, because a repack starts from a box
               serial instead of a typed customer name. */}
           <div style={{ position: 'relative', display: 'flex' }}>
-            <button onClick={openNewSession} style={{ background: C.tan, color: C.dark, border: 'none', borderRadius: '4px 0 0 4px', padding: '0.5rem 1.1rem', fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer', letterSpacing: '0.04em' }}>
+            <button onClick={() => openNewSession()} style={{ background: C.tan, color: C.dark, border: 'none', borderRadius: '4px 0 0 4px', padding: '0.5rem 1.1rem', fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer', letterSpacing: '0.04em' }}>
               + New Session
             </button>
             <button
@@ -2729,7 +2786,7 @@ export default function ScannerPage() {
             <div style={{ textAlign: 'center', color: C.lightBrown, padding: '4rem 2rem' }}>
               <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🔍</div>
               <div style={{ fontSize: '0.95rem', marginBottom: '1.25rem' }}>No sessions yet</div>
-              <button onClick={openNewSession} style={{ background: C.tan, color: C.dark, border: 'none', borderRadius: 4, padding: '0.65rem 1.5rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer' }}>
+              <button onClick={() => openNewSession()} style={{ background: C.tan, color: C.dark, border: 'none', borderRadius: 4, padding: '0.65rem 1.5rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer' }}>
                 Start First Session
               </button>
             </div>
@@ -2809,12 +2866,17 @@ export default function ScannerPage() {
         {/* New Session modal */}
         {showNewForm && (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-            <div style={{ background: C.darkBrown, border: '1px solid rgba(166,120,90,0.35)', borderRadius: 8, padding: '2rem', width: '100%', maxWidth: 360 }}>
+            <div style={{ background: C.darkBrown, border: '1px solid rgba(166,120,90,0.35)', borderRadius: 8, padding: '2rem', width: '100%', maxWidth: 360, maxHeight: '94vh', overflowY: 'auto' }}>
               <h2 style={{ fontFamily: 'Georgia, serif', color: C.cream, fontSize: '1.1rem', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 1.5rem' }}>New Session</h2>
+              <AnimalStart
+                date={date}
+                pick={newPick}
+                initialCode={newPickCode}
+                onPick={p => { setNewPick(p); if (p?.customer_name) setCustomer(p.customer_name) }}
+              />
               <div style={{ marginBottom: '1rem' }}>
-                <label style={LBL}>Customer</label>
+                <label style={LBL}>Customer{newPick ? ' — label on the boxes (add the weight if you like)' : ' — or type one for retail / repack'}</label>
                 <CustomerPicker
-                  autoFocus
                   value={customer}
                   onChange={setCustomer}
                   onEnter={() => { if (customer.trim() && pluLoaded) { setShowNewForm(false); startSession() } }}
@@ -2922,6 +2984,9 @@ export default function ScannerPage() {
             </button>
           )}
           <span style={{ color: C.lightBrown, fontSize: '0.82rem' }}>{date}</span>
+          {sessionLinked
+            ? <span title="Tied to its animal — the cut card, box labels and cure seals follow the animal, not the name" style={{ color: C.green, fontSize: '0.72rem', fontWeight: 700 }}>🔗 animal</span>
+            : <span title="No animal on this session — scan its carcass tag to link it (fine to leave for retail or repack)" style={{ color: C.lightBrown, fontSize: '0.72rem' }}>no animal linked</span>}
           {/* Status badge + quick-change */}
           {currentStatus === 'scanning' && (
             <button onClick={() => updateSessionStatus('value_add')}
