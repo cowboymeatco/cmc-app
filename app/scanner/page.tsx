@@ -1375,13 +1375,22 @@ export default function ScannerPage() {
       if (Array.isArray(data)) existingInputs = data as ProcessingInput[]
     } catch { /* the list reloads on the next scan */ }
     // Started off a carcass tag: that tag is the session's first input, so
-    // nobody scans it twice (and the rail pull happens now).
+    // nobody scans it twice (and the rail pull happens now). A carcass tapped
+    // off a list because its tag wouldn't scan goes in by id and says so on
+    // the record — "not scanned" — the same way the cut schedule's hand link
+    // does, so a yield that looks off can be traced to it.
     const code = pick?.carcass_code ?? null
-    if (code && !existingInputs.some(i => (i.box_identifier ?? '').toUpperCase() === code)) {
+    const already = existingInputs.some(i =>
+      (code && (i.box_identifier ?? '').toUpperCase() === code) ||
+      (pick?.harvest_log_id && i.linked_harvest_id === pick.harvest_log_id))
+    if (code && !already) {
       try {
+        const body = pick?.picked && pick.harvest_log_id
+          ? { session_date: date, customer_name: cust, pack_date: date, harvest_log_id: pick.harvest_log_id, notes: "Picked on New Session - tag would not scan (not scanned)" }
+          : { session_date: date, customer_name: cust, pack_date: date, box_identifier: code, input_type: 'carcass', source_type: 'general' }
         const inp: ProcessingInput = await fetch('/api/processing/inputs', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_date: date, customer_name: cust, pack_date: date, box_identifier: code, input_type: 'carcass', source_type: 'general' }),
+          body: JSON.stringify(body),
         }).then(r => r.json())
         if (inp?.id) existingInputs = [...existingInputs, inp]
       } catch { /* scan the tag in the session instead */ }

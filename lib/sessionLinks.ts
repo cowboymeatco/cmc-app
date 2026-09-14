@@ -213,3 +213,44 @@ export async function coolerAnimals(today: string): Promise<CoolerAnimal[]> {
   }
   return out.sort((a, b) => Number(b.scheduled_today) - Number(a.scheduled_today) || a.harvest_date.localeCompare(b.harvest_date))
 }
+
+export interface BookingAnimal {
+  harvest_log_id: string
+  code: string
+  tag: string
+  species: string | null
+  producer: string | null
+  harvest_date: string
+  weight_lbs: number | null
+  status: string | null
+}
+
+/**
+ * The carcasses on a cut card's booking — the short list for a tag that won't
+ * scan once the card is in hand (Charlie, 2026-09-13). Also says how each card
+ * on the booking is portioned, so a half's pick doesn't pull the whole carcass.
+ */
+export async function animalsOnBooking(appointmentId: string): Promise<{ animals: BookingAnimal[]; portions: Record<string, string> }> {
+  const [{ data: rows }, { data: appt }] = await Promise.all([
+    supabase.from('harvest_log')
+      .select('id, species, carcass_tag, harvest_date, producer, status, hot_carcass_weight_lbs, half_1_weight_lbs, half_2_weight_lbs')
+      .eq('appointment_id', appointmentId).order('carcass_tag'),
+    supabase.from('harvest_appointments').select('customers').eq('id', appointmentId).maybeSingle(),
+  ])
+  const portions: Record<string, string> = {}
+  for (const c of ((appt?.customers ?? []) as { linked_cutting_instruction_id?: string; portion?: string }[])) {
+    const id = (c.linked_cutting_instruction_id ?? '').trim()
+    if (id) portions[id] = c.portion ?? 'Whole'
+  }
+  const animals = (rows ?? []).map(r => ({
+    harvest_log_id: String(r.id),
+    code: `${julianYYDDD(r.harvest_date as string)}-${r.carcass_tag}`,
+    tag: String(r.carcass_tag ?? ''),
+    species: (r.species as string) ?? null,
+    producer: (r.producer as string) ?? null,
+    harvest_date: r.harvest_date as string,
+    weight_lbs: num(r.hot_carcass_weight_lbs) ?? (((num(r.half_1_weight_lbs) ?? 0) + (num(r.half_2_weight_lbs) ?? 0)) || null),
+    status: (r.status as string) ?? null,
+  }))
+  return { animals, portions }
+}

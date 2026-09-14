@@ -16,7 +16,7 @@
 // the card is still scanned.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { AnimalCard, CoolerAnimal, ResolvedAnimal } from '@/lib/sessionLinks'
+import type { AnimalCard, BookingAnimal, CoolerAnimal, ResolvedAnimal } from '@/lib/sessionLinks'
 
 const C = {
   dark: '#1A0A04', medBrown: '#75471B', lightBrown: '#A6785A', tan: '#C9A882', cream: '#F2E8D9', yellow: '#D97706', green: '#4CAF50', red: '#EF4444',
@@ -26,8 +26,11 @@ export interface AnimalPick {
   customer_name: string
   appointment_id: string | null
   ci_id: string | null
-  /** A carcass tag to add to the session as its input. Null when the animal was picked off the list as a split. */
+  /** A carcass tag to add to the session as its input. Null when a split animal was picked (scan the half in the session). */
   carcass_code: string | null
+  harvest_log_id: string | null
+  /** Tapped off a list because the tag wouldn't scan — the carcass input says "not scanned". */
+  picked: boolean
   label: string
 }
 
@@ -35,6 +38,8 @@ export interface AnimalPick {
 interface AnimalSlot {
   appointment_id: string | null
   carcass_code: string | null
+  harvest_log_id: string | null
+  picked: boolean
   label: string
   cards: AnimalCard[]
 }
@@ -61,12 +66,24 @@ export default function AnimalStart({ date, onPick, onRetail, retail, initialCod
   const [showCooler, setShowCooler] = useState(false)
   const [cooler, setCooler] = useState<CoolerAnimal[] | null>(null)
   const [filter, setFilter] = useState('')
+  // The card's own booking, for a tag that won't scan once the card is in hand.
+  const [booking, setBooking] = useState<{ appointment_id: string; animals: BookingAnimal[]; portions: Record<string, string> } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!showCooler || cooler) return
     fetch(`/api/scanner/animal?cooler=1&date=${date}`).then(r => r.json()).then(d => setCooler(d.animals ?? [])).catch(() => setCooler([]))
   }, [showCooler, cooler, date])
+
+  const cardAppt = card?.appointment_id ?? null
+  useEffect(() => {
+    if (!cardAppt || animal) return
+    let live = true
+    fetch(`/api/scanner/animal?booking=${encodeURIComponent(cardAppt)}`).then(r => r.json())
+      .then(d => { if (live && d.animals) setBooking({ appointment_id: cardAppt, animals: d.animals, portions: d.portions ?? {} }) })
+      .catch(() => {})
+    return () => { live = false }
+  }, [cardAppt, animal])
 
   const resolve = async (given?: string) => {
     const raw = (given ?? code).trim()
@@ -80,7 +97,7 @@ export default function AnimalStart({ date, onPick, onRetail, retail, initialCod
         setCard({ card: hit.cards[0], appointment_id: hit.appointment_id })
         setMismatchOk(false)
       } else {
-        setAnimal({ appointment_id: hit.appointment_id, carcass_code: hit.carcass_code, label: hit.label, cards: hit.cards })
+        setAnimal({ appointment_id: hit.appointment_id, carcass_code: hit.carcass_code, harvest_log_id: hit.harvest_log_id, picked: false, label: hit.label, cards: hit.cards })
         setShowCooler(false)
         setNoCardOk(false); setMismatchOk(false)
       }
@@ -118,9 +135,11 @@ export default function AnimalStart({ date, onPick, onRetail, retail, initialCod
     appointment_id: animal.appointment_id,
     ci_id: card?.card.id ?? null,
     carcass_code: animal.carcass_code,
+    harvest_log_id: animal.harvest_log_id,
+    picked: animal.picked,
     label: animal.label,
   } : null, [complete, animal, card])
-  const pickKey = pick ? `${pick.appointment_id}|${pick.ci_id}|${pick.carcass_code}|${pick.customer_name}` : ''
+  const pickKey = pick ? `${pick.appointment_id}|${pick.ci_id}|${pick.carcass_code}|${pick.harvest_log_id}|${pick.picked}|${pick.customer_name}` : ''
   useEffect(() => { onPick(pick) }, [pickKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const shown = useMemo(() => {
@@ -175,6 +194,40 @@ export default function AnimalStart({ date, onPick, onRetail, retail, initialCod
           match === 'mismatch' ? (mismatchOk ? 'warn' : 'bad') : 'ok')}
       </div>
 
+      {card && !animal && booking && booking.appointment_id === card.appointment_id && (
+        <div style={{ marginTop: '0.45rem', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 4, background: C.dark }}>
+          <div style={{ color: C.lightBrown, fontSize: '0.7rem', padding: '0.35rem 0.6rem', borderBottom: '1px solid rgba(166,120,90,0.2)' }}>
+            Tag won&apos;t scan? Type the number printed on it above — or tap this card&apos;s animal:
+          </div>
+          {!booking.animals.length && <div style={{ color: C.yellow, fontSize: '0.76rem', padding: '0.45rem 0.6rem' }}>No kill records on this card&apos;s booking yet.</div>}
+          {booking.animals.map(a => {
+            const portion = booking.portions[card.card.id] ?? 'Whole'
+            const gone = a.status === 'cut' || a.status === 'delivered'
+            return (
+              <button key={a.harvest_log_id} type="button"
+                onClick={() => {
+                  setAnimal({
+                    appointment_id: booking.appointment_id,
+                    // A half or quarter card: the whole-carcass code would pull both halves off the rail — scan or type the half's tag in the session.
+                    carcass_code: portion === 'Whole' ? a.code : null,
+                    harvest_log_id: a.harvest_log_id,
+                    picked: true,
+                    label: `${a.species ?? 'Carcass'} · Tag ${a.tag}${a.weight_lbs ? ` · ${Math.round(a.weight_lbs)} lb` : ''}${a.producer ? ` · ${a.producer}` : ''} (picked, not scanned)`,
+                    cards: [card.card],
+                  })
+                  setMismatchOk(false); setNoCardOk(false)
+                }}
+                style={{ display: 'block', width: '100%', textAlign: 'left', background: 'transparent', border: 'none', borderBottom: '1px solid rgba(166,120,90,0.12)', padding: '0.45rem 0.6rem', cursor: 'pointer', opacity: gone ? 0.6 : 1 }}>
+                <div style={{ color: C.cream, fontSize: '0.88rem' }}>Tag {a.tag} · {a.species}{a.weight_lbs ? ` · ${Math.round(a.weight_lbs)} lb` : ''}</div>
+                <div style={{ color: C.lightBrown, fontSize: '0.7rem' }}>
+                  killed {a.harvest_date.slice(5)} · {gone ? `already ${a.status}` : 'hanging'}{portion !== 'Whole' ? ` · this card is a ${portion.toLowerCase()} — scan the half tag in the session` : ''}
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      )}
+
       {match === 'mismatch' && card && animal && (
         <div style={{ marginTop: '0.4rem', color: '#FCA5A5', fontSize: '0.78rem', lineHeight: 1.35 }}>
           ⚠ This cut card isn&apos;t on that animal&apos;s booking.{' '}
@@ -226,6 +279,8 @@ export default function AnimalStart({ date, onPick, onRetail, retail, initialCod
                     appointment_id: a.appointment_id,
                     // A split animal: the whole-carcass code would pull both halves off the rail — scan the half's tag in the session instead.
                     carcass_code: a.picks.length === 1 ? a.code : null,
+                    harvest_log_id: a.harvest_log_id,
+                    picked: true,
                     label: `${a.species ?? 'Carcass'} · Tag ${a.tag}${a.weight_lbs ? ` · ${Math.round(a.weight_lbs)} lb` : ''}${a.producer ? ` · ${a.producer}` : ''} (picked, not scanned)`,
                     cards: a.picks.filter(p => p.cutting_instruction_id).map(p => ({ id: p.cutting_instruction_id!, customer_name: p.customer_name, species: a.species, created_at: null })),
                   })
