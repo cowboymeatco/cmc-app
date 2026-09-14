@@ -6,6 +6,45 @@ import { isoDate } from '@/lib/dates'
 
 export const dynamic = 'force-dynamic'
 
+type OrderRow = { id: string; retail_order_items?: { plu_number: string | null; unit: string }[] }
+
+// What was actually packed for each line, read off the scanner.
+//
+// Packing an order on the scanner links the box to it (boxes.order_id), and
+// every package scanned in carries its real weight — but nothing ever copied
+// that onto the order, so qty_filled sat at 0 and the printed ticket had no
+// weight on it (Charlie, 2026-09-14: Sheena Schiffer's 15.1 lb brisket).
+// This is a keyed join, not a guess: only boxes linked to THIS order count,
+// matched to a line by PLU. LB lines sum pounds, anything else sums packages.
+async function attachScans<T extends OrderRow>(orders: T[]): Promise<T[]> {
+  const ids = orders.map(o => o.id)
+  if (ids.length === 0) return orders
+  const { data: boxes } = await supabase.from('boxes').select('id, order_id').in('order_id', ids)
+  if (!boxes?.length) return orders
+  const orderOfBox = new Map(boxes.map(b => [b.id as string, b.order_id as string]))
+  const { data: scans } = await supabase
+    .from('box_scans')
+    .select('box_id, plu_number, weight_lbs, quantity')
+    .in('box_id', [...orderOfBox.keys()])
+
+  const lbs = new Map<string, number>(), pkgs = new Map<string, number>()
+  for (const s of scans ?? []) {
+    const key = `${orderOfBox.get(s.box_id)}|${s.plu_number ?? ''}`
+    lbs.set(key, (lbs.get(key) ?? 0) + (Number(s.weight_lbs) || 0))
+    pkgs.set(key, (pkgs.get(key) ?? 0) + (Number(s.quantity) || 1))
+  }
+
+  return orders.map(o => ({
+    ...o,
+    retail_order_items: (o.retail_order_items ?? []).map(i => {
+      const key = `${o.id}|${i.plu_number ?? ''}`
+      if (!i.plu_number || !pkgs.has(key)) return i
+      const qty = i.unit === 'LB' ? Math.round((lbs.get(key) ?? 0) * 100) / 100 : pkgs.get(key)
+      return { ...i, scanned_qty: qty }
+    }),
+  }))
+}
+
 // GET /api/orders â€” list all orders with their items
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -19,7 +58,7 @@ export async function GET(req: NextRequest) {
       .eq('id', id)
       .single()
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-    return NextResponse.json(data)
+    return NextResponse.json((await attachScans([data]))[0])
   }
 
   let query = supabase
@@ -31,7 +70,7 @@ export async function GET(req: NextRequest) {
 
   const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json(data)
+  return NextResponse.json(await attachScans(data ?? []))
 }
 
 // POST /api/orders â€” create a new retail order with line items
@@ -105,7 +144,7 @@ export async function PATCH(req: NextRequest) {
     .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json(data)
+  return NextResponse.json((await attachScans([data]))[0])
 }
 
 // DELETE /api/orders?id= â€” permanently delete an order.

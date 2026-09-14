@@ -18,7 +18,18 @@ interface OrderItem {
   qty_ordered: number
   qty_filled:  number
   notes:       string
+  /** Packed on the scanner into a box linked to this order (added by /api/orders). */
+  scanned_qty?: number
 }
+
+// What's actually been filled on a line. Scanned packages are weighed by the
+// scale, so they win over a hand-typed number; a line nobody scanned falls
+// back to whatever was typed in.
+const filledQty = (i: OrderItem) => i.scanned_qty != null ? i.scanned_qty : Number(i.qty_filled)
+
+// plu_items.unit is the Hobart scale code ('02' on every PLU), not a unit of
+// sale — an order line wants LB or EA, which is the PLU's sell-by-weight flag.
+const saleUnit = (d: { sell_by_weight?: boolean | null }) => d.sell_by_weight === false ? 'EA' : 'LB'
 
 interface RetailOrder {
   id:                string
@@ -109,9 +120,9 @@ function FillBar({ items }: { items: OrderItem[] }) {
   const eaItems = items.filter(i => i.unit === 'EA')
 
   const totalLb   = lbItems.reduce((s, i) => s + Number(i.qty_ordered), 0)
-  const filledLb  = lbItems.reduce((s, i) => s + Number(i.qty_filled),  0)
+  const filledLb  = lbItems.reduce((s, i) => s + filledQty(i),  0)
   const totalEa   = eaItems.reduce((s, i) => s + Number(i.qty_ordered), 0)
-  const filledEa  = eaItems.reduce((s, i) => s + Number(i.qty_filled),  0)
+  const filledEa  = eaItems.reduce((s, i) => s + filledQty(i),  0)
 
   if (items.length === 0) return null
 
@@ -478,13 +489,13 @@ function printOrder(order: RetailOrder) {
   // The Picked box is left empty to write in, whatever the unit — the unit column
   // right beside it already says whether that means pounds or packages.
   const rows = items.map(i => {
-    const filled = Number(i.qty_filled) > 0
+    const filled = filledQty(i) > 0
     return `<tr>
       <td class="plu">${i.plu_number ? esc(i.plu_number) : ''}</td>
       <td class="nm">${esc(i.item_name)}</td>
       <td class="qty">${esc(String(i.qty_ordered))}</td>
       <td class="un">${esc(i.unit || '')}</td>
-      <td class="pick">${filled ? `<span class="pre">${esc(String(i.qty_filled))}</span>` : ''}</td>
+      <td class="pick">${filled ? `<span class="pre">${esc(String(filledQty(i)))}</span>` : ''}</td>
       <td class="note">${esc(i.notes || '')}</td>
     </tr>`
   }).join('')
@@ -647,7 +658,7 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
       body: JSON.stringify({ id: itemId, qty_filled: qty }),
     })
     const updatedItem = await res.json()
-    const updatedItems = order.retail_order_items.map(i => i.id === itemId ? updatedItem : i)
+    const updatedItems = order.retail_order_items.map(i => i.id === itemId ? { ...i, ...updatedItem } : i)
     onUpdated({ ...order, retail_order_items: updatedItems })
     setEditingItem(null)
     setFilledVal('')
@@ -658,7 +669,7 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
   }
 
   const totalLb   = order.retail_order_items.filter(i => i.unit === 'LB').reduce((s, i) => s + Number(i.qty_ordered), 0)
-  const filledLb  = order.retail_order_items.filter(i => i.unit === 'LB').reduce((s, i) => s + Number(i.qty_filled),  0)
+  const filledLb  = order.retail_order_items.filter(i => i.unit === 'LB').reduce((s, i) => s + filledQty(i),  0)
   const pct = totalLb > 0 ? Math.min(100, Math.round((filledLb / totalLb) * 100)) : null
 
   return (
@@ -842,7 +853,7 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
             <div style={{ color: C.lightBrown, fontSize: '0.85rem', fontStyle: 'italic' }}>No items on this order.</div>
           )}
           {order.retail_order_items.map(item => {
-            const itemPct = item.qty_ordered > 0 ? Math.min(100, Math.round((Number(item.qty_filled) / Number(item.qty_ordered)) * 100)) : 0
+            const itemPct = item.qty_ordered > 0 ? Math.min(100, Math.round((filledQty(item) / Number(item.qty_ordered)) * 100)) : 0
             const done    = itemPct >= 100
             return (
               <div key={item.id} style={{ background: 'rgba(255,255,255,0.04)', border: `1px solid ${done ? 'rgba(76,175,80,0.3)' : 'rgba(166,120,90,0.15)'}`, borderRadius: 3, padding: '0.65rem 0.85rem' }}>
@@ -886,7 +897,7 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
                           fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer', padding: '0.25rem 0.6rem', whiteSpace: 'nowrap',
                         }}
                       >
-                        {Number(item.qty_filled).toFixed(item.unit === 'LB' ? 1 : 0)} filled
+                        {filledQty(item).toFixed(item.unit === 'LB' ? 1 : 0)} filled{item.scanned_qty != null ? ' · scanned' : ''}
                       </button>
                     )}
                     <button
@@ -1013,9 +1024,9 @@ export default function OrdersPage() {
       .then(r => r.json())
       .then((data: unknown) => {
         if (Array.isArray(data)) {
-          setPluList((data as { plu_number?: string; item_name?: string; unit?: string }[])
+          setPluList((data as { plu_number?: string; item_name?: string; sell_by_weight?: boolean | null }[])
             .filter(d => d.plu_number)
-            .map(d => ({ plu_number: String(d.plu_number), item_name: d.item_name ?? '', unit: d.unit ?? 'LB' }))
+            .map(d => ({ plu_number: String(d.plu_number), item_name: d.item_name ?? '', unit: saleUnit(d) }))
           )
         }
       })
