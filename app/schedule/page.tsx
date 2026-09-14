@@ -4,6 +4,7 @@ import Link from 'next/link'
 import type { HarvestAppointment, AppointmentCustomer, Customer } from '@/lib/types'
 import { isoDate, addDaysISO, dayOfWeekISO } from '@/lib/dates'
 import { SPECIES_CLR, SPECIES_EMOJI } from '@/lib/cutSchedule'
+import BookedDollars from './BookedDollars'
 
 const SPECIES  = ['Beef', 'Hog', 'Lamb', 'Goat']
 const PORTIONS = ['Whole', 'Half', 'Quarter']
@@ -384,6 +385,9 @@ export default function SchedulePage() {
       </div>
 
       <div style={{ maxWidth: '1300px', margin: '0 auto', padding: '1.25rem 1.5rem' }}>
+
+        {/* Dollars booked per harvest week vs what a week needs */}
+        <BookedDollars />
 
         {/* Capacity mini-banner */}
         {capacity && (() => {
