@@ -174,6 +174,10 @@ export default function ValueAddReport() {
   const [withUntagged, setWithUntagged] = useState(false)
   const [species, setSpecies] = useState('Pork') // hogs first
   const [search,  setSearch]  = useState('')
+  // One product's column and only the customers who ordered it (Jill,
+  // 2026-09-14: "Add Filter by product") — so the print is a pull list for
+  // that one run instead of every value-add item across the page.
+  const [product, setProduct] = useState('all')
   const [sortKey, setSortKey] = useState<'date' | 'customer'>('date')
 
 
@@ -214,11 +218,30 @@ export default function ValueAddReport() {
   // an empty page that reads as "no hams".
   const effSpecies = mode === 'ham' ? 'Pork' : species
 
+  // Products on the sheets for the chosen species — ordered, or riding in the
+  // cure cooler under that column — in the same cut order as the matrix.
+  const productList = useMemo(() => {
+    const set = new Set<string>()
+    for (const s of sheets) {
+      if (effSpecies !== 'all' && s.species !== effSpecies) continue
+      for (const it of s.products) set.add(it.product)
+      for (const t of s.cure_tags ?? []) set.add(TAG_COL[t.product] ?? t.product)
+    }
+    return [...set].sort((a, b) => (colRank(a) - colRank(b)) || a.localeCompare(b))
+  }, [sheets, effSpecies])
+
+  // The ham view has its own list, and a product the new species doesn't carry
+  // falls back to everything rather than drawing an empty page.
+  const effProduct = mode === 'all' && productList.includes(product) ? product : 'all'
+
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase()
     const out = sheets.filter(s => {
       if (effSpecies !== 'all' && s.species !== effSpecies) return false
       if (q && !s.customer_name.toLowerCase().includes(q)) return false
+      if (effProduct !== 'all'
+        && !s.products.some(it => it.product === effProduct)
+        && !tagsFor(s, effProduct).length) return false
       return true
     })
     out.sort((a, b) =>
@@ -227,19 +250,21 @@ export default function ValueAddReport() {
         : (b.date ?? '').localeCompare(a.date ?? '') || a.customer_name.localeCompare(b.customer_name),
     )
     return out
-  }, [sheets, effSpecies, search, sortKey])
+  }, [sheets, effSpecies, effProduct, search, sortKey])
 
   // Columns present in the filtered rows, in cut order. Cell = the detail
   // (brats "German · 25 lb") when the sheet carries it, else a plain check.
   const cols = useMemo(() => {
+    if (effProduct !== 'all') return [effProduct]
     const set = new Set<string>()
     for (const s of rows) for (const p of s.products) set.add(p.product)
     return [...set].sort((a, b) => (colRank(a) - colRank(b)) || a.localeCompare(b))
-  }, [rows])
+  }, [rows, effProduct])
 
   const itemsFor = (s: Sheet, col: string): VAItem[] => s.products.filter(p => p.product === col)
   const qtyOf    = (it: VAItem) => it.qty ?? 1
-  const rowQty   = (s: Sheet) => s.products.reduce((n, p) => n + qtyOf(p), 0)
+  // Across the columns on show, so a product filter totals only that product.
+  const rowQty   = (s: Sheet) => s.products.reduce((n, p) => n + (cols.includes(p.product) ? qtyOf(p) : 0), 0)
   // Cell text: a bare quantity for plain products ("2"), qty×detail for the ones
   // that carry a spec ("2× Cut in Half", "German · 25 lb"), joined when a product
   // has more than one variant on the sheet. Ham always carries its count — even a
@@ -433,7 +458,7 @@ export default function ValueAddReport() {
       base.total = rowQty(s)
       return base
     })
-    download(toCSV(out), `value-add_${species}_${from}_to_${to}.csv`)
+    download(toCSV(out), `value-add_${species}${effProduct !== 'all' ? `_${effProduct.replace(/[^A-Za-z0-9]+/g, '-')}` : ''}_${from}_to_${to}.csv`)
   }
 
   // Print the current filtered matrix — a landscape sheet that mirrors what's on
@@ -543,7 +568,7 @@ export default function ValueAddReport() {
     <div class="title">Value-Add Output</div>
   </div>
   <div class="meta">
-    <span><strong>Species:</strong> ${escHtml(speciesLabel)}${search.trim() ? ` &nbsp;·&nbsp; <strong>Search:</strong> ${escHtml(search.trim())}` : ''}</span>
+    <span><strong>Species:</strong> ${escHtml(speciesLabel)}${effProduct !== 'all' ? ` &nbsp;·&nbsp; <strong>Product:</strong> ${escHtml(effProduct)}` : ''}${search.trim() ? ` &nbsp;·&nbsp; <strong>Search:</strong> ${escHtml(search.trim())}` : ''}</span>
     <span><strong>Kill dates:</strong> ${escHtml(fmtDay(from))} – ${escHtml(fmtDay(to))}</span>
   </div>
   <table>
@@ -609,6 +634,12 @@ export default function ValueAddReport() {
               <option value="Pork">🐷 Hogs (Pork)</option>
               {speciesList.filter(s => s !== 'Pork').map(s => <option key={s} value={s}>{speciesEmoji(s)} {s}</option>)}
               <option value="all">All species</option>
+            </select>
+          )}
+          {mode === 'all' && (
+            <select value={effProduct} onChange={e => setProduct(e.target.value)} style={{ ...INPUT, width: 190 }}>
+              <option value="all">All products</option>
+              {productList.map(p => <option key={p} value={p}>{p}</option>)}
             </select>
           )}
           {mode === 'all' && (
