@@ -670,6 +670,8 @@ export default function ScannerPage() {
   // card onto the session, so the typed name is only a label (2026-09-13).
   const [newPick,          setNewPick]          = useState<AnimalPick | null>(null)
   const [newPickCode,      setNewPickCode]      = useState<string | null>(null)
+  // "Not an animal — retail / repack": the one way to start on a typed name.
+  const [retailMode,       setRetailMode]       = useState(false)
   const [sessionLinked,    setSessionLinked]    = useState(false)
   const carcassHomeRef = useRef<((code: string) => void) | null>(null)
   const [showAllFreezer,   setShowAllFreezer]   = useState(false)
@@ -1322,9 +1324,10 @@ export default function ScannerPage() {
   // can only ever start at today. Backdating stays possible — the field is
   // still editable, and a session genuinely packed yesterday needs it — but it
   // now has to be chosen rather than inherited.
-  function openNewSession(carcassCode: string | null = null) {
+  function openNewSession(scannedCode: string | null = null) {
     setNewPick(null)
-    setNewPickCode(carcassCode)
+    setNewPickCode(scannedCode)
+    setRetailMode(false)
     setCustomer('')
     setBoxType('USDA')
     setCmc(false)
@@ -1332,9 +1335,13 @@ export default function ScannerPage() {
     setShowNewForm(true)
   }
 
+  // Both scans matched (or an allowed exception), or it's said out loud to be
+  // retail / repack. Nothing else starts a session (Charlie, 2026-09-13).
+  const canStartNew = !!customer.trim() && pluLoaded && (!!newPick || retailMode)
+
   async function startSession() {
     const cust = customer.trim()
-    if (!cust || !pluLoaded) return
+    if (!cust || !pluLoaded || (!newPick && !retailMode)) return
     // Normalize the state too — a trailing space typed in the form would
     // otherwise split every later box/input onto a different session key.
     setCustomer(cust)
@@ -1488,6 +1495,13 @@ export default function ScannerPage() {
     const hit = resolveCiScan(raw, custNames)
     if (!hit) return
     const dt = isoDate()
+    // No session for this card today yet: a session starts on the tag AND the
+    // card, so open New Session with the card in and wait for the tag
+    // (Charlie, 2026-09-13). Inside an open session a card still moves it.
+    if (!startedRef.current && !sessions.some(s => s.customer_name === hit.name && s.session_date === dt)) {
+      openNewSession(raw)
+      return
+    }
     const sorted = await startSessionFromExisting(hit.name, dt)
     sessionCiRef.current = hit.ciId
     // The card names the animal: keep it on the session, so the card on screen,
@@ -2865,16 +2879,17 @@ export default function ScannerPage() {
               <h2 style={{ fontFamily: 'Georgia, serif', color: C.cream, fontSize: '1.1rem', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 1.5rem' }}>New Session</h2>
               <AnimalStart
                 date={date}
-                pick={newPick}
                 initialCode={newPickCode}
+                retail={retailMode}
+                onRetail={on => { setRetailMode(on); if (on) setNewPick(null) }}
                 onPick={p => { setNewPick(p); if (p?.customer_name) setCustomer(p.customer_name) }}
               />
               <div style={{ marginBottom: '1rem' }}>
-                <label style={LBL}>Customer{newPick ? ' — label on the boxes (add the weight if you like)' : ' — or type one for retail / repack'}</label>
+                <label style={LBL}>Customer{retailMode ? '' : ' — from the cut card; add the weight if you like'}</label>
                 <CustomerPicker
                   value={customer}
                   onChange={setCustomer}
-                  onEnter={() => { if (customer.trim() && pluLoaded) { setShowNewForm(false); startSession() } }}
+                  onEnter={() => { if (canStartNew) { setShowNewForm(false); startSession() } }}
                   names={custNames}
                   aliases={custAliases}
                 />
@@ -2926,8 +2941,9 @@ export default function ScannerPage() {
                 <button onClick={() => setShowNewForm(false)} style={{ flex: 1, background: 'transparent', border: '1px solid rgba(166,120,90,0.3)', color: C.lightBrown, borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', cursor: 'pointer' }}>
                   Cancel
                 </button>
-                <button onClick={() => { setShowNewForm(false); startSession() }} disabled={!customer.trim() || !pluLoaded}
-                  style={{ flex: 2, background: customer.trim() && pluLoaded ? C.tan : C.medBrown, color: C.dark, border: 'none', borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer', opacity: customer.trim() && pluLoaded ? 1 : 0.6 }}>
+                <button onClick={() => { setShowNewForm(false); startSession() }} disabled={!canStartNew}
+                  title={canStartNew ? '' : 'Scan the carcass tag and the cut card first (or mark it retail / repack)'}
+                  style={{ flex: 2, background: canStartNew ? C.tan : C.medBrown, color: C.dark, border: 'none', borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', fontWeight: 700, cursor: canStartNew ? 'pointer' : 'not-allowed', opacity: canStartNew ? 1 : 0.6 }}>
                   Start Scanning
                 </button>
               </div>
