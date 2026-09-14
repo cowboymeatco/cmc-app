@@ -157,7 +157,7 @@ interface TurnoverData {
 }
 interface LaborWeek {
   week_start: string; week_end: string
-  labor_dollars: number; labor_hours: number; headcount: number; avg_hours: number; over40: number
+  labor_dollars: number; labor_hours: number | null; headcount: number; avg_hours: number | null; over40: number | null
   throughput_lbs: number | null; dollars_per_lb: number | null
   // Only the hand-entered rows from before the payroll feed carry sales; the
   // feed reads payroll and the pack floor, not invoices.
@@ -466,7 +466,7 @@ function LaborBars({ weeks }: { weeks: LaborWeek[] }) {
           const w = byWeek.get(iso)
           const v = w ? Number(w.dollars_per_lb) || 0 : 0
           const title = w
-            ? `Week of ${label(iso)} — ${usd(w.labor_dollars)} payroll over ${fmt(w.throughput_lbs ?? 0)} lb packed (${fmt(w.labor_hours)} h, ${w.headcount} on payroll)`
+            ? `Week of ${label(iso)} — ${usd(w.labor_dollars)} payroll over ${fmt(w.throughput_lbs ?? 0)} lb packed (${w.labor_hours != null ? `${fmt(w.labor_hours)} h, ` : ''}${w.headcount} on payroll)`
             : `Week of ${label(iso)} — no payroll run on file`
           return (
             <div key={iso} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
@@ -1521,9 +1521,9 @@ export default function ExecPage() {
                         value={latestLabor.dollars_per_lb != null ? `$${Number(latestLabor.dollars_per_lb).toFixed(2)}` : '—'}
                         accent={COST_COLOR}
                         sub={`week of ${latestLabor.week_start}${latestLabor.throughput_lbs != null ? ` · ${fmt(latestLabor.throughput_lbs)} lb packed` : ''}`} />
-                      <StatTile label="Payroll" value={usd(latestLabor.labor_dollars)} sub={`${fmt(latestLabor.labor_hours)} hours`} />
+                      <StatTile label="Payroll" value={usd(latestLabor.labor_dollars)} sub={latestLabor.labor_hours != null ? `${fmt(latestLabor.labor_hours)} hours` : 'hours not on payslips'} />
                       <StatTile label="Crew" value={String(latestLabor.headcount)}
-                        sub={`avg ${Math.round(latestLabor.avg_hours)} hr · ${latestLabor.over40} over 40`} />
+                        sub={latestLabor.avg_hours != null ? `avg ${Math.round(latestLabor.avg_hours)} hr · ${latestLabor.over40 ?? 0} over 40` : 'on payroll'} />
                       {latestLabor.labor_pct != null && (
                         <StatTile label="Labor % of invoiced" value={`${Math.round(latestLabor.labor_pct)}%`}
                           accent={latestLabor.labor_pct <= 33 ? INCOME_COLOR : COST_COLOR}
@@ -1551,9 +1551,9 @@ export default function ExecPage() {
                           <tr key={w.week_start} style={{ borderTop: '1px solid rgba(166,120,90,0.12)' }}>
                             <td style={{ padding: '0.35rem 0.5rem' }}>{w.week_start}</td>
                             <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>{usd(w.labor_dollars)}</td>
-                            <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>{fmt(w.labor_hours)}</td>
+                            <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>{w.labor_hours != null ? fmt(w.labor_hours) : '—'}</td>
                             <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>{w.headcount}</td>
-                            <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', color: w.over40 >= 3 ? WARN_COLOR : C.tan }}>{w.over40}</td>
+                            <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', color: (w.over40 ?? 0) >= 3 ? WARN_COLOR : C.tan }}>{w.over40 ?? '—'}</td>
                             <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>{w.throughput_lbs != null ? fmt(w.throughput_lbs) : '—'}</td>
                             <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', fontWeight: 600, color: C.cream }}>
                               {w.dollars_per_lb != null ? `$${Number(w.dollars_per_lb).toFixed(2)}` : '—'}

@@ -5,6 +5,7 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { fetchAnimalProgress, STAGE_RANK, type AnimalStage } from '@/lib/animalProgress'
 import { getInvoicesSince, type DatedInvoice } from '@/lib/qboInvoices'
 import { nameKey } from '@/lib/nameKey'
+import { loadLaborRate, loadSmokeRates, smokeLines, valueAccount, type AccountValue, type LaborRate } from '@/lib/pipelineValue'
 
 export const dynamic = 'force-dynamic'
 
@@ -30,6 +31,8 @@ export interface PipelineBilling {
   total: number
   balance: number
   doc_numbers: string[]
+  /** Balance per invoice, so an invoice matched by two appointments is counted once. */
+  open_balances: Record<string, number>
   latest_date: string | null
   matched_by: 'link' | 'name' | null
 }
@@ -55,6 +58,15 @@ export interface PipelineRow {
   trail_cold: boolean
   sessions: { customer_name: string; session_date: string; status: string }[]
   billing: PipelineBilling
+  value: AccountValue
+}
+
+export interface PipelineResponse {
+  generated_at: string
+  qbo_ok: boolean
+  labor: LaborRate
+  office_minutes: number
+  rows: PipelineRow[]
 }
 
 // Invoices for the window, indexed two ways: by QBO customer id (exact, via
@@ -92,7 +104,7 @@ function billingFor(
   idx: Awaited<ReturnType<typeof loadInvoiceIndex>>,
   account: string, customers: string[], harvestDate: string | null,
 ): PipelineBilling {
-  const none: PipelineBilling = { status: idx.ok ? 'none' : 'unknown', invoices: 0, total: 0, balance: 0, doc_numbers: [], latest_date: null, matched_by: null }
+  const none: PipelineBilling = { status: idx.ok ? 'none' : 'unknown', invoices: 0, total: 0, balance: 0, doc_numbers: [], open_balances: {}, latest_date: null, matched_by: null }
   if (!idx.ok) return none
 
   // Only invoices written for THIS animal: nothing dated more than a week
@@ -124,6 +136,7 @@ function billingFor(
     total: Math.round(total * 100) / 100,
     balance: Math.round(balance * 100) / 100,
     doc_numbers: hits.map(h => h.docNumber),
+    open_balances: Object.fromEntries(hits.filter(h => (h.balance || 0) > 0.005).map(h => [h.docNumber, h.balance])),
     latest_date: hits.map(h => h.txnDate).sort().pop() ?? null,
     matched_by: matchedBy,
   }
@@ -131,7 +144,7 @@ function billingFor(
 
 type ApptRow = {
   id: string; harvest_date: string | null; species: string | null; head_count: number | null
-  source: string | null; status: string | null; customers: { customer_name?: string; portion?: string }[] | null
+  source: string | null; status: string | null; customers: { customer_name?: string; portion?: string; linked_cutting_instruction_id?: string }[] | null
 }
 
 export async function GET() {
@@ -147,12 +160,42 @@ export async function GET() {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   const appts = (data ?? []) as ApptRow[]
-  const [progress, invoiceIdx] = await Promise.all([
+  const ids = appts.map(a => a.id)
+  const linkedCardIds = appts.flatMap(a => (a.customers ?? []).map(c => (c.linked_cutting_instruction_id ?? '').trim())).filter(Boolean)
+  const [progress, invoiceIdx, labor, smokeRates, settings, cardsByAppt, cardsById] = await Promise.all([
     fetchAnimalProgress(supabase, appts.map(a => ({ id: a.id, harvest_date: a.harvest_date }))),
     // A week before the oldest harvest in the window, so a deposit invoice
     // written ahead of the kill still counts.
     loadInvoiceIndex(new Date(Date.parse(since + 'T12:00:00') - 7 * 86400000).toLocaleDateString('en-CA')),
+    loadLaborRate(),
+    loadSmokeRates(),
+    supabaseAdmin.from('capacity_settings').select('pipeline_office_minutes').eq('id', 1).maybeSingle(),
+    ids.length ? supabase.from('cutting_instructions').select('id, appointment_id, data').in('appointment_id', ids) : Promise.resolve({ data: [] }),
+    linkedCardIds.length ? supabase.from('cutting_instructions').select('id, appointment_id, data').in('id', linkedCardIds) : Promise.resolve({ data: [] }),
   ])
+  const officeMinutes = Number(settings.data?.pipeline_office_minutes) || 15
+
+  // Cut cards per appointment — by the card's own appointment_id and by the
+  // appointment's customer rows pointing at a card. Smokehouse pounds come
+  // off these.
+  type Card = { id: string; appointment_id: string | null; data: unknown }
+  const allCards = new Map<string, Card>()
+  for (const c of [...((cardsByAppt.data ?? []) as Card[]), ...((cardsById.data ?? []) as Card[])]) allCards.set(String(c.id), c)
+  const cardsFor = (a: ApptRow) => {
+    const linked = new Set((a.customers ?? []).map(c => (c.linked_cutting_instruction_id ?? '').trim()).filter(Boolean))
+    return [...allCards.values()].filter(c => c.appointment_id === a.id || linked.has(String(c.id)))
+  }
+
+  // Pounds boxed so far per session, for how much of a cut is left.
+  const sessionNames = [...new Set([...progress.values()].flatMap(p => p.sessions.map(s => s.customer_name)))]
+  const boxed = new Map<string, number>()
+  if (sessionNames.length) {
+    const { data: stats } = await supabase
+      .from('v_box_session_stats')
+      .select('customer_name, session_date, total_weight')
+      .in('customer_name', sessionNames)
+    for (const s of stats ?? []) boxed.set(`${s.customer_name}|${s.session_date}`, Number(s.total_weight) || 0)
+  }
 
   const now = Date.now()
   const rows: PipelineRow[] = []
@@ -174,9 +217,22 @@ export async function GET() {
     const pastHarvestDays = a.harvest_date ? Math.floor((now - Date.parse(a.harvest_date + 'T12:00:00')) / 86400000) : 0
     const receivedOnlyCold = p.stage === 'received' && !p.sessions.length && pastHarvestDays > 21
 
+    const account = (a.source ?? '').trim() || customers[0] || 'Unnamed'
+    const billing = billingFor(invoiceIdx, (a.source ?? '').trim(), customers, a.harvest_date)
+    const value = valueAccount({
+      account,
+      species: a.species ?? '',
+      head_count: Number(a.head_count) || 0,
+      stage: p.stage,
+      hanging_weight_lbs: p.hangingWeightLbs,
+      billing,
+      boxed_lbs: p.sessions.reduce((s, x) => s + (boxed.get(`${x.customer_name}|${x.session_date}`) ?? 0), 0),
+      smoke: cardsFor(a).flatMap(c => smokeLines(c.data)),
+    }, labor, smokeRates, officeMinutes)
+
     rows.push({
       id: a.id,
-      account: (a.source ?? '').trim() || customers[0] || 'Unnamed',
+      account,
       customers,
       species: a.species ?? '',
       head_count: Number(a.head_count) || 0,
@@ -194,11 +250,60 @@ export async function GET() {
       days_in: daysIn,
       trail_cold: p.trailCold || receivedOnlyCold,
       sessions: p.sessions,
-      billing: billingFor(invoiceIdx, (a.source ?? '').trim(), customers, a.harvest_date),
+      billing,
+      value,
     })
   }
 
-  // Closest to the finish line first, then the ones that have waited longest.
-  rows.sort((x, y) => (y.stage_rank - x.stage_rank) || ((y.days_in ?? 0) - (x.days_in ?? 0)))
-  return NextResponse.json({ generated_at: new Date().toISOString(), qbo_ok: invoiceIdx.ok, rows })
+  // One invoice, one claim. Appointments on the same account match the same
+  // QuickBooks invoices (King's Ace Hardware's hog and beef, one $5,484
+  // balance; Beau Botts' 2769C on two appointments), and counting each on
+  // every row doubled the money. Rows sharing ANY open invoice form a group:
+  // the group's unique invoice balances sit on its furthest-along animal
+  // (hidden records-stop rows last), carrying every animal's work left —
+  // it's paid when they're all done. The others point at it.
+  const open = rows.filter(r => r.value.kind === 'open')
+  const parent = open.map((_, i) => i)
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])))
+  const firstWithDoc = new Map<string, number>()
+  open.forEach((r, i) => {
+    for (const doc of Object.keys(r.billing.open_balances)) {
+      const j = firstWithDoc.get(doc)
+      if (j == null) firstWithDoc.set(doc, i)
+      else parent[find(i)] = find(j)
+    }
+  })
+  const groups = new Map<number, PipelineRow[]>()
+  open.forEach((r, i) => groups.set(find(i), [...(groups.get(find(i)) ?? []), r]))
+  for (const group of groups.values()) {
+    if (group.length < 2) continue
+    group.sort((x, y) => (Number(x.trail_cold) - Number(y.trail_cold)) || (y.stage_rank - x.stage_rank))
+    const [lead, ...rest] = group
+    const balances: Record<string, number> = {}
+    for (const r of group) Object.assign(balances, r.billing.open_balances)
+    const dollars = Math.round(Object.values(balances).reduce((s, b) => s + b, 0) * 100) / 100
+    const hours = group.every(r => r.value.hours_left != null) ? Math.round(group.reduce((s, r) => s + r.value.hours_left!, 0) * 100) / 100 : null
+    lead.value.dollars = dollars
+    lead.value.hours_left = hours
+    lead.value.labor_left = hours != null && labor.blendedHourly ? Math.round(hours * labor.blendedHourly * 100) / 100 : null
+    lead.value.per_hour = hours && dollars ? Math.round(dollars / hours * 100) / 100 : null
+    lead.value.basis[0] = `$${dollars.toLocaleString('en-US')} due on ${Object.keys(balances).length} QuickBooks invoice${Object.keys(balances).length !== 1 ? 's' : ''} (${Object.keys(balances).join(', ')})`
+    lead.value.basis.push(`shared by ${group.length} appointments — work left is all of them`)
+    for (const r of rest) {
+      r.value.dollars = null
+      r.value.per_hour = null
+      r.value.bucket = 'none'
+      r.value.basis.unshift(`Same QuickBooks invoice as ${lead.account}'s ${lead.species.toLowerCase()} — counted there`)
+    }
+  }
+
+  // Most dollars freed per hour of work left first (Charlie, 2026-09-13).
+  // Accounts we can't price follow, then paid-but-still-here, then our own
+  // animals; ties and the tail go finish line first, longest wait first.
+  const tier = (r: PipelineRow) => r.value.per_hour != null ? 0 : r.value.kind === 'paid' ? 2 : r.value.kind === 'own' ? 3 : 1
+  rows.sort((x, y) => (tier(x) - tier(y))
+    || ((y.value.per_hour ?? 0) - (x.value.per_hour ?? 0))
+    || (y.stage_rank - x.stage_rank)
+    || ((y.days_in ?? 0) - (x.days_in ?? 0)))
+  return NextResponse.json({ generated_at: new Date().toISOString(), qbo_ok: invoiceIdx.ok, labor, office_minutes: officeMinutes, rows })
 }

@@ -6,15 +6,17 @@
 // they have been there. I need to be able to see what animals are closest to
 // the finish line to get paid."
 //
-// One row per appointment that has been received and not picked up. The bar
-// runs from the day it came in to today, coloured by what happened when:
-// received → harvested → hanging → cutting → freezer. Rows sort with the
-// finish line at the top, so the first screen is what to call about.
+// Charlie (2026-09-13): drive what's closest to VALUE — "with X amount of
+// effort we free up Y amount of dollars". The page leads with the dollars
+// tied up by stage, and rows rank by dollars freed per hour of work left
+// (lib/pipelineValue.ts). Finish line = paid AND picked up, so paid accounts
+// still in the freezer sink to the bottom rather than leave.
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { STAGE_LABEL, STAGE_RANK, type AnimalStage } from '@/lib/animalProgress'
-import type { PipelineRow } from '@/app/api/pipeline/route'
+import { STAGE_LABEL, STAGE_RANK } from '@/lib/animalProgress'
+import type { PipelineResponse, PipelineRow } from '@/app/api/pipeline/route'
+import type { MoneyBucket } from '@/lib/pipelineValue'
 
 const C = {
   dark: '#1A0A04', darkBrown: '#351E0E', medBrown: '#75471B', lightBrown: '#A6785A',
@@ -31,11 +33,22 @@ const SEG_COLOR: Record<string, string> = {
   received: '#C9A882', hanging: '#3B82F6', cutting: '#75471B', smokehouse: '#E8883A', freezer: '#4CAF50', baker: '#B45309',
 }
 
+// The money strip, in the order work flows toward cash.
+const BUCKETS: { key: MoneyBucket; label: string; color: string; hint: string }[] = [
+  { key: 'aging',          label: 'Hanging',            color: '#3B82F6', hint: 'received, killed or aging — not cut yet' },
+  { key: 'cutting',        label: 'Cutting',            color: '#A6785A', hint: 'on the cutting floor' },
+  { key: 'smokehouse',     label: 'Smokehouse',         color: '#E8883A', hint: 'value add in progress' },
+  { key: 'ready_unbilled', label: 'Ready, not billed',  color: '#4CAF50', hint: 'done — needs an invoice' },
+  { key: 'billed_unpaid',  label: 'Billed, unpaid',     color: '#D97706', hint: 'QuickBooks balance due' },
+]
+
 // What's next for this account, in the words the office would use.
 function nextStep(r: PipelineRow): string {
   if (r.trail_cold) return r.harvested_at
     ? 'Records stop after harvest — confirm it went home'
     : 'No kill record — confirm it went home'
+  if (r.value.kind === 'paid' && STAGE_RANK.indexOf(r.stage) >= STAGE_RANK.indexOf('freezing')) return 'Paid — call for pickup'
+  if (r.value.bucket === 'ready_unbilled') return 'Done — send the invoice'
   switch (r.stage) {
     case 'received':   return 'Waiting on harvest'
     case 'harvested':
@@ -67,10 +80,8 @@ function segments(r: PipelineRow, now: number) {
   return { start: recv, segs }
 }
 
-type Filter = 'all' | AnimalStage
-type BillFilter = 'all' | 'paid' | 'open' | 'none'
-
 const money = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+const hrs = (h: number) => (h < 1 ? `${Math.round(h * 60)} min` : `${h.toFixed(h < 10 ? 1 : 0)} h`)
 
 // The QuickBooks word on this animal, as a chip.
 function BillingChip({ b }: { b: PipelineRow['billing'] }) {
@@ -81,38 +92,67 @@ function BillingChip({ b }: { b: PipelineRow['billing'] }) {
   return <span style={{ ...base, color: C.lightBrown, border: '1px solid rgba(166,120,90,0.35)' }}>Not invoiced</span>
 }
 
+// Dollars · hours left · dollars per hour, with where each came from.
+function ValueCell({ r }: { r: PipelineRow }) {
+  const v = r.value
+  const title = v.basis.join('\n') + (v.labor_left != null ? `\n≈ ${money(v.labor_left)} of labor left` : '')
+  if (v.kind === 'own')  return <div title={title} style={{ color: C.lightBrown, fontSize: '0.74rem' }}>Our animal</div>
+  if (v.kind === 'paid') return <div title={title} style={{ color: C.green, fontSize: '0.74rem' }}>Paid — pickup only</div>
+  if (v.dollars == null) return <div title={title} style={{ color: C.lightBrown, fontSize: '0.74rem' }}>{v.basis[0]}</div>
+  return (
+    <div title={title} style={{ cursor: 'help' }}>
+      <span style={{ color: C.cream, fontWeight: 700, fontSize: '0.92rem' }}>{v.kind === 'open' ? '' : '~'}{money(v.dollars)}</span>
+      {v.hours_left != null && <span style={{ color: C.lightBrown, fontSize: '0.74rem' }}> · {hrs(v.hours_left)} left</span>}
+      {v.per_hour != null && <div style={{ color: C.tan, fontSize: '0.74rem', fontWeight: 700 }}>{money(v.per_hour)} per labor hour</div>}
+    </div>
+  )
+}
+
 export default function PipelinePage() {
-  const [rows, setRows] = useState<PipelineRow[] | null>(null)
+  const [data, setData] = useState<PipelineResponse | null>(null)
   const [err, setErr] = useState('')
   const [q, setQ] = useState('')
   const [species, setSpecies] = useState('all')
-  const [stage, setStage] = useState<Filter>('all')
-  const [bill, setBill] = useState<BillFilter>('all')
+  const [bucket, setBucket] = useState<'all' | MoneyBucket>('all')
   const [showCold, setShowCold] = useState(false)
+  const [officeDraft, setOfficeDraft] = useState('')
 
-  useEffect(() => {
-    fetch('/api/pipeline')
-      .then(r => r.json())
-      .then((d: { rows?: PipelineRow[]; error?: string }) => { if (d.rows) setRows(d.rows); else setErr(d.error ?? 'Could not load') })
-      .catch(() => setErr('Could not load'))
-  }, [])
+  const load = () => fetch('/api/pipeline')
+    .then(r => r.json())
+    .then((d: PipelineResponse & { error?: string }) => { if (d.rows) { setData(d); setOfficeDraft(String(d.office_minutes)) } else setErr(d.error ?? 'Could not load') })
+    .catch(() => setErr('Could not load'))
+  useEffect(() => { load() }, [])
 
+  const saveOffice = async () => {
+    const n = Number(officeDraft)
+    if (!Number.isFinite(n) || n === data?.office_minutes) return
+    await fetch('/api/pipeline/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ office_minutes: n }) })
+    load()
+  }
+
+  const rows = data?.rows ?? null
+  const labor = data?.labor
   const now = Date.now()
   const live = useMemo(() => (rows ?? []).filter(r => showCold || !r.trail_cold), [rows, showCold])
   const shown = useMemo(() => live.filter(r =>
     (species === 'all' || r.species === species)
-    && (stage === 'all' || r.stage === stage)
-    && (bill === 'all' || r.billing.status === bill)
+    && (bucket === 'all' || r.value.bucket === bucket)
     && (!q.trim() || `${r.account} ${r.customers.join(' ')}`.toLowerCase().includes(q.trim().toLowerCase()))
-  ), [live, species, stage, bill, q])
+  ), [live, species, bucket, q])
 
-  // Money still out on animals in the building — the number the Gantt exists for.
-  const toCollect = useMemo(() => live.filter(r => r.billing.status === 'open').reduce((s, r) => s + r.billing.balance, 0), [live])
-  const billCounts = useMemo(() => {
-    const c: Record<BillFilter, number> = { all: live.length, paid: 0, open: 0, none: 0 }
-    for (const r of live) if (r.billing.status === 'paid' || r.billing.status === 'open' || r.billing.status === 'none') c[r.billing.status]++
-    return c
+  // Dollars tied up by stage — the strip the page leads with.
+  const tally = useMemo(() => {
+    const t: Record<string, { n: number; dollars: number; unpriced: number }> = {}
+    for (const r of live) {
+      const k = r.value.bucket
+      t[k] = t[k] ?? { n: 0, dollars: 0, unpriced: 0 }
+      t[k].n++
+      if (r.value.dollars != null) t[k].dollars += r.value.dollars
+      else if (k !== 'paid' && k !== 'own' && k !== 'none') t[k].unpriced++
+    }
+    return t
   }, [live])
+  const tiedUp = BUCKETS.reduce((s, b) => s + (tally[b.key]?.dollars ?? 0), 0)
 
   // Time axis: from the oldest arrival on screen to today, in whole weeks.
   const axisStart = useMemo(() => {
@@ -126,11 +166,6 @@ export default function PipelinePage() {
   const weeks: number[] = []
   for (let t = axisStart; t <= axisEnd; t += 7 * DAY) weeks.push(t)
 
-  const counts = useMemo(() => {
-    const c: Partial<Record<AnimalStage, number>> = {}
-    for (const r of live) c[r.stage] = (c[r.stage] ?? 0) + 1
-    return c
-  }, [live])
   const speciesList = useMemo(() => [...new Set((rows ?? []).map(r => r.species).filter(Boolean))].sort(), [rows])
   const coldCount = (rows ?? []).filter(r => r.trail_cold).length
 
@@ -141,7 +176,7 @@ export default function PipelinePage() {
         <span style={{ color: 'rgba(166,120,90,0.3)' }}>|</span>
         <div>
           <h1 style={{ fontFamily: 'Georgia, serif', fontSize: '1.1rem', fontWeight: 700, color: C.cream, textTransform: 'uppercase', letterSpacing: '0.08em', margin: 0 }}>In the Building</h1>
-          <p style={{ fontSize: '0.68rem', color: C.lightBrown, letterSpacing: '0.15em', textTransform: 'uppercase', margin: 0 }}>Every account · where it is · how long it has been here</p>
+          <p style={{ fontSize: '0.68rem', color: C.lightBrown, letterSpacing: '0.15em', textTransform: 'uppercase', margin: 0 }}>Money tied up · work left to free it</p>
         </div>
         <span style={{ marginLeft: 'auto', color: C.lightBrown, fontSize: '0.8rem' }}>
           {rows ? `${live.length} account${live.length !== 1 ? 's' : ''} in the building` : ''}
@@ -149,23 +184,58 @@ export default function PipelinePage() {
       </header>
 
       <main style={{ padding: '1.5rem 2rem', maxWidth: 1400, margin: '0 auto' }}>
-        {/* Stage tally — the finish line is on the left */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginBottom: '1rem' }}>
-          <button onClick={() => setStage('all')} style={chip(stage === 'all', C.tan)}>All · {live.length}</button>
-          {[...STAGE_RANK].reverse().filter(s => s !== 'picked_up' && s !== 'scheduled').map(s => (
-            <button key={s} onClick={() => setStage(stage === s ? 'all' : s)} style={chip(stage === s, STAGE_LABEL[s].color)}>
-              {STAGE_LABEL[s].label} · {counts[s] ?? 0}
-            </button>
-          ))}
-        </div>
+        {/* $ tied up by stage */}
+        {rows && (
+          <>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.75rem', marginBottom: '0.5rem' }}>
+              <span style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '1.6rem', fontWeight: 700 }}>{money(tiedUp)}</span>
+              <span style={{ color: C.lightBrown, fontSize: '0.8rem' }}>tied up in the building, not yet collected</span>
+              {bucket !== 'all' && <button onClick={() => setBucket('all')} style={{ marginLeft: 'auto', ...chip(false, C.tan) }}>Show all</button>}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '0.5rem', marginBottom: '0.6rem' }}>
+              {BUCKETS.map(b => {
+                const t = tally[b.key] ?? { n: 0, dollars: 0, unpriced: 0 }
+                const on = bucket === b.key
+                return (
+                  <button key={b.key} onClick={() => setBucket(on ? 'all' : b.key)} title={b.hint}
+                    style={{ textAlign: 'left', background: on ? `${b.color}33` : C.dark, borderStyle: 'solid', borderWidth: '3px 1px 1px 1px', borderColor: `${b.color} ${on ? b.color : 'rgba(166,120,90,0.25)'} ${on ? b.color : 'rgba(166,120,90,0.25)'} ${on ? b.color : 'rgba(166,120,90,0.25)'}`, borderRadius: 4, padding: '0.6rem 0.8rem', cursor: 'pointer' }}>
+                    <div style={{ color: b.color, fontSize: '0.66rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em' }}>{b.label}</div>
+                    <div style={{ color: C.cream, fontSize: '1.15rem', fontWeight: 700 }}>{money(t.dollars)}</div>
+                    <div style={{ color: C.lightBrown, fontSize: '0.7rem' }}>
+                      {t.n} account{t.n !== 1 ? 's' : ''}{t.unpriced ? ` · ${t.unpriced} can't price yet` : ''}
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.9rem' }}>
+              <button onClick={() => setBucket(bucket === 'paid' ? 'all' : 'paid')} style={chip(bucket === 'paid', C.green)}>Paid, still here · {tally.paid?.n ?? 0}</button>
+              <button onClick={() => setBucket(bucket === 'own' ? 'all' : 'own')} style={chip(bucket === 'own', C.lightBrown)}>Our animals · {tally.own?.n ?? 0}</button>
+            </div>
 
-        {/* Money — invoiced or not, paid or not, straight from QuickBooks */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginBottom: '1rem', alignItems: 'center' }}>
-          <button onClick={() => setBill(bill === 'open' ? 'all' : 'open')} style={chip(bill === 'open', C.yellow)}>💵 Unpaid · {billCounts.open}{toCollect > 0 ? ` · ${money(toCollect)} to collect` : ''}</button>
-          <button onClick={() => setBill(bill === 'paid' ? 'all' : 'paid')} style={chip(bill === 'paid', C.green)}>Paid · {billCounts.paid}</button>
-          <button onClick={() => setBill(bill === 'none' ? 'all' : 'none')} style={chip(bill === 'none', C.lightBrown)}>Not invoiced · {billCounts.none}</button>
-          <span style={{ color: C.lightBrown, fontSize: '0.7rem', marginLeft: '0.5rem' }}>QuickBooks invoices dated after each animal's harvest, matched by customer</span>
-        </div>
+            {/* Where the labor number comes from — broad on purpose */}
+            {labor && (
+              <div style={{ background: 'rgba(26,10,4,0.6)', border: '1px solid rgba(166,120,90,0.2)', borderRadius: 4, padding: '0.55rem 0.9rem', marginBottom: '1rem', color: C.lightBrown, fontSize: '0.74rem', lineHeight: 1.5 }}>
+                <strong style={{ color: C.tan }}>Labor:</strong>{' '}
+                {labor.dollarsPerLb != null
+                  ? <>
+                      ${labor.dollarsPerLb.toFixed(2)} of payroll per hanging lb
+                      {labor.hoursPerLb != null && labor.blendedHourly != null && <> · {(labor.hoursPerLb * 60).toFixed(1)} crew-min per lb at ${labor.blendedHourly.toFixed(2)}/hr</>}
+                      {' '}— {money(labor.payroll)} payroll over {labor.hangingLbs.toLocaleString()} lb killed, {labor.weeksUsed} pay weeks {fmt(labor.from)}–{fmt(labor.to)}
+                      {labor.weeksSkipped.length > 0 && <> ({labor.weeksSkipped.length} skipped: payroll but no carcass weighed)</>}
+                      {labor.packOut != null && <> · pack-out {Math.round(labor.packOut * 100)}% of hanging</>}
+                    </>
+                  : 'no payroll weeks with kill records yet'}
+                <span style={{ marginLeft: '0.75rem', whiteSpace: 'nowrap' }}>
+                  · office per account{' '}
+                  <input value={officeDraft} onChange={e => setOfficeDraft(e.target.value)} onBlur={saveOffice} onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+                    style={{ width: 40, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.35)', borderRadius: 3, color: C.cream, fontSize: '0.74rem', padding: '0 4px', textAlign: 'right' }} /> min (a guess)
+                </span>
+                <div>Whole-plant payroll, not measured per job — every row ranks on the same yardstick. Hover a row&apos;s money for the math.</div>
+              </div>
+            )}
+          </>
+        )}
 
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap' }}>
           <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search account or customer"
@@ -178,7 +248,7 @@ export default function PipelinePage() {
           {coldCount > 0 && (
             <label style={{ color: C.lightBrown, fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '0.35rem', cursor: 'pointer' }}>
               <input type="checkbox" checked={showCold} onChange={e => setShowCold(e.target.checked)} />
-              show {coldCount} whose records stop after harvest
+              show {coldCount} whose records stop
             </label>
           )}
           <span style={{ marginLeft: 'auto', color: C.lightBrown, fontSize: '0.74rem' }}>
@@ -194,8 +264,9 @@ export default function PipelinePage() {
         {rows && (
           <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflowX: 'auto' }}>
             {/* Axis */}
-            <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr 230px', borderBottom: '1px solid rgba(166,120,90,0.25)', position: 'sticky', top: 0, background: C.dark, zIndex: 2 }}>
-              <div style={{ padding: '0.5rem 0.9rem', color: C.lightBrown, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.12em' }}>Account</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '34px 270px minmax(260px, 1fr) 210px 230px', minWidth: 1000, borderBottom: '1px solid rgba(166,120,90,0.25)', position: 'sticky', top: 0, background: C.dark, zIndex: 2 }}>
+              <div />
+              <div style={{ padding: '0.5rem 0.6rem', color: C.lightBrown, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.12em' }}>Account</div>
               <div style={{ position: 'relative', height: 30 }}>
                 {weeks.map(t => (
                   <span key={t} style={{ position: 'absolute', left: pct(t), top: 8, transform: 'translateX(-50%)', color: C.lightBrown, fontSize: '0.66rem', whiteSpace: 'nowrap' }}>
@@ -204,12 +275,13 @@ export default function PipelinePage() {
                 ))}
                 <span style={{ position: 'absolute', left: pct(now), top: 6, transform: 'translateX(-50%)', color: C.cream, fontSize: '0.66rem', fontWeight: 700 }}>today</span>
               </div>
-              <div style={{ padding: '0.5rem 0.9rem', color: C.lightBrown, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.12em' }}>Next · Money</div>
+              <div style={{ padding: '0.5rem 0.9rem', color: C.lightBrown, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.12em' }}>$ · work left</div>
+              <div style={{ padding: '0.5rem 0.9rem', color: C.lightBrown, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.12em' }}>Stage · next</div>
             </div>
 
             {shown.length === 0 && <p style={{ color: C.lightBrown, padding: '2rem', textAlign: 'center', margin: 0 }}>Nothing matches.</p>}
 
-            {shown.map(r => {
+            {shown.map((r, i) => {
               const { segs } = segments(r, now)
               const lab = STAGE_LABEL[r.stage]
               const stageSince = r.stage === 'ready' || r.stage === 'freezing' || r.stage === 'at_baker' ? r.session_at
@@ -217,9 +289,11 @@ export default function PipelinePage() {
                 : r.stage === 'aging' || r.stage === 'harvested' ? (r.harvested_at ?? r.harvest_date)
                 : r.received_at
               const stageDays = daysAgo(stageSince)
+              const ranked = r.value.per_hour != null
               return (
-                <div key={r.id} style={{ display: 'grid', gridTemplateColumns: '300px 1fr 230px', borderBottom: '1px solid rgba(166,120,90,0.12)', alignItems: 'center', opacity: r.trail_cold ? 0.55 : 1 }}>
-                  <div style={{ padding: '0.55rem 0.9rem', minWidth: 0 }}>
+                <div key={r.id} style={{ display: 'grid', gridTemplateColumns: '34px 270px minmax(260px, 1fr) 210px 230px', minWidth: 1000, borderBottom: '1px solid rgba(166,120,90,0.12)', alignItems: 'center', opacity: r.trail_cold ? 0.55 : r.value.kind === 'paid' || r.value.kind === 'own' ? 0.7 : 1 }}>
+                  <div style={{ color: ranked ? C.tan : 'transparent', fontSize: '0.72rem', fontWeight: 700, textAlign: 'right' }}>{ranked ? i + 1 : ''}</div>
+                  <div style={{ padding: '0.55rem 0.6rem', minWidth: 0 }}>
                     <div style={{ color: C.cream, fontWeight: 700, fontSize: '0.88rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.account}</div>
                     <div style={{ color: C.lightBrown, fontSize: '0.72rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {r.species}{r.head_count > 1 ? ` ×${r.head_count}` : ''}
@@ -229,15 +303,16 @@ export default function PipelinePage() {
                   </div>
                   <div style={{ position: 'relative', height: 40 }}>
                     {weeks.map(t => <span key={t} style={{ position: 'absolute', left: pct(t), top: 0, bottom: 0, borderLeft: '1px solid rgba(166,120,90,0.1)' }} />)}
-                    {segs.map((s, i) => (
-                      <span key={i} title={`${s.key} · ${fmt(new Date(s.from).toISOString())} → ${fmt(new Date(s.to).toISOString())}`}
-                        style={{ position: 'absolute', left: pct(s.from), width: `calc(${pct(s.to)} - ${pct(s.from)})`, top: 12, height: 16, background: s.color, borderRadius: i === 0 ? '3px 0 0 3px' : i === segs.length - 1 ? '0 3px 3px 0' : 0, minWidth: 2 }} />
+                    {segs.map((s, j) => (
+                      <span key={j} title={`${s.key} · ${fmt(new Date(s.from).toISOString())} → ${fmt(new Date(s.to).toISOString())}`}
+                        style={{ position: 'absolute', left: pct(s.from), width: `calc(${pct(s.to)} - ${pct(s.from)})`, top: 12, height: 16, background: s.color, borderRadius: j === 0 ? '3px 0 0 3px' : j === segs.length - 1 ? '0 3px 3px 0' : 0, minWidth: 2 }} />
                     ))}
                     <span style={{ position: 'absolute', left: pct(now), top: 0, bottom: 0, borderLeft: '1px dashed rgba(242,232,217,0.45)' }} />
                     {r.days_in != null && (
                       <span style={{ position: 'absolute', left: `calc(${pct(now)} + 6px)`, top: 12, color: C.cream, fontSize: '0.72rem', fontWeight: 700, whiteSpace: 'nowrap' }}>{r.days_in}d</span>
                     )}
                   </div>
+                  <div style={{ padding: '0.4rem 0.9rem' }}><ValueCell r={r} /></div>
                   <div style={{ padding: '0.4rem 0.9rem' }}>
                     <span style={{ display: 'inline-block', fontSize: '0.68rem', fontWeight: 700, color: lab.color, border: `1px solid ${lab.color}66`, borderRadius: 99, padding: '1px 8px', marginBottom: 2 }}>
                       {r.trail_cold ? 'Records stop' : lab.label}{stageDays != null && !r.trail_cold ? ` · ${stageDays}d` : ''}
