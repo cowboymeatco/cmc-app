@@ -183,6 +183,8 @@ export interface ValueInputs {
   boxed_lbs: number
   smoke: SmokeLine[]
   jobs: SmokehouseJobs
+  /** Set by hand: this booking never gets an invoice. */
+  no_invoice_reason?: string | null
 }
 
 const money = (n: number) => `$${n.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
@@ -239,6 +241,10 @@ export function valueAccount(v: ValueInputs, labor: LaborRate, smokeRates: Map<s
     basis,
   })
 
+  if (v.no_invoice_reason) {
+    basis.unshift(`No invoice needed — ${v.no_invoice_reason}`)
+    return done('own', 'own', null)
+  }
   if (isExcludedProducer(v.account)) {
     basis.unshift('Our own animal — sold at retail, never invoiced')
     return done('own', 'own', null)

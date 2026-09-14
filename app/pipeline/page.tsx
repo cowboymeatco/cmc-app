@@ -17,6 +17,7 @@ import Link from 'next/link'
 import { STAGE_LABEL, STAGE_RANK } from '@/lib/animalProgress'
 import type { PipelineResponse, PipelineRow } from '@/app/api/pipeline/route'
 import type { MoneyBucket } from '@/lib/pipelineValue'
+import InvoiceMatch from './InvoiceMatch'
 
 const C = {
   dark: '#1A0A04', darkBrown: '#351E0E', medBrown: '#75471B', lightBrown: '#A6785A',
@@ -90,8 +91,9 @@ const hrs = (h: number) => (h < 1 ? `${Math.round(h * 60)} min` : `${h.toFixed(h
 // The QuickBooks word on this animal, as a chip.
 function BillingChip({ b }: { b: PipelineRow['billing'] }) {
   const base: React.CSSProperties = { display: 'inline-block', fontSize: '0.68rem', fontWeight: 700, borderRadius: 99, padding: '1px 8px', whiteSpace: 'nowrap' }
-  if (b.status === 'paid')    return <span title={`Invoice ${b.doc_numbers.join(', ')} · ${money(b.total)}`} style={{ ...base, color: C.green, border: `1px solid ${C.green}66` }}>💵 Paid {money(b.total)}</span>
-  if (b.status === 'open')    return <span title={`Invoice ${b.doc_numbers.join(', ')} · ${money(b.total)} total`} style={{ ...base, color: C.yellow, border: `1px solid ${C.yellow}66` }}>💵 {money(b.balance)} due · #{b.doc_numbers[b.doc_numbers.length - 1]}</span>
+  const how = b.matched_by === 'manual' ? ' · matched by hand' : b.matched_by === 'name' ? ' · matched by name — check it' : ''
+  if (b.status === 'paid')    return <span title={`Invoice ${b.doc_numbers.join(', ')} · ${money(b.total)}${how}`} style={{ ...base, color: C.green, border: `1px solid ${C.green}66` }}>💵 Paid {money(b.total)}</span>
+  if (b.status === 'open')    return <span title={`Invoice ${b.doc_numbers.join(', ')} · ${money(b.total)} total${how}`} style={{ ...base, color: C.yellow, border: `1px solid ${C.yellow}66` }}>💵 {money(b.balance)} due · #{b.doc_numbers[b.doc_numbers.length - 1]}</span>
   if (b.status === 'unknown') return <span style={{ ...base, color: C.lightBrown, border: '1px solid rgba(166,120,90,0.35)' }}>QuickBooks unavailable</span>
   return <span style={{ ...base, color: C.lightBrown, border: '1px solid rgba(166,120,90,0.35)' }}>Not invoiced</span>
 }
@@ -120,6 +122,8 @@ export default function PipelinePage() {
   const [bucket, setBucket] = useState<'all' | MoneyBucket>('all')
   const [showCold, setShowCold] = useState(false)
   const [officeDraft, setOfficeDraft] = useState('')
+  // The account whose invoice is being matched by hand (InvoiceMatch.tsx).
+  const [matching, setMatching] = useState<string | null>(null)
 
   const load = () => fetch('/api/pipeline')
     .then(r => r.json())
@@ -323,7 +327,16 @@ export default function PipelinePage() {
                       {r.trail_cold ? 'Records stop' : lab.label}{stageDays != null && !r.trail_cold ? ` · ${stageDays}d` : ''}
                     </span>
                     <div style={{ color: C.lightBrown, fontSize: '0.7rem', lineHeight: 1.3 }}>{nextStep(r)}</div>
-                    <div style={{ marginTop: 3 }}><BillingChip b={r.billing} /></div>
+                    <div style={{ marginTop: 3, display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                      <BillingChip b={r.billing} />
+                      {r.value.kind !== 'own' || r.no_invoice_reason ? (
+                        <button onClick={() => setMatching(r.id)}
+                          title={r.billing.status === 'none' ? 'Find this animal’s QuickBooks invoice' : 'Wrong invoice? Match it by hand'}
+                          style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '0.68rem', color: r.billing.status === 'none' ? C.tan : C.lightBrown, textDecoration: 'underline' }}>
+                          {r.billing.status === 'none' ? '🔗 match invoice' : r.no_invoice_reason ? 'no invoice ✎' : 'invoice ✎'}
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
               )
@@ -331,6 +344,9 @@ export default function PipelinePage() {
           </div>
         )}
       </main>
+      {matching && (
+        <InvoiceMatch appointmentId={matching} onClose={() => setMatching(null)} onSaved={() => { setMatching(null); load() }} />
+      )}
     </div>
   )
 }

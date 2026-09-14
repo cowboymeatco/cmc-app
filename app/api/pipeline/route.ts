@@ -34,7 +34,8 @@ export interface PipelineBilling {
   /** Balance per invoice, so an invoice matched by two appointments is counted once. */
   open_balances: Record<string, number>
   latest_date: string | null
-  matched_by: 'link' | 'name' | null
+  /** 'manual' = a person matched it on this page (appointment_invoice_links); 'link' = saved QBO customer; 'name' = spelling. */
+  matched_by: 'manual' | 'link' | 'name' | null
 }
 
 export interface PipelineRow {
@@ -58,6 +59,8 @@ export interface PipelineRow {
   trail_cold: boolean
   sessions: { customer_name: string; session_date: string; status: string }[]
   billing: PipelineBilling
+  /** Set by hand when this booking never gets an invoice (our animal, resale). */
+  no_invoice_reason: string | null
   value: AccountValue
   smokehouse_jobs: SmokehouseJobs
 }
@@ -76,10 +79,12 @@ export interface PipelineResponse {
 async function loadInvoiceIndex(sinceISO: string) {
   const byId = new Map<string, DatedInvoice[]>()
   const byName = new Map<string, DatedInvoice[]>()
+  const byInvoice = new Map<string, DatedInvoice>()
   let ok = true
   try {
     const invoices = await getInvoicesSince(sinceISO)
     for (const inv of invoices) {
+      byInvoice.set(inv.id, inv)
       if (inv.customerId) (byId.get(inv.customerId) ?? byId.set(inv.customerId, []).get(inv.customerId)!).push(inv)
       const k = nameKey(inv.customerName)
       if (k) (byName.get(k) ?? byName.set(k, []).get(k)!).push(inv)
@@ -98,12 +103,16 @@ async function loadInvoiceIndex(sinceISO: string) {
     for (const r of (p.data ?? []) as { producer_name: string; qbo_customer_id: string }[]) linkByProducer.set(nameKey(r.producer_name), r.qbo_customer_id)
     for (const r of (c.data ?? []) as { customer_name: string; qbo_customer_id: string }[]) linkByCustomer.set(nameKey(r.customer_name), r.qbo_customer_id)
   } catch { /* links are a bonus; names still match */ }
-  return { ok, byId, byName, linkByProducer, linkByCustomer }
+  return { ok, byId, byName, byInvoice, linkByProducer, linkByCustomer }
 }
 
 function billingFor(
   idx: Awaited<ReturnType<typeof loadInvoiceIndex>>,
   account: string, customers: string[], harvestDate: string | null,
+  /** Invoice ids a person matched to THIS appointment. */
+  manual: string[],
+  /** Invoice ids matched by hand to some OTHER appointment — never name-matched here. */
+  claimedElsewhere: Set<string>,
 ): PipelineBilling {
   const none: PipelineBilling = { status: idx.ok ? 'none' : 'unknown', invoices: 0, total: 0, balance: 0, doc_numbers: [], open_balances: {}, latest_date: null, matched_by: null }
   if (!idx.ok) return none
@@ -112,6 +121,12 @@ function billingFor(
   // before it was harvested. An old open invoice on the same producer is real
   // money but a different job, and would mislabel a fresh animal as unpaid.
   const floor = harvestDate ? new Date(new Date(harvestDate + 'T12:00:00').getTime() - 7 * 86400000).toLocaleDateString('en-CA') : null
+
+  // A person matched it: exactly those invoices, whatever the names say.
+  if (manual.length) {
+    const hits = manual.map(id => idx.byInvoice.get(id)).filter((h): h is DatedInvoice => !!h)
+    if (hits.length) return summarize(hits, 'manual')
+  }
 
   const names = [account, ...customers].map(nameKey).filter(Boolean)
   const linked = [...new Set([
@@ -126,9 +141,12 @@ function billingFor(
     matchedBy = hits.length ? 'name' : null
   }
   const seen = new Set<string>()
-  hits = hits.filter(h => (!floor || h.txnDate >= floor) && !seen.has(h.id) && seen.add(h.id))
+  hits = hits.filter(h => (!floor || h.txnDate >= floor) && !claimedElsewhere.has(h.id) && !seen.has(h.id) && seen.add(h.id))
   if (!hits.length) return none
+  return summarize(hits, matchedBy)
+}
 
+function summarize(hits: DatedInvoice[], matchedBy: PipelineBilling['matched_by']): PipelineBilling {
   const total = hits.reduce((s, h) => s + (h.total || 0), 0)
   const balance = hits.reduce((s, h) => s + (h.balance || 0), 0)
   return {
@@ -146,6 +164,7 @@ function billingFor(
 type ApptRow = {
   id: string; harvest_date: string | null; species: string | null; head_count: number | null
   source: string | null; status: string | null; customers: { customer_name?: string; portion?: string; linked_cutting_instruction_id?: string }[] | null
+  no_invoice_reason: string | null
 }
 
 export async function GET() {
@@ -154,7 +173,7 @@ export async function GET() {
   const since = new Date(Date.now() - 180 * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Denver' })
   const { data, error } = await supabase
     .from('harvest_appointments')
-    .select('id, harvest_date, species, head_count, source, status, customers')
+    .select('id, harvest_date, species, head_count, source, status, customers, no_invoice_reason')
     .in('status', ['AnimalIn', 'Processing', 'Complete'])
     .gte('harvest_date', since)
     .order('harvest_date', { ascending: true })
@@ -175,6 +194,13 @@ export async function GET() {
     linkedCardIds.length ? supabase.from('cutting_instructions').select('id, appointment_id, data').in('id', linkedCardIds) : Promise.resolve({ data: [] }),
   ])
   const officeMinutes = Number(settings.data?.pipeline_office_minutes) || 15
+
+  // Invoices a person matched to an appointment on this page.
+  const { data: invoiceLinks } = await supabaseAdmin.from('appointment_invoice_links').select('appointment_id, qbo_invoice_id')
+  const manualFor = new Map<string, string[]>()
+  for (const l of invoiceLinks ?? []) manualFor.set(String(l.appointment_id), [...(manualFor.get(String(l.appointment_id)) ?? []), String(l.qbo_invoice_id)])
+  const claimedBy = new Map<string, string>()
+  for (const l of invoiceLinks ?? []) claimedBy.set(String(l.qbo_invoice_id), String(l.appointment_id))
 
   // Cut cards per appointment — by the card's own appointment_id and by the
   // appointment's customer rows pointing at a card. Smokehouse pounds come
@@ -242,7 +268,8 @@ export async function GET() {
     const receivedOnlyCold = p.stage === 'received' && !p.sessions.length && pastHarvestDays > 21
 
     const account = (a.source ?? '').trim() || customers[0] || 'Unnamed'
-    const billing = billingFor(invoiceIdx, (a.source ?? '').trim(), customers, a.harvest_date)
+    const claimedElsewhere = new Set([...claimedBy].filter(([, appt]) => appt !== a.id).map(([inv]) => inv))
+    const billing = billingFor(invoiceIdx, (a.source ?? '').trim(), customers, a.harvest_date, manualFor.get(a.id) ?? [], claimedElsewhere)
     const smokehouse_jobs = jobsFor(a)
     const value = valueAccount({
       account,
@@ -254,6 +281,7 @@ export async function GET() {
       boxed_lbs: p.sessions.reduce((s, x) => s + (boxed.get(`${x.customer_name}|${x.session_date}`) ?? 0), 0),
       smoke: cardsFor(a).flatMap(c => smokeLines(c.data)),
       jobs: smokehouse_jobs,
+      no_invoice_reason: a.no_invoice_reason,
     }, labor, smokeRates, officeMinutes)
 
     rows.push({
@@ -277,6 +305,7 @@ export async function GET() {
       trail_cold: p.trailCold || receivedOnlyCold,
       sessions: p.sessions,
       billing,
+      no_invoice_reason: a.no_invoice_reason ?? null,
       value,
       smokehouse_jobs,
     })
