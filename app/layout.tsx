@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import './globals.css'
 import FeedbackButton from './components/FeedbackButton'
+import NavLogger from './components/NavLogger'
 
 export const metadata: Metadata = {
   title: 'CMC Operations | Cowboy Meat Company',
@@ -13,6 +14,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-full flex flex-col">
         {children}
         <FeedbackButton />
+        <NavLogger />
       </body>
     </html>
   )
