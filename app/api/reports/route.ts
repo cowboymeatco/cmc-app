@@ -95,7 +95,7 @@ export async function GET(req: NextRequest) {
     const [{ data: logs }, { data: asgs }] = apptIds.length
       ? await Promise.all([
           supabase.from('harvest_log')
-            .select('id, appointment_id, hot_carcass_weight_lbs, half_1_weight_lbs, half_2_weight_lbs')
+            .select('id, appointment_id, carcass_tag, hot_carcass_weight_lbs, half_1_weight_lbs, half_2_weight_lbs')
             .in('appointment_id', apptIds),
           supabase.from('carcass_assignments')
             .select('harvest_log_id, appointment_id, appointment_customer_id, linked_cutting_instruction_id')
@@ -111,12 +111,17 @@ export async function GET(req: NextRequest) {
       .filter(id => id && !known.has(id)))]
     const strays = strayIds.length
       ? (await supabase.from('harvest_log')
-          .select('id, appointment_id, hot_carcass_weight_lbs, half_1_weight_lbs, half_2_weight_lbs')
+          .select('id, appointment_id, carcass_tag, hot_carcass_weight_lbs, half_1_weight_lbs, half_2_weight_lbs')
           .in('id', strayIds)).data ?? []
       : []
 
     const carcassIdx = buildSheetCarcassIndex(slots, asgs, [...(logs ?? []), ...strays])
     const dateByCi = slots.dateByCi
+    // Rail tag per carcass, so a sheet covering several animals can name each
+    // one the way it is tagged in the cooler (Jill, 2026-09-14).
+    const tagByLog = new Map<string, string | null>(
+      [...(logs ?? []), ...strays].map(l =>
+        [String(l.id), ((l as { carcass_tag?: unknown }).carcass_tag as string | null) ?? null]))
 
     const rows = (cis ?? []).map(ci => {
       const data = ci.data as { killDate?: string; portion?: string } | null
@@ -133,7 +138,7 @@ export async function GET(req: NextRequest) {
         // Whole-carcass hanging weights, the way they print on the cut card —
         // portion rides alongside rather than scaling them. One entry per
         // animal, carrying its id so a split animal counts once in a total.
-        carcasses:     carcassIds.map(id => ({ id, lbs: carcassIdx.weightOf(id) })),
+        carcasses:     carcassIds.map(id => ({ id, lbs: carcassIdx.weightOf(id), tag: tagByLog.get(id) ?? null })),
         products:      extractValueAdd(ci.species as string, ci.data),
         // A tag scanned in off a cut card knows its exact SHEET and shows only
         // there. A tag PINNED to an animal shows only on the sheet that animal

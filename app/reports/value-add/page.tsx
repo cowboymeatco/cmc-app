@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { isoDate } from '@/lib/dates'
+import { setFeedbackContext, clearFeedbackContext } from '@/lib/feedbackTelemetry'
 
 const C = {
   dark:       '#1A0A04',
@@ -31,7 +32,7 @@ interface Sheet {
   // Whole-carcass hanging weights, as they print on the cut card — one entry
   // per animal the sheet is linked to, carrying its id so a split animal is
   // counted once in the column total.
-  carcasses:     { id: string; lbs: number | null }[]
+  carcasses:     { id: string; lbs: number | null; tag?: string | null }[]
   products:      VAItem[]
   // Seal tags actually riding through the cure cooler for this customer —
   // shown in the cell under what the sheet ordered, so an ordered ham with no
@@ -110,15 +111,8 @@ const hangLbs = (s: Sheet) => {
   return known.length ? known.reduce((n, c) => n + (c.lbs as number), 0) : null
 }
 const fmtLbs = (n: number) => String(Math.round(n * 10) / 10)
-// Cell/CSV text: "412" — or "412 · ½" on a share, "2 hd · 950" on a customer
-// taking more than one animal.
-const hangText = (s: Sheet) => {
-  const lbs = hangLbs(s)
-  if (lbs == null) return ''
-  const tag  = PORTION_TAG[s.portion ?? ''] ?? ''
-  const head = s.carcasses.length > 1 ? `${s.carcasses.length} hd · ` : ''
-  return `${head}${fmtLbs(lbs)}${tag ? ` · ${tag}` : ''}`
-}
+// The old "2 hd · 950" cell text is gone: a card covering several animals now
+// draws a line per animal, each carrying its own tag and weight.
 
 const speciesEmoji = (s: string | null) =>
   s === 'Pork' ? '🐷' : s === 'Beef' ? '🐄' : s === 'Lamb' ? '🐑' : s === 'Goat' ? '🐐' : '🥩'
@@ -278,6 +272,42 @@ export default function ValueAddReport() {
   const colTotals = useMemo(
     () => cols.map(c => rows.reduce((n, s) => n + itemsFor(s, c).reduce((m, it) => m + qtyOf(it), 0), 0)),
     [cols, rows],
+  )
+
+  // One line per ANIMAL, not per cut card (Charlie + Jill, 2026-09-14: Kevin
+  // McGovern's two beef and Katie Muller's four hogs each rode on a single card
+  // and drew a single line reading "2 hd" / "4 hd").
+  //
+  // The card stays the unit of ORDERING — its value-add was filled in once, for
+  // the whole card — so only the first animal's line carries the product cells
+  // and the row total. The rest name their animal and say where the order lives.
+  // Totals above still reduce over `rows` (the cards), so splitting the display
+  // cannot double-count an order; that is the whole reason the split lives here
+  // and not in `rows`.
+  //
+  // Which bacon belongs to which of a customer's animals is not knowable from
+  // the sheet — it's a decision someone makes at the rack, and it's what the
+  // open "two bacons go to 748#" report asks for. Until that exists, repeating
+  // the card's order against its first animal is the honest display: it says
+  // what was ordered and which animals it was ordered against, and claims
+  // nothing about the split.
+  // Animals come out of the carcass index in slot order, which put Katie
+  // Muller's #22 above her #02. Tag order is what the rail is walked in, and it
+  // also fixes WHICH animal the card's order is drawn against.
+  const byTag = (a: { tag?: string | null }, b: { tag?: string | null }) => {
+    const na = Number(a.tag), nb = Number(b.tag)
+    if (Number.isFinite(na) && Number.isFinite(nb) && na !== nb) return na - nb
+    return String(a.tag ?? '').localeCompare(String(b.tag ?? ''))
+  }
+  const animalRows = useMemo(
+    () => rows.flatMap(s => (s.carcasses.length ? [...s.carcasses].sort(byTag) : [null]).map((animal, i) => ({
+      sheet: s,
+      animal,
+      first: i === 0,
+      count: s.carcasses.length,
+      key:   `${s.id}:${animal?.id ?? 'none'}`,
+    }))),
+    [rows],
   )
   // Pounds on the rail behind these sheets. A split animal shows on two sheets
   // but is ONE carcass — keyed by carcass id so it's counted once.
@@ -445,17 +475,22 @@ export default function ValueAddReport() {
       }))), `hams_${from}_to_${to}.csv`)
       return
     }
-    const out = rows.map(s => {
+    // One line per animal, matching the table. The order columns are filled on
+    // the card's first animal only, so a spreadsheet that sums a column still
+    // gets what was ordered rather than it multiplied by the head count.
+    const out = animalRows.map(({ sheet: s, animal, first, count }) => {
       const base: Record<string, unknown> = {
-        date: s.date ?? '', customer: s.customer_name, species: s.species ?? '',
-        hanging_lbs: hangLbs(s) ?? '', portion: s.portion ?? '', head: s.carcasses.length,
+        date: first ? (s.date ?? '') : '', customer: s.customer_name, species: s.species ?? '',
+        carcass_tag: animal?.tag ?? '', animal_lbs: animal?.lbs ?? '',
+        card_hanging_lbs: first ? (hangLbs(s) ?? '') : '',
+        portion: s.portion ?? '', head: count, card_id: s.id,
       }
       for (const c of cols) {
-        const items = itemsFor(s, c)
-        const tags  = tagsFor(s, c)
+        const items = first ? itemsFor(s, c) : []
+        const tags  = first ? tagsFor(s, c)  : []
         base[c] = [items.length ? cellText(items) : '', tags.length ? `🏷 ${tagText(tags, tagSeen)}` : ''].filter(Boolean).join('  ')
       }
-      base.total = rowQty(s)
+      base.total = first ? rowQty(s) : ''
       return base
     })
     download(toCSV(out), `value-add_${species}${effProduct !== 'all' ? `_${effProduct.replace(/[^A-Za-z0-9]+/g, '-')}` : ''}_${from}_to_${to}.csv`)
@@ -527,14 +562,22 @@ export default function ValueAddReport() {
     if (mode === 'ham') return printHams()
     const speciesLabel = species === 'all' ? 'All species' : `${speciesEmoji(species)} ${species}`
     const headCols = cols.map(c => `<th class="prod">${escHtml(c)}</th>`).join('')
-    const bodyRows = rows.map(s => {
+    // Same split as the screen: a line per animal, the order drawn once on the
+    // card's first animal so the printed sheet can be added up.
+    const bodyRows = animalRows.map(({ sheet: s, animal, first, count }) => {
+      const hang = animal
+        ? `${animal.tag ? `#${animal.tag} · ` : ''}${animal.lbs == null ? '—' : fmtLbs(animal.lbs)}${PORTION_TAG[s.portion ?? ''] ? ` · ${PORTION_TAG[s.portion ?? '']}` : ''}`
+        : ''
+      if (!first) {
+        return `<tr class="cont"><td class="cust">↳</td><td class="date"></td><td class="ctr hang">${escHtml(hang)}</td><td class="cont-note" colspan="${cols.length + 1}">↳ one order across ${count} head, shown above</td></tr>`
+      }
       const cells = cols.map(c => {
         const items = itemsFor(s, c)
         const tags  = tagsFor(s, c)
         const tagLine = tags.length ? `<div class="tags">🏷 ${escHtml(tagText(tags, tagSeen))}</div>` : ''
         return `<td class="ctr${items.some(it => it.detail) ? ' det' : ''}">${items.length ? escHtml(cellText(items)) : ''}${tagLine}</td>`
       }).join('')
-      return `<tr><td class="cust">${escHtml(s.customer_name)}</td><td class="date">${escHtml(fmtDay(s.date ?? ''))}</td><td class="ctr hang">${escHtml(hangText(s))}</td>${cells}<td class="ctr tot">${rowQty(s)}</td></tr>`
+      return `<tr><td class="cust">${escHtml(s.customer_name)}</td><td class="date">${escHtml(fmtDay(s.date ?? ''))}</td><td class="ctr hang">${escHtml(hang)}</td>${cells}<td class="ctr tot">${rowQty(s)}</td></tr>`
     }).join('')
     const totalsRow = colTotals.map(n => `<td class="ctr">${n}</td>`).join('')
     const generated = new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
@@ -561,6 +604,9 @@ export default function ValueAddReport() {
   td.hang { white-space: nowrap; font-weight: bold }
   td.tot, th.tot { font-weight: bold }
   tr.totals td { border-top: 1.5pt solid #000; font-weight: bold; background: #f2f2f2 }
+  tr.cont td { border-top: 0.5pt dotted #bbb }
+  tr.cont td.cust { font-weight: normal; color: #888; text-align: center }
+  td.cont-note { font-size: 7pt; color: #888; font-style: italic }
   .foot { margin-top: 8px; font-size: 7.5pt; color: #666; text-align: right }
 </style></head><body>
   <div class="hdr">
@@ -584,8 +630,20 @@ export default function ValueAddReport() {
     if (w) { w.document.write(html); w.document.close() }
   }
 
+  // Cards, and the head they cover — the table now draws a line per animal, so
+  // a bare count would read as the number of lines and be wrong.
   const totalCustomers = rows.length
+  const totalHead      = animalRows.filter(r => r.animal).length
   const totalItems = rows.reduce((n, s) => n + rowQty(s), 0)
+
+  // Both 2026-09-14 reports about this page arrived with app_context null,
+  // so the tab and filters behind them had to be reconstructed by hand.
+  useEffect(() => {
+    setFeedbackContext({ va_mode: mode, va_species: species, va_product: effProduct,
+      va_from: from, va_to: to, va_search: search.trim() || null,
+      va_cards: rows.length, va_head: totalHead })
+    return () => clearFeedbackContext(['va_mode','va_species','va_product','va_from','va_to','va_search','va_cards','va_head'])
+  }, [mode, species, effProduct, from, to, search, rows.length, totalHead])
 
   return (
     <div style={{ minHeight: '100vh', background: C.darkBrown }}>
@@ -742,24 +800,35 @@ export default function ValueAddReport() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map(s => (
-                    <tr key={s.id} style={{ borderTop: '1px solid rgba(166,120,90,0.1)' }}>
-                      <td style={{ position: 'sticky', left: 0, background: C.dark, padding: '0.45rem 0.8rem', color: C.cream, fontWeight: 600, whiteSpace: 'nowrap', zIndex: 1 }}>{s.customer_name}</td>
-                      <td style={{ padding: '0.45rem 0.7rem', color: C.lightBrown, whiteSpace: 'nowrap', fontFamily: 'monospace' }}>{s.date ?? '—'}</td>
+                  {animalRows.map(({ sheet: s, animal, first, count, key }) => (
+                    <tr key={key} style={{ borderTop: first ? '1px solid rgba(166,120,90,0.1)' : '1px solid rgba(166,120,90,0.04)' }}>
+                      <td style={{ position: 'sticky', left: 0, background: C.dark, padding: '0.45rem 0.8rem', color: first ? C.cream : 'rgba(242,232,217,0.45)', fontWeight: first ? 600 : 400, whiteSpace: 'nowrap', zIndex: 1 }}>
+                        {first ? s.customer_name : <span style={{ paddingLeft: '0.9rem' }}>↳</span>}
+                      </td>
+                      <td style={{ padding: '0.45rem 0.7rem', color: C.lightBrown, whiteSpace: 'nowrap', fontFamily: 'monospace' }}>{first ? (s.date ?? '—') : ''}</td>
                       <td style={{ padding: '0.45rem 0.7rem', textAlign: 'right', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
-                        {hangLbs(s) == null
-                          ? <span style={{ color: 'rgba(166,120,90,0.35)' }} title={s.carcasses.length
-                              ? 'Carcass linked, but no weight recorded yet'
-                              : 'This sheet is not linked to a check-in animal yet'}>—</span>
+                        {animal == null
+                          ? <span style={{ color: 'rgba(166,120,90,0.35)' }} title="This sheet is not linked to a check-in animal yet">—</span>
                           : <>
-                              {s.carcasses.length > 1 && <span style={{ color: C.lightBrown, fontSize: '0.72rem' }}>{s.carcasses.length} hd&nbsp;·&nbsp;</span>}
-                              <span style={{ color: C.cream, fontWeight: 700 }}>{fmtLbs(hangLbs(s) as number)}</span>
+                              {/* The rail tag, so the line names the animal the crew is
+                                  looking at rather than just its weight. */}
+                              {animal.tag && <span style={{ color: C.lightBrown, fontSize: '0.72rem' }} title="Carcass tag">#{animal.tag}&nbsp;·&nbsp;</span>}
+                              {animal.lbs == null
+                                ? <span style={{ color: 'rgba(166,120,90,0.35)' }} title="Carcass linked, but no weight recorded yet">—</span>
+                                : <span style={{ color: C.cream, fontWeight: 700 }}>{fmtLbs(animal.lbs)}</span>}
                               {/* Separated by a dot — "182 · ½" can't be misread as 182.5 the way "182½" can. */}
                               {PORTION_TAG[s.portion ?? ''] &&
                                 <span style={{ color: C.blue, fontSize: '0.76rem' }} title={`${s.portion} share`}> · {PORTION_TAG[s.portion ?? '']}</span>}
                             </>}
                       </td>
-                      {cols.map(c => {
+                      {/* The order was filled in once for the whole card, so it is drawn
+                          once — against the card's first animal. Repeating it down the
+                          group would read as four separate orders. */}
+                      {!first ? (
+                        <td colSpan={cols.length + 1} style={{ padding: '0.45rem 0.6rem', color: 'rgba(166,120,90,0.55)', fontSize: '0.72rem', fontStyle: 'italic', borderLeft: '1px solid rgba(166,120,90,0.08)' }}>
+                          ↳ on {s.customer_name}&apos;s cut card above — one order across {count} head
+                        </td>
+                      ) : cols.map(c => {
                         const items = itemsFor(s, c)
                         const hasDetail = items.some(it => it.detail)
                         const tags = tagsFor(s, c)
@@ -778,13 +847,13 @@ export default function ValueAddReport() {
                           </td>
                         )
                       })}
-                      <td style={{ padding: '0.45rem 0.7rem', textAlign: 'center', color: C.cream, fontWeight: 800, borderLeft: '1px solid rgba(166,120,90,0.3)' }}>{rowQty(s)}</td>
+                      {first && <td style={{ padding: '0.45rem 0.7rem', textAlign: 'center', color: C.cream, fontWeight: 800, borderLeft: '1px solid rgba(166,120,90,0.3)' }}>{rowQty(s)}</td>}
                     </tr>
                   ))}
                 </tbody>
                 <tfoot>
                   <tr style={{ borderTop: '2px solid rgba(166,120,90,0.4)', background: 'rgba(166,120,90,0.1)' }}>
-                    <td style={{ position: 'sticky', left: 0, background: '#2a160a', padding: '0.55rem 0.8rem', color: C.tan, fontWeight: 800, whiteSpace: 'nowrap', zIndex: 1 }}>Total · {totalCustomers}</td>
+                    <td style={{ position: 'sticky', left: 0, background: '#2a160a', padding: '0.55rem 0.8rem', color: C.tan, fontWeight: 800, whiteSpace: 'nowrap', zIndex: 1 }}>Total · {totalCustomers} {totalCustomers === 1 ? 'card' : 'cards'}{totalHead ? ` · ${totalHead} hd` : ''}</td>
                     <td />
                     <td style={{ padding: '0.55rem 0.7rem', textAlign: 'right', color: C.amber, fontWeight: 800, whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
                       {hangTotal ? `${fmtLbs(hangTotal)} lbs` : ''}
