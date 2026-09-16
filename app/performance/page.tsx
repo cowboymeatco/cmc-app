@@ -673,7 +673,7 @@ export default function PerformancePage() {
               {fmt(data.stale.head)} head ({fmt(data.stale.lbs)} lbs) were scheduled to be cut
               {data.stale.oldestDue ? ` starting ${dateLabel(data.stale.oldestDue, { month: 'short', day: 'numeric' })}` : ''},
               but are still hanging on the harvest log — so this chart still counts them in the cooler.{' '}
-              <Link href="/processing" style={{ color: C.tan, textDecoration: 'underline' }}>
+              <Link href="/processing?tab=cut-schedule" style={{ color: C.tan, textDecoration: 'underline' }}>
                 Mark them cut on the cut schedule
               </Link>{' '}
               to bring it back in line.
@@ -831,7 +831,7 @@ export default function PerformancePage() {
                       {fmt(data.drawdown.unplanned.head)} head ({fmt(data.drawdown.unplanned.lbs)} lbs) have no cut day
                     </strong>{' '}
                     and never come off this projection —{' '}
-                    <Link href="/processing" style={{ color: C.tan, textDecoration: 'underline' }}>give them a day</Link>{' '}
+                    <Link href="/processing?tab=cut-schedule" style={{ color: C.tan, textDecoration: 'underline' }}>give them a day</Link>{' '}
                     and the line reaches the floor.
                   </>
                 ) : (

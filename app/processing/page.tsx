@@ -1880,13 +1880,33 @@ function TabMenu({ label, items, tab, setTab }: {
   )
 }
 
+const TAB_IDS: Tab[] = ['browser', 'upload', 'export', 'cleanup', 'cut-schedule', 'in-cure', 'box-labels', 'clover', 'quickbooks', 'alignment']
+
 export default function ProcessingPage() {
   const [tab, setTab] = useState<Tab>('browser')
+  // Nothing renders until we know whether this visit is even staying here.
+  const [staying, setStaying] = useState(false)
 
-  // Land on the QuickBooks tab when returning from the QBO OAuth redirect
+  // The floor opens Processing to pack, not to edit the PLU catalog, so a bare
+  // /processing hands over to the scanner (Charlie, 2026-09-16). Every link
+  // that means a particular tab says so with ?tab=, and those stay put — the
+  // QBO round trip included, since it comes back mid-authorization.
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).has('qbo')) setTab('quickbooks')
+    const qs  = new URLSearchParams(window.location.search)
+    const req = qs.get('tab')
+    if (req && (TAB_IDS as string[]).includes(req)) { setTab(req as Tab); setStaying(true); return }
+    if (qs.has('qbo')) { setTab('quickbooks'); setStaying(true); return }
+    window.location.replace('/scanner')
   }, [])
+
+  // A tab picked here belongs in the URL, or Back walks out of the page
+  // entirely instead of to the tab that was open before it.
+  const openTab = useCallback((t: Tab) => {
+    setTab(t)
+    window.history.replaceState(null, '', `/processing?tab=${t}`)
+  }, [])
+
+  if (!staying) return null
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--dark-brown)', display: 'flex', flexDirection: 'column' }}>
@@ -1905,7 +1925,7 @@ export default function ProcessingPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden' }}>
             {DAILY_TABS.map(t => (
-              <button key={t.id} onClick={() => setTab(t.id)} style={{
+              <button key={t.id} onClick={() => openTab(t.id)} style={{
                 padding: '0.45rem 1.1rem', border: 'none', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
                 background: tab === t.id ? C.medBrown : 'transparent',
                 color: tab === t.id ? C.cream : C.lightBrown,
@@ -1913,8 +1933,8 @@ export default function ProcessingPage() {
               }}>{t.label}</button>
             ))}
           </div>
-          <TabMenu label="🔗 Integrations" items={INTEGRATION_TABS} tab={tab} setTab={setTab} />
-          <TabMenu label="🗂 PLU Tools"    items={PLU_TOOL_TABS}    tab={tab} setTab={setTab} />
+          <TabMenu label="🔗 Integrations" items={INTEGRATION_TABS} tab={tab} setTab={openTab} />
+          <TabMenu label="🗂 PLU Tools"    items={PLU_TOOL_TABS}    tab={tab} setTab={openTab} />
         </div>
       </header>
 

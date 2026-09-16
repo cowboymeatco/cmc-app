@@ -128,7 +128,7 @@ export default function QuickBooksTab() {
     setOauthMsg(qbo === 'connected'
       ? '✓ QuickBooks connected.'
       : `QuickBooks connection failed (${params.get('reason') ?? 'unknown'}) — try again.`)
-    window.history.replaceState(null, '', '/processing')
+    window.history.replaceState(null, '', '/processing?tab=quickbooks')
   }, [])
 
   async function link(plu: PluLite, qboId: string) {

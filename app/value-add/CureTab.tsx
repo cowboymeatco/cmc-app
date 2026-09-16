@@ -229,7 +229,7 @@ export default function CureTab() {
         <br />
         Piece by piece — whose it is, days in cure, marking one done — is the
         operational board on{' '}
-        <Link href="/processing" style={{ color: C.blue }}>Processing → In Cure</Link>.
+        <Link href="/processing?tab=in-cure" style={{ color: C.blue }}>Processing → In Cure</Link>.
         What&apos;s still coming is on the Schedule tab, under 📖 The Smokehouse Book.
         <button
           onClick={load}

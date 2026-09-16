@@ -2583,7 +2583,7 @@ export default function ScannerPage() {
         {/* Header */}
         <div style={{ background: C.darkBrown, borderBottom: '1px solid rgba(166,120,90,0.3)', padding: '0.75rem 1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <Link href="/processing" style={{ color: C.lightBrown, fontSize: '0.8rem', textDecoration: 'none' }}>← Processing</Link>
+            <Link href="/processing?tab=browser" style={{ color: C.lightBrown, fontSize: '0.8rem', textDecoration: 'none' }}>← Processing Tools</Link>
             <span style={{ color: 'rgba(166,120,90,0.35)' }}>|</span>
             <span style={{ fontFamily: 'Georgia, serif', color: C.cream, fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Processing Scanner</span>
             <span style={{ fontSize: '0.72rem', color: pluLoaded ? C.green : C.yellow, fontWeight: 600 }}>
@@ -2995,7 +2995,7 @@ export default function ScannerPage() {
               {reportLoading ? '⟳ Building…' : '📋 Packout Slip'}
             </button>
           )}
-          <Link href="/processing" style={{ color: C.lightBrown, fontSize: '0.75rem', textDecoration: 'none', opacity: 0.6 }}>PLU Browser ›</Link>
+          <Link href="/processing?tab=browser" style={{ color: C.lightBrown, fontSize: '0.75rem', textDecoration: 'none', opacity: 0.6 }}>PLU Browser ›</Link>
         </div>
       </div>
 

@@ -417,7 +417,7 @@ export default function CrewCutSchedulePage() {
         {/* Footer link to the full planner (desktop) */}
         <div style={{ textAlign: 'center', marginTop: '1.5rem', fontSize: '0.75rem', color: C.lightBrown }}>
           Read-only crew view · plan changes on the{' '}
-          <Link href="/processing" style={{ color: C.tan }}>Processing page</Link>
+          <Link href="/processing?tab=cut-schedule" style={{ color: C.tan }}>Processing page</Link>
         </div>
       </main>
     </div>

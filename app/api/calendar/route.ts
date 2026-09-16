@@ -425,7 +425,7 @@ export async function GET(req: NextRequest) {
         title: `📋 ${name || 'Planned cut'}`,
         subtitle: [log?.species, log?.carcass_tag ? `#${log.carcass_tag}` : '', 'planned']
           .filter(Boolean).join(' · '),
-        href: '/processing',
+        href: '/processing?tab=cut-schedule',
       })
     }
   }
@@ -449,7 +449,7 @@ export async function GET(req: NextRequest) {
       title: `🔮 ${log.producer || species || 'Projected cut'}`,
       subtitle: [species, log.carcass_tag ? `#${log.carcass_tag}` : '', 'projected']
         .filter(Boolean).join(' · '),
-      href: '/processing',
+      href: '/processing?tab=cut-schedule',
     })
   }
 
@@ -469,7 +469,7 @@ export async function GET(req: NextRequest) {
           id: `cutfut-${apptId}-${d}`, lane: 'processing', date: d, planned: true,
           title: `📋 ${r.source || species || 'Planned cut'}`,
           subtitle: [`${head} ${species}`.trim(), 'not yet harvested', 'planned'].filter(Boolean).join(' · '),
-          href: '/processing',
+          href: '/processing?tab=cut-schedule',
         })
       }
       continue
