@@ -1355,7 +1355,7 @@ function julianCode(dateISO: string): string {
 // WORKSHEET TAB — printable pre-harvest sheet of every checked-in animal for a day
 // ══════════════════════════════════════════════════════════════════════════════
 interface WSRow {
-  ear_tag: string; sex: string; breed: string; over_30_months: boolean
+  ear_tag: string; sex: string; breed: string; over_30_months: boolean; horns: boolean
   // Pre-filled from this animal's harvest record (Part A/B) when one exists, so
   // anything already typed into the app shows on the worksheet instead of a blank.
   killOrder:  number | null
@@ -1532,7 +1532,7 @@ function WorksheetTab({ date }: { date: string }) {
             tagCursor.set(key, cursor + 1)
             return {
               slot: an.animal_index ?? i + 1,
-              ear_tag: an.ear_tag || '', sex: an.sex || '', breed: an.breed || '', over_30_months: an.over_30_months,
+              ear_tag: an.ear_tag || '', sex: an.sex || '', breed: an.breed || '', over_30_months: an.over_30_months, horns: an.horns ?? false,
               killOrder:  log?.harvest_order ?? null,
               harvested:  log != null && (
                 !!log.knock_time || log.live_weight_lbs != null || !!log.carcass_tag ||
@@ -1671,7 +1671,7 @@ function WorksheetTab({ date }: { date: string }) {
             : ''
         }</td>
         <td class="id">${r.ear_tag ? esc(r.ear_tag) : '—'}${r.over_30_months ? ' <span class="otm">OTM</span>' : ''}</td>
-        <td>${esc(r.sex)}</td>
+        <td>${esc(r.sex)}${r.horns ? ' <span class="otm">HORNED</span>' : ''}</td>
         <td>${esc(r.breed)}</td>
         <td class="ko">${r.harvested && r.killOrder != null ? `<span class="pre">${r.killOrder}</span>` : ''}</td>
         <td class="wt">${r.half1 != null ? `<span class="pre">${r.half1}</span>` : ''}</td>

@@ -99,6 +99,7 @@ export interface AnimalReceivingLog {
   sex:             string
   breed:           string
   over_30_months:  boolean
+  horns:           boolean
   photo_url:       string
 }
 

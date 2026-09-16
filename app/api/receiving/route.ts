@@ -47,6 +47,7 @@ export async function POST(req: NextRequest) {
       sex:            fields.sex            ?? '',
       breed:          fields.breed          ?? '',
       over_30_months: fields.over_30_months ?? false,
+      horns:          fields.horns          ?? false,
       photo_url:      fields.photo_url      ?? '',
     }]
 
@@ -63,6 +64,7 @@ export async function POST(req: NextRequest) {
       sex:             a.sex            ?? '',
       breed:           a.breed          ?? '',
       over_30_months:  a.over_30_months ?? false,
+      horns:           a.horns          ?? false,
       photo_url:       a.photo_url      ?? '',
     }))
 

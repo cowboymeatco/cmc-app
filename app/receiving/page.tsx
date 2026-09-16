@@ -73,6 +73,7 @@ interface AnimalSlot {
   sex:            string
   breed:          string
   over_30_months: boolean
+  horns:          boolean
   photo_url:      string
   uploading:      boolean
   upload_error:   string
@@ -81,7 +82,7 @@ interface AnimalSlot {
 
 function blankSlot(species: string): AnimalSlot {
   const sexOpts = SEX_BY_SPECIES[species] ?? ['Male', 'Female']
-  return { ear_tag: '', sex: sexOpts[0], breed: '', over_30_months: false, photo_url: '', uploading: false, upload_error: '', no_show: false }
+  return { ear_tag: '', sex: sexOpts[0], breed: '', over_30_months: false, horns: false, photo_url: '', uploading: false, upload_error: '', no_show: false }
 }
 
 
@@ -275,6 +276,7 @@ function AnimalTab() {
       sex:            s.sex,
       breed:          s.breed,
       over_30_months: s.over_30_months,
+      horns:          s.horns,
       photo_url:      s.photo_url,
       status:         s.no_show ? 'no_show' : 'received',
     }))
@@ -655,8 +657,39 @@ function AnimalCard({ index, total, species, slot, onChange, onPhotoChange, appo
               </div>
             )}
 
+            {/* Horns — the kill floor wants to know before the head comes off
+                (Jill, 2026-09-16). Hogs never carry them, so the question only
+                prints where it can be answered. */}
+            {species !== 'Hog' && (
+              <div>
+                <label style={LABEL}>Horns</label>
+                <div style={{ display: 'flex', gap: '0.4rem' }}>
+                  <button
+                    onClick={() => onChange({ horns: false })}
+                    style={{
+                      ...BTN(!slot.horns ? 'rgba(76,175,80,0.25)' : 'rgba(255,255,255,0.05)', !slot.horns ? C.green : C.lightBrown),
+                      border: `1px solid ${!slot.horns ? 'rgba(76,175,80,0.5)' : 'rgba(166,120,90,0.2)'}`,
+                      padding: '0.4rem 0.9rem', fontSize: '0.8rem',
+                    }}
+                  >
+                    No Horns
+                  </button>
+                  <button
+                    onClick={() => onChange({ horns: true })}
+                    style={{
+                      ...BTN(slot.horns ? 'rgba(217,119,6,0.25)' : 'rgba(255,255,255,0.05)', slot.horns ? '#fbbf24' : C.lightBrown),
+                      border: `1px solid ${slot.horns ? 'rgba(217,119,6,0.5)' : 'rgba(166,120,90,0.2)'}`,
+                      padding: '0.4rem 0.9rem', fontSize: '0.8rem',
+                    }}
+                  >
+                    Horns
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Photo */}
-            <div style={{ marginLeft: species === 'Beef' ? 'auto' : 0 }}>
+            <div style={{ marginLeft: species !== 'Hog' ? 'auto' : 0 }}>
               <label style={LABEL}>Photo</label>
               {slot.upload_error && (
                 <div style={{ fontSize: '0.75rem', color: '#fca5a5', marginBottom: '0.35rem' }}>
