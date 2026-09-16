@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
     const [{ data: cis, error: ciErr }, { data: appts }, { data: cureTags }] = await Promise.all([
       supabase.from('cutting_instructions').select('id, customer_name, species, data, status').neq('status', 'archived'),
       supabase.from('harvest_appointments').select('id, harvest_date, customers'),
-      supabase.from('cure_tags').select('tag_number, product, customer_name, status, linked_harvest_id, linked_cutting_instruction_id'),
+      supabase.from('cure_tags').select('tag_number, product, customer_name, status, source_cut, linked_harvest_id, linked_cutting_instruction_id'),
     ])
     // What the floor's shorthand stands for — see lib/nameKey. Read separately
     // so a failure here degrades to plain word-matching instead of blanking the
@@ -68,7 +68,7 @@ export async function GET(req: NextRequest) {
     // second animal — it cannot close an abbreviation, so whatever is left over
     // is reported below instead of being dropped on the floor.
     const tagsByName = new Map<string, {
-      tag_number: string; product: string; status: string; linked_harvest_id: string | null
+      tag_number: string; product: string; status: string; source_cut: string | null; linked_harvest_id: string | null
       linked_cutting_instruction_id: string | null
     }[]>()
     const tagNamesByKey = new Map<string, Set<string>>()
@@ -78,6 +78,7 @@ export async function GET(req: NextRequest) {
       const list = tagsByName.get(k) ?? []
       list.push({
         tag_number: String(t.tag_number), product: String(t.product), status: String(t.status),
+        source_cut: t.source_cut ? String(t.source_cut) : null,
         linked_harvest_id: t.linked_harvest_id ? String(t.linked_harvest_id) : null,
         linked_cutting_instruction_id: t.linked_cutting_instruction_id ? String(t.linked_cutting_instruction_id) : null,
       })

@@ -151,10 +151,10 @@ export async function GET(req: NextRequest) {
 // crew's "tag anyway" (force) always wins (Charlie, 2026-09-01).
 export async function POST(req: NextRequest) {
   const body = await req.json()
-  const { tag_number, product, customer_name, session_date, weight_lbs, linked_cutting_instruction_id, force } = body as {
+  const { tag_number, product, customer_name, session_date, weight_lbs, linked_cutting_instruction_id, source_cut, force } = body as {
     tag_number: string; product: string; customer_name: string
     session_date?: string; weight_lbs?: number | null
-    linked_cutting_instruction_id?: string | null; force?: boolean
+    linked_cutting_instruction_id?: string | null; source_cut?: string | null; force?: boolean
   }
   if (!tag_number || !product || !customer_name) {
     return NextResponse.json({ error: 'tag_number, product and customer_name required' }, { status: 400 })
@@ -236,6 +236,7 @@ export async function POST(req: NextRequest) {
       weight_lbs:   weight_lbs ?? null,
       linked_cutting_instruction_id: ciId,
       linked_harvest_id,
+      source_cut: source_cut || null,
     }])
     .select()
     .single()
@@ -246,10 +247,10 @@ export async function POST(req: NextRequest) {
 // PATCH /api/cure-tags — status flip (done stamps completed_at) or field edits
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
-  const { id, status, product, weight_lbs, notes, linked_harvest_id, customer_name } = body as {
+  const { id, status, product, weight_lbs, notes, linked_harvest_id, customer_name, source_cut } = body as {
     id: string; status?: 'curing' | 'done'; product?: string
     weight_lbs?: number | null; notes?: string | null
-    linked_harvest_id?: string | null; customer_name?: string
+    linked_harvest_id?: string | null; customer_name?: string; source_cut?: string | null
   }
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
 
@@ -268,6 +269,9 @@ export async function PATCH(req: NextRequest) {
   }
   if (status)                    { updates.status = status; updates.completed_at = status === 'done' ? new Date().toISOString() : null }
   if (product !== undefined)     updates.product = product
+  // '' clears it, the same way the animal pin takes a null — a primal recorded
+  // in error must be as easy to take back as to set.
+  if (source_cut !== undefined)  updates.source_cut = source_cut || null
   if (weight_lbs !== undefined)  updates.weight_lbs = weight_lbs
   if (notes !== undefined)       updates.notes = notes
   // null unpins — a wrong animal has to be as easy to take back as to set.

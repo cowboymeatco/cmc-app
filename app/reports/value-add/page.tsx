@@ -37,7 +37,7 @@ interface Sheet {
   // Seal tags actually riding through the cure cooler for this customer —
   // shown in the cell under what the sheet ordered, so an ordered ham with no
   // tag next to it reads as a piece that never got tagged in.
-  cure_tags:     { tag_number: string; product: string; status: string }[]
+  cure_tags:     { tag_number: string; product: string; status: string; source_cut?: string | null; linked_harvest_id?: string | null }[]
 }
 
 // A cure tag whose customer name matches no cut sheet at all. Reported rather
@@ -61,16 +61,40 @@ const TAG_COL: Record<string, string> = {
   'Fresh Side':     'Fresh Side Pork',
 }
 
+// A seal says "Bacon"; a BEEF card's column is "Beef Bacon" (the wizard's
+// beef-bacon option, named for Jill in 2026-08-20). So a beef bacon seal never
+// matched its own card's column and drew only against that customer's PORK
+// sheet, in the pork Bacon column — the wrong animal entirely. The tag's
+// column depends on the species of the sheet it is being drawn on.
+const tagCol = (product: string, species: string | null) =>
+  product === 'Bacon' && species === 'Beef' ? 'Beef Bacon' : (TAG_COL[product] ?? product)
+
 const tagsFor = (s: Sheet, col: string) =>
-  (s.cure_tags ?? []).filter(t => (TAG_COL[t.product] ?? t.product) === col)
+  (s.cure_tags ?? []).filter(t => tagCol(t.product, s.species) === col)
+
+// The seals for ONE animal's line. A tag pinned to a carcass belongs to that
+// animal and nowhere else, so it draws on its own row; an unpinned tag knows
+// only whose it is, so it stays on the card's first row with the order it was
+// ordered under. Without this the split added rows the seals never followed,
+// and every bacon still read against the first animal (Jill, 2026-09-14:
+// "Two of Kevin McGovern's bacons need to go to 748#").
+const tagsForAnimal = (s: Sheet, col: string, animalId: string | null, first: boolean) =>
+  tagsFor(s, col).filter(t => t.linked_harvest_id
+    ? t.linked_harvest_id === animalId
+    : first)
+
+// "Brisket" / "Plate" behind a bacon seal, so two seals off two primals stop
+// reading as one product.
+const tagLabel = (t: { tag_number: string; source_cut?: string | null }) =>
+  t.source_cut ? `${t.tag_number} (${t.source_cut[0]})` : t.tag_number
 
 // "🏷 0341981✓ · 0341982" — done gets the check, in-cure rides bare. A tag
 // drawn on more than one sheet carries a * : it isn't pinned to an animal, so
 // it prints on EVERY sheet its customer has, and without the mark a two-hog
 // customer reads four bacon seals on each hog's row (Charlie, 2026-09-01 —
 // "how are some hogs having more than 2 bacons scanned in?").
-const tagText = (tags: { tag_number: string; status: string }[], seen?: Map<string, number>) =>
-  tags.map(t => `${t.tag_number}${t.status === 'done' ? '✓' : ''}${(seen?.get(t.tag_number) ?? 0) > 1 ? '*' : ''}`).join(' · ')
+const tagText = (tags: { tag_number: string; status: string; source_cut?: string | null }[], seen?: Map<string, number>) =>
+  tags.map(t => `${tagLabel(t)}${t.status === 'done' ? '✓' : ''}${(seen?.get(t.tag_number) ?? 0) > 1 ? '*' : ''}`).join(' · ')
 
 const HAM_COL = 'Cured & Smoked Ham'
 
@@ -800,7 +824,10 @@ export default function ValueAddReport() {
                   </tr>
                 </thead>
                 <tbody>
-                  {animalRows.map(({ sheet: s, animal, first, count, key }) => (
+                  {animalRows.map(({ sheet: s, animal, first, count, key }) => {
+                    // Seals pinned to THIS animal, across every column on show.
+                    const ownTags = !first && cols.some(c => tagsForAnimal(s, c, animal?.id ?? null, false).length)
+                    return (
                     <tr key={key} style={{ borderTop: first ? '1px solid rgba(166,120,90,0.1)' : '1px solid rgba(166,120,90,0.04)' }}>
                       <td style={{ position: 'sticky', left: 0, background: C.dark, padding: '0.45rem 0.8rem', color: first ? C.cream : 'rgba(242,232,217,0.45)', fontWeight: first ? 600 : 400, whiteSpace: 'nowrap', zIndex: 1 }}>
                         {first ? s.customer_name : <span style={{ paddingLeft: '0.9rem' }}>↳</span>}
@@ -823,33 +850,42 @@ export default function ValueAddReport() {
                       </td>
                       {/* The order was filled in once for the whole card, so it is drawn
                           once — against the card's first animal. Repeating it down the
-                          group would read as four separate orders. */}
-                      {!first ? (
+                          group would read as four separate orders.
+                          Seals are different: one pinned to a carcass belongs to THAT
+                          animal, so it draws on that animal's own row and the row earns
+                          its product cells. */}
+                      {!first && !ownTags ? (
                         <td colSpan={cols.length + 1} style={{ padding: '0.45rem 0.6rem', color: 'rgba(166,120,90,0.55)', fontSize: '0.72rem', fontStyle: 'italic', borderLeft: '1px solid rgba(166,120,90,0.08)' }}>
                           ↳ on {s.customer_name}&apos;s cut card above — one order across {count} head
                         </td>
                       ) : cols.map(c => {
-                        const items = itemsFor(s, c)
+                        // Only the first line carries the order; every line carries the
+                        // seals pinned to its own animal.
+                        const items = first ? itemsFor(s, c) : []
                         const hasDetail = items.some(it => it.detail)
-                        const tags = tagsFor(s, c)
+                        const tags = tagsForAnimal(s, c, animal?.id ?? null, first)
                         return (
                           <td key={c} style={{ padding: '0.45rem 0.6rem', textAlign: 'center', borderLeft: '1px solid rgba(166,120,90,0.08)', whiteSpace: 'nowrap', color: hasDetail ? C.tan : C.green }}>
                             {items.length
                               ? <span style={{ fontSize: hasDetail ? '0.72rem' : '0.86rem', fontWeight: hasDetail ? 400 : 700 }}>{cellText(items)}</span>
                               : tags.length
                                 ? null
-                                : <span style={{ color: 'rgba(166,120,90,0.18)' }}>·</span>}
+                                : <span style={{ color: 'rgba(166,120,90,0.18)' }}>{first ? '·' : ''}</span>}
                             {tags.length > 0 && (
-                              <div style={{ fontFamily: 'monospace', fontSize: '0.66rem', color: C.amber, marginTop: 2 }} title="Seal tags in cure for this customer (✓ = out of cure · * = not pinned to an animal, so it shows on every sheet this customer has)">
+                              <div style={{ fontFamily: 'monospace', fontSize: '0.66rem', color: C.amber, marginTop: 2 }} title="Seal tags in cure (✓ = out of cure · * = not pinned to an animal, so it shows on every sheet this customer has · (B)/(P) = cut off the Brisket or the Plate)">
                                 🏷 {tagText(tags, tagSeen)}
                               </div>
                             )}
                           </td>
                         )
                       })}
+                      {/* Keeps the row the same width as the header when a continuation
+                          line draws cells instead of the single spanning note. */}
+                      {!first && ownTags && <td style={{ borderLeft: '1px solid rgba(166,120,90,0.3)' }} />}
                       {first && <td style={{ padding: '0.45rem 0.7rem', textAlign: 'center', color: C.cream, fontWeight: 800, borderLeft: '1px solid rgba(166,120,90,0.3)' }}>{rowQty(s)}</td>}
                     </tr>
-                  ))}
+                    )
+                  })}
                 </tbody>
                 <tfoot>
                   <tr style={{ borderTop: '2px solid rgba(166,120,90,0.4)', background: 'rgba(166,120,90,0.1)' }}>

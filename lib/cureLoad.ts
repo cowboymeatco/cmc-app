@@ -38,6 +38,39 @@ export function cureProductFitsSpecies(product: string, species: string | null |
 // owner (Charlie, 2026-09-01).
 export const CURE_PICKER_PRODUCTS = ['Ham', 'Bacon', 'Shoulder Bacon', 'Fresh Side', 'Bone-In Loin', 'Hocks', 'Jowl', 'Other']
 
+// Which primal a piece was cut from, for the products where the name alone
+// doesn't say. Beef bacon is cut from the brisket OR the plate, and both were
+// logged as plain "Bacon" — so Kevin McGovern's six bacon seals were six
+// identical rows and nobody could say which two came off which carcass (Jill,
+// 2026-09-14: "Differentiate between brisket bacon and plate bacon as well as
+// animal").
+//
+// Only asked where there is a real choice to record. Pork bacon comes off the
+// belly and shoulder bacon is already its own product, so neither is listed:
+// an unnecessary picker on every seal is a tap the floor pays for on every tag.
+export const SOURCE_CUTS: Record<string, string[]> = {
+  'Bacon': ['Brisket', 'Plate', 'Belly'],
+}
+
+/**
+ * Does this product/species combination have a primal worth recording?
+ *
+ * ⚠️ Two vocabularies again, and a third: harvest_log says 'Hog', cutting
+ * instructions say 'Pork', and the scanner holds packSpecies' lowercase 'pork'.
+ * Compared case-insensitively so a caller can pass whichever it has.
+ *
+ * An unknown species keeps the choice ON. Asking once on a pork bacon costs a
+ * tap; staying silent on a beef one loses the fact, and nobody goes back.
+ */
+export function sourceCutOptions(product: string, species?: string | null): string[] {
+  const opts = SOURCE_CUTS[product]
+  if (!opts) return []
+  const sp = (species ?? '').trim().toLowerCase()
+  // Pork bacon is belly bacon, full stop — nothing to choose.
+  if (sp === 'pork' || sp === 'hog') return []
+  return opts
+}
+
 // A tag's product → the product name extractValueAdd emits, so the tag list can
 // show what the customer's cut sheet says to do with the piece once it's cured,
 // and the picker can lead with what the sheet actually orders.

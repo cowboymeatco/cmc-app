@@ -2,7 +2,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { isCureTagNumber, type ProcessingInput, type CureTag } from '@/lib/types'
-import { CURE_PICKER_PRODUCTS } from '@/lib/cureLoad'
+import { CURE_PICKER_PRODUCTS, sourceCutOptions } from '@/lib/cureLoad'
 import { isoDate } from '@/lib/dates'
 import { speciesIcon, speciesFromDescription } from '@/lib/cutSchedule'
 
@@ -621,6 +621,10 @@ export default function ScannerPage() {
   const [cureProduct, setCureProduct] = useState<string | null>(null)
   // The picker leads with the card's own products; this opens the full list.
   const [cureShowAll, setCureShowAll] = useState(false)
+  // Which primal a bacon came off. Asked at the gun, where the person is
+  // holding the piece — a day later on the In Cure board it is a memory test
+  // (Jill, 2026-09-14: six identical bacon seals on one customer).
+  const [cureSource,  setCureSource]  = useState<string | null>(null)
   const [cureWeight,  setCureWeight]  = useState('')
   const [cureSaving,  setCureSaving]  = useState(false)
   // The server counted this piece against the sheet and it's one more than the
@@ -2047,6 +2051,7 @@ export default function ScannerPage() {
           session_date:  date,
           weight_lbs:    cureWeight ? parseFloat(cureWeight) : null,
           linked_cutting_instruction_id: ciId,
+          source_cut:    cureSource,
           force,
         }),
       })
@@ -4117,7 +4122,7 @@ export default function ScannerPage() {
                     <button
                       key={p}
                       disabled={cureSaving}
-                      onClick={() => { setCureProduct(p); setCureWarn(null) }}
+                      onClick={() => { setCureProduct(p); setCureSource(null); setCureWarn(null) }}
                       style={{
                         background: cureProduct === p ? C.tan : 'rgba(255,255,255,0.06)',
                         border: `1px solid ${cureProduct === p ? C.tan : onCard.includes(p) && !narrow ? 'rgba(201,168,130,0.7)' : 'rgba(166,120,90,0.4)'}`,
@@ -4152,6 +4157,42 @@ export default function ScannerPage() {
                     </>
                   )
                 })()}
+                {/* Beef bacon is cut off the brisket or the plate — two products,
+                    one word. Asked only where there's a choice: a session that is
+                    plainly pork skips it, so belly bacon costs no extra tap. */}
+                {(() => {
+                  // One species on the session answers it; a mixed or unknown
+                  // session keeps the question, since a missed beef bacon is the
+                  // fact that never comes back.
+                  const sp = expected?.species?.length === 1 ? expected.species[0] : null
+                  const opts = cureProduct ? sourceCutOptions(cureProduct, sp) : []
+                  if (!opts.length) return null
+                  return (
+                    <>
+                      <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.65rem' }}>
+                        Cut off the… <span style={{ textTransform: 'none', letterSpacing: 0, opacity: 0.7 }}>(optional)</span>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${opts.length}, 1fr)`, gap: '0.5rem', marginBottom: '1.25rem' }}>
+                        {opts.map(o => (
+                          <button
+                            key={o}
+                            disabled={cureSaving}
+                            onClick={() => setCureSource(cureSource === o ? null : o)}
+                            style={{
+                              background: cureSource === o ? C.tan : 'rgba(255,255,255,0.06)',
+                              border: `1px solid ${cureSource === o ? C.tan : 'rgba(166,120,90,0.4)'}`,
+                              color: cureSource === o ? C.dark : C.cream,
+                              borderRadius: 4, padding: '0.7rem 0.5rem', fontSize: '0.9rem', fontWeight: 700,
+                              cursor: cureSaving ? 'default' : 'pointer', opacity: cureSaving ? 0.5 : 1,
+                            }}
+                          >
+                            {o}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )
+                })()}
                 {/* The server counted this piece against the sheet and it's one
                     more than ordered. Warn, never block: the person holding the
                     piece knows things the sheet doesn't — a belly split into
@@ -4170,7 +4211,7 @@ export default function ScannerPage() {
                 )}
                 <div style={{ display: 'flex', gap: '0.6rem' }}>
                   <button
-                    onClick={() => { setCureModal(null); setCureWarn(null); scanRef.current?.focus() }}
+                    onClick={() => { setCureModal(null); setCureWarn(null); setCureSource(null); scanRef.current?.focus() }}
                     style={{ flex: 1, background: 'transparent', border: '1px solid rgba(166,120,90,0.3)', color: C.lightBrown, borderRadius: 4, padding: '0.85rem', fontSize: '0.9rem', cursor: 'pointer' }}
                   >
                     Cancel
@@ -4184,7 +4225,7 @@ export default function ScannerPage() {
                       cursor: cureProduct && !cureSaving ? 'pointer' : 'default', opacity: cureSaving ? 0.5 : cureProduct ? 1 : 0.6,
                     }}
                   >
-                    {cureWarn ? `⚠ Tag ${cureProduct} anyway` : cureProduct ? `✓ Send ${cureProduct} to cure` : 'Pick a product'}
+                    {cureWarn ? `⚠ Tag ${cureProduct} anyway` : cureProduct ? `✓ Send ${cureSource ? `${cureSource} ` : ''}${cureProduct} to cure` : 'Pick a product'}
                   </button>
                 </div>
               </>

@@ -335,6 +335,11 @@ export interface CureTag {
   created_at:    string
   tag_number:    string   // as printed/scanned, incl. leading zeros
   product:       string   // Ham | Bacon | Shoulder Bacon | Hocks | Jowl | Other
+  // Which primal it came off, when the product alone doesn't say: beef bacon
+  // is cut from the brisket OR the plate and both logged as plain "Bacon",
+  // so the floor could not tell one customer's six bacons apart (Jill,
+  // 2026-09-14). Null on everything it doesn't apply to, which is most tags.
+  source_cut?:   string | null
   customer_name: string
   session_date:  string | null
   weight_lbs:    number | null

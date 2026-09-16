@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { CureTag } from '@/lib/types'
+import { SOURCE_CUTS } from '@/lib/cureLoad'
 
 // ══════════════════════════════════════════════════════════════════════════════
 // IN CURE — numbered seals riding on hams/bacons through the cure cooler.
@@ -87,6 +88,23 @@ export default function CureTagsTab() {
         : t))
     } catch {
       setErr('Could not pin that tag to an animal.')
+    } finally { setBusyId(null) }
+  }
+
+  // Which primal the piece came off, where the product name doesn't say it.
+  // Like the animal, only ever set by hand — nothing in a seal number says
+  // whether that bacon was cut off the brisket or the plate.
+  async function setSourceCut(tag: CureTag, cut: string) {
+    setBusyId(tag.id)
+    try {
+      const res = await fetch('/api/cure-tags', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: tag.id, source_cut: cut || null }),
+      })
+      if (!res.ok) throw new Error()
+      setTags(prev => prev.map(t => t.id === tag.id ? { ...t, source_cut: cut || null } : t))
+    } catch {
+      setErr('Could not set the cut on that tag.')
     } finally { setBusyId(null) }
   }
 
@@ -215,7 +233,32 @@ export default function CureTagsTab() {
                         </button>
                       )}
                     </td>
-                    <td style={td}>{t.product}</td>
+                    {/* Beef bacon comes off the brisket or the plate and both
+                        logged as plain "Bacon", so one customer's six seals
+                        were six identical rows with no way to say which two
+                        belonged to which carcass (Jill, 2026-09-14). Only drawn
+                        where there is a real choice — a picker on every seal is
+                        a tap the floor pays for on every tag. */}
+                    <td style={td}>
+                      {t.product}
+                      {SOURCE_CUTS[t.product] && (
+                        <select
+                          value={t.source_cut ?? ''}
+                          disabled={busyId === t.id}
+                          onChange={e => setSourceCut(t, e.target.value)}
+                          title="Which primal this piece was cut from"
+                          style={{
+                            display: 'block', marginTop: 3,
+                            background: C.dark, color: t.source_cut ? C.cream : C.lightBrown,
+                            border: `1px solid rgba(166,120,90,${t.source_cut ? 0.4 : 0.22})`,
+                            borderRadius: 3, fontSize: '0.72rem', padding: '0.15rem 0.3rem',
+                          }}
+                        >
+                          <option value="">— cut —</option>
+                          {SOURCE_CUTS[t.product].map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      )}
+                    </td>
                     {/* Three different answers, not two. "No sheet under this
                         name" is somebody typing the customer differently from
                         the office and is worth chasing; "not on the sheet" is
