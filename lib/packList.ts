@@ -973,6 +973,24 @@ export function packLabel(cut: string, species: string, section = '', plain = fa
   return `${word} ${cut}`
 }
 
+// A handful of wizard choices change WHAT the package is, not just how it was
+// cut — and the scale has a separate PLU for each of them. Left folded into
+// their cut, they had nowhere to hang that PLU: every shank style shared one
+// "Beef Shank" line, so BEEF OSSO BUCCO (198) could not be linked at all, and
+// BEEF CUBED STEAK (111) sat on plain "bottom round", which both mislabels an
+// ordinary bottom round roast and misses a cube steak cut off any other primal
+// (Chris, 2026-09-15: cubed steak "did not recognize those from the cutting
+// instructions").
+//
+// Deliberately a SHORT list. Most specs are thickness and pack counts — "1 inch
+// · 2 per pack" — which describe the same product and must keep sharing a line,
+// or the book fills with hundreds of rows nobody can link. A style earns a
+// place here only when the scale carries its own PLU for it.
+const PRODUCT_STYLES: { re: RegExp; label: string }[] = [
+  { re: /\bosso\s*bucco\b/i, label: 'Osso Bucco' },
+  { re: /\bcubed\b/i,        label: 'Cubed' },
+]
+
 // Add-on rows ("· seasoned") are how a cut is packed, not a package of their
 // own, so they never become a line to tick off.
 export function expectedLines(rows: PackRow[], species = ''): ExpectedLine[] {
@@ -983,13 +1001,19 @@ export function expectedLines(rows: PackRow[], species = ''): ExpectedLine[] {
     if (r.isAddon) continue
     const cut = String(r.cut ?? '').trim()
     if (!cut) continue
+    const spec = String(r.spec ?? '')
+    // The style rides in the line name the same way the value-add lines already
+    // carry theirs ("Cured & Smoked Ham · Cut in Half"), so it keys — and links
+    // — on its own. The cut name itself is left alone for everything else.
+    const style = PRODUCT_STYLES.find(s => s.re.test(spec) || s.re.test(cut))
+    const named = style && !style.re.test(cut) ? `${cut} · ${style.label}` : cut
     out.push({
-      key:     cutKey(cut),
+      key:     cutKey(named),
       section,
       cut,
-      label:   packLabel(cut, species, section, !!r.isGrind || !!r.writeIn || !!r.noSpecies),
+      label:   packLabel(named, species, section, !!r.isGrind || !!r.writeIn || !!r.noSpecies),
       species,
-      spec:    String(r.spec ?? ''),
+      spec,
       isGrind: !!r.isGrind,
       writeIn: !!r.writeIn,
     })
