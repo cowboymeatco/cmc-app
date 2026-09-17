@@ -88,6 +88,19 @@ function HarvestDayRow({ day }: { day: HarvestDay }) {
   )
 }
 
+// An animal nobody has bought yet has no customer name, and the card was
+// printing an empty line where the name goes — a queue of blanks you can't
+// schedule against (Charlie, 2026-09-16). The producer is a fact we DO know,
+// so show that instead, said plainly as the producer. It is never presented as
+// the buyer: the row keeps its own "no buyer" marker, and nothing here guesses
+// who bought the animal.
+function queueName(entry: { customer_name: string; producer: string }): { text: string; unnamed: boolean } {
+  const name = (entry.customer_name ?? '').trim()
+  if (name) return { text: name, unnamed: false }
+  const producer = (entry.producer ?? '').trim()
+  return producer ? { text: producer, unnamed: true } : { text: 'No buyer yet', unnamed: true }
+}
+
 export default function CutScheduleTab() {
   const [entries,     setEntries]     = useState<ListItem[]>([])
   const [weights,     setWeights]     = useState<PriorityWeights>(DEFAULT_WEIGHTS)
@@ -1065,12 +1078,16 @@ export default function CutScheduleTab() {
                   {/* Customer + tag + weight + note */}
                   <div style={{ minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.45rem', minWidth: 0 }}>
-                      <span style={{
-                        fontWeight: 600, fontSize: '0.87rem', color: C.cream,
-                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                      }}>
-                        {entry.customer_name}
-                      </span>
+                      {(() => { const n = queueName(entry); return (
+                        <span style={{
+                          fontWeight: 600, fontSize: '0.87rem',
+                          color: n.unnamed ? C.medBrown : C.cream,
+                          fontStyle: n.unnamed ? 'italic' : 'normal',
+                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                        }} title={n.unnamed ? 'No buyer named on this booking yet — this is the producer' : undefined}>
+                          {n.text}
+                        </span>
+                      ) })()}
                       {entry.carcass_tag && (
                         <span style={{
                           fontSize: '0.66rem', color: C.medBrown, fontFamily: 'monospace',
@@ -1514,12 +1531,16 @@ export default function CutScheduleTab() {
                 >
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem', minWidth: 0 }}>
                     <span style={{ color: C.medBrown, fontSize: '0.8rem', userSelect: 'none' }}>⠿</span>
-                    <span style={{
-                      fontWeight: 600, fontSize: '0.78rem', color: C.cream, minWidth: 0,
-                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                    }}>
-                      {entry.customer_name}
-                    </span>
+                    {(() => { const n = queueName(entry); return (
+                      <span style={{
+                        fontWeight: 600, fontSize: '0.78rem', minWidth: 0,
+                        color: n.unnamed ? C.medBrown : C.cream,
+                        fontStyle: n.unnamed ? 'italic' : 'normal',
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                      }} title={n.unnamed ? 'No buyer named on this booking yet — this is the producer' : undefined}>
+                        {n.text}
+                      </span>
+                    ) })()}
                     {entry.carcass_tag && (
                       <span style={{
                         fontSize: '0.62rem', color: C.medBrown, fontFamily: 'monospace',
