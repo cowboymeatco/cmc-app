@@ -910,8 +910,49 @@ export default function ScannerPage() {
   }, [sessionScans, keysForPlu])
   const unclaimedCount = scanTally.filter(t => !t.keys.length).length
 
+  const keyTotals = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const l of expected?.lines ?? []) m.set(l.key, (m.get(l.key) ?? 0) + 1)
+    return m
+  }, [expected])
+
   const expectedKeys   = useMemo(() => [...new Set((expected?.lines ?? []).map(l => l.key))], [expected])
-  const packedKeyCount = expectedKeys.filter(k => (packedByKey.get(k)?.pkgs ?? 0) > 0).length
+  // Done means every line that asked for this cut is covered, not just the
+  // first one - otherwise the tally calls the rib finished while two rib rows
+  // are still standing in the list underneath it.
+  const packedKeyCount = expectedKeys.filter(k =>
+    (packedByKey.get(k)?.pkgs ?? 0) >= (keyTotals.get(k) ?? 1)).length
+
+  // What is still owed, when two lines share one cut key.
+  //
+  // Two ways that happens. A customer with two animals on one session owes the
+  // ribeye twice, once per card - forty names in the book hold more than one
+  // live card (Charlie, 2026-09-16). And a single card can split a primal:
+  // Amber Essex asked for her rib as a Prime Rib Half AND as 1" steaks, two
+  // real jobs both keyed `rib`.
+  //
+  // "Packed" was read off the cut key alone, so ONE rib over the scale struck
+  // out BOTH rows - and the second job left the list without anybody packing
+  // it. That is the quiet half of this bug: not a doubled list, a job that
+  // disappears.
+  //
+  // So a row in a shared-key group stays up until the WHOLE group is covered,
+  // wearing an n/m chip meanwhile. Clearing them one at a time in list order
+  // would be a guess - a package on the scale carries no animal identity and
+  // no spec, so nothing here can say whether that rib was the roast or the
+  // steaks. It reports how many of the group are accounted for and lets the
+  // packer read the specs. A key only one line wants behaves exactly as it
+  // always has: packed, gone. A session started off a carcass tag pins one
+  // card and removes the two-animal half of this entirely; see AnimalStart.
+  const remainingLines = useMemo(() => {
+    const out: { line: NonNullable<typeof expected>['lines'][number]; of: number; done: number }[] = []
+    for (const l of expected?.lines ?? []) {
+      const of   = keyTotals.get(l.key) ?? 1
+      const done = Math.min(packedByKey.get(l.key)?.pkgs ?? 0, of)
+      if (done < of) out.push({ line: l, of, done })
+    }
+    return out
+  }, [expected, packedByKey, keyTotals])
 
   // ── A scan the card never asked for ───────────────────────────────────────
   // A PLU that has been linked to a line, none of whose lines are on THIS
@@ -3706,10 +3747,9 @@ export default function ScannerPage() {
               // Packed lines drop off the list entirely rather than just
               // greying out — what's left standing is what's still owed, with
               // nothing to read past to find it (Charlie, 2026-08-18).
-              const remaining = expected.lines.filter(l => (packedByKey.get(l.key)?.pkgs ?? 0) === 0)
               let section = ''
               let card = -1
-              return remaining.map((l, i) => {
+              return remainingLines.map(({ line: l, of, done }, i) => {
                 // A beef card and a hog card on one bench read as one list
                 // without a banner between them — "roasts" under which
                 // animal? (Jill, 2026-09-04). One card needs no banner.
@@ -3720,6 +3760,14 @@ export default function ScannerPage() {
                     {cardHead && (
                       <div style={{ color: C.cream, fontSize: '0.78rem', fontWeight: 700, letterSpacing: '0.16em', margin: `${i === 0 ? '0.3rem' : '1.1rem'} 0 0.1rem`, padding: '0.3rem 0.4rem', background: 'rgba(201,168,130,0.16)', border: '1px solid rgba(201,168,130,0.45)', borderRadius: 4 }}>
                         {PACK_SPECIES_BANNER[l.species] ?? `🏷 ${l.species.toUpperCase()}`}
+                        {/* Two beef cards on one session banner identically,
+                            which reads as the same list printed twice - the
+                            "double beef cut card deal" (Chris, 2026-09-16). */}
+                        {expected.lines.some(o => o.species === l.species && o.card !== l.card) && (
+                          <span style={{ marginLeft: '0.4rem', color: C.tan, fontWeight: 700 }}>
+                            {l.card + 1} OF {new Set(expected.lines.filter(o => o.species === l.species).map(o => o.card)).size}
+                          </span>
+                        )}
                       </div>
                     )}
                     {head && (
@@ -3744,6 +3792,13 @@ export default function ScannerPage() {
                       <span style={{ color: C.cream, fontSize: '0.86rem', fontWeight: 600 }}>
                         {l.label || l.cut}
                       </span>
+                      {of > 1 && (
+                        <span
+                          title={`${of} lines on this session ask for this cut and ${done} are packed so far. A package on the scale carries no spec, so read both lines and pack both.`}
+                          style={{ flexShrink: 0, color: done ? C.yellow : C.lightBrown, fontSize: '0.68rem', fontWeight: 700, fontFamily: 'monospace', border: `1px solid ${done ? 'rgba(217,119,6,0.45)' : 'rgba(166,120,90,0.35)'}`, borderRadius: 2, padding: '0 3px' }}>
+                          {done}/{of}
+                        </span>
+                      )}
                       <span style={{ color: C.lightBrown, fontSize: '0.72rem', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {l.spec}
                       </span>
