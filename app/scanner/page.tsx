@@ -1341,7 +1341,11 @@ export default function ScannerPage() {
 
   // Both scans matched (or an allowed exception), or it's said out loud to be
   // retail / repack. Nothing else starts a session (Charlie, 2026-09-13).
-  const canStartNew = !!customer.trim() && pluLoaded && (!!newPick || retailMode)
+  // The animal scans pin the session; they don't stand in its way (Charlie,
+  // 2026-09-16). A name and a loaded PLU list is still all it takes to start —
+  // what the scans buy is a session that knows which animal it is, and a red
+  // banner when the card in hand belongs to a different one.
+  const canStartNew = !!customer.trim() && pluLoaded
 
   async function startSession() {
     const cust = customer.trim()
@@ -2955,10 +2959,13 @@ export default function ScannerPage() {
                 <button onClick={() => setShowNewForm(false)} style={{ flex: 1, background: 'transparent', border: '1px solid rgba(166,120,90,0.3)', color: C.lightBrown, borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', cursor: 'pointer' }}>
                   Cancel
                 </button>
+                {/* The warning rides the button itself. A banner three fields up
+                    is a banner nobody reads on the way to the only control that
+                    matters. */}
                 <button onClick={() => { setShowNewForm(false); startSession() }} disabled={!canStartNew}
-                  title={canStartNew ? '' : 'Scan the carcass tag and the cut card first (or mark it retail / repack)'}
-                  style={{ flex: 2, background: canStartNew ? C.tan : C.medBrown, color: C.dark, border: 'none', borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', fontWeight: 700, cursor: canStartNew ? 'pointer' : 'not-allowed', opacity: canStartNew ? 1 : 0.6 }}>
-                  Start Scanning
+                  title={canStartNew ? '' : 'A customer name is needed first'}
+                  style={{ flex: 2, background: !canStartNew ? C.medBrown : newPick?.warn === 'mismatch' ? C.yellow : C.tan, color: newPick?.warn === 'mismatch' ? C.cream : C.dark, border: 'none', borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', fontWeight: 700, cursor: canStartNew ? 'pointer' : 'not-allowed', opacity: canStartNew ? 1 : 0.6 }}>
+                  {newPick?.warn === 'mismatch' ? '⚠ Start with that card anyway' : 'Start Scanning'}
                 </button>
               </div>
             </div>

@@ -10,10 +10,14 @@
 // single box is filled. The customer's name comes off the card and stays
 // editable as the box label.
 //
-// Only two ways around it, both said out loud: an animal whose booking has no
-// cut card (our own animals) starts on the tag, and "not an animal — retail /
-// repack" starts on a typed name. A lost tag can be picked off the cooler list;
-// the card is still scanned.
+// The check WARNS, it does not block (Charlie, 2026-09-16). A crossed scan is
+// worth a red banner naming the animal's real card; it is not worth a crew
+// standing at the bench unable to start at all. Whatever they go ahead with is
+// what the session gets pinned to, and the banner is what they saw first.
+//
+// An animal whose booking has no cut card (our own animals) starts on the tag,
+// and "not an animal — retail / repack" starts on a typed name. A lost tag can
+// be picked off the cooler list.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AnimalCard, BookingAnimal, CoolerAnimal, ResolvedAnimal } from '@/lib/sessionLinks'
@@ -32,6 +36,8 @@ export interface AnimalPick {
   /** Tapped off a list because the tag wouldn't scan — the carcass input says "not scanned". */
   picked: boolean
   label: string
+  /** The card doesn't belong to this animal's booking, or there's no card at all. Start still works; it just says so. */
+  warn: 'mismatch' | 'no-card' | null
 }
 
 /** The animal slot: scanned tag, or a pick off the cooler list when the tag is missing. */
@@ -61,8 +67,6 @@ export default function AnimalStart({ date, onPick, onRetail, retail, initialCod
   const [msg, setMsg] = useState('')
   const [animal, setAnimal] = useState<AnimalSlot | null>(null)
   const [card, setCard] = useState<CardSlot | null>(null)
-  const [noCardOk, setNoCardOk] = useState(false)
-  const [mismatchOk, setMismatchOk] = useState(false)
   const [showCooler, setShowCooler] = useState(false)
   const [cooler, setCooler] = useState<CoolerAnimal[] | null>(null)
   const [filter, setFilter] = useState('')
@@ -95,11 +99,9 @@ export default function AnimalStart({ date, onPick, onRetail, retail, initialCod
       if (!hit.found) { setMsg(hit.label); return }
       if (hit.kind === 'card') {
         setCard({ card: hit.cards[0], appointment_id: hit.appointment_id })
-        setMismatchOk(false)
       } else {
         setAnimal({ appointment_id: hit.appointment_id, carcass_code: hit.carcass_code, harvest_log_id: hit.harvest_log_id, picked: false, label: hit.label, cards: hit.cards })
         setShowCooler(false)
-        setNoCardOk(false); setMismatchOk(false)
       }
     } catch {
       setMsg('Lookup failed — scan again')
@@ -124,10 +126,11 @@ export default function AnimalStart({ date, onPick, onRetail, retail, initialCod
     : 'mismatch'
   const animalHasNoCard = !!animal && animal.cards.length === 0
 
-  const complete = !!animal && (
-    (!!card && (match === 'ok' || mismatchOk)) ||
-    (!card && animalHasNoCard && noCardOk)
-  )
+  // Knowing which animal is on the table is the whole point — pin that, and let
+  // the card be as right or as wrong as the banner above says it is.
+  const complete = !!animal
+  const warn: 'mismatch' | 'no-card' | null =
+    match === 'mismatch' ? 'mismatch' : (!card ? 'no-card' : null)
 
   // Tell the page whenever the pick becomes complete or stops being.
   const pick: AnimalPick | null = useMemo(() => complete && animal ? {
@@ -138,8 +141,9 @@ export default function AnimalStart({ date, onPick, onRetail, retail, initialCod
     harvest_log_id: animal.harvest_log_id,
     picked: animal.picked,
     label: animal.label,
-  } : null, [complete, animal, card])
-  const pickKey = pick ? `${pick.appointment_id}|${pick.ci_id}|${pick.carcass_code}|${pick.harvest_log_id}|${pick.picked}|${pick.customer_name}` : ''
+    warn,
+  } : null, [complete, animal, card, warn])
+  const pickKey = pick ? `${pick.appointment_id}|${pick.ci_id}|${pick.carcass_code}|${pick.harvest_log_id}|${pick.picked}|${pick.customer_name}|${pick.warn}` : ''
   useEffect(() => { onPick(pick) }, [pickKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const shown = useMemo(() => {
@@ -184,14 +188,14 @@ export default function AnimalStart({ date, onPick, onRetail, retail, initialCod
       {msg && <div style={{ color: C.yellow, fontSize: '0.76rem', marginTop: '0.3rem' }}>{msg}</div>}
 
       <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.45rem' }}>
-        {slot(!!animal, 'Carcass tag', animal ? animal.label : 'the animal on the table', () => { setAnimal(null); setNoCardOk(false); setMismatchOk(false) })}
+        {slot(!!animal, 'Carcass tag', animal ? animal.label : 'the animal on the table', () => setAnimal(null))}
         {slot(!!card, 'Cut card', card
           ? <>{card.card.customer_name}<span style={{ display: 'block', color: C.lightBrown, fontSize: '0.68rem' }}>{shortCi(card.card.id)}{card.card.species ? ` · ${card.card.species}` : ''}</span></>
           : animal && animal.cards.length
             ? <>expecting {animal.cards.length === 1 ? `${animal.cards[0].customer_name} (${shortCi(animal.cards[0].id)})` : `one of ${animal.cards.map(c => shortCi(c.id)).join(', ')}`}</>
             : 'whose it is',
-          () => { setCard(null); setMismatchOk(false) },
-          match === 'mismatch' ? (mismatchOk ? 'warn' : 'bad') : 'ok')}
+          () => setCard(null),
+          match === 'mismatch' ? 'bad' : 'ok')}
       </div>
 
       {card && !animal && booking && booking.appointment_id === card.appointment_id && (
@@ -215,7 +219,6 @@ export default function AnimalStart({ date, onPick, onRetail, retail, initialCod
                     label: `${a.species ?? 'Carcass'} · Tag ${a.tag}${a.weight_lbs ? ` · ${Math.round(a.weight_lbs)} lb` : ''}${a.producer ? ` · ${a.producer}` : ''} (picked, not scanned)`,
                     cards: [card.card],
                   })
-                  setMismatchOk(false); setNoCardOk(false)
                 }}
                 style={{ display: 'block', width: '100%', textAlign: 'left', background: 'transparent', border: 'none', borderBottom: '1px solid rgba(166,120,90,0.12)', padding: '0.45rem 0.6rem', cursor: 'pointer', opacity: gone ? 0.6 : 1 }}>
                 <div style={{ color: C.cream, fontSize: '0.88rem' }}>Tag {a.tag} · {a.species}{a.weight_lbs ? ` · ${Math.round(a.weight_lbs)} lb` : ''}</div>
@@ -232,23 +235,15 @@ export default function AnimalStart({ date, onPick, onRetail, retail, initialCod
         <div style={{ marginTop: '0.4rem', color: '#FCA5A5', fontSize: '0.78rem', lineHeight: 1.35 }}>
           ⚠ This cut card isn&apos;t on that animal&apos;s booking.{' '}
           {animal.cards.length ? <>Its booking has {animal.cards.map(c => `${c.customer_name} (${shortCi(c.id)})`).join(', ')}.</> : 'That booking has no cut card at all.'}
-          {' '}Check the tag and the card before packing.
-          {!mismatchOk && (
-            <button type="button" onClick={() => setMismatchOk(true)}
-              style={{ display: 'block', marginTop: '0.3rem', background: 'transparent', border: `1px solid ${C.yellow}`, color: C.yellow, borderRadius: 3, padding: '0.25rem 0.6rem', fontSize: '0.74rem', cursor: 'pointer' }}>
-              They&apos;re right — the card just isn&apos;t linked. Use it anyway
-            </button>
-          )}
+          {' '}Check the tag and the card before packing — starting still works, and this card is what the session will carry.
         </div>
       )}
 
-      {animalHasNoCard && !card && (
+      {!card && animal && (
         <div style={{ marginTop: '0.4rem', color: C.yellow, fontSize: '0.78rem' }}>
-          This animal&apos;s booking has no cut card (our own animals don&apos;t).{' '}
-          <label style={{ cursor: 'pointer', color: C.cream }}>
-            <input type="checkbox" checked={noCardOk} onChange={e => setNoCardOk(e.target.checked)} style={{ verticalAlign: 'middle', marginRight: 4 }} />
-            start without a card
-          </label>
+          {animalHasNoCard
+            ? <>This animal&apos;s booking has no cut card — our own animals don&apos;t. Starting on the tag alone is the right move here.</>
+            : <>No cut card scanned. Scan it, or this session can&apos;t tell which of {animal.cards.length > 1 ? 'their animals' : 'this customer’s animals'} it is.</>}
         </div>
       )}
 
@@ -284,7 +279,7 @@ export default function AnimalStart({ date, onPick, onRetail, retail, initialCod
                     label: `${a.species ?? 'Carcass'} · Tag ${a.tag}${a.weight_lbs ? ` · ${Math.round(a.weight_lbs)} lb` : ''}${a.producer ? ` · ${a.producer}` : ''} (picked, not scanned)`,
                     cards: a.picks.filter(p => p.cutting_instruction_id).map(p => ({ id: p.cutting_instruction_id!, customer_name: p.customer_name, species: a.species, created_at: null })),
                   })
-                  setShowCooler(false); setNoCardOk(false); setMismatchOk(false)
+                  setShowCooler(false)
                   setTimeout(() => inputRef.current?.focus(), 0)
                 }}
                 style={{ display: 'block', width: '100%', textAlign: 'left', background: 'transparent', border: 'none', borderBottom: '1px solid rgba(166,120,90,0.12)', padding: '0.45rem 0.6rem', cursor: 'pointer' }}>
