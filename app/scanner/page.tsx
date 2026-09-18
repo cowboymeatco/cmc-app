@@ -259,12 +259,33 @@ function fmtDue(iso: string): string {
   return new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
+// Hanging weight for the Weight Summary (Jill, 2026-09-17): the carcass tags
+// scanned into the session — the same sum the session list shows. A half that
+// other sessions also pull from (quarters) would read as a half-sized yield on
+// this customer's slip, so a shared carcass prints its weight but no yield.
+interface CarcassSummary { hangingLbs: number; shared: boolean }
+
+async function loadCarcassSummary(cust: string, dt: string): Promise<CarcassSummary | null> {
+  try {
+    const q = `customer_name=${encodeURIComponent(cust)}&session_date=${dt}`
+    const [inputs, pool] = await Promise.all([
+      fetch(`/api/processing/inputs?${q}`).then(r => r.json()),
+      fetch(`/api/processing/yield?${q}`).then(r => r.json()).catch(() => null),
+    ])
+    const hangingLbs = (Array.isArray(inputs) ? inputs as ProcessingInput[] : [])
+      .filter(i => i.input_type === 'carcass')
+      .reduce((t, i) => t + (Number(i.weight_lbs) || 0), 0)
+    return hangingLbs > 0 ? { hangingLbs, shared: !!pool?.shared } : null
+  } catch { return null }
+}
+
 function buildPackoutHTML(
   customer: string,
   dateISO: string,
   sortedBoxes: BoxRecord[],
   allScans: (ScanLine & { boxNum: number })[],
   cureTags: CureTag[] = [],
+  carcass: CarcassSummary | null = null,
 ): string {
   const dateStr   = new Date(dateISO + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
   const grandLbs  = allScans.reduce((t, sc) => t + (Number(sc.weight_lbs) || 0), 0)
@@ -360,6 +381,21 @@ function buildPackoutHTML(
   })
   const pieSvg = `<svg width="300" height="300" viewBox="0 0 300 300" xmlns="http://www.w3.org/2000/svg">${slices}${labels}</svg>`
 
+  // Hanging weight + yield under the summary total. Pieces still in cure
+  // aren't in a box yet, so the yield says so rather than reading short.
+  const inCure = cureTags.filter(t => t.status !== 'done').length
+  const yieldBlock = carcass ? `
+  <table class="yield-table">
+    <tbody>
+      <tr><td>Hanging Weight</td><td class="num mono">${carcass.hangingLbs.toFixed(2)} lbs</td></tr>
+      <tr><td>Packed Weight</td><td class="num mono">${grandLbs.toFixed(2)} lbs</td></tr>
+      <tr class="total-row"><td>Yield</td><td class="num mono">${carcass.shared ? '—' : `${((grandLbs / carcass.hangingLbs) * 100).toFixed(1)}%`}</td></tr>
+    </tbody>
+  </table>
+  <div class="yield-note">${carcass.shared
+    ? 'Carcass shared with another order — yield is not shown for one share.'
+    : `Packed weight ÷ hanging weight.${inCure ? ` Does not include ${inCure} piece${inCure === 1 ? '' : 's'} still in cure.` : ''}`}</div>` : ''
+
   // ── Cured & Smoked — seal-tagged pieces riding through the cure cooler ──
   // On the slip so the customer's cutout tells the whole story: what's still
   // in cure isn't missing, it's coming.
@@ -415,6 +451,9 @@ function buildPackoutHTML(
   .pie-box { flex-shrink: 0; text-align: center }
   .pie-cap { font-size: 9.5pt; font-weight: bold; margin-bottom: 6px }
   .summary-table { flex: 1 }
+  .yield-table { margin-top: 18px; font-size: 10.5pt }
+  .yield-table td { padding: 4px 6px }
+  .yield-note { margin-top: 4px; font-size: 8.5pt; color: #555 }
 </style></head><body>
 
 <div class="page">
@@ -467,6 +506,7 @@ function buildPackoutHTML(
           <tr class="total-row"><td>TOTAL</td><td class="num mono">${grandLbs.toFixed(2)}</td><td class="num">${summaryPieces}</td><td class="num">100%</td></tr>
         </tbody>
       </table>
+      ${yieldBlock}
     </div>
   </div>
 </div>
@@ -1359,7 +1399,8 @@ export default function ScannerPage() {
     }
     const cureRes  = await fetch(`/api/cure-tags?customer=${encodeURIComponent(s.customer_name)}`)
     const cureData = await cureRes.json().catch(() => [])
-    const html = buildPackoutHTML(s.customer_name, s.session_date, sortedBoxes, allScans, Array.isArray(cureData) ? cureData : [])
+    const carcass  = await loadCarcassSummary(s.customer_name, s.session_date)
+    const html = buildPackoutHTML(s.customer_name, s.session_date, sortedBoxes, allScans, Array.isArray(cureData) ? cureData : [], carcass)
     const win = window.open('', '_blank')
     if (win) { win.document.write(html); win.document.close() }
   }
@@ -2418,7 +2459,8 @@ export default function ScannerPage() {
 
     const cureRes  = await fetch(`/api/cure-tags?customer=${encodeURIComponent(customer)}`)
     const cureData = await cureRes.json().catch(() => [])
-    const html = buildPackoutHTML(customer, date, sortedBoxes, allScans, Array.isArray(cureData) ? cureData : [])
+    const carcass  = await loadCarcassSummary(customer, date)
+    const html = buildPackoutHTML(customer, date, sortedBoxes, allScans, Array.isArray(cureData) ? cureData : [], carcass)
     const win = window.open('', '_blank')
     if (win) { win.document.write(html); win.document.close() }
     setReportLoading(false)
