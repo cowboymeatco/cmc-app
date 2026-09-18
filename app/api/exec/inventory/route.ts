@@ -3,6 +3,7 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { requireExec } from '@/lib/execGate'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
+import { isOwnSession, OWN_PRODUCER } from '@/lib/ownership'
 import { INCOME_ACCOUNT_ENTERPRISE } from '@/lib/revenueRecognition'
 import { dayColumns, fetchProfitAndLossByDay, leafAccountSeries } from '@/lib/qboReports'
 import { addDaysISO, mondayOfISO } from '@/lib/dates'
@@ -30,14 +31,8 @@ import { addDaysISO, mondayOfISO } from '@/lib/dates'
 // somebody counts the freezer once and anchors it. That is the next step and
 // it is said on the page rather than faked here.
 
-const OWN_PRODUCER = /cowboy\s*meat|^\s*cmc\b/i
-// The scanner's CMC checkbox (processing_sessions.cmc) is the ownership signal
-// since 2026-09-04. The name pattern stays as a fallback for sessions packed
-// before it existed and for a box the crew named "CMC Retail 659" but forgot to
-// tick: "CMC", "CMC 2", "26188 CMC Retail", "Retail 26153", "Lamb CMC Retail".
-// A surname that happens to contain the letters ("Cmcarthy") does not match —
-// the token has to stand alone.
-const OWN_SESSION = /(^|\s)(cmc|retail)(\s|$|\d)/i
+// Ownership (the CMC checkbox, with a name fallback) lives in lib/ownership so
+// /inventory refuses a producer's box by exactly the rule this page values by.
 
 // Label price is what the package rings up at. `price` is the scale's price;
 // a penny there is the placeholder for service-only PLUs (wild game), where the
@@ -106,7 +101,7 @@ export async function GET(req: NextRequest) {
     const sessions = await all<{ customer_name: string; session_date: string; status: string; cmc: boolean | null }>((a, b) =>
       supabaseAdmin.from('processing_sessions').select('customer_name, session_date, status, cmc')
         .gte('session_date', rateStart).range(a, b))
-    const own = sessions.filter(s => s.cmc || OWN_SESSION.test(s.customer_name ?? ''))
+    const own = sessions.filter(s => isOwnSession(s))
     const key = (name: string, date: string) => `${name}|${date}`
     const ownKeys = new Set(own.map(s => key(s.customer_name, s.session_date)))
 
