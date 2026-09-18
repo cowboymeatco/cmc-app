@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { planSweep, runSweep } from '@/lib/ringUpSweep'
+import { planSweep, runSweep, removeOrphan } from '@/lib/ringUpSweep'
 import { planSync, runSync, loadContext } from '@/lib/ringUpSync'
 import { supabase } from '@/lib/supabase'
 
@@ -8,6 +8,7 @@ import { supabase } from '@/lib/supabase'
 //   GET               -> what a run would do right now + recent history
 //   POST {phase:sync}  -> create/correct orders for open invoices
 //   POST {phase:sweep} -> remove orders whose invoice is settled
+//   POST {phase:remove-orphan, orderId} -> a person clears one orphan (see below)
 //
 // The two phases are SEPARATE requests on purpose. Running both in one call
 // timed out (504) against a populated register: the writes had completed but
@@ -31,7 +32,9 @@ export async function GET() {
     ])
     return NextResponse.json({
       wouldRemove: sweepDecisions.filter(d => d.action === 'remove'),
-      wouldKeep: sweepDecisions.filter(d => d.action === 'keep'),
+      wouldKeep: sweepDecisions.filter(d => d.action === 'keep' && !d.orphan),
+      // Tickets whose invoice has vanished from QuickBooks — a person decides.
+      orphans: sweepDecisions.filter(d => d.orphan),
       wouldCreate: syncDecisions.filter(d => d.action === 'create'),
       wouldUpdate: syncDecisions.filter(d => d.action === 'update'),
       // Only the skips that need a human — "amount current" is the steady
@@ -47,7 +50,15 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const { phase } = await req.json().catch(() => ({ phase: 'sync' }))
+    const { phase, orderId } = await req.json().catch(() => ({ phase: 'sync' }))
+
+    if (phase === 'remove-orphan') {
+      if (typeof orderId !== 'string' || !orderId) {
+        return NextResponse.json({ error: 'orderId required' }, { status: 400 })
+      }
+      const removed = await removeOrphan(orderId)
+      return NextResponse.json({ phase, removed })
+    }
 
     if (phase === 'sweep') {
       const sweep = await runSweep('manual')

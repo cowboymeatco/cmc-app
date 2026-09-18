@@ -45,6 +45,10 @@ export interface SweepDecision {
   amountCents: number | null
   action: 'remove' | 'keep'
   reason: string
+  // The invoice is gone from QuickBooks (deleted, or its number now matches
+  // more than one invoice). Never removed automatically — /billing lists these
+  // for a person, since a missing invoice is not proof of anything.
+  orphan?: boolean
 }
 
 // Decide the fate of every ring-up order in the recent window. Read-only —
@@ -177,7 +181,15 @@ async function decide(o: CloverOrder, openDocs: Set<string>): Promise<SweepDecis
 
       // Gate 3 — QuickBooks must positively say the invoice is settled.
       const invoice = await getInvoiceByDocNumber(docNumber)
-      if (!invoice) return keep(`invoice ${docNumber} not found in QuickBooks — left alone`)
+      if (!invoice) {
+        // An invoice deleted in QuickBooks and re-done under a new number left
+        // its ticket on the register for days with nothing saying so
+        // (2026-09-18). Flag it where a person will see it.
+        return {
+          ...keep(`invoice ${docNumber} is no longer in QuickBooks (deleted, or the number matches more than one invoice)`),
+          orphan: true,
+        }
+      }
       if (invoice.balance > 0) return keep(`still owing $${invoice.balance.toFixed(2)} in QuickBooks`)
 
       // Gate 4 — anything the counter added stays.
@@ -258,4 +270,29 @@ function logRow(d: SweepDecision, triggeredBy: string) {
     reason: d.reason,
     triggered_by: triggeredBy,
   }
+}
+
+// A person pressed Remove on an orphan in /billing. Every gate is re-checked
+// against Clover and QuickBooks right now — the page may be hours old.
+export async function removeOrphan(orderId: string): Promise<SweepDecision> {
+  const orders = await getRingUpOrders()
+  const o = orders.find(x => x.id === orderId)
+  if (!o) throw new Error('That order is no longer on the register.')
+
+  const openDocs = new Set((await getOpenInvoices()).map(i => i.docNumber))
+  const d = await decide(o, openDocs)
+  if (!d.orphan) throw new Error(`Not removed: ${d.reason}`)
+
+  const lineItems = lineItemsOf(o)
+  if (lineItems.length !== 1 || lineItems[0].name !== o.title) {
+    throw new Error('Not removed: something was rung onto this order at the counter — void it on the device.')
+  }
+
+  await deleteOrder(o.id)
+  const removed = { ...d, action: 'remove' as const, reason: `invoice ${d.docNumber} gone from QuickBooks — removed from /billing` }
+  const { error } = await supabase.from('clover_ringup_sweep_log').insert({
+    ...logRow(removed, 'manual'), action: 'removed', status: 'ok',
+  })
+  if (error) console.error(`ring-up sweep log write failed: ${error.message}`)
+  return removed
 }

@@ -83,6 +83,7 @@ interface SweepDecision {
   amountCents: number | null
   action: 'remove' | 'keep'
   reason: string
+  orphan?: boolean
 }
 interface SweepLogRow {
   created_at: string
@@ -107,6 +108,7 @@ interface SyncDecision {
 interface SweepData {
   wouldRemove: SweepDecision[]
   wouldKeep: SweepDecision[]
+  orphans: SweepDecision[]
   wouldCreate: SyncDecision[]
   wouldUpdate: SyncDecision[]
   needsPerson: SyncDecision[]
@@ -218,6 +220,29 @@ export default function BillingPage() {
       setError(e instanceof Error ? e.message : String(e))
     }
     setSweeping(false)
+  }
+
+  // Clear a ticket whose invoice is gone from QuickBooks. The server re-checks
+  // everything before deleting, so a stale page can't remove the wrong thing.
+  async function removeOrphan(d: SweepDecision) {
+    const amt = d.amountCents != null ? ` ($${(d.amountCents / 100).toFixed(2)})` : ''
+    if (!confirm(`Remove "${d.title}"${amt} from the register?
+
+Only do this if the invoice was deleted on purpose or re-done under a new number.`)) return
+    setSweepMsg(null)
+    try {
+      const res = await fetch('/api/clover/reconcile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phase: 'remove-orphan', orderId: d.orderId }),
+      })
+      const json = await res.json()
+      if (!res.ok || json.error) throw new Error(json.error ?? 'Remove failed')
+      setSweepMsg(`Removed ${d.title} from the register.`)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
   }
 
   // Push one invoice to the register as a pre-labelled open order. The amount
@@ -481,7 +506,7 @@ export default function BillingPage() {
           ) : (
             <>
               {sweep.wouldCreate.length === 0 && sweep.wouldUpdate.length === 0 &&
-               sweep.wouldRemove.length === 0 && sweep.needsPerson.length === 0 && (
+               sweep.wouldRemove.length === 0 && sweep.needsPerson.length === 0 && sweep.orphans.length === 0 && (
                 <div style={{ color: C.green, fontSize: '0.83rem' }}>
                   Register is in sync with QuickBooks — nothing to add, correct or remove.
                 </div>
@@ -505,6 +530,30 @@ export default function BillingPage() {
                     ))}
                   </tbody>
                 </table>
+              )}
+
+              {sweep.orphans.length > 0 && (
+                <div style={{ fontSize: '0.78rem', color: C.yellow, marginBottom: '0.5rem' }}>
+                  <div style={{ marginBottom: '0.25rem' }}>
+                    ⚠ Invoice gone from QuickBooks ({sweep.orphans.length}) — still on the register:
+                  </div>
+                  {sweep.orphans.map(d => (
+                    <div key={d.orderId} style={{ paddingLeft: '0.6rem', color: C.lightBrown, display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.2rem' }}>
+                      <span style={{ color: C.cream }}>{d.title}</span>
+                      <span style={{ fontFamily: 'monospace', color: C.yellow }}>
+                        {d.amountCents != null ? `$${(d.amountCents / 100).toFixed(2)}` : '—'}
+                      </span>
+                      <button onClick={() => removeOrphan(d)} style={{ ...BTN(C.tan), padding: '0.15rem 0.5rem', fontSize: '0.72rem' }}>
+                        Remove from register
+                      </button>
+                    </div>
+                  ))}
+                  <div style={{ paddingLeft: '0.6rem', marginTop: '0.35rem', color: C.lightBrown, fontStyle: 'italic' }}>
+                    The invoice behind each of these was deleted in QuickBooks (usually re-done under a
+                    new number). The ticket can still be rung up, so a customer could be charged twice.
+                    Check the customer&apos;s invoices, then remove it.
+                  </div>
+                </div>
               )}
 
               {sweep.needsPerson.length > 0 && (

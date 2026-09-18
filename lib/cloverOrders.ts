@@ -86,8 +86,8 @@ export async function createRingUpOrder(opts: {
 // the register, just the new balance.
 //
 // This used to be delete-then-recreate, and every late fee QuickBooks tacked
-// on made the invoice look brand new at the counter (2026-09-18, Christy
-// Durham). Only ever called on an order the sync has proven unpaid and carrying
+// on made the invoice look brand new at the counter (2026-09-18). Only ever
+// called on an order the sync has proven unpaid and carrying
 // nothing but its own invoice line.
 //
 // Clover won't reprice a line item: a POST with a new price returns 200 and
