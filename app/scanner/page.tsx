@@ -1421,17 +1421,16 @@ export default function ScannerPage() {
     setShowNewForm(true)
   }
 
-  // Both scans matched (or an allowed exception), or it's said out loud to be
-  // retail / repack. Nothing else starts a session (Charlie, 2026-09-13).
   // The animal scans pin the session; they don't stand in its way (Charlie,
-  // 2026-09-16). A name and a loaded PLU list is still all it takes to start —
+  // 2026-09-16). A name and a loaded PLU list is all it takes to start —
   // what the scans buy is a session that knows which animal it is, and a red
-  // banner when the card in hand belongs to a different one.
+  // banner when the card in hand belongs to a different one. Fat and pet food
+  // going back to inventory have no carcass at all (Chris, 2026-09-18).
   const canStartNew = !!customer.trim() && pluLoaded
 
   async function startSession() {
     const cust = customer.trim()
-    if (!cust || !pluLoaded || (!newPick && !retailMode)) return
+    if (!canStartNew) return
     // Normalize the state too — a trailing space typed in the form would
     // otherwise split every later box/input onto a different session key.
     setCustomer(cust)
