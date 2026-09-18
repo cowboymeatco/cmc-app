@@ -9,6 +9,7 @@ import QuickBooksTab from './QuickBooksTab'
 import AlignmentTab from './AlignmentTab'
 import { buildHtFile, inferLabelFormat, needsIngredientStatement, type HobartPlu } from '@/lib/hobart'
 import { isoDate } from '@/lib/dates'
+import { nextOpenPlu } from '@/lib/nextPlu'
 
 type Tab = 'browser' | 'upload' | 'export' | 'cleanup' | 'cut-schedule' | 'in-cure' | 'box-labels' | 'clover' | 'quickbooks' | 'alignment'
 
@@ -271,6 +272,26 @@ function EditPanel({ item, onSaved, onDeleted, onClose }: {
   const [lastPush, setLastPush] = useState<PushReq | null | undefined>(undefined)
   const fileRef = useRef<HTMLInputElement>(null)
   const isNew = !form.id
+  const [nextHint, setNextHint] = useState<string | null>(null)
+
+  // New PLU only: fill the number with the next open one — after whatever is
+  // typed, or at the top of the species' range (lib/nextPlu.ts).
+  async function fillNextOpen() {
+    setNextHint('Looking…')
+    try {
+      const d = await fetch('/api/processing/used-numbers').then(r => r.json())
+      const used = new Set<number>(Array.isArray(d?.numbers) ? d.numbers : [])
+      const n = nextOpenPlu(used, { from: form.plu_number, species: form.species })
+      if (n === null) {
+        setNextHint(form.plu_number.trim() || form.species ? 'No open number there' : 'Pick a species or type a starting number')
+        return
+      }
+      setNextHint(form.plu_number.trim() ? `Next open from ${form.plu_number.trim()}` : `Next open in ${form.species}`)
+      setForm(p => ({ ...p, plu_number: String(n), species: p.species || detectSpecies(String(n)) }))
+    } catch {
+      setNextHint('Could not load PLU numbers')
+    }
+  }
 
   // Photos upload immediately (resized client-side) and write straight to
   // plu_items.photo_url, so the thumbnail reflects saved state — Cancel won't
@@ -390,7 +411,22 @@ function EditPanel({ item, onSaved, onDeleted, onClose }: {
         {editTab === 'basic' && (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1rem' }}>
             <Field label="PLU #">
-              <input style={INPUT} value={form.plu_number} onChange={f('plu_number')} />
+              {isNew ? (
+                <>
+                  <div style={{ display: 'flex', gap: '0.4rem' }}>
+                    <input style={{ ...INPUT, flex: 1, minWidth: 0 }} value={form.plu_number}
+                      onChange={e => { setNextHint(null); f('plu_number')(e) }} placeholder="or ask for the next open →" />
+                    <button type="button" onClick={fillNextOpen}
+                      title="Next number nobody has used — after what's typed here, or in the species picked"
+                      style={{ background: 'transparent', border: `1px solid ${C.tan}`, color: C.tan, borderRadius: 4, padding: '0 0.6rem', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                      Next open
+                    </button>
+                  </div>
+                  {nextHint && <div style={{ fontSize: '0.68rem', color: C.lightBrown, marginTop: '0.25rem' }}>{nextHint}</div>}
+                </>
+              ) : (
+                <input style={INPUT} value={form.plu_number} onChange={f('plu_number')} />
+              )}
             </Field>
             <Field label="Species">
               <select style={{ ...INPUT }} value={form.species} onChange={f('species')}>
