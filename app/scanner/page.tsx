@@ -2752,9 +2752,12 @@ export default function ScannerPage() {
             <Link href="/processing?tab=browser" style={{ color: C.lightBrown, fontSize: '0.8rem', textDecoration: 'none' }}>← Processing Tools</Link>
             <span style={{ color: 'rgba(166,120,90,0.35)' }}>|</span>
             <span style={{ fontFamily: 'Georgia, serif', color: C.cream, fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Processing Scanner</span>
-            <span style={{ fontSize: '0.72rem', color: pluLoaded ? C.green : C.yellow, fontWeight: 600 }}>
-              {pluLoaded ? `✓ ${Object.keys(pluMap).length} PLUs` : '⟳ Loading…'}
-            </span>
+            {/* The PLU list, one tap away in its own tab — the scanner stays
+                where it was, no Back-button round trip (Charlie, 2026-09-18). */}
+            <a href="/processing?tab=browser" target="_blank" rel="noopener" title="Open the PLU list in a new tab"
+              style={{ fontSize: '0.72rem', color: pluLoaded ? C.green : C.yellow, fontWeight: 600, textDecoration: 'underline', textUnderlineOffset: 3 }}>
+              {pluLoaded ? `✓ ${Object.keys(pluMap).length} PLUs ↗` : '⟳ Loading…'}
+            </a>
           </div>
           {/* New Session — split button, because a repack starts from a box
               serial instead of a typed customer name. */}
@@ -3160,7 +3163,10 @@ export default function ScannerPage() {
               ⚡ {Math.round(paceLbsHr)} lb/hr
             </span>
           )}
-          <span style={{ fontSize: '0.72rem', color: C.lightBrown }}>{Object.keys(pluMap).length} PLUs</span>
+          <a href="/processing?tab=browser" target="_blank" rel="noopener" title="Open the PLU list in a new tab"
+            style={{ fontSize: '0.72rem', color: C.lightBrown, textDecoration: 'underline', textUnderlineOffset: 3 }}>
+            {Object.keys(pluMap).length} PLUs ↗
+          </a>
           {boxes.length > 0 && (
             <button
               onClick={generateCutoutReport}
