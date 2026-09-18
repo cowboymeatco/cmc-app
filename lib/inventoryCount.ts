@@ -6,7 +6,17 @@
 // Keeping this layer plain is what lets the count be re-tallied at any instant
 // without re-deciding anything.
 
-export const COUNT_LOCATIONS = ['Retail Case', 'Freezer', 'Cooler'] as const
+// The plant's own names for its rooms, in Charlie's order (2026-09-18). A count
+// is one room, so the one-open-count-per-location guard is one-per-room.
+export const COUNT_LOCATIONS = [
+  'Showcase Cooler',
+  'Showcase Freezer',
+  'Showroom',
+  'Retail Freezer',
+  'Custom Freezer',
+  'Old Cooler',
+  'New Cooler',
+] as const
 export type CountLocation = typeof COUNT_LOCATIONS[number]
 
 export interface InventoryCount {
