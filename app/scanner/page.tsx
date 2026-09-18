@@ -753,9 +753,13 @@ export default function ScannerPage() {
   // ── The packer's wall TV follows this gun ───────────────────────────────────
   //
   // The screen over the packing bench has nobody standing in front of it, so it
-  // is never pointed by hand: it shows whatever session is open HERE. The
-  // scanner publishes that to the 'kiosk' channel and /display/pack reads it
-  // back (scripts/2026-09-18_cut_room_displays.sql).
+  // is never pointed by hand: it shows whatever session is open HERE. All that
+  // is published is WHICH SESSION — the name and the pack date. Which cut card
+  // that session is working is deliberately not sent, because this page is not
+  // where that question is answered: scanning a CI-xxxxxxxx barcode mid-cut
+  // moves the session onto another animal, and the screen has to move with it.
+  // /api/display reads the session's own link back on every poll instead, the
+  // same place the box label and the cure seals read it from.
   //
   // Only a tab that has actually opened a session ever writes, and it only
   // clears what it itself put up. Otherwise a crew member pulling /scanner up
@@ -772,10 +776,6 @@ export default function ScannerPage() {
         ? {
             action: 'channel', channel: 'kiosk', updated_by: 'kiosk',
             customer_name: customer.trim(), session_date: date,
-            // Whatever the session was opened or scanned in under
-            // (lib/sessionLinks.ts). Null is fine — the TV then says the
-            // session has no cut card, which is itself worth seeing.
-            cutting_instruction_id: sessionCiRef.current,
           }
         : {
             action: 'channel', channel: 'kiosk', updated_by: 'kiosk',
@@ -786,9 +786,7 @@ export default function ScannerPage() {
       // A wall screen that misses one update is not worth interrupting the
       // packer for; the next scan or session change posts again.
     })
-    // sessionLinked flips once a session resolves its cut card, which is the
-    // moment the TV can stop saying there isn't one.
-  }, [started, customer, date, sessionLinked])
+  }, [started, customer, date])
 
   // ── Box reassignment (right-click a box tab) ─────────────────────────────────
   const [boxMenu,          setBoxMenu]          = useState<{ box: BoxRecord; x: number; y: number } | null>(null)

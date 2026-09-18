@@ -89,15 +89,41 @@ export async function GET(req: NextRequest) {
 
   if (!channel) return NextResponse.json(payload)
 
+  // A channel that carries a packing session takes its card FROM that session,
+  // every time it is asked — it does not trust an id pushed at write time.
+  //
+  // This is the whole reason the packing kiosk's screen works. The cut card and
+  // packaging sheet print a CI-xxxxxxxx barcode, and scanning one mid-cut moves
+  // the session onto that animal (handleCiScan in app/scanner) — which is
+  // exactly what a customer with two hogs does between animals. An id captured
+  // when the session opened would still be the first hog's, and the wall would
+  // check off one animal's intent while the packer boxed the other's. Reading
+  // the link back on every poll means the screen follows the gun by
+  // construction, the same place the box label and the cure seals read it from
+  // (lib/cutCardLookup.ts).
+  //
+  // A session with no card resolves to null, and the screen says so — "scan the
+  // cut card" is a job somebody can do, and a guess is not.
+  let ciId = channel.cutting_instruction_id
+  if (channel.customer_name && channel.session_date) {
+    const { data: sess } = await supabase
+      .from('processing_sessions')
+      .select('linked_cutting_instruction_id')
+      .eq('customer_name', channel.customer_name.trim())
+      .eq('session_date', channel.session_date)
+      .maybeSingle()
+    ciId = (sess?.linked_cutting_instruction_id as string | null) ?? null
+  }
+
   // An animal can be on the table before anyone has linked its card, so the
   // carcass is looked up on its own account — the tag and hanging weight are
   // worth putting on the wall even when the instructions aren't there yet, and
   // a screen that says "Tag 06, no cut card" is a job somebody can go fix.
-  const { data: ci } = channel.cutting_instruction_id
+  const { data: ci } = ciId
     ? await supabase
         .from('cutting_instructions')
         .select('id, data, customer_name, species')
-        .eq('id', channel.cutting_instruction_id)
+        .eq('id', ciId)
         .maybeSingle()
     : { data: null }
 

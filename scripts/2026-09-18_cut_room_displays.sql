@@ -35,8 +35,15 @@ CREATE TABLE IF NOT EXISTS display_channels (
   --             it follows the gun, because the packer's hands are full.
   channel     text        PRIMARY KEY,
 
-  -- The cut card being worked. Null is a real state, not an error: the room
-  -- between animals, or a session opened under a name with no card yet.
+  -- The cut card being worked, for a channel somebody points by hand.
+  -- Null is a real state, not an error: the room between animals.
+  --
+  -- IGNORED on a channel that carries a session_date. There the card is read
+  -- back off processing_sessions on every poll instead, because scanning a
+  -- CI-xxxxxxxx barcode mid-cut moves the session onto another animal and the
+  -- screen has to move with it — a customer with two hogs does exactly that
+  -- between animals, and an id frozen here would leave the wall checking off
+  -- the first hog while the packer boxed the second.
   cutting_instruction_id  uuid,
 
   -- The animal itself, when it is known. Kept beside the card rather than
@@ -50,7 +57,8 @@ CREATE TABLE IF NOT EXISTS display_channels (
   customer_name           text NOT NULL DEFAULT '',
 
   -- Only the kiosk channel uses this — a packing session is a name plus a
-  -- date, and both are needed to find it again (lib/sessionLinks.ts).
+  -- date, and both are needed to find it again (lib/sessionLinks.ts). Setting
+  -- it is what makes a channel resolve its card from the session, above.
   session_date            date,
 
   updated_at  timestamptz NOT NULL DEFAULT now(),

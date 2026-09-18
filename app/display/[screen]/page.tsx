@@ -161,18 +161,25 @@ export default function DisplayScreenPage({ params }: { params: Promise<{ screen
   return (
     <Shell>
       <StaleBar seconds={staleFor} />
-      <Header screen={screen} cfg={cfg} card={card} carcass={carcass} now={now} />
+      <Header screen={screen} cfg={cfg} card={card} carcass={carcass} channel={payload?.channel ?? null} now={now} />
 
       {!card && view !== 'queue' && (
         <IdlePlate
           screen={screen}
           label={carcass
             ? `Tag ${carcass.carcass_tag || '—'} — no cut card`
-            : (cfg?.label || 'Nothing on the board')}
+            : payload?.channel?.customer_name
+              ? `${payload.channel.customer_name} — no cut card`
+              : (cfg?.label || 'Nothing on the board')}
           hint={carcass
             ? 'This animal is on the board but no cut card is linked to it yet.'
             : cfg?.channel === 'kiosk'
-              ? 'Open a session on the packing scanner and it shows up here.'
+              // A session IS open, it just has no card on it — so the useful
+              // thing to say is the one action that fixes it, not "open a
+              // session" to somebody who already has.
+              ? payload?.channel?.customer_name
+                ? 'Scan the cut card or packaging sheet at the kiosk.'
+                : 'Open a session on the packing scanner and it shows up here.'
               : 'Set the animal from the cut room board on the laptop.'}
         />
       )}
@@ -222,11 +229,12 @@ function Shell({ children }: { children: React.ReactNode }) {
 // Who, what animal, how long it has hung. The clock is not decoration: a
 // stopped clock is the fastest way for anyone walking past to spot a screen
 // whose browser has died, which the stale bar cannot catch.
-function Header({ screen, cfg, card, carcass, now }: {
+function Header({ screen, cfg, card, carcass, channel, now }: {
   screen: string
   cfg?: ScreenCfg
   card: CardPayload | null
   carcass: CarcassPayload | null
+  channel: ChannelRow | null
   now: number | null
 }) {
   const species = card?.species || carcass?.species || ''
@@ -245,7 +253,10 @@ function Header({ screen, cfg, card, carcass, now }: {
       <div style={{ minWidth: 0, display: 'flex', alignItems: 'baseline', gap: '0.8vw', flexWrap: 'wrap' }}>
         <span style={{ fontSize: T.name, fontWeight: 800, whiteSpace: 'nowrap' }}>
           {species && <span style={{ marginRight: '0.4vw' }}>{speciesIcon(species)}</span>}
-          {card?.customer_name || '—'}
+          {/* Who, even before a card reaches the screen: a packing session
+              with no cut card scanned yet still has a name on it, and a
+              header reading "—" over an open session helps nobody. */}
+          {card?.customer_name || channel?.customer_name || '—'}
         </span>
         {badge && (
           <span style={{
