@@ -16,9 +16,10 @@
 // balance when it's pressed; a preloaded order has no such protection, so
 // something has to keep it honest.
 //
-// An update is done as delete-then-recreate rather than by mutating the line
-// item in place: it reuses the two paths already proven against the live
-// register, and is only ever applied to an order that is unpaid and untouched.
+// An update changes the amount on the existing order, keeping its id. It used to be
+// delete-then-recreate, which made every QuickBooks late fee show up at the
+// counter as a brand-new ticket for the same invoice. Only ever applied to an
+// order that is unpaid and untouched.
 //
 // Same gates as the sweep — never modify an order carrying payments or a
 // cashier's added items. Those get logged for a person instead, because
@@ -30,8 +31,8 @@ import {
   getRingUpOrders,
   getOrderPayments,
   lineItemsOf,
-  deleteOrder,
   createRingUpOrder,
+  updateRingUpAmount,
   parseRingUpDocNumber,
   type CloverOrder,
 } from '@/lib/cloverOrders'
@@ -52,6 +53,8 @@ export interface SyncDecision {
   action: 'create' | 'update' | 'skip'
   reason: string
   orderId?: string
+  lineItemId?: string
+  lineName?: string
 }
 
 async function classify(inv: OpenInvoice, order: CloverOrder | undefined): Promise<SyncDecision> {
@@ -96,6 +99,8 @@ async function classify(inv: OpenInvoice, order: CloverOrder | undefined): Promi
       ...base,
       action: 'update',
       orderId: order.id,
+      lineItemId: lineItems[0].id,
+      lineName: lineItems[0].name,
       reason: `register has $${(onRegister / 100).toFixed(2)}, QuickBooks says $${inv.balance.toFixed(2)}`,
     }
   } catch (e) {
@@ -160,16 +165,29 @@ export async function runSync(triggeredBy: 'cron' | 'manual', ctx?: ReconcileCon
     writes++
 
     try {
-      // An update is a replace: bin the stale order, then ring the current
-      // amount. Safe only because the gates above proved it unpaid and
-      // untouched.
-      if (d.action === 'update' && d.orderId) await deleteOrder(d.orderId)
-      const order = await createRingUpOrder({
-        customerName: d.customerName,
-        docNumber: d.docNumber,
-        amountCents: d.amountCents,
-      })
-      const done = { ...d, orderId: order.id }
+      // An update keeps the same order and changes only its amount. Safe
+      // only because the gates above proved it unpaid and untouched.
+      let orderId = d.orderId
+      if (d.action === 'update') {
+        // Never fall through to a create here — that would put the invoice on
+        // the register twice.
+        if (!d.orderId || !d.lineItemId || !d.lineName) throw new Error(`update for INV ${d.docNumber} is missing its order or line item id`)
+        await updateRingUpAmount({
+          orderId: d.orderId,
+          lineItemId: d.lineItemId,
+          lineName: d.lineName,
+          docNumber: d.docNumber,
+          amountCents: d.amountCents,
+        })
+      } else {
+        const order = await createRingUpOrder({
+          customerName: d.customerName,
+          docNumber: d.docNumber,
+          amountCents: d.amountCents,
+        })
+        orderId = order.id
+      }
+      const done = { ...d, orderId }
       ;(d.action === 'create' ? result.created : result.updated).push(done)
       rows.push(logRow(done, triggeredBy, d.action === 'create' ? 'created' : 'updated', 'ok', ''))
     } catch (e) {

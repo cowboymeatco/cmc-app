@@ -82,6 +82,46 @@ export async function createRingUpOrder(opts: {
   return { ...order, title, total: amountCents }
 }
 
+// Change the amount on an existing ring-up order — same order id, same spot on
+// the register, just the new balance.
+//
+// This used to be delete-then-recreate, and every late fee QuickBooks tacked
+// on made the invoice look brand new at the counter (2026-09-18, Christy
+// Durham). Only ever called on an order the sync has proven unpaid and carrying
+// nothing but its own invoice line.
+//
+// Clover won't reprice a line item: a POST with a new price returns 200 and
+// changes nothing (tested 2026-09-18). So the line is swapped instead — the new
+// one goes on BEFORE the old one comes off, so a failure part-way leaves two
+// lines (which the sync flags for a person) rather than a $0 ticket.
+//
+// The order total is written too: a device that has opened the order holds its
+// own total, and a REST line-item change doesn't recompute it.
+export async function updateRingUpAmount(opts: {
+  orderId: string
+  lineItemId: string
+  lineName: string   // the old line's exact name — the sync matches it to the order title
+  docNumber: string
+  amountCents: number
+}): Promise<void> {
+  const { mid } = creds()
+  const { orderId, lineItemId, lineName, docNumber, amountCents } = opts
+
+  if (!Number.isInteger(amountCents) || amountCents <= 0) {
+    throw new Error(`Refusing to update invoice ${docNumber}: invalid amount (${amountCents} cents)`)
+  }
+
+  await cloverFetch(`/merchants/${mid}/orders/${orderId}/line_items`, {
+    method: 'POST',
+    body: JSON.stringify({ name: lineName, price: amountCents }),
+  })
+  await cloverFetch(`/merchants/${mid}/orders/${orderId}/line_items/${lineItemId}`, { method: 'DELETE' })
+  await cloverFetch(`/merchants/${mid}/orders/${orderId}`, {
+    method: 'POST',
+    body: JSON.stringify({ total: amountCents }),
+  })
+}
+
 // Pull the invoice number back out of a ring-up title. Accepts an em-dash or a
 // plain hyphen so a title retyped on the device still parses.
 const RING_UP_TITLE = /\s[—-]\s*INV\s+(\S+)\s*$/i
