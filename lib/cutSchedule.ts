@@ -781,3 +781,85 @@ export function buildEntries(
 
   return combined.map((c, i) => ({ ...c.item, rank: i + 1 }))
 }
+
+// ── The day the crew actually works ──────────────────────────────────────────
+//
+// buildEntries returns one ordered list — carcasses, day breaks and not-yet-
+// harvested placeholders all in the same manual_rank sequence, because that is
+// what the planner drags around. Turning that into "what is on the rail today"
+// is a separate question, and it has a rule the planner deliberately does not:
+// a carcass with no dated break above it has no cut day yet, and showing it as
+// work sends somebody to the cooler for an animal nobody scheduled.
+//
+// Lifted out of the crew's /cut-schedule page when the cut room wall TVs needed
+// the same answer. Two screens deriving "today's work" independently is how
+// they end up disagreeing about it in front of the crew.
+export interface CutDaySection {
+  key:         string
+  /** The day this section heads. Null only for the leading "up first" group. */
+  date:        string | null
+  entries:     ScheduleEntry[]
+  /** Kill days falling between the previous cutting day and this one — not
+   *  work, but the reason there is none on those dates (Charlie, 2026-08-24). */
+  harvest:     HarvestDay[]
+  /** Head killed on this cutting day itself, when there's a harvest booked too. */
+  alsoKilling: number | null
+}
+
+export function cutDaySections(list: ListItem[], todayISO: string, harvestDays: HarvestDay[]): CutDaySection[] {
+  const blank = (key: string, date: string | null): CutDaySection =>
+    ({ key, date, entries: [], harvest: [], alsoKilling: null })
+
+  // Split the ordered list into day sections: a break heads the day below
+  // it, carcasses before the first break are simply "up first".
+  const rawSecs: CutDaySection[] = []
+  let current = blank('first', null)
+  for (const item of list) {
+    if (item.type === 'break') {
+      rawSecs.push(current)
+      current = blank(item.key, item.break_date || null)
+    } else if (item.type === 'carcass') {
+      current.entries.push(item)
+    }
+    // 'future' placeholders are planning intent for animals that aren't in
+    // the building yet — never work the crew can pick up. The planner owns
+    // them; a crew-facing list only ever shows real carcasses.
+  }
+  rawSecs.push(current)
+
+  // Carcasses with no dated day break above them have no cut day yet —
+  // that's the planner's pile to sort out, and the crew must not see it as
+  // work (Charlie, 2026-08-05). They're dropped here rather than in
+  // buildEntries so the planner still gets them.
+  // The one exception is a plan with no dated break anywhere: then nothing
+  // is scheduled, the list falls back to plain priority order the way it
+  // always has, and hiding would leave the crew staring at an empty cooler.
+  const anyDated = rawSecs.some(s => s.date !== null)
+
+  // Fold days already behind us into the leading section — anything still
+  // hanging from a past day is overdue and cuts first.
+  const lead = blank('first', null)
+  const rest: CutDaySection[] = []
+  for (const sec of rawSecs) {
+    if (anyDated && sec.date === null) continue
+    if (sec.key === 'first' || (sec.date && sec.date < todayISO)) lead.entries.push(...sec.entries)
+    else rest.push(sec)
+  }
+  const secs = [lead, ...rest].filter(s => s.entries.length > 0)
+
+  // Hang each kill day above the next cutting day after it, so a jump from
+  // Wednesday to the following Tuesday says why instead of just looking
+  // like a week off. Only within the span the plan covers — a kill day past
+  // the last cutting day isn't explaining a gap the crew can see.
+  const dated   = secs.filter(s => s.date !== null)
+  const planEnd = dated.length ? dated[dated.length - 1].date! : ''
+  for (const hd of harvestDays) {
+    if (!planEnd || hd.date > planEnd || hd.date < todayISO) continue
+    const host = dated.find(s => s.date! >= hd.date)
+    if (!host) continue
+    if (host.date === hd.date) host.alsoKilling = hd.head
+    else host.harvest.push(hd)
+  }
+
+  return secs
+}

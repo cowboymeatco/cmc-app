@@ -28,6 +28,11 @@ export async function POST(req: NextRequest) {
     // workflow — it has its own inspector_visits log and stays out of this one.
     if (path.startsWith('/inspector')) return new NextResponse(null, { status: 204 })
 
+    // Nor are the cut room wall screens navigation. A TV parked on one route
+    // all shift would post a single ten-hour dwell and swamp every real page in
+    // the averages — it is furniture, not somewhere the crew went.
+    if (path.startsWith('/display/')) return new NextResponse(null, { status: 204 })
+
     const entered = Date.parse(b?.entered_at)
 
     await supabaseAdmin.from('nav_events').insert([{

@@ -57,7 +57,11 @@ export default function FeedbackButton() {
 
   // Staff tool — it stays off the inspector portal, which is a visitor-facing
   // read-only surface and not somewhere to file into Charlie's punch list.
-  const hidden = pathname?.startsWith('/inspector') ?? false
+  // It also stays off the wall screens (/display/cut1 and friends): those are
+  // furniture bolted to a TV with nobody in front of them, so a floating button
+  // there is chrome that can only ever be clicked by accident. The cut room
+  // board at /display itself is a page a person uses, and keeps it.
+  const hidden = (pathname?.startsWith('/inspector') || pathname?.startsWith('/display/')) ?? false
   // Record route changes as breadcrumbs.
   useEffect(() => { addBreadcrumb('nav', `page → ${pathname}`) }, [pathname])
 

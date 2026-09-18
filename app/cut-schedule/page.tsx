@@ -7,8 +7,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import {
-  type ScheduleEntry,
-  DEFAULT_WEIGHTS, buildEntries, loadScheduleData, carcassTotals, type HarvestDay,
+  type CutDaySection,
+  DEFAULT_WEIGHTS, buildEntries, loadScheduleData, carcassTotals, cutDaySections,
   speciesColor, speciesIcon, portionBadge, hangAtCut, hangColor,
 } from '@/lib/cutSchedule'
 import { isoDate, dateLabel } from '@/lib/dates'
@@ -25,19 +25,8 @@ const C = {
   amber:      '#F59E0B',
 }
 
-interface Section {
-  key:     string
-  date:    string | null       // break date heading this day, null = list before the first break
-  entries: ScheduleEntry[]
-  // Kill days that fall between the previous cutting day and this one. Not work
-  // — the reason there's no work on those dates (Charlie, 2026-08-24).
-  harvest: HarvestDay[]
-  // Head killed on this cutting day itself, when there's a harvest booked too.
-  alsoKilling: number | null
-}
-
 export default function CrewCutSchedulePage() {
-  const [sections,   setSections]   = useState<Section[]>([])
+  const [sections,   setSections]   = useState<CutDaySection[]>([])
   const [planDate,   setPlanDate]   = useState<string | null>(null)
   const [loading,    setLoading]    = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -54,56 +43,7 @@ export default function CrewCutSchedulePage() {
       const { logs, apptMap, instrIds, instrByBuyer, saved, assignments, harvestDays } = await loadScheduleData(today)
       const list = buildEntries(logs, apptMap, instrIds, saved, assignments, DEFAULT_WEIGHTS, [], instrByBuyer)
 
-      // Split the ordered list into day sections: a break heads the day below
-      // it, carcasses before the first break are simply "up first".
-      const rawSecs: Section[] = []
-      let current: Section = { key: 'first', date: null, entries: [], harvest: [], alsoKilling: null }
-      for (const item of list) {
-        if (item.type === 'break') {
-          rawSecs.push(current)
-          current = { key: item.key, date: item.break_date || null, entries: [], harvest: [], alsoKilling: null }
-        } else if (item.type === 'carcass') {
-          current.entries.push(item)
-        }
-        // 'future' placeholders are planning intent for animals that aren't in
-        // the building yet — never work the crew can pick up. The planner owns
-        // them; this page only ever shows real carcasses.
-      }
-      rawSecs.push(current)
-
-      // Carcasses with no dated day break above them have no cut day yet —
-      // that's the planner's pile to sort out, and the crew must not see it as
-      // work (Charlie, 2026-08-05). They're dropped here rather than in
-      // buildEntries so the planner still gets them.
-      // The one exception is a plan with no dated break anywhere: then nothing
-      // is scheduled, this page falls back to plain priority order the way it
-      // always has, and hiding would leave the crew staring at an empty cooler.
-      const anyDated = rawSecs.some(s => s.date !== null)
-
-      // Fold days already behind us into the leading section — anything still
-      // hanging from a past day is overdue and cuts first.
-      const lead: Section = { key: 'first', date: null, entries: [], harvest: [], alsoKilling: null }
-      const rest: Section[] = []
-      for (const sec of rawSecs) {
-        if (anyDated && sec.date === null) continue
-        if (sec.key === 'first' || (sec.date && sec.date < today)) lead.entries.push(...sec.entries)
-        else rest.push(sec)
-      }
-      const secs = [lead, ...rest].filter(s => s.entries.length > 0)
-
-      // Hang each kill day above the next cutting day after it, so a jump from
-      // Wednesday to the following Tuesday says why instead of just looking
-      // like a week off. Only within the span the plan covers — a kill day past
-      // the last cutting day isn't explaining a gap the crew can see.
-      const dated  = secs.filter(s => s.date !== null)
-      const planEnd = dated.length ? dated[dated.length - 1].date! : ''
-      for (const hd of harvestDays) {
-        if (!planEnd || hd.date > planEnd || hd.date < today) continue
-        const host = dated.find(s => s.date! >= hd.date)
-        if (!host) continue
-        if (host.date === hd.date) host.alsoKilling = hd.head
-        else host.harvest.push(hd)
-      }
+      const secs = cutDaySections(list, today, harvestDays)
 
       setSections(secs)
       setPlanDate(saved[0]?.schedule_date ?? null)

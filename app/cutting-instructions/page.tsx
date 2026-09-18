@@ -6,7 +6,8 @@ import { makeCode39Barcode } from '@/lib/label'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-import { buildPackList, BONE_IN_FILET_THICKNESS, baggedTrimPackRows, loinFields, mergeSides, shoulderFields, EIGHTHS, FMT_OVERRIDES, STEAK_STANDARDS, bagSizeLabel, baggedTrimCutterRows, beefTrimCutterRows, beefTrimPackRows, beefTrimRows, bellyRows, bellyWord, brisketLabel, fracThick, hamCut, hamLine, hamRows, hamStyleWord, hockStyle, isWholeAnimal, lgTrimLabel, porkTrimCutterRows, porkTrimRows, rawWeighIn, ribeyeAdds, roastOr, roastText, sidePair, smokehouseRows, smokehouseTotalLbs, stdThick, trimIsBagged, trimSplitOf, v2fmt } from '@/lib/packList'
+import { buildPackList, baggedTrimPackRows, loinFields, mergeSides, shoulderFields, EIGHTHS, FMT_OVERRIDES, STEAK_STANDARDS, bagSizeLabel, baggedTrimCutterRows, beefTrimPackRows, beefTrimRows, bellyRows, bellyWord, brisketLabel, fracThick, hamCut, hamLine, hamRows, hamStyleWord, hockStyle, isWholeAnimal, lgTrimLabel, porkTrimRows, rawWeighIn, ribeyeAdds, roastOr, roastText, sidePair, smokehouseRows, smokehouseTotalLbs, stdThick, trimSplitOf, v2fmt } from '@/lib/packList'
+import { PRIMAL_COLORS, buildCutSections, lgLegSteaks, shortLoinFields, type CutRow, type CutSection } from '@/lib/cutRoomCard'
 
 interface RawInstruction {
   id:         string
@@ -437,10 +438,6 @@ const PORTION_LABELS: Record<string, string> = {
   'half': 'Half', 'half-ab': 'Half A|B', 'quarter': 'Quarter',
 }
 
-function lgLegSteaks(leg?: { cut?: string; cut2?: string | null } | null): boolean {
-  return leg?.cut === 'leg-steaks' || leg?.cut2 === 'leg-steaks'
-}
-
 function v2thick(v: string): string { return fracThick(v) }
 function v2withT(cut: string, t: string): string { return [v2fmt(cut), v2thick(t)].filter(Boolean).join(' — ') }
 function v2adds(arr: string[]): string { return arr?.length ? arr.map(v2fmt).join(', ') : '' }
@@ -481,23 +478,6 @@ function V2Section({ title, children }: { title: string; children: React.ReactNo
       </div>
     </div>
   )
-}
-
-// One short-loin side as (label, value) pairs. A bone-in loin still yields
-// filets — the tenderloin head runs past the last rib — so both paths can
-// produce a Filet row, which is exactly why the merge below matters.
-// `f` formats a cut value (the print and detail renderers format differently).
-function shortLoinFields(sl: any, f: (v: string) => string, t: (v: string) => string): Array<[string, string]> {
-  if (sl?.path === 'bone-in') return [
-    ['T-Bone / Porterhouse', t(sl.tBoneThickness ?? '')],
-    ['Filet', BONE_IN_FILET_THICKNESS],
-  ]
-  if (sl?.path === 'boneless') return [
-    // One name per row — "Tenderloin: Filet Mignon" read as two cuts (Charlie)
-    sl.tenderloin?.cut === 'filet' ? ['Filet', '2"'] : ['Tenderloin', f(sl.tenderloin?.cut ?? '')],
-    ['Strip Loin', [f(sl.stripLoin?.cut ?? ''), t(sl.stripLoin?.thickness ?? '')].filter(Boolean).join(' — ')],
-  ]
-  return []
 }
 
 function renderV2Detail(ci: RawInstruction) {
@@ -746,236 +726,38 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
   const sp = species.toLowerCase()
   const isBeef = sp === 'beef'
   const isPork = sp === 'pork' || sp === 'hog'
-  const isLG   = sp === 'lamb' || sp === 'goat'
 
   const fmt   = (v: string) => v ? (FMT_OVERRIDES[v] ?? v.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())) : ''
   // The card is built as an HTML string from a public form's JSONB, so anything
   // interpolated raw gets escaped first.
   const esc   = (v: unknown) => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string))
-  const thick = (v: string) => fracThick(v)
-  const withT = (cut: string, t: string) => [fmt(cut), thick(t)].filter(Boolean).join(' — ')
-  const adds  = (arr: string[]) => arr?.length ? arr.map(fmt).join(', ') : ''
-  // A per-side roast count doubles when the customer has the whole animal.
-  const wholeAnimal = isWholeAnimal(d.portion)
   // Handwriting blank — anything the system doesn't know gets a line to write on
   const wline = (w: number) => `<span style="display:inline-block;min-width:${w}px;border-bottom:1.5px solid #1A0A04">&nbsp;</span>`
-  // Jill's wording: a kept-whole rack reads "Frenched Rack of Lamb/Goat"
-  const rackDisplay = (v?: string) => v === 'whole-rack' ? `Frenched Rack of ${sp === 'goat' ? 'Goat' : 'Lamb'}` : fmt(v ?? '')
-  // A round sent to jerky carries its flavor; split rounds print both sides. A
-  // round taken as roasts carries a count like the arm and the tip do, and that
-  // count is per side — but a split round already prints each side on its own,
-  // so only the unsplit case doubles for a whole beef.
-  const roundOne = (r: any, perHalf = false) => r?.cut === 'jerky'
-    ? `Jerky${r.jerkyFlavor ? ` — ${fmt(r.jerkyFlavor)}` : ''}`
-    : roastOr(r?.cut, r?.roastCount, c => withT(c, r?.thickness ?? ''), perHalf)
-  const roundVal = (r: any) => r?.round2
-    ? sidePair(roundOne(r), roundOne(r.round2))
-    : roundOne(r, wholeAnimal)
-  // Split rounds can be seasoned on one side and not the other, so each side
-  // gets its own add-on line rather than one merged list.
-  const roundAddonRows = (r: any) => r?.round2
-    ? [
-        r.addons?.length        ? row('  Add-ons (1)', adds(r.addons), true)        : '',
-        r.round2.addons?.length ? row('  Add-ons (2)', adds(r.round2.addons), true) : '',
-      ].join('')
-    : (r?.addons?.length ? row('  Add-ons', adds(r.addons), true) : '')
-
-  // Primal color coding for the cutting table (Chris): chuck green,
-  // rib & plate yellow, rest of the beef red
-  const PRIMAL_COLORS: Record<string, { bar: string; text: string; tint: string }> = {
-    'Chuck':              { bar: '#2e7d32', text: '#ffffff', tint: '#edf5ee' },
-    'Plate & Short Ribs': { bar: '#f2c200', text: '#4a3800', tint: '#fdf8e0' },
-    'Rib':                { bar: '#f2c200', text: '#4a3800', tint: '#fdf8e0' },
-    'Short Loin':         { bar: '#b71c1c', text: '#ffffff', tint: '#fbecec' },
-    'Sirloin':            { bar: '#b71c1c', text: '#ffffff', tint: '#fbecec' },
-    'Flank':              { bar: '#b71c1c', text: '#ffffff', tint: '#fbecec' },
-    'Round':              { bar: '#b71c1c', text: '#ffffff', tint: '#fbecec' },
-  }
-
   // ── Page 1: Cut Card ──────────────────────────────────────────────────────
+  // What each primal SAYS is built in lib/cutRoomCard, so this card and the cut
+  // room wall TVs can never disagree about an answer; all that happens here is
+  // rendering those sections to print HTML.
+  //
   // Compact rows + sections wrapped in break-inside:avoid for 2-column CSS layout
-  const row = (label: string, value: any, addon = false): string => {
-    const v = value != null ? String(value) : ''
-    if (!v.trim()) return ''
+  const row = ({ label, value, addon }: CutRow): string => {
     const lc = addon ? '#8a6200' : '#75471B'
     const fi = addon ? 'italic'  : 'normal'
     // 24px values (18px labels) — readable across the cutting room (Charlie)
     return `<tr style="${addon ? 'background:#fffbe8' : ''}">
       <td style="padding:3px 8px;color:${lc};font-size:18px;width:150px;vertical-align:top">${label}</td>
-      <td style="padding:3px 8px;font-size:24px;font-weight:600;font-style:${fi};vertical-align:top;border-left:1px solid #eee">${v}</td>
+      <td style="padding:3px 8px;font-size:24px;font-weight:600;font-style:${fi};vertical-align:top;border-left:1px solid #eee">${value}</td>
     </tr>`
   }
   // Each section is a single div with break-inside:avoid so CSS columns won't split it mid-section
-  const sec = (title: string, rows: string): string => {
-    if (!rows.trim()) return ''
+  const sec = ({ title, rows }: CutSection): string => {
     const c = PRIMAL_COLORS[title]
     return `<div class="sec" style="break-inside:avoid;margin-top:6px">
            <div class="sechdr" style="background:${c?.bar ?? '#351E0E'};color:${c?.text ?? '#F2E8D9'};padding:4px 10px;font-size:18px;letter-spacing:0.12em;text-transform:uppercase;font-weight:bold">${title}</div>
-           <table style="width:100%;border-collapse:collapse;border:1px solid #e0d5c8;${c ? `background:${c.tint}` : ''}">${rows}</table>
+           <table style="width:100%;border-collapse:collapse;border:1px solid #e0d5c8;${c ? `background:${c.tint}` : ''}">${rows.map(row).join('')}</table>
          </div>`
   }
 
-  let cutSections = ''
-
-  // No organs on the cut card: the cutters never handle them (Charlie,
-  // 2026-07-22). Whatever the customer is keeping still reaches the floor on
-  // the packaging sheet, where it's actually packed.
-
-  // Grinding the whole animal: the band up top is the instruction, and no
-  // primal section may contradict it — an order that once had cut answers and
-  // was later switched to all-grind must not print them (Jill, 2026-07-27).
-  if (isBeef && !d.grindWhole) {
-    cutSections += sec('Chuck', [
-      row('Brisket', d.brisket?.cut2 ? sidePair(brisketLabel(d.brisket.cut, d.brisket.half, fmt), brisketLabel(d.brisket.cut2, d.brisket.half2, fmt)) : brisketLabel(d.brisket?.cut, d.brisket?.half, fmt)),
-      d.brisket?.fat ? row('  Brisket Fat', fmt(d.brisket.fat)) : '',
-      row('Shank', fmt(d.shank?.cut)),
-      d.shank?.addons?.length ? row('  Add-ons', adds(d.shank.addons), true) : '',
-      row('Arm Roast', d.armRoast?.arm2
-        ? sidePair(roastOr(d.armRoast.cut, d.armRoast.roastCount, c => withT(c, stdThick(c))), roastOr(d.armRoast.arm2.cut, d.armRoast.arm2.roastCount, c => withT(c, stdThick(c))))
-        : roastOr(d.armRoast?.cut, d.armRoast?.roastCount, c => withT(c, stdThick(c)), wholeAnimal)),
-      d.armRoast?.arm2
-        ? [
-            d.armRoast.addons?.length ? row('  Add-ons (1)', adds(d.armRoast.addons), true) : '',
-            d.armRoast.arm2.addons?.length ? row('  Add-ons (2)', adds(d.armRoast.arm2.addons), true) : '',
-          ].join('')
-        : (d.armRoast?.addons?.length ? row('  Add-ons', adds(d.armRoast.addons), true) : ''),
-      row('Flat Iron', withT(d.flatIron?.cut ?? '', stdThick(d.flatIron?.cut, 'flat-iron'))),
-      row('Chuck Roll', d.chuckRoll?.cut2
-        ? sidePair(roastOr(d.chuckRoll.cut, d.chuckRoll.roastCount, c => withT(c, stdThick(c))), roastOr(d.chuckRoll.cut2, d.chuckRoll.roastCount2, c => withT(c, stdThick(c))))
-        : roastOr(d.chuckRoll?.cut, d.chuckRoll?.roastCount, c => withT(c, stdThick(c)), wholeAnimal)),
-      d.chuckRoll?.cut2
-        ? [
-            d.chuckRoll.addons?.length ? row('  Add-ons (1)', adds(d.chuckRoll.addons), true) : '',
-            d.chuckRoll.addons2?.length ? row('  Add-ons (2)', adds(d.chuckRoll.addons2), true) : '',
-          ].join('')
-        : (d.chuckRoll?.addons?.length ? row('  Add-ons', adds(d.chuckRoll.addons), true) : ''),
-    ].join(''))
-    cutSections += sec('Plate & Short Ribs', [
-      row('Short Ribs', fmt(d.shortRibs?.cut)),
-      d.shortRibs?.addons?.length ? row('  Add-ons', adds(d.shortRibs.addons), true) : '',
-      row('Plate', fmt(d.plate?.cut)),
-    ].join(''))
-    // A split ribeye prints one line per side — style and cut together — the same
-    // shape the packaging sheet uses. A Style row and a Cut row each carrying
-    // "1: … / 2: …" made the cutter read across two rows to work out what side 2
-    // actually was (Jill, 2026-07-28).
-    const ribeyeLine = (r?: { style?: string | null; cut?: string | null; thickness?: string | null } | null) =>
-      [fmt(r?.style ?? ''), withT(r?.cut ?? '', r?.thickness ?? '')].filter(Boolean).join(' · ')
-    cutSections += sec('Rib', (d.ribeye?.ribeye2
-      ? [
-          row('Rib (1)', ribeyeLine(d.ribeye)),
-          ribeyeAdds(d.ribeye).length ? row('  Add-ons (1)', adds(ribeyeAdds(d.ribeye)), true) : '',
-          row('Rib (2)', ribeyeLine(d.ribeye.ribeye2)),
-          ribeyeAdds(d.ribeye.ribeye2).length ? row('  Add-ons (2)', adds(ribeyeAdds(d.ribeye.ribeye2)), true) : '',
-        ]
-      : [
-          row('Style', fmt(d.ribeye?.style)),
-          row('Cut', withT(d.ribeye?.cut ?? '', d.ribeye?.thickness ?? '')),
-          ribeyeAdds(d.ribeye).length ? row('  Add-ons', adds(ribeyeAdds(d.ribeye)), true) : '',
-        ]
-    ).join(''))
-    const sl = d.shortLoin ?? {}
-    cutSections += sec('Short Loin', (sl.loin2
-      ? mergeSides(shortLoinFields(sl, fmt, thick), shortLoinFields(sl.loin2, fmt, thick))
-      : shortLoinFields(sl, fmt, thick)
-    ).map(([label, value]) => row(label, value)).join(''))
-    cutSections += sec('Sirloin', [
-      row('Top Sirloin', withT(d.topSirloin?.cut ?? '', d.topSirloin?.thickness ?? '')),
-      d.topSirloin?.addons?.length ? row('  Add-ons', adds(d.topSirloin.addons), true) : '',
-      row('Tri Tip', fmt(d.triTip?.cut)),
-      d.triTip?.addons?.length ? row('  Add-ons', adds(d.triTip.addons), true) : '',
-    ].join(''))
-    cutSections += sec('Flank', [
-      row('Skirt', fmt(d.skirt?.cut)),
-      row('Flank Steak', fmt(d.flank?.cut)),
-    ].join(''))
-    cutSections += sec('Round', [
-      row('Sirloin Tip', d.sirloinTip?.tip2
-        ? sidePair(roastOr(d.sirloinTip.cut, d.sirloinTip.roastCount, c => withT(c, d.sirloinTip.thickness ?? '')), roastOr(d.sirloinTip.tip2.cut, d.sirloinTip.tip2.roastCount, c => withT(c, d.sirloinTip.tip2.thickness ?? '')))
-        : roastOr(d.sirloinTip?.cut, d.sirloinTip?.roastCount, c => withT(c, d.sirloinTip?.thickness ?? ''), wholeAnimal)),
-      d.sirloinTip?.tip2
-        ? [
-            d.sirloinTip.addons?.length ? row('  Add-ons (1)', adds(d.sirloinTip.addons), true) : '',
-            d.sirloinTip.tip2.addons?.length ? row('  Add-ons (2)', adds(d.sirloinTip.tip2.addons), true) : '',
-          ].join('')
-        : (d.sirloinTip?.addons?.length ? row('  Add-ons', adds(d.sirloinTip.addons), true) : ''),
-      row('Bottom Round', roundVal(d.bottomRound)),
-      roundAddonRows(d.bottomRound),
-      d.eyeOfRound?.cut ? row('Eye of Round', withT(d.eyeOfRound.cut, d.eyeOfRound.thickness ?? '')) : '',
-      d.rumpRoast?.cut  ? row('Rump Roast',   withT(d.rumpRoast.cut,  d.rumpRoast.thickness  ?? '')) : '',
-      row('Top Round', roundVal(d.topRound)),
-      roundAddonRows(d.topRound),
-      row('Round Shank / Marrow', fmt(d.roundShank?.marrow)),
-    ].join(''))
-  }
-
-  if (isBeef) {
-    cutSections += sec(trimIsBagged(d.trim) ? 'Trim' : 'Trim & Ground Beef', beefTrimCutterRows(d.trim).map(([l, v]) => row(l, v)).join(''))
-  }
-
-  if (isPork && !d.grindWhole) {
-    const loin = d.loin ?? {}
-    cutSections += sec('Shoulder', (d.shoulder?.shoulder2
-      ? mergeSides(shoulderFields(d.shoulder, fmt, thick), shoulderFields(d.shoulder.shoulder2, fmt, thick))
-      : shoulderFields(d.shoulder, fmt, thick)
-    ).map(([label, value]) => row(label.startsWith('Add-ons') ? `  ${label}` : label, value, label.startsWith('Add-ons'))).join(''))
-    cutSections += sec('Loin', (loin.loin2
-      ? mergeSides(loinFields(loin, fmt, thick), loinFields(loin.loin2, fmt, thick))
-      : loinFields(loin, fmt, thick)
-    ).map(([label, value]) => row(label.startsWith('Add-ons') ? `  ${label}` : label, value, label.startsWith('Add-ons'))).join(''))
-    // A split belly used to print only side 1 here, so half the instruction
-    // never reached the cutter.
-    cutSections += sec('Belly', bellyRows(d.belly).map(([l, v]) => row(l, v)).join(''))
-    // Hocks come off the ham and always follow its style, so the cut card no
-    // longer restates them — the cutter has that from the ham line (Charlie).
-    cutSections += sec('Ham', hamRows(d.ham).map(([l, v]) => row(l, v)).join(''))
-    cutSections += sec('Country Style Ribs', [
-      row('Country Style Ribs', fmt(d.spareRibs?.cut)),
-    ].join(''))
-  }
-
-  if (isPork) {
-    cutSections += sec(trimIsBagged(d.trim) ? 'Trim' : 'Sausage / Trim', porkTrimCutterRows(d.trim, fmt).map(([l, v]) => row(l, v)).join(''))
-  }
-
-  if (isLG) {
-    cutSections += sec('Primals', [
-      row('Rack',     rackDisplay(d.rack?.cut)),
-      row('Loin',     fmt(d.loin?.cut)),
-      d.loin?.cut === 'loin-chops' && d.loin?.chopThickness ? row('Chop Thickness', thick(d.loin.chopThickness)) : '',
-      d.loin?.cut === 'loin-chops' && d.loin?.chopPack ? row('Per Pack', d.loin.chopPack) : '',
-      row('Leg',      sidePair(fmt(d.leg?.cut), fmt(d.leg?.cut2))),
-      lgLegSteaks(d.leg) && d.leg?.steakThickness ? row('Steak Thickness', thick(d.leg.steakThickness)) : '',
-      lgLegSteaks(d.leg) && d.leg?.steakPack ? row('Per Pack', d.leg.steakPack) : '',
-      row('Shoulder', sidePair(fmt(d.shoulder?.cut), fmt(d.shoulder?.cut2))),
-      row('Shank',    fmt(d.shank?.cut)),
-      d.trim?.style ? row('Trim', lgTrimLabel(d.trim.style, species, d.trim.bagSize)) : '',
-    ].join(''))
-  }
-
-  // Smokehouse on the CUTTER's page too — they're the ones deciding what goes
-  // to the grind bucket, so they need the trim total before it's all ground.
-  {
-    const smokeCardRows = smokehouseRows(d.smokehouse, fmt, d)
-    if (smokeCardRows.length) {
-      const totalLbs = smokehouseTotalLbs(d.smokehouse)
-      cutSections += sec('Smokehouse', [
-        ...smokeCardRows.map(([l, v]) => row(l, v)),
-        totalLbs > 0 ? row('Trim to save', `${+totalLbs.toFixed(1)} lbs total`) : '',
-      ].join(''))
-    }
-  }
-
-  // A "no thanks" is an answered question, not an instruction — printing it just
-  // costs the cutter a section to read past (Charlie, 2026-07-22). Only a yes
-  // earns space, and any notes ride along with it.
-  if (d.specialty?.interest === 'yes') {
-    cutSections += sec('Specialty Items', [
-      row('Interested', 'Yes'),
-      d.specialty.notes ? row('Notes', d.specialty.notes) : '',
-    ].join(''))
-  }
-  if (d.notes) cutSections += sec('Special Notes', row('Notes', d.notes))
+  const cutSections = buildCutSections(d, species).map(sec).join('')
 
   // The packaging sheet is the same list the scanner checks off as packages
   // come over the scale, so it is built in one place for both.

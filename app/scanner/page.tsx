@@ -739,12 +739,56 @@ export default function ScannerPage() {
   // number before the first had come back (Manning Roofing, 2026-08-28).
   const addBoxInFlight = useRef(false)
 
+  // Has THIS tab put a session on the packing kiosk's wall screen? Only a tab
+  // that has may take it back down again.
+  const publishedKiosk = useRef(false)
+
   // Every way into a session goes through here, so the spot in the list is
   // always taken before the screen changes.
   function enterSession() {
     listScrollY.current = window.scrollY
     setStarted(true)
   }
+
+  // ── The packer's wall TV follows this gun ───────────────────────────────────
+  //
+  // The screen over the packing bench has nobody standing in front of it, so it
+  // is never pointed by hand: it shows whatever session is open HERE. The
+  // scanner publishes that to the 'kiosk' channel and /display/pack reads it
+  // back (scripts/2026-09-18_cut_room_displays.sql).
+  //
+  // Only a tab that has actually opened a session ever writes, and it only
+  // clears what it itself put up. Otherwise a crew member pulling /scanner up
+  // on their phone to look something up would blank the packer's TV from across
+  // the plant, mid-box.
+  useEffect(() => {
+    const open = started && customer.trim()
+    if (!open && !publishedKiosk.current) return
+    publishedKiosk.current = !!open
+    fetch('/api/display', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(open
+        ? {
+            action: 'channel', channel: 'kiosk', updated_by: 'kiosk',
+            customer_name: customer.trim(), session_date: date,
+            // Whatever the session was opened or scanned in under
+            // (lib/sessionLinks.ts). Null is fine — the TV then says the
+            // session has no cut card, which is itself worth seeing.
+            cutting_instruction_id: sessionCiRef.current,
+          }
+        : {
+            action: 'channel', channel: 'kiosk', updated_by: 'kiosk',
+            customer_name: '', session_date: null,
+            cutting_instruction_id: null, harvest_log_id: null,
+          }),
+    }).catch(() => {
+      // A wall screen that misses one update is not worth interrupting the
+      // packer for; the next scan or session change posts again.
+    })
+    // sessionLinked flips once a session resolves its cut card, which is the
+    // moment the TV can stop saying there isn't one.
+  }, [started, customer, date, sessionLinked])
 
   // ── Box reassignment (right-click a box tab) ─────────────────────────────────
   const [boxMenu,          setBoxMenu]          = useState<{ box: BoxRecord; x: number; y: number } | null>(null)
