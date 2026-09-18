@@ -190,6 +190,9 @@ export default function ValueAddReport() {
   // year they outnumber the tagged ones three to one — every ham cut before we
   // started tagging is one — and this page is read to look a tag UP.
   const [withUntagged, setWithUntagged] = useState(false)
+  // In cure / out of cure (Charlie, 2026-09-18) — the print becomes a list of
+  // what's still hanging in the cure cooler.
+  const [cureFilter, setCureFilter] = useState<'all' | 'curing' | 'done'>('all')
   const [species, setSpecies] = useState('Pork') // hogs first
   const [search,  setSearch]  = useState('')
   // One product's column and only the customers who ordered it (Jill,
@@ -481,8 +484,9 @@ export default function ValueAddReport() {
   }), [hamRows])
 
   const hamShown = useMemo(
-    () => withUntagged ? hamRows : hamRows.filter(h => h.tag),
-    [hamRows, withUntagged],
+    () => hamRows.filter(h =>
+      cureFilter === 'all' ? (withUntagged || !!h.tag) : (!!h.tag && h.status === cureFilter)),
+    [hamRows, withUntagged, cureFilter],
   )
 
   const hasRows = mode === 'ham' ? hamShown.length > 0 : rows.length > 0
@@ -564,7 +568,7 @@ export default function ValueAddReport() {
 </style></head><body>
   <div class="hdr">
     <div class="company">Cowboy Meat Company</div>
-    <div class="title">Ham Processing — by cure tag</div>
+    <div class="title">Ham Processing — by cure tag${cureFilter === 'curing' ? ' — in cure' : cureFilter === 'done' ? ' — out of cure' : ''}</div>
   </div>
   <div class="meta">
     <span><strong>${hamShown.length}</strong> ham${hamShown.length === 1 ? '' : 's'} &nbsp;·&nbsp; ${hamStats.curing} in cure &nbsp;·&nbsp; ${hamStats.done} out of cure${withUntagged && hamStats.untagged ? ` &nbsp;·&nbsp; ${hamStats.untagged} not tagged in` : ''}${search.trim() ? ` &nbsp;·&nbsp; <strong>Search:</strong> ${escHtml(search.trim())}` : ''}</span>
@@ -730,7 +734,14 @@ export default function ValueAddReport() {
               <option value="customer">Sort: customer</option>
             </select>
           )}
-          {mode === 'ham' && hamStats.untagged > 0 && (
+          {mode === 'ham' && (
+            <select value={cureFilter} onChange={e => setCureFilter(e.target.value as 'all' | 'curing' | 'done')} style={{ ...INPUT, width: 190 }}>
+              <option value="all">All hams</option>
+              <option value="curing">In cure ({hamStats.curing})</option>
+              <option value="done">Out of cure ({hamStats.done})</option>
+            </select>
+          )}
+          {mode === 'ham' && cureFilter === 'all' && hamStats.untagged > 0 && (
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: C.tan, fontSize: '0.78rem', cursor: 'pointer', whiteSpace: 'nowrap' }}>
               <input type="checkbox" checked={withUntagged} onChange={e => setWithUntagged(e.target.checked)} />
               Include {hamStats.untagged} ordered but not tagged in
