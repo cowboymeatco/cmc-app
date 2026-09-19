@@ -169,6 +169,23 @@ interface LaborData {
   sync: { written: number; error: string | null }
 }
 
+// Daily gross vs clocked labor — see /api/exec/daily-labor.
+interface DailyLaborDay {
+  date: string
+  gross: number
+  grossBy: Record<EnterpriseKey, number>
+  headHarvested: number
+  headCut: number
+  hours: number
+  laborDollars: number
+  people: { name: string; hours: number; rate: number | null }[]
+  unratedHours: number
+}
+interface DailyLaborData { days: DailyLaborDay[]; today: string; booksThrough: string | null; booksError: string | null }
+
+const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const dayLabel = (iso: string) => `${WEEKDAY[new Date(`${iso}T12:00:00`).getDay()]} ${Number(iso.slice(5, 7))}/${Number(iso.slice(8, 10))}`
+
 interface SmokehouseWeek { week: string; cooks: number; hours: number; daysRun: number; utilPct: number }
 interface SmokehouseData {
   weeks: number; weekHours: number
@@ -880,6 +897,7 @@ export default function ExecPage() {
   const [receivables, setReceivables] = useState<ReceivablesData | null>(null)
   const [war, setWar] = useState<WarData | null>(null)
   const [labor, setLabor] = useState<LaborData | null>(null)
+  const [daily, setDaily] = useState<DailyLaborData | null>(null)
   const [turnover, setTurnover] = useState<TurnoverData | null>(null)
   const [smoke, setSmoke] = useState<SmokehouseData | null>(null)
   const [revenue, setRevenue] = useState<RevenueData | null>(null)
@@ -916,6 +934,7 @@ export default function ExecPage() {
     grab<ReceivablesData>('/api/exec/receivables', setReceivables, 'receivables')
     grab<WarData>('/api/exec/war', setWar, 'war')
     grab<LaborData>('/api/exec/labor', setLabor, 'labor')
+    grab<DailyLaborData>('/api/exec/daily-labor?days=14', setDaily, 'daily')
     grab<TurnoverData>('/api/exec/turnover?months=12', setTurnover, 'turnover')
     grab<SmokehouseData>('/api/exec/smokehouse?weeks=12', setSmoke, 'smokehouse')
     grab<InventoryData>('/api/exec/inventory?weeks=8', setInventory, 'inventory')
@@ -966,7 +985,7 @@ export default function ExecPage() {
 
   const logout = async () => {
     await fetch('/api/exec/login', { method: 'DELETE' })
-    setAuthed(false); setPnl(null); setOverview(null); setWar(null); setLabor(null); setRevenue(null); setErrors({})
+    setAuthed(false); setPnl(null); setOverview(null); setWar(null); setLabor(null); setDaily(null); setRevenue(null); setErrors({})
   }
 
   const latestLabor = labor?.weeks[0] ?? null
@@ -1484,6 +1503,84 @@ export default function ExecPage() {
               </div>
             </>
           )}
+
+          {/* The Production Report spreadsheet, finally fed by itself: each
+              day's gross against the crew's clocked wages. Daily totals only
+              until the time data can split work by station (Charlie,
+              2026-09-18). */}
+          <SectionLabel>Daily gross vs labor — last 14 days</SectionLabel>
+          {errors.daily ? <ErrorBox msg={errors.daily} /> : !daily ? (
+            <div style={{ color: C.lightBrown, fontSize: '0.85rem' }}>Loading…</div>
+          ) : (() => {
+            const rows = daily.days.filter(d => d.gross > 0 || d.hours > 0)
+            const gross = rows.reduce((a, d) => a + d.gross, 0)
+            const wages = rows.reduce((a, d) => a + d.laborDollars, 0)
+            const hours = rows.reduce((a, d) => a + d.hours, 0)
+            const unrated = [...new Set(rows.flatMap(d => d.people.filter(p => p.rate == null).map(p => p.name)))]
+            const cell = { textAlign: 'right' as const, padding: '0.35rem 0.5rem' }
+            return (
+              <>
+                <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+                  <StatTile hero label="Gross less wages" value={gross - wages >= 0 ? usd(gross - wages) : `−${usd(wages - gross)}`}
+                    accent={gross - wages >= 0 ? INCOME_COLOR : COST_COLOR}
+                    sub={`${usd(gross)} gross − ${usd(wages)} wages`} />
+                  <StatTile label="Wages % of gross" value={gross > 0 ? `${Math.round(wages / gross * 100)}%` : '—'}
+                    accent={gross > 0 && wages / gross <= 0.33 ? INCOME_COLOR : COST_COLOR} sub="target 33%" />
+                  <StatTile label="Clocked hours" value={fmt(hours)} sub={hours > 0 ? `${usd(wages / hours)}/hr average wage` : 'QuickBooks Time'} />
+                </div>
+                <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '0.75rem 1.25rem', overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', color: C.tan }}>
+                    <thead>
+                      <tr style={{ color: C.lightBrown, textTransform: 'uppercase', fontSize: '0.65rem', letterSpacing: '0.08em' }}>
+                        <th style={{ textAlign: 'left', padding: '0.35rem 0.5rem' }}>Day</th>
+                        <th style={cell}>Killed / cut</th>
+                        <th style={cell}>Harvest</th>
+                        <th style={cell}>Processing</th>
+                        <th style={cell}>Value add</th>
+                        <th style={cell}>Retail + whsl</th>
+                        <th style={cell}>Gross</th>
+                        <th style={cell}>Hours</th>
+                        <th style={cell}>Wages</th>
+                        <th style={cell}>Net</th>
+                        <th style={cell}>Wages %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map(d => {
+                        const net = d.gross - d.laborDollars
+                        const pct = d.gross > 0 ? d.laborDollars / d.gross * 100 : null
+                        const retail = d.grossBy.retail + d.grossBy.wholesale
+                        const crew = d.people.map(p => `${p.name} ${p.hours.toFixed(1)} h${p.rate == null ? ' (no rate on file)' : ''}`).join('\n')
+                        return (
+                          <tr key={d.date} title={crew || 'no one clocked in'} style={{ borderTop: '1px solid rgba(166,120,90,0.12)' }}>
+                            <td style={{ padding: '0.35rem 0.5rem', whiteSpace: 'nowrap' }}>{dayLabel(d.date)}{d.date === daily.today ? ' · today' : ''}</td>
+                            <td style={cell}>{d.headHarvested || d.headCut ? `${d.headHarvested} / ${d.headCut}` : '—'}</td>
+                            <td style={cell}>{d.grossBy.harvest ? usd(d.grossBy.harvest) : '—'}</td>
+                            <td style={cell}>{d.grossBy.processing ? usd(d.grossBy.processing) : '—'}</td>
+                            <td style={cell}>{d.grossBy.valueAdd ? usd(d.grossBy.valueAdd) : '—'}</td>
+                            <td style={cell}>{retail ? usd(retail) : '—'}</td>
+                            <td style={{ ...cell, fontWeight: 600, color: C.cream }}>{usd(d.gross)}</td>
+                            <td style={cell}>{d.hours ? `${d.hours.toFixed(1)}${d.unratedHours ? '*' : ''}` : '—'}</td>
+                            <td style={cell}>{d.laborDollars ? usd(d.laborDollars) : '—'}</td>
+                            <td style={{ ...cell, fontWeight: 600, color: net >= 0 ? INCOME_COLOR : COST_COLOR }}>{net >= 0 ? usd(net) : `−${usd(-net)}`}</td>
+                            <td style={{ ...cell, color: pct == null ? C.lightBrown : pct <= 33 ? INCOME_COLOR : COST_COLOR }}>{pct != null ? `${Math.round(pct)}%` : '—'}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.5rem', lineHeight: 1.5 }}>
+                  Gross is the revenue-recognition money for the day: kill fees on kill day, cut &amp; wrap on the day the carcass is broken,
+                  value add and retail as the books post them{daily.booksThrough ? ` (through ${daily.booksThrough})` : ''}. Own animals earn no service fee.
+                  Wages are QuickBooks Time clocked hours × each person&apos;s straight-time rate — no payroll taxes, overtime premium or salaried staff.
+                  Hover a day to see who clocked in.
+                  {unrated.length > 0 && <> <span style={{ color: WARN_COLOR }}>* No pay rate on file for {unrated.join(', ')} — hours counted, wages not.</span></>}
+                  {daily.booksError && <> <span style={{ color: WARN_COLOR }}>Books unavailable: {daily.booksError}</span></>}
+                </div>
+              </>
+            )
+          })()}
 
           <SectionLabel>Labor — payroll per pound packed, 13 weeks</SectionLabel>
           {errors.labor ? <ErrorBox msg={errors.labor} /> : !labor ? (
