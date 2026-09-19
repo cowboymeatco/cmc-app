@@ -1574,7 +1574,8 @@ export default function ExecPage() {
                   Gross is the revenue-recognition money for the day: kill fees on kill day, cut &amp; wrap on the day the carcass is broken,
                   value add and retail as the books post them{daily.booksThrough ? ` (through ${daily.booksThrough})` : ''}. Own animals earn no service fee.
                   Wages are QuickBooks Time clocked hours × each person&apos;s straight-time rate — no payroll taxes, overtime premium or salaried staff.
-                  Hover a day to see who clocked in.
+                  Hover a day to see who clocked in.{' '}
+                  <Link href="/exec/study" style={{ color: C.tan }}>Run a timing study →</Link>
                   {unrated.length > 0 && <> <span style={{ color: WARN_COLOR }}>* No pay rate on file for {unrated.join(', ')} — hours counted, wages not.</span></>}
                   {daily.booksError && <> <span style={{ color: WARN_COLOR }}>Books unavailable: {daily.booksError}</span></>}
                 </div>
