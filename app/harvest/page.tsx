@@ -1432,6 +1432,34 @@ const TAG_CSS = `
   .otm { font-size: 6.5pt; font-weight: 800; border: 1pt solid #000; padding: 0 2pt; white-space: nowrap; }
 `
 
+// Head, total and average hot carcass weight by species, then by sex within it
+// (Charlie, 2026-09-18). Averages divide by the animals actually weighed, so a
+// half-finished day doesn't read light; "weighed" says how many that is.
+interface WSTally { label: string; head: number; weighed: number; lbs: number }
+function worksheetSummary(groups: WSGroup[]): { species: WSTally; sexes: WSTally[] }[] {
+  const bySpecies = new Map<string, { species: WSTally; sexes: Map<string, WSTally> }>()
+  for (const g of groups) {
+    if (g.movedTo) continue
+    const s = bySpecies.get(g.species) ?? { species: { label: g.species, head: 0, weighed: 0, lbs: 0 }, sexes: new Map() }
+    bySpecies.set(g.species, s)
+    for (const r of g.rows) {
+      const sex = r.sex || 'Sex not recorded'
+      const x = s.sexes.get(sex) ?? { label: sex, head: 0, weighed: 0, lbs: 0 }
+      s.sexes.set(sex, x)
+      const w = r.total ?? (r.half1 != null || r.half2 != null ? (r.half1 ?? 0) + (r.half2 ?? 0) : null)
+      for (const t of [s.species, x]) {
+        t.head++
+        if (w != null && w > 0) { t.weighed++; t.lbs += Number(w) }
+      }
+    }
+  }
+  return [...bySpecies.values()]
+    .map(s => ({ species: s.species, sexes: [...s.sexes.values()].sort((a, b) => b.head - a.head) }))
+    .sort((a, b) => b.species.head - a.species.head)
+}
+const tallyLbs = (t: WSTally) => (t.weighed ? Math.round(t.lbs).toLocaleString() : '—')
+const tallyAvg = (t: WSTally) => (t.weighed ? Math.round(t.lbs / t.weighed).toLocaleString() : '—')
+
 function WorksheetTab({ date }: { date: string }) {
   const todayStr = isoDate()
   const [d, setD]           = useState(date)
@@ -1590,6 +1618,7 @@ function WorksheetTab({ date }: { date: string }) {
   }
 
   const totalHead = groups.reduce((s, g) => s + g.rows.length, 0)
+  const summary   = worksheetSummary(groups)
 
   // Every checked-in animal flattened into worksheet (check-in) order, each
   // carrying the carcass ID it will be tagged with — the same numbering
@@ -1707,8 +1736,20 @@ function WorksheetTab({ date }: { date: string }) {
       .sig { margin-top: 24pt; font-size: 9pt; }
       .sig span { display: inline-block; border-top: 0.75pt solid #000; padding-top: 2pt; width: 2.4in; margin-right: 0.6in; }
       .empty { text-align: center; padding: 20pt; color: #666; }
+      table.sum { width: auto; margin-top: 12pt; page-break-inside: avoid; }
+      table.sum td { padding: 3pt 8pt; }
+      table.sum .n { text-align: right; }
+      table.sum tr.sp td { font-weight: 700; background: #eee; }
+      table.sum tr.sx td:first-child { padding-left: 18pt; }
     `
     const body = rowsHtml || '<tr><td colspan="9" class="empty">No animals checked in for this date.</td></tr>'
+    const tallyRow = (t: WSTally, cls: string) =>
+      `<tr class="${cls}"><td>${esc(t.label)}</td><td class="n">${t.head}</td><td class="n">${t.weighed}</td><td class="n">${tallyLbs(t)}</td><td class="n">${tallyAvg(t)}</td></tr>`
+    const summaryHtml = summary.length ? `
+      <table class="sum">
+        <thead><tr><th>Species / Sex</th><th class="n">Head</th><th class="n">Weighed</th><th class="n">Total HCW (lbs)</th><th class="n">Avg HCW (lbs)</th></tr></thead>
+        <tbody>${summary.map(s => tallyRow(s.species, 'sp') + s.sexes.map(x => tallyRow(x, 'sx')).join('')).join('')}</tbody>
+      </table>` : ''
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${css}</style></head><body>
       <h1>Cowboy Meat Co. — Harvest Worksheet</h1>
       <div class="sub">Forsyth, Montana</div>
@@ -1720,6 +1761,7 @@ function WorksheetTab({ date }: { date: string }) {
         </tr></thead>
         <tbody>${body}</tbody>
       </table>
+      ${summaryHtml}
       <div class="sig"><span>Inspector</span><span>Performed By</span></div>
       <script>window.onload=function(){window.print()}<\/script>
     </body></html>`
@@ -1988,6 +2030,27 @@ function WorksheetTab({ date }: { date: string }) {
         Every animal checked in for this date, across all producers. The blank Kill Order / L&nbsp;Half / R&nbsp;Half / Total columns are for writing weights at the rail before logging in Part&nbsp;A/B.
         A kill order that Part&nbsp;A has only <em>suggested</em> shows greyed below and prints as an empty box — the floor decides the real order.
       </div>
+
+      {/* Species / sex tally — also prints under the worksheet table */}
+      {!loading && summary.length > 0 && (
+        <table style={{ borderCollapse: 'collapse', fontSize: '0.82rem', alignSelf: 'flex-start', background: C.dark, border: '1px solid rgba(166,120,90,0.3)' }}>
+          <thead>
+            <tr>{['Species / Sex', 'Head', 'Weighed', 'Total HCW (lbs)', 'Avg HCW (lbs)'].map((h, i) => (
+              <th key={h} style={{ padding: '0.4rem 0.8rem', color: C.lightBrown, fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.08em', textAlign: i ? 'right' : 'left', borderBottom: '1px solid rgba(166,120,90,0.3)' }}>{h}</th>
+            ))}</tr>
+          </thead>
+          <tbody>
+            {summary.flatMap(s => [s.species, ...s.sexes].map((t, i) => (
+              <tr key={`${s.species.label}|${i}|${t.label}`} style={{ background: i === 0 ? 'rgba(166,120,90,0.12)' : 'transparent' }}>
+                <td style={{ padding: '0.3rem 0.8rem', paddingLeft: i === 0 ? '0.8rem' : '1.8rem', color: i === 0 ? C.cream : C.tan, fontWeight: i === 0 ? 700 : 500 }}>{t.label}</td>
+                {[t.head, t.weighed, tallyLbs(t), tallyAvg(t)].map((v, j) => (
+                  <td key={j} style={{ padding: '0.3rem 0.8rem', textAlign: 'right', color: i === 0 ? C.cream : C.tan, fontWeight: i === 0 ? 700 : 500, fontFamily: 'monospace' }}>{v}</td>
+                ))}
+              </tr>
+            )))}
+          </tbody>
+        </table>
+      )}
 
       {loading && <div style={{ color: C.lightBrown, textAlign: 'center', padding: '2rem' }}>Loading…</div>}
 
