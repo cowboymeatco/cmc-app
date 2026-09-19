@@ -67,6 +67,24 @@ function nextStep(r: PipelineRow): string {
   }
 }
 
+// Where this account is hung up, as a page to open (Charlie, 2026-09-18: "If
+// I click a name can I be directed to where the account is hung up at?").
+// Follows nextStep's order; the account rides along as ?q= so the page opens
+// already searched to it.
+function hungUpAt(r: PipelineRow): { href: string; where: string } {
+  const q = (name: string) => `?q=${encodeURIComponent(name)}`
+  const session = r.sessions[0]?.customer_name ?? r.customers[0] ?? r.account
+  if (r.trail_cold || r.stage === 'received') return { href: `/schedule${q(r.account)}`, where: 'the booking' }
+  const jobs = r.smokehouse_jobs
+  if (jobs.packaging.length || jobs.smoking.length || jobs.queued.length) return { href: '/value-add', where: 'Value Add' }
+  // Billed: the open invoice, found by its number. Not billed yet: Billing itself.
+  const doc = r.billing.doc_numbers[r.billing.doc_numbers.length - 1]
+  if (r.value.bucket === 'billed_unpaid' && doc) return { href: `/billing${q(doc)}`, where: `invoice #${doc}` }
+  if (r.value.bucket === 'ready_unbilled' || r.value.bucket === 'billed_unpaid') return { href: '/billing', where: 'Billing' }
+  if (r.stage === 'harvested' || r.stage === 'aging') return { href: '/processing?tab=cut-schedule', where: 'the cut schedule' }
+  return { href: `/scanner${q(session)}`, where: 'its scanner session' }
+}
+
 // The bar as a list of [start, end, colour] stretches from the timestamps.
 function segments(r: PipelineRow, now: number) {
   const pts: { t: number; key: string }[] = []
@@ -303,7 +321,15 @@ export default function PipelinePage() {
                 <div key={r.id} style={{ display: 'grid', gridTemplateColumns: '34px 270px minmax(260px, 1fr) 210px 230px', minWidth: 1000, borderBottom: '1px solid rgba(166,120,90,0.12)', alignItems: 'center', opacity: r.trail_cold ? 0.55 : r.value.kind === 'paid' || r.value.kind === 'own' ? 0.7 : 1 }}>
                   <div style={{ color: ranked ? C.tan : 'transparent', fontSize: '0.72rem', fontWeight: 700, textAlign: 'right' }}>{ranked ? i + 1 : ''}</div>
                   <div style={{ padding: '0.55rem 0.6rem', minWidth: 0 }}>
-                    <div style={{ color: C.cream, fontWeight: 700, fontSize: '0.88rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.account}</div>
+                    {(() => {
+                      const go = hungUpAt(r)
+                      return (
+                        <Link href={go.href} title={`Open ${go.where}`}
+                          style={{ display: 'block', color: C.cream, fontWeight: 700, fontSize: '0.88rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textDecoration: 'none' }}>
+                          {r.account} <span style={{ color: C.tan, fontSize: '0.72rem' }}>→</span>
+                        </Link>
+                      )
+                    })()}
                     <div style={{ color: C.lightBrown, fontSize: '0.72rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {r.species}{r.head_count > 1 ? ` ×${r.head_count}` : ''}
                       {r.hanging_weight_lbs ? ` · ${Math.round(r.hanging_weight_lbs)} lb` : ''}

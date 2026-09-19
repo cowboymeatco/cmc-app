@@ -722,6 +722,8 @@ export default function ScannerPage() {
   const [showAllBaker,     setShowAllBaker]     = useState(false)
   const [showAllPickedUp,  setShowAllPickedUp]  = useState(false)
   const [sessionQuery,     setSessionQuery]     = useState('')
+  // /pipeline sends an account here as ?q= — open with the session list searched to it.
+  useEffect(() => { const v = new URLSearchParams(window.location.search).get('q'); if (v) setSessionQuery(v) }, [])
   const [statusFilter,     setStatusFilter]     = useState<SessionStatus | 'all'>('all')
   const [sharedYield,      setSharedYield]      = useState<SharedYield | null>(null)
   const [expected,     setExpected]     = useState<ExpectedCard | null>(null)

@@ -147,6 +147,8 @@ export default function BillingPage() {
   // ring up at register
   const [ringUp, setRingUp] = useState<RingUpData | null>(null)
   const [ringSearch, setRingSearch] = useState('')
+  // /pipeline sends an account here as ?q= — open with its invoices searched.
+  useEffect(() => { const v = new URLSearchParams(window.location.search).get('q'); if (v) setRingSearch(v) }, [])
   const [ringBusy, setRingBusy] = useState<string | null>(null)
   const [ringMsg, setRingMsg] = useState<string | null>(null)
 

@@ -187,6 +187,8 @@ export default function SchedulePage() {
   const [saving,       setSaving]       = useState(false)
   const [filter,       setFilter]       = useState<'upcoming'|'complete'|'all'>('upcoming')
   const [query,        setQuery]        = useState('')
+  // /pipeline sends an account here as ?q= — open already searched to it.
+  useEffect(() => { const v = new URLSearchParams(window.location.search).get('q'); if (v) setQuery(v) }, [])
   const [view,         setView]         = useState<'list'|'calendar'>('calendar')
   const [calYear,      setCalYear]      = useState(new Date().getFullYear())
   const [calMonth,     setCalMonth]     = useState(new Date().getMonth())
