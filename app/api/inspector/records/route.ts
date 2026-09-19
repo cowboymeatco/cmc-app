@@ -38,6 +38,7 @@ export async function GET(req: NextRequest) {
       .from('harvest_log')
       .select('id, carcass_tag, species, sex, harvest_date, live_weight_lbs, hot_carcass_weight_lbs, yield_pct, inspector_initials, intervention_applied, intervention_type, intervention_temp_f, final_carcass_temp_f, ccp_pass, performed_by, status, notes')
       .eq('harvest_date', date)
+      .is('legacy_source', null)   // imported history was never a HACCP record
       .order('carcass_tag', { ascending: true })
     if (harvestRes.error) return NextResponse.json({ error: harvestRes.error.message }, { status: 500 })
 

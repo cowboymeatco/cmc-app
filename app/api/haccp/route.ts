@@ -19,6 +19,7 @@ export async function GET(req: NextRequest) {
       .from('harvest_log')
       .select('*')
       .eq('harvest_date', date)
+      .is('legacy_source', null)   // imported history was never a HACCP record
       .order('carcass_tag', { ascending: true }),
     supabase
       .from('chill_log')

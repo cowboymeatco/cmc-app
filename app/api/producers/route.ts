@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
   // string in /api/customers — a comma or paren here is just a character.
   const [apptRes, logRes] = await Promise.all([
     supabase.from('harvest_appointments').select('source').ilike('source', `%${search}%`).limit(300),
-    supabase.from('harvest_log').select('producer').ilike('producer', `%${search}%`).limit(300),
+    supabase.from('harvest_log').select('producer').is('legacy_source', null).ilike('producer', `%${search}%`).limit(300),
   ])
   if (apptRes.error) return NextResponse.json({ error: apptRes.error.message }, { status: 500 })
 

@@ -169,6 +169,8 @@ export interface HarvestLog {
   producer:                 string
   ear_tag:                  string
   breed:                    string
+  brand_insp_no:            string   // off the load's receiving record
+  legacy_source:            string | null   // 'master_book' = imported history, not recorded here
   // Part A / B fields
   knock_time:               string | null
   harvest_order:            number | null

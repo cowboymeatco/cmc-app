@@ -443,6 +443,8 @@ Save anyway?`
       part_a_complete:   true,
       inspector_initials: inspInitials,
       performed_by:      performedBy,
+      // Brand # is entered at receiving; carry it onto the carcass.
+      ...(a.animal.brand_insp_no ? { brand_insp_no: a.animal.brand_insp_no } : {}),
       // Recovered a pair whose tags had drifted apart — put them back in step,
       // so the next load matches on the tag again instead of on position.
       ...(a.logEarTag !== null && a.logEarTag !== (a.animal.ear_tag || '')
@@ -470,6 +472,7 @@ Save anyway?`
             ear_tag:        a.animal.ear_tag,
             sex:            a.animal.sex,
             breed:          a.animal.breed,
+            brand_insp_no:  a.animal.brand_insp_no || '',
             over_30_months: a.animal.over_30_months,
             carcass_tag:    '',
             knock_time:     knockTime,
@@ -1242,7 +1245,7 @@ function HarvestLogTab() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.83rem' }}>
               <thead>
                 <tr style={{ borderBottom: '2px solid rgba(166,120,90,0.3)' }}>
-                  {['#', 'Tag', 'ET', 'Owner', 'Species', 'Type', 'Sex', 'Breed', 'Age', 'LW (lbs)', 'L Half', 'R Half', 'HCW (lbs)', 'Yield', 'ZT', 'HW °F', 'Cooler °F', 'Inspector', 'By', ''].map(h => (
+                  {['#', 'Tag', 'ET', 'Brand #', 'Owner', 'Species', 'Type', 'Sex', 'Breed', 'Age', 'LW (lbs)', 'L Half', 'R Half', 'HCW (lbs)', 'Yield', 'ZT', 'HW °F', 'Cooler °F', 'Inspector', 'By', ''].map(h => (
                     <th key={h} style={{ padding: '0.6rem 0.75rem', color: C.lightBrown, fontWeight: 600, textAlign: 'left', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
@@ -1253,6 +1256,7 @@ function HarvestLogTab() {
                     <td style={{ padding: '0.5rem 0.75rem', color: C.lightBrown }}>{l.harvest_order ?? i + 1}</td>
                     <td style={{ padding: '0.5rem 0.75rem', color: C.cream, fontWeight: 600 }}>{l.carcass_tag || '—'}</td>
                     <td style={{ padding: '0.5rem 0.75rem', color: C.tan }}>{l.ear_tag || '—'}</td>
+                    <td style={{ padding: '0.5rem 0.75rem', color: C.tan }}>{l.brand_insp_no || '—'}</td>
                     <td style={{ padding: '0.5rem 0.75rem', color: C.cream, whiteSpace: 'nowrap' }}>{l.producer || '—'}</td>
                     <td style={{ padding: '0.5rem 0.75rem', color: C.lightBrown }}>{l.species}</td>
                     <td style={{ padding: '0.5rem 0.75rem' }}>{l.kill_type ? <KillTypeBadge killType={l.kill_type} /> : <span style={{ color: C.lightBrown }}>—</span>}</td>

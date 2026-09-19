@@ -38,6 +38,7 @@ async function namesForScope(scope: Scope): Promise<{ name: string; harvestCount
   if (scope === 'producers') {
     const { data, error } = await supabase
       .from('harvest_log').select('producer').not('producer', 'is', null).neq('producer', '')
+      .is('legacy_source', null)   // imported owner names are free-typed history, not linkable producers
     if (error) throw new Error(error.message)
     for (const h of data ?? []) counts.set(h.producer, (counts.get(h.producer) ?? 0) + 1)
   } else {

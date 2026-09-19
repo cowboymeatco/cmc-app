@@ -103,6 +103,7 @@ export async function POST(req: NextRequest) {
     producer:                  fields.producer ?? '',
     ear_tag:                   c.ear_tag ?? '',
     breed:                     c.breed ?? '',
+    brand_insp_no:             c.brand_insp_no ?? '',
     knock_time:                c.knock_time ?? null,
     harvest_order:             c.harvest_order ?? null,
     part_a_complete:           c.part_a_complete ?? false,
