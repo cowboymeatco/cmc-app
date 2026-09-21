@@ -23,6 +23,7 @@ const GRID         = 'rgba(166,120,90,0.15)'
 
 const fmt = (n: number) => Math.round(n).toLocaleString('en-US')
 const usd = (n: number) => `$${fmt(n)}`
+const f1 = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 1 })
 const usdK = (n: number) => `$${Math.round(n / 1000)}k`
 
 function niceCeil(max: number): number {
@@ -185,6 +186,12 @@ interface DailyLaborData { days: DailyLaborDay[]; today: string; booksThrough: s
 
 const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const dayLabel = (iso: string) => `${WEEKDAY[new Date(`${iso}T12:00:00`).getDay()]} ${Number(iso.slice(5, 7))}/${Number(iso.slice(8, 10))}`
+
+interface ThroughputWeek {
+  week: string; killHead: number; killLbs: number; cutHead: number
+  packedLbs: number; hours: number; lbsPerHour: number | null; killDays: number; packDays: number
+}
+interface ThroughputData { weeks: ThroughputWeek[]; start: string; today: string }
 
 interface FreightData {
   start: string; end: string; months: number
@@ -913,6 +920,7 @@ export default function ExecPage() {
   const [labor, setLabor] = useState<LaborData | null>(null)
   const [daily, setDaily] = useState<DailyLaborData | null>(null)
   const [freight, setFreight] = useState<FreightData | null>(null)
+  const [through, setThrough] = useState<ThroughputData | null>(null)
   const [turnover, setTurnover] = useState<TurnoverData | null>(null)
   const [smoke, setSmoke] = useState<SmokehouseData | null>(null)
   const [revenue, setRevenue] = useState<RevenueData | null>(null)
@@ -951,6 +959,7 @@ export default function ExecPage() {
     grab<LaborData>('/api/exec/labor', setLabor, 'labor')
     grab<DailyLaborData>('/api/exec/daily-labor?days=14', setDaily, 'daily')
     grab<FreightData>('/api/exec/freight?months=12', setFreight, 'freight')
+    grab<ThroughputData>('/api/exec/throughput?weeks=13', setThrough, 'throughput')
     grab<TurnoverData>('/api/exec/turnover?months=12', setTurnover, 'turnover')
     grab<SmokehouseData>('/api/exec/smokehouse?weeks=12', setSmoke, 'smokehouse')
     grab<InventoryData>('/api/exec/inventory?weeks=8', setInventory, 'inventory')
@@ -1001,7 +1010,7 @@ export default function ExecPage() {
 
   const logout = async () => {
     await fetch('/api/exec/login', { method: 'DELETE' })
-    setAuthed(false); setPnl(null); setOverview(null); setWar(null); setLabor(null); setDaily(null); setFreight(null); setRevenue(null); setErrors({})
+    setAuthed(false); setPnl(null); setOverview(null); setWar(null); setLabor(null); setDaily(null); setFreight(null); setThrough(null); setRevenue(null); setErrors({})
   }
 
   const latestLabor = labor?.weeks[0] ?? null
@@ -1594,6 +1603,74 @@ export default function ExecPage() {
                   <Link href="/exec/study" style={{ color: C.tan }}>Run a timing study →</Link>
                   {unrated.length > 0 && <> <span style={{ color: WARN_COLOR }}>* No pay rate on file for {unrated.join(', ')} — hours counted, wages not.</span></>}
                   {daily.booksError && <> <span style={{ color: WARN_COLOR }}>Books unavailable: {daily.booksError}</span></>}
+                </div>
+              </>
+            )
+          })()}
+
+          {/* "I feel like we are back at a throughput issue all over" —
+              Charlie, 2026-09-20. Pounds out the door against the hours that
+              packed them, with the kill and the cut beside it, because a big
+              kill week the cut floor can't match just fills the cooler. */}
+          <SectionLabel>Throughput — pounds packed per crew hour, {through?.weeks.length ?? 13} weeks</SectionLabel>
+          {errors.throughput ? <ErrorBox msg={errors.throughput} /> : !through ? (
+            <div style={{ color: C.lightBrown, fontSize: '0.85rem' }}>Loading…</div>
+          ) : (() => {
+            const rows = through.weeks
+            const rated = rows.filter(w => w.lbsPerHour != null)
+            const best = rated.reduce((a, w) => (w.lbsPerHour! > (a?.lbsPerHour ?? 0) ? w : a), rated[0] ?? null)
+            const bestLbs = rows.reduce((a, w) => Math.max(a, w.packedLbs), 0)
+            const last = rows.find(w => w.packedLbs > 0 || w.hours > 0) ?? null
+            const avg = rated.length ? rated.reduce((a, w) => a + w.lbsPerHour!, 0) / rated.length : null
+            const cell = { textAlign: 'right' as const, padding: '0.35rem 0.5rem' }
+            return (
+              <>
+                <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+                  <StatTile hero label="Last week" value={last?.lbsPerHour != null ? f1(last.lbsPerHour) : '—'} unit="lb/hr"
+                    accent={avg != null && last?.lbsPerHour != null && last.lbsPerHour >= avg ? INCOME_COLOR : COST_COLOR}
+                    sub={last ? `${fmt(last.packedLbs)} lb on ${fmt(last.hours)} hours` : 'no hours yet'} />
+                  <StatTile label="Average" value={avg != null ? f1(avg) : '—'} unit="lb/hr" sub="these weeks" />
+                  <StatTile label="Best rate" value={best?.lbsPerHour != null ? f1(best.lbsPerHour) : '—'} unit="lb/hr"
+                    sub={best ? `week of ${best.week}` : ''} />
+                  <StatTile label="Biggest week" value={fmt(bestLbs)} unit="lb packed"
+                    sub="what the plant has shown it can do" />
+                </div>
+                <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '0.75rem 1.25rem', overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', color: C.tan }}>
+                    <thead>
+                      <tr style={{ color: C.lightBrown, textTransform: 'uppercase', fontSize: '0.65rem', letterSpacing: '0.08em' }}>
+                        <th style={{ textAlign: 'left', padding: '0.35rem 0.5rem' }}>Week of</th>
+                        <th style={cell}>Killed</th>
+                        <th style={cell}>Carcass lb</th>
+                        <th style={cell}>Cut</th>
+                        <th style={cell}>Packed lb</th>
+                        <th style={cell}>Pack days</th>
+                        <th style={cell}>Hours</th>
+                        <th style={cell}>Lb / hr</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map(w => (
+                        <tr key={w.week} style={{ borderTop: '1px solid rgba(166,120,90,0.12)' }}>
+                          <td style={{ padding: '0.35rem 0.5rem', whiteSpace: 'nowrap' }}>{dayLabel(w.week)}</td>
+                          <td style={cell}>{w.killHead || '—'}{w.killDays > 0 && <span style={{ color: C.lightBrown }}> /{w.killDays}d</span>}</td>
+                          <td style={cell}>{w.killLbs ? fmt(w.killLbs) : '—'}</td>
+                          <td style={cell}>{w.cutHead || '—'}</td>
+                          <td style={{ ...cell, color: C.cream, fontWeight: 600 }}>{w.packedLbs ? fmt(w.packedLbs) : '—'}</td>
+                          <td style={cell}>{w.packDays || '—'}</td>
+                          <td style={cell}>{w.hours ? fmt(w.hours) : '—'}</td>
+                          <td style={{ ...cell, fontWeight: 600, color: w.lbsPerHour == null ? C.lightBrown : avg != null && w.lbsPerHour >= avg ? INCOME_COLOR : COST_COLOR }}>
+                            {w.lbsPerHour != null ? f1(w.lbsPerHour) : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.5rem', lineHeight: 1.5 }}>
+                  Packed pounds are every package scanned that week; hours are everyone clocked in, floor and office, so this is the
+                  whole plant&apos;s rate rather than one station&apos;s. Cut counts only carcasses scanned into a packing session, so a week
+                  the crew didn&apos;t scan reads low. A kill far bigger than the cut beside it is product going into the cooler, not out the door.
                 </div>
               </>
             )
