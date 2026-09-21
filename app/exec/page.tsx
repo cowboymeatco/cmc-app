@@ -193,6 +193,19 @@ interface ThroughputWeek {
 }
 interface ThroughputData { weeks: ThroughputWeek[]; start: string; today: string }
 
+interface BenchSpecies {
+  species: string; sessions: number; head: number
+  medianMinPerHead: number; lbsPerActiveHour: number | null
+}
+interface BenchSession {
+  customer: string; date: string; species: string | null; head: number
+  scans: number; lbs: number; activeMin: number; wallMin: number; minPerHead: number | null
+}
+interface BenchData {
+  days: number; gapCapMinutes: number
+  species: BenchSpecies[]; sessions: BenchSession[]
+}
+
 interface FreightData {
   start: string; end: string; months: number
   costs: { name: string; label: string; amount: number | null }[]
@@ -921,6 +934,7 @@ export default function ExecPage() {
   const [daily, setDaily] = useState<DailyLaborData | null>(null)
   const [freight, setFreight] = useState<FreightData | null>(null)
   const [through, setThrough] = useState<ThroughputData | null>(null)
+  const [bench,   setBench]   = useState<BenchData | null>(null)
   const [turnover, setTurnover] = useState<TurnoverData | null>(null)
   const [smoke, setSmoke] = useState<SmokehouseData | null>(null)
   const [revenue, setRevenue] = useState<RevenueData | null>(null)
@@ -960,6 +974,7 @@ export default function ExecPage() {
     grab<DailyLaborData>('/api/exec/daily-labor?days=14', setDaily, 'daily')
     grab<FreightData>('/api/exec/freight?months=12', setFreight, 'freight')
     grab<ThroughputData>('/api/exec/throughput?weeks=13', setThrough, 'throughput')
+    grab<BenchData>('/api/exec/bench-time?days=90', setBench, 'bench')
     grab<TurnoverData>('/api/exec/turnover?months=12', setTurnover, 'turnover')
     grab<SmokehouseData>('/api/exec/smokehouse?weeks=12', setSmoke, 'smokehouse')
     grab<InventoryData>('/api/exec/inventory?weeks=8', setInventory, 'inventory')
@@ -1845,6 +1860,80 @@ export default function ExecPage() {
                   </div>
                 </>
               )}
+            </>
+          )}
+
+          {/* Charlie asked for a timestamp on the scanner marking a card
+              finished, to get packing time per head. The scans already answer
+              it, and the timestamp would have answered it wrong: first-to-last
+              is wall time, so an animal left overnight reads as a day of work.
+              Counting only the gaps short enough to be work gives a standard
+              you can schedule against. NOT labour cost - see the route. */}
+          <SectionLabel>Bench time — minutes at the scale per head, {bench?.days ?? 90} days</SectionLabel>
+          {errors.bench ? <ErrorBox msg={errors.bench} /> : !bench ? (
+            <div style={{ color: C.lightBrown, fontSize: '0.85rem' }}>Loading…</div>
+          ) : bench.species.length === 0 ? (
+            <div style={{ color: C.lightBrown, fontSize: '0.85rem' }}>No packed sessions with a carcass behind them in the window.</div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+                {bench.species.map(sp => (
+                  <div key={sp.species} style={{ flex: '1 1 150px', background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '0.7rem 0.9rem' }}>
+                    <div style={{ color: C.lightBrown, fontSize: '0.65rem', letterSpacing: '0.1em', textTransform: 'uppercase' }}>{sp.species}</div>
+                    <div style={{ color: C.cream, fontSize: '1.35rem', fontWeight: 700, fontFamily: 'monospace' }}>
+                      {sp.medianMinPerHead}<span style={{ fontSize: '0.8rem', fontWeight: 400, color: C.lightBrown }}> min/head</span>
+                    </div>
+                    <div style={{ color: C.lightBrown, fontSize: '0.7rem' }}>
+                      {sp.head} head{sp.lbsPerActiveHour != null ? ` · ${fmt(sp.lbsPerActiveHour)} lb/hr` : ''}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ color: C.lightBrown, fontSize: '0.72rem', marginBottom: '0.75rem', lineHeight: 1.5 }}>
+                Time with a package actually crossing the scale — gaps over {bench.gapCapMinutes} minutes are
+                treated as a break, not packing (95% of real gaps are under 2.5 min). This is bench time, not
+                labour cost: it leaves out the cutting and wrapping before the scale and runs one clock however
+                many people are on the bench, so it reads far better than the crew-hour rate above. Both are right.
+              </div>
+              <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '0.75rem 1.25rem', overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', color: C.tan }}>
+                  <thead>
+                    <tr style={{ color: C.lightBrown, textTransform: 'uppercase', fontSize: '0.65rem', letterSpacing: '0.08em' }}>
+                      <th style={{ textAlign: 'left',  padding: '0.35rem 0.5rem' }}>Packed</th>
+                      <th style={{ textAlign: 'left',  padding: '0.35rem 0.5rem' }}>Customer</th>
+                      <th style={{ textAlign: 'left',  padding: '0.35rem 0.5rem' }}>Species</th>
+                      <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Head</th>
+                      <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Lb</th>
+                      <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Bench min</th>
+                      <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>Min/head</th>
+                      <th style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>On the floor</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bench.sessions.slice(0, 15).map(r => {
+                      const med = bench.species.find(x => x.species === r.species)?.medianMinPerHead ?? null
+                      // Well off its species' standard is the row worth asking about.
+                      const off = med != null && r.minPerHead != null && med > 0 && r.minPerHead > med * 1.75
+                      return (
+                        <tr key={`${r.customer}-${r.date}`} style={{ borderTop: '1px solid rgba(166,120,90,0.12)' }}>
+                          <td style={{ padding: '0.35rem 0.5rem' }}>{new Date(r.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
+                          <td style={{ padding: '0.35rem 0.5rem', color: C.cream }}>{r.customer}</td>
+                          <td style={{ padding: '0.35rem 0.5rem' }}>{r.species ?? '—'}</td>
+                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>{r.head || '—'}</td>
+                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>{fmt(Math.round(r.lbs))}</td>
+                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', fontFamily: 'monospace' }}>{Math.round(r.activeMin)}</td>
+                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', fontFamily: 'monospace', color: off ? WARN_COLOR : C.tan }}>
+                            {r.minPerHead != null ? Math.round(r.minPerHead) : '—'}
+                          </td>
+                          <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', color: C.lightBrown }}>
+                            {r.wallMin >= 60 ? `${(r.wallMin / 60).toFixed(1)} h` : `${Math.round(r.wallMin)} min`}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </>
           )}
 
