@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { killFeeCharge, cutWrapCharge, isExcludedProducer, PORTION_FRACTION, type BillingCharge } from '@/lib/billingRules'
 import type { AppointmentCustomer } from '@/lib/types'
+import { selectIn } from '@/lib/selectIn'
 
 // Billing detector: scans operational records and writes pending rows into
 // billable_events. Idempotent — the unique key (rule, source, customer) makes
@@ -100,13 +101,22 @@ export async function POST(req: NextRequest) {
     // appointment id this route was matching it against — so before
     // 2026-08-27 that lookup never hit and every cut & wrap charge was dated
     // "today", whatever day the detector happened to run.
-    const [{ data: appts }, { data: packs }] = await Promise.all([
-      apptIds.length
-        ? supabase.from('harvest_appointments').select('id, customers').in('id', apptIds)
-        : Promise.resolve({ data: [] }),
-      logIds.length
-        ? supabase.from('processing_inputs').select('linked_harvest_id, pack_date').in('linked_harvest_id', logIds).not('pack_date', 'is', null)
-        : Promise.resolve({ data: [] }),
+    // Both lists grow with every kill day and `since` above is a fixed date,
+    // so they only ever get longer. A whole id list in one URL is what took
+    // /api/exec/revenue down at 414 carcasses; this one was at 287 and
+    // climbing (2026-09-21). See lib/selectIn.
+    const [appts, packs] = await Promise.all([
+      selectIn<{ id: string; customers: AppointmentCustomer[] | null }>(
+        apptIds,
+        batch => supabase.from('harvest_appointments').select('id, customers').in('id', batch),
+      ),
+      selectIn<{ linked_harvest_id: string; pack_date: string }>(
+        logIds,
+        batch => supabase.from('processing_inputs')
+          .select('linked_harvest_id, pack_date')
+          .in('linked_harvest_id', batch)
+          .not('pack_date', 'is', null),
+      ),
     ])
     const apptById = new Map((appts ?? []).map(a => [a.id, (a.customers ?? []) as AppointmentCustomer[]]))
     // First scan wins: a carcass packed over two days was cut on the first.

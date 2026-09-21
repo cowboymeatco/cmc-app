@@ -5,6 +5,7 @@ import {
 } from '@/lib/revenueRecognition'
 import { dayColumns, fetchProfitAndLossByDay, leafAccountSeries, sectionValues } from '@/lib/qboReports'
 import { addDaysISO } from '@/lib/dates'
+import { selectIn } from '@/lib/selectIn'
 
 // Loads everything lib/revenueRecognition needs for a window and builds it.
 // Shared by /api/exec/revenue and /api/exec/daily-labor so the labor panel's
@@ -67,15 +68,17 @@ export async function loadRevenueRecognition(start: string, end: string, today: 
   }))
 
   // The day each carcass was really broken, off the packing scans.
-  const packRes = logIds.length
-    ? await supabaseAdmin.from('processing_inputs')
-        .select('linked_harvest_id, pack_date')
-        .in('linked_harvest_id', logIds)
-        .not('pack_date', 'is', null)
-    : { data: [], error: null }
-  if (packRes.error) throw new Error(packRes.error.message)
+  // In batches: a 120-day window holds well over 400 carcasses now, and the
+  // whole id list in one URL is what was 500ing this route (see lib/selectIn).
+  const packRows = await selectIn<{ linked_harvest_id: string; pack_date: string }>(
+    logIds,
+    batch => supabaseAdmin.from('processing_inputs')
+      .select('linked_harvest_id, pack_date')
+      .in('linked_harvest_id', batch)
+      .not('pack_date', 'is', null),
+  )
   const packDayByLogId = new Map<string, string>()
-  for (const p of packRes.data ?? []) {
+  for (const p of packRows) {
     const id = p.linked_harvest_id as string
     const d = p.pack_date as string
     const prev = packDayByLogId.get(id)
