@@ -847,6 +847,8 @@ interface DeliveryRun {
   stops:        Stop[]
   notes:        string
   status:       string
+  odometer_out: number | null
+  odometer_in:  number | null
 }
 
 const RUN_STATUS: Record<string, { label: string; color: string }> = {
@@ -875,6 +877,12 @@ function ScheduleTab() {
 
   // The new-run form. Kept flat rather than in one object so a half-typed run
   // survives a re-render of the list behind it.
+  // Odometer out and back. Two numbers off the dash that turn the fuel and
+  // repair bills in QuickBooks into a cost per mile and per route (/exec
+  // Freight) — nothing about who drove or how long they took.
+  const [odoOut, setOdoOut] = useState('')
+  const [odoIn,  setOdoIn]  = useState('')
+
   const [date,   setDate]   = useState('')
   const [route,  setRoute]  = useState('')
   const [driver, setDriver] = useState('')
@@ -894,6 +902,7 @@ function ScheduleTab() {
 
   function resetForm() {
     setDate(''); setRoute(''); setDriver(''); setDepart(''); setNotes(''); setStops([emptyStop()])
+    setOdoOut(''); setOdoIn('')
     setEditing(null)
   }
 
@@ -906,6 +915,8 @@ function ScheduleTab() {
     setDriver(run.driver || '')
     setDepart(run.depart_time ? run.depart_time.slice(0, 5) : '')
     setNotes(run.notes || '')
+    setOdoOut(run.odometer_out == null ? '' : String(run.odometer_out))
+    setOdoIn(run.odometer_in == null ? '' : String(run.odometer_in))
     setStops(run.stops?.length ? run.stops.map(st => ({ customer: st.customer || '', town: st.town || '', note: st.note || '' })) : [emptyStop()])
     setAdding(true)
   }
@@ -918,7 +929,11 @@ function ScheduleTab() {
   async function save() {
     if (!date || !route.trim()) return
     setBusy(editing ? editing.id : 'new')
-    const payload = { run_date: date, route, driver, depart_time: depart, notes, stops }
+    const payload = {
+      run_date: date, route, driver, depart_time: depart, notes, stops,
+      odometer_out: odoOut === '' ? null : Number(odoOut),
+      odometer_in:  odoIn  === '' ? null : Number(odoIn),
+    }
     const res = await fetch('/api/delivery/runs', {
       method: editing ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(editing ? { id: editing.id, ...payload } : payload),
@@ -996,6 +1011,14 @@ function ScheduleTab() {
             <div>
               <label style={LABEL}>Leaves At</label>
               <input type="time" value={depart} onChange={e => setDepart(e.target.value)} style={INPUT} />
+            </div>
+            <div>
+              <label style={LABEL}>Odometer Out</label>
+              <input type="number" inputMode="decimal" value={odoOut} onChange={e => setOdoOut(e.target.value)} placeholder="Leaving the yard" style={INPUT} />
+            </div>
+            <div>
+              <label style={LABEL}>Odometer Back</label>
+              <input type="number" inputMode="decimal" value={odoIn} onChange={e => setOdoIn(e.target.value)} placeholder="Back at the shop" style={INPUT} />
             </div>
           </div>
 
@@ -1090,7 +1113,11 @@ function RunList({ runs, busy, onStatus, onEdit, onDelete, empty }: {
                   {runDay(r.run_date)} · {r.route || 'Route not named'}
                 </span>
                 <span style={{ color: C.lightBrown, fontSize: '0.78rem', marginLeft: '0.6rem' }}>
-                  {[r.depart_time ? `leaves ${r.depart_time.slice(0, 5)}` : '', r.driver].filter(Boolean).join(' · ')}
+                  {[
+                    r.depart_time ? `leaves ${r.depart_time.slice(0, 5)}` : '',
+                    r.driver,
+                    r.odometer_out != null && r.odometer_in != null ? `${Math.round(r.odometer_in - r.odometer_out)} miles` : '',
+                  ].filter(Boolean).join(' · ')}
                 </span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>

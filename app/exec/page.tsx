@@ -186,6 +186,15 @@ interface DailyLaborData { days: DailyLaborDay[]; today: string; booksThrough: s
 const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const dayLabel = (iso: string) => `${WEEKDAY[new Date(`${iso}T12:00:00`).getDay()]} ${Number(iso.slice(5, 7))}/${Number(iso.slice(8, 10))}`
 
+interface FreightData {
+  start: string; end: string; months: number
+  costs: { name: string; label: string; amount: number | null }[]
+  pool: number; income: number | null; gap: number | null; recoveryPct: number | null
+  runs: { id: string; run_date: string; route: string | null; driver: string | null; miles: number | null }[]
+  runCount: number; runsWithOdometer: number; miles: number; costPerMile: number | null
+  milesNeeded: number; runsNeeded: number
+}
+
 interface SmokehouseWeek { week: string; cooks: number; hours: number; daysRun: number; utilPct: number }
 interface SmokehouseData {
   weeks: number; weekHours: number
@@ -898,6 +907,7 @@ export default function ExecPage() {
   const [war, setWar] = useState<WarData | null>(null)
   const [labor, setLabor] = useState<LaborData | null>(null)
   const [daily, setDaily] = useState<DailyLaborData | null>(null)
+  const [freight, setFreight] = useState<FreightData | null>(null)
   const [turnover, setTurnover] = useState<TurnoverData | null>(null)
   const [smoke, setSmoke] = useState<SmokehouseData | null>(null)
   const [revenue, setRevenue] = useState<RevenueData | null>(null)
@@ -935,6 +945,7 @@ export default function ExecPage() {
     grab<WarData>('/api/exec/war', setWar, 'war')
     grab<LaborData>('/api/exec/labor', setLabor, 'labor')
     grab<DailyLaborData>('/api/exec/daily-labor?days=14', setDaily, 'daily')
+    grab<FreightData>('/api/exec/freight?months=12', setFreight, 'freight')
     grab<TurnoverData>('/api/exec/turnover?months=12', setTurnover, 'turnover')
     grab<SmokehouseData>('/api/exec/smokehouse?weeks=12', setSmoke, 'smokehouse')
     grab<InventoryData>('/api/exec/inventory?weeks=8', setInventory, 'inventory')
@@ -985,7 +996,7 @@ export default function ExecPage() {
 
   const logout = async () => {
     await fetch('/api/exec/login', { method: 'DELETE' })
-    setAuthed(false); setPnl(null); setOverview(null); setWar(null); setLabor(null); setDaily(null); setRevenue(null); setErrors({})
+    setAuthed(false); setPnl(null); setOverview(null); setWar(null); setLabor(null); setDaily(null); setFreight(null); setRevenue(null); setErrors({})
   }
 
   const latestLabor = labor?.weeks[0] ?? null
@@ -1582,6 +1593,65 @@ export default function ExecPage() {
               </>
             )
           })()}
+
+          {/* Freight as its own enterprise: the truck bills for delivery and
+              the truck costs money, and until now neither side of that was on
+              one page (Charlie, 2026-09-20). Cost per mile waits on the
+              odometer being written down. */}
+          <SectionLabel>Freight — the truck&apos;s own P&amp;L, last 12 months</SectionLabel>
+          {errors.freight ? <ErrorBox msg={errors.freight} /> : !freight ? (
+            <div style={{ color: C.lightBrown, fontSize: '0.85rem' }}>Loading…</div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+                <StatTile hero label="Delivery cost" value={usd(freight.pool)} accent={COST_COLOR}
+                  sub={`${freight.start} to ${freight.end}`} />
+                <StatTile label="Billed for delivery" value={freight.income == null ? '—' : usd(freight.income)}
+                  sub="Shipping Income" />
+                <StatTile label="Recovered" value={freight.recoveryPct == null ? '—' : `${Math.round(freight.recoveryPct)}%`}
+                  accent={freight.recoveryPct != null && freight.recoveryPct >= 100 ? INCOME_COLOR : COST_COLOR}
+                  sub={freight.gap == null ? 'of what the truck costs' : freight.gap >= 0 ? `${usd(freight.gap)} ahead` : `${usd(-freight.gap)} short`} />
+                <StatTile label="Cost per mile" value={freight.costPerMile == null ? '—' : `$${freight.costPerMile.toFixed(2)}`}
+                  sub={freight.costPerMile != null ? `over ${fmt(freight.miles)} logged miles`
+                    : `${freight.runsWithOdometer} of ${freight.runsNeeded} runs logged with an odometer`} />
+              </div>
+              <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '0.75rem 1.25rem' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', color: C.tan }}>
+                  <tbody>
+                    {freight.costs.map(c => (
+                      <tr key={c.name} style={{ borderTop: '1px solid rgba(166,120,90,0.12)' }}>
+                        <td style={{ padding: '0.35rem 0.5rem' }}>{c.label}</td>
+                        <td style={{ padding: '0.35rem 0.5rem', color: C.lightBrown, fontSize: '0.72rem' }}>{c.name}</td>
+                        <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem', color: C.cream }}>
+                          {c.amount == null ? 'not in the books' : usd(c.amount)}
+                        </td>
+                      </tr>
+                    ))}
+                    <tr style={{ borderTop: '1px solid rgba(166,120,90,0.35)', fontWeight: 700, color: C.cream }}>
+                      <td style={{ padding: '0.35rem 0.5rem' }}>What the truck costs</td>
+                      <td />
+                      <td style={{ textAlign: 'right', padding: '0.35rem 0.5rem' }}>{usd(freight.pool)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.5rem', lineHeight: 1.5 }}>
+                Plant Repairs &amp; Maintenance is deliberately not counted here — that account is ironworks, electricians and scale service.
+                Car &amp; Truck is the truck loan payment, so strictly only its interest is an expense; counting the whole payment
+                makes the cost of a mile slightly high. Driver wages are not in this pool; they are in the daily labor panel above.
+                {' '}
+                {freight.runsWithOdometer > 0
+                  ? `${freight.runsWithOdometer} of ${freight.runCount} logged runs have both odometer readings.`
+                  : `${freight.runCount} runs logged in this window, none with an odometer reading yet.`}
+                {' '}
+                <span style={{ color: WARN_COLOR }}>
+                  Cost per mile stays blank until {freight.runsNeeded} runs and {fmt(freight.milesNeeded)} miles have been logged: a year of fuel divided by a couple of
+                  written-down runs would read like $186 a mile. Log the odometer out and back and it fills itself in.
+                </span>{' '}
+                <Link href="/delivery" style={{ color: C.tan }}>Log a run →</Link>
+              </div>
+            </>
+          )}
 
           <SectionLabel>Labor — payroll per pound packed, 13 weeks</SectionLabel>
           {errors.labor ? <ErrorBox msg={errors.labor} /> : !labor ? (

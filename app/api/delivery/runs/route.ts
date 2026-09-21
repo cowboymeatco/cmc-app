@@ -65,6 +65,8 @@ export async function POST(req: NextRequest) {
       driver:      String(body?.driver ?? '').trim(),
       depart_time: String(body?.depart_time ?? '').trim() || null,
       stops:       cleanStops(body?.stops),
+      odometer_out: Number.isFinite(Number(body?.odometer_out)) && body?.odometer_out !== null && body?.odometer_out !== '' ? Number(body?.odometer_out) : null,
+      odometer_in:  Number.isFinite(Number(body?.odometer_in))  && body?.odometer_in  !== null && body?.odometer_in  !== '' ? Number(body?.odometer_in)  : null,
       notes:       String(body?.notes ?? '').trim(),
       status:      'planned',
     }])
@@ -89,6 +91,13 @@ export async function PATCH(req: NextRequest) {
   if ('notes' in body!)       updates.notes       = String(body!.notes ?? '').trim()
   if ('stops' in body!)       updates.stops       = cleanStops(body!.stops)
   if ('status' in body!)      updates.status      = String(body!.status ?? 'planned')
+  // Odometer out and back — what makes the freight pool divisible (lib/freight).
+  for (const k of ['odometer_out', 'odometer_in'] as const) {
+    if (k in body!) {
+      const n = Number(body![k])
+      updates[k] = body![k] == null || body![k] === '' || !Number.isFinite(n) ? null : n
+    }
+  }
 
   const { data, error } = await supabase
     .from('delivery_runs')
