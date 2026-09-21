@@ -2196,9 +2196,13 @@ function ChillTab({ onReopen }: { onReopen: (log: HarvestLog) => void }) {
   const [form, setForm] = useState({ checked_at: isoDateTime(), carcass_temp_f: '', cooler_temp_f: '', checked_by: '', notes: '' })
 
   const load = useCallback(async () => {
-    const [cRes, lRes] = await Promise.all([fetch('/api/harvest?type=log'), fetch('/api/harvest?type=chill')])
+    const [cRes, lRes] = await Promise.all([fetch('/api/harvest?type=log&status=chilling'), fetch('/api/harvest?type=chill')])
     const c: HarvestLog[] = await cRes.json().catch(() => [])
     const l: ChillLog[]   = await lRes.json().catch(() => [])
+    // Filtered server-side. Pulling the whole log and narrowing it here stopped
+    // working the day the master book import pushed harvest_log past the
+    // 1,000-row response cap: the page got the oldest thousand carcasses, all
+    // of them cut in 2022, and the chill worklist came up empty (2026-09-21).
     setCarcasses(c.filter(h => h.status === 'chilling'))
     setChillLogs(l)
   }, [])

@@ -29,6 +29,11 @@ interface HarvestRow {
   hot_carcass_weight_lbs: number | null
   half_1_weight_lbs:      number | null
   half_2_weight_lbs:      number | null
+  // Set on the 3,629 kills imported from the paper master book (2022 → Apr
+  // 2026). Real animals with real weights, so they belong on the history, but
+  // they predate cut tracking entirely — anything measuring how well we RECORD
+  // a cut has to leave them out or it reads as thousands of lost records.
+  legacy_source:          string | null
 }
 
 const FALLBACK_HANG_DAYS = 14
@@ -48,12 +53,36 @@ function carcassLbs(h: HarvestRow): number {
   return Number(h.half_1_weight_lbs ?? 0) + Number(h.half_2_weight_lbs ?? 0)
 }
 
+const isLegacy = (h: HarvestRow) => h.legacy_source != null
+
+// Every carcass, in pages. PostgREST caps one response at 1,000 rows and says
+// nothing about it — no error, no flag, just a short array. harvest_log crossed
+// that line on 2026-09-18 when the master book import landed, and because the
+// order is oldest-first the thousand rows that came back were all 2022–2023
+// carcasses cut years ago. The chart dutifully drew an empty cooler for every
+// day since: "why are we zeroing out" (Charlie, 2026-09-21). Ask for a second
+// sort key as well, since harvest_date alone isn't unique and a range scan
+// needs a total order or pages overlap and drop rows.
+async function allCarcasses(): Promise<{ data: HarvestRow[]; error: { message: string } | null }> {
+  const PAGE = 1000
+  const rows: HarvestRow[] = []
+  for (let offset = 0; ; offset += PAGE) {
+    const { data, error } = await supabase
+      .from('harvest_log')
+      .select('id,harvest_date,status,species,hot_carcass_weight_lbs,half_1_weight_lbs,half_2_weight_lbs,legacy_source')
+      .order('harvest_date', { ascending: true })
+      .order('id',           { ascending: true })
+      .range(offset, offset + PAGE - 1)
+    if (error) return { data: [], error }
+    rows.push(...((data ?? []) as HarvestRow[]))
+    if (!data || data.length < PAGE) break
+  }
+  return { data: rows, error: null }
+}
+
 export async function GET() {
   const [harvestRes, scheduleRes, planRes, scanRes, bookedRes] = await Promise.all([
-    supabase
-      .from('harvest_log')
-      .select('id,harvest_date,status,species,hot_carcass_weight_lbs,half_1_weight_lbs,half_2_weight_lbs')
-      .order('harvest_date', { ascending: true }),
+    allCarcasses(),
     supabase
       .from('cut_schedule_items')
       .select('appointment_id,schedule_date')
@@ -179,7 +208,10 @@ export async function GET() {
     // says so rather than presenting an estimate as a measurement.
     fromScan: carcasses.filter(h => h.status !== 'chilling' && scannedCutDay.has(h.id)).length,
     known:    allHangs.length,
-    total:    carcasses.filter(h => h.status !== 'chilling').length,
+    // Tracked-era carcasses only. The imported master book never had a cut
+    // date to lose, so counting its 3,629 kills as missing one would turn a
+    // healthy "370 of 400" into a false alarm.
+    total:    carcasses.filter(h => h.status !== 'chilling' && !isLegacy(h)).length,
   }
 
   // First date with an exact (non-estimated) cut record.
@@ -355,21 +387,52 @@ export async function GET() {
   // cooler-wide lbs/head is mostly a mix reading — cut the hogs and it leaps
   // without a single animal being heavier — so "are we trending heavier?" can
   // only be answered a species at a time (Charlie, 2026-08-05).
+  // Carried as a running balance instead of re-counting every carcass on every
+  // day. That inner scan was fine at 300 carcasses over a few months; with the
+  // master book it is 4,000 carcasses across 1,400 days, ~6M comparisons per
+  // request. A carcass adds itself on the day it arrives and subtracts itself
+  // on the day it's cut, so one pass over the deltas gives the same series.
+  type Delta = { head: number; lbs: number; sp: Map<Species, { head: number; lbs: number }> }
+  const deltas = new Map<string, Delta>()
+  const bump = (d: string, head: number, lbs: number, species: Species) => {
+    let day = deltas.get(d)
+    if (!day) { day = { head: 0, lbs: 0, sp: new Map() }; deltas.set(d, day) }
+    day.head += head
+    day.lbs  += lbs
+    const cur = day.sp.get(species) ?? { head: 0, lbs: 0 }
+    cur.head += head
+    cur.lbs  += lbs
+    day.sp.set(species, cur)
+  }
+  for (const c of intervals) {
+    bump(c.in, 1, c.lbs, c.species)
+    // Counted on days [in, out) — it hangs the day it arrives and is gone the
+    // day it's cut, so both deltas landing on one day means it never hung.
+    if (c.out !== null) bump(c.out, -1, -c.lbs, c.species)
+  }
+
   const series: { d: string; head: number; lbs: number; sp: Record<string, number>; spLbs: Record<string, number> }[] = []
+  let runHead = 0, runLbs = 0
+  const spHead = new Map<Species, number>()
+  const spLbs  = new Map<Species, number>()
   for (let d = firstDay; d <= today; d = addDaysISO(d, 1)) {
-    let head = 0, lbs = 0
-    const sp: Record<string, number> = {}
-    const spLbs: Record<string, number> = {}
-    for (const c of intervals) {
-      if (c.in <= d && (c.out === null || c.out > d)) {
-        head++
-        lbs += c.lbs
-        sp[c.species]    = (sp[c.species] ?? 0) + 1
-        spLbs[c.species] = (spLbs[c.species] ?? 0) + c.lbs
+    const day = deltas.get(d)
+    if (day) {
+      runHead += day.head
+      runLbs  += day.lbs
+      for (const [k, v] of day.sp) {
+        spHead.set(k, (spHead.get(k) ?? 0) + v.head)
+        spLbs.set(k,  (spLbs.get(k)  ?? 0) + v.lbs)
       }
     }
-    for (const k of Object.keys(spLbs)) spLbs[k] = Math.round(spLbs[k])
-    series.push({ d, head, lbs: Math.round(lbs), sp, spLbs })
+    const sp: Record<string, number> = {}
+    const lbsBy: Record<string, number> = {}
+    for (const [k, v] of spHead) {
+      if (v === 0) continue
+      sp[k]    = v
+      lbsBy[k] = Math.round(spLbs.get(k) ?? 0)
+    }
+    series.push({ d, head: runHead, lbs: Math.round(runLbs), sp, spLbs: lbsBy })
   }
 
   return NextResponse.json({ series, asOf: today, trackingStart, medianHangDays, estimatedExits, hanging, ytd, stale, drawdown, hangToCut })
