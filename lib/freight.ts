@@ -45,3 +45,15 @@ export function runMiles(r: RunMiles): number | null {
   const miles = Number(r.odometer_in) - Number(r.odometer_out)
   return miles > 0 && miles < 3000 ? miles : null
 }
+
+/** The Shipping Income account id in QuickBooks (looked up once, 2026-09-20). */
+export const SHIPPING_INCOME_ACCOUNT_ID = '84'
+
+export interface FreightBilling {
+  invoiceCount: number            // invoices written in the window
+  chargedCount: number            // ...that carried a shipping charge
+  chargedGross: number            // what those invoices were worth in total
+  freightBilled: number           // the shipping charge on them
+  freightPctOfGross: number | null
+  topCustomers: { name: string; amount: number }[]
+}

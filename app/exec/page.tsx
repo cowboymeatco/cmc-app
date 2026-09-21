@@ -193,6 +193,11 @@ interface FreightData {
   runs: { id: string; run_date: string; route: string | null; driver: string | null; miles: number | null }[]
   runCount: number; runsWithOdometer: number; miles: number; costPerMile: number | null
   milesNeeded: number; runsNeeded: number
+  billing: {
+    invoiceCount: number; chargedCount: number; chargedGross: number
+    freightBilled: number; freightPctOfGross: number | null
+    topCustomers: { name: string; amount: number }[]
+  }
 }
 
 interface SmokehouseWeek { week: string; cooks: number; hours: number; daysRun: number; utilPct: number }
@@ -1611,11 +1616,17 @@ export default function ExecPage() {
                 <StatTile label="Recovered" value={freight.recoveryPct == null ? '—' : `${Math.round(freight.recoveryPct)}%`}
                   accent={freight.recoveryPct != null && freight.recoveryPct >= 100 ? INCOME_COLOR : COST_COLOR}
                   sub={freight.gap == null ? 'of what the truck costs' : freight.gap >= 0 ? `${usd(freight.gap)} ahead` : `${usd(-freight.gap)} short`} />
+                <StatTile label="Invoices charging freight"
+                  value={`${fmt(freight.billing.chargedCount)} of ${fmt(freight.billing.invoiceCount)}`}
+                  sub={freight.billing.invoiceCount > 0
+                    ? `${(freight.billing.chargedCount / freight.billing.invoiceCount * 100).toFixed(1)}% of invoices · ${usd(freight.billing.chargedGross)} of product on them`
+                    : 'no invoices in the window'} />
                 <StatTile label="Cost per mile" value={freight.costPerMile == null ? '—' : `$${freight.costPerMile.toFixed(2)}`}
                   sub={freight.costPerMile != null ? `over ${fmt(freight.miles)} logged miles`
                     : `${freight.runsWithOdometer} of ${freight.runsNeeded} runs logged with an odometer`} />
               </div>
-              <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '0.75rem 1.25rem' }}>
+              <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+              <div style={{ flex: '1 1 340px', background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '0.75rem 1.25rem' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', color: C.tan }}>
                   <tbody>
                     {freight.costs.map(c => (
@@ -1634,6 +1645,27 @@ export default function ExecPage() {
                     </tr>
                   </tbody>
                 </table>
+              </div>
+              {freight.billing.topCustomers.length > 0 && (
+                <div style={{ flex: '1 1 300px', background: C.dark, border: '1px solid rgba(166,120,90,0.18)', borderRadius: 4, padding: '0.75rem 1.25rem' }}>
+                  <div style={{ fontSize: '0.65rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '0.4rem' }}>
+                    Who pays freight
+                  </div>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', color: C.tan }}>
+                    <tbody>
+                      {freight.billing.topCustomers.map(c => (
+                        <tr key={c.name} style={{ borderTop: '1px solid rgba(166,120,90,0.12)' }}>
+                          <td style={{ padding: '0.3rem 0.5rem' }}>{c.name}</td>
+                          <td style={{ textAlign: 'right', padding: '0.3rem 0.5rem', color: C.cream }}>{usd(c.amount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div style={{ fontSize: '0.7rem', color: C.lightBrown, marginTop: '0.4rem' }}>
+                    Freight is {freight.billing.freightPctOfGross == null ? '—' : `${freight.billing.freightPctOfGross.toFixed(1)}%`} of what those invoices are worth.
+                  </div>
+                </div>
+              )}
               </div>
               <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.5rem', lineHeight: 1.5 }}>
                 Plant Repairs &amp; Maintenance is deliberately not counted here — that account is ironworks, electricians and scale service.

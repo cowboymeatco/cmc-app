@@ -121,6 +121,37 @@ export function monthColumns(report: QboReport): string[] {
   return out
 }
 
+/**
+ * Every posting to ONE income or expense account, transaction by transaction.
+ * Cheap (a second or two) because the account filter runs server-side, which
+ * is how the freight panel counts the invoices that carried a shipping charge
+ * without pulling a year of invoices.
+ */
+export async function fetchAccountDetail(accountId: string, startDate: string, endDate: string): Promise<QboReport> {
+  return qboFetch<QboReport>(
+    `reports/ProfitAndLossDetail?start_date=${startDate}&end_date=${endDate}&account=${accountId}` +
+    '&columns=tx_date,txn_type,doc_num,name,memo,subt_nat_amount&accounting_method=Accrual',
+  )
+}
+
+export interface DetailLine { date: string; type: string; docNumber: string; name: string; memo: string; amount: number }
+
+/** Flatten a detail report's data rows. Column order follows the request above. */
+export function detailLines(report: QboReport): DetailLine[] {
+  const out: DetailLine[] = []
+  const walk = (rows: ReportRow[] | undefined) => {
+    for (const r of rows ?? []) {
+      const c = r.ColData
+      if (c && c.length >= 6 && c[0].value) {
+        out.push({ date: c[0].value, type: c[1].value, docNumber: c[2].value, name: c[3].value, memo: c[4].value, amount: num(c[5].value) })
+      }
+      walk(r.Rows?.Row)
+    }
+  }
+  walk(report.Rows?.Row)
+  return out
+}
+
 export async function fetchProfitAndLossByMonth(startDate: string, endDate: string): Promise<QboReport> {
   return qboFetch<QboReport>(
     `reports/ProfitAndLoss?start_date=${startDate}&end_date=${endDate}&summarize_column_by=Month&accounting_method=Accrual`,
