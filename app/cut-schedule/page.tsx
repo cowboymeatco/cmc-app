@@ -25,6 +25,44 @@ const C = {
   amber:      '#F59E0B',
 }
 
+// USDA or custom, said plainly on every job. A USDA carcass carries the mark
+// of inspection and its packages can be sold; a custom one is the owner's own
+// meat and everything off it is NOT FOR SALE. The cutter needs that before the
+// first cut, not after (Charlie, 2026-09-21). Same colours as the badge on
+// /harvest Part A so the two pages agree at a glance. Blank on carcasses that
+// predate the Part A field — say nothing rather than guess which it was.
+function KillTypeBadge({ killType }: { killType: 'USDA' | 'Custom' | null }) {
+  if (!killType) return null
+  const usda = killType === 'USDA'
+  const color = usda ? C.green : C.amber
+  return (
+    <span style={{
+      fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+      padding: '1px 6px', borderRadius: 4, whiteSpace: 'nowrap',
+      color, border: `1px solid ${color}66`, background: `${color}1A`,
+    }}>
+      {killType}
+    </span>
+  )
+}
+
+/** How many of a day's carcasses are USDA and how many are custom. Deduped by
+ *  carcass, since a split animal shows as one row per cut sheet. */
+function killMix(entries: ScheduleEntry[]): { type: 'USDA' | 'Custom'; head: number; color: string }[] {
+  const seen = new Set<string>()
+  let usda = 0, custom = 0
+  for (const e of entries) {
+    if (seen.has(e.harvest_log_id)) continue
+    seen.add(e.harvest_log_id)
+    if (e.kill_type === 'USDA') usda++
+    else if (e.kill_type === 'Custom') custom++
+  }
+  return [
+    ...(usda   ? [{ type: 'USDA'   as const, head: usda,   color: C.green }] : []),
+    ...(custom ? [{ type: 'Custom' as const, head: custom, color: C.amber }] : []),
+  ]
+}
+
 interface Section {
   key:     string
   date:    string | null       // break date heading this day, null = list before the first break
@@ -293,6 +331,12 @@ export default function CrewCutSchedulePage() {
                 </span>
                 <span style={{ color: C.lightBrown, fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
                   {secTotals.head} head · {Math.round(secTotals.lbs).toLocaleString()} lb
+                  {/* Counted per carcass, not per cut sheet — a split animal is
+                      one kill and one kill type. Only types actually recorded
+                      are named, so a day with none stays silent. */}
+                  {killMix(sec.entries).map(m => (
+                    <span key={m.type} style={{ color: m.color, fontWeight: 700 }}> · {m.head} {m.type}</span>
+                  ))}
                 </span>
               </div>
 
@@ -332,6 +376,7 @@ export default function CrewCutSchedulePage() {
                           }}>
                             {pb.label}
                           </span>
+                          <KillTypeBadge killType={entry.kill_type} />
                         </div>
                         <div style={{ fontSize: '0.78rem', color: C.lightBrown, marginTop: 3 }}>
                           <span style={{ color: spColor, fontWeight: 700 }}>{speciesIcon(entry.species)} {entry.species}</span>

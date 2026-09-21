@@ -46,6 +46,11 @@ export interface ScheduleEntry {
   harvest_date:              string
   carcass_tag:               string
   hot_carcass_weight_lbs:    number | null
+  /** USDA or Custom, straight off the carcass. The cutter has to know before
+   *  the first cut — a USDA carcass carries the mark of inspection and can be
+   *  sold, a custom one is the owner's own meat and every package off it is
+   *  NOT FOR SALE. Blank on older carcasses that predate the Part A field. */
+  kill_type:                 'USDA' | 'Custom' | null
   has_instructions:          boolean
   cutting_instruction_id:    string | null
   days_hanging:              number
@@ -624,6 +629,7 @@ export function buildEntries(
         harvest_date:            log.harvest_date,
         carcass_tag:             log.carcass_tag,
         hot_carcass_weight_lbs:  log.hot_carcass_weight_lbs,
+        kill_type:               log.kill_type ?? null,
         // Every sheet has to be in before the row is clear — one missing sheet
         // still stops the carcass, so the flag follows the weakest portion.
         has_instructions:        cutCustomers.every(c => c.has_instructions),
@@ -679,6 +685,7 @@ export function buildEntries(
       harvest_date:            log.harvest_date,
       carcass_tag:             log.carcass_tag,
       hot_carcass_weight_lbs:  log.hot_carcass_weight_lbs,
+      kill_type:               log.kill_type ?? null,
       has_instructions:        hasInstructions,
       cutting_instruction_id:  singleSheet || single?.linked_cutting_instruction_id || null,
       // Nobody has been written down as buying this animal yet, so there is no
