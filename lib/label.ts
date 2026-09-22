@@ -162,6 +162,17 @@ export function nameCarriesWeight(name: string, weightLbs?: number | null): bool
   return displayCustomerName(name, weightLbs) !== (name || '').trim()
 }
 
+// The weight the crew typed into the name, whatever it says — where
+// nameCarriesWeight asks "does this name already say THIS weight", this asks
+// "what weight does this name claim". Only the explicit "#"/"lb" forms count: a
+// bare trailing number is as likely to be a hog number or a year as a weight,
+// and there is nothing to check it against until it is read as one.
+export function weightInName(name: string): number | null {
+  const m = (name || '').trim().match(/\s[·\-]?\s*(\d{2,4}(?:\.\d+)?)\s*(?:#|lbs?)\s*$/i)
+  const n = m ? Number(m[1]) : NaN
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
 // Batch code: YYDDD off the pack/processing date (Julian day-of-year). This is
 // the number the floor recognizes, not the calendar date.
 export function julianYYDDD(dateStr: string): string {

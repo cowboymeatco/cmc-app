@@ -41,8 +41,9 @@ export default function CureTagsTab() {
   const [loading, setLoading] = useState(true)
   const [err,     setErr]     = useState('')
 
-  const [statusFilter, setStatusFilter] = useState<'curing' | 'done' | 'all'>('curing')
-  const [search,       setSearch]       = useState('')
+  const [statusFilter,  setStatusFilter]  = useState<'curing' | 'done' | 'all'>('curing')
+  const [productFilter, setProductFilter] = useState('')
+  const [search,        setSearch]        = useState('')
   const [busyId,       setBusyId]       = useState<string | null>(null)
   const [editId,       setEditId]       = useState<string | null>(null)
   const [editName,     setEditName]     = useState('')
@@ -62,12 +63,29 @@ export default function CureTagsTab() {
     const q = search.trim().toLowerCase()
     return tags.filter(t => {
       if (statusFilter !== 'all' && t.status !== statusFilter) return false
+      if (productFilter && t.product !== productFilter) return false
       if (q && !t.customer_name.toLowerCase().includes(q) && !t.tag_number.includes(q)) return false
       return true
     })
-  }, [tags, statusFilter, search])
+  }, [tags, statusFilter, productFilter, search])
 
   const inCure = tags.filter(t => t.status === 'curing').length
+
+  // Everything in cure at once is a dozen customers' hams, bacons and jowls in
+  // one list, and the work is done a product at a time — the bacon comes out of
+  // the cure together (Jill, 2026-09-21). Counted against the status showing,
+  // so "Bacon (9)" is nine tags she will actually see. The product picked stays
+  // in the list even when the status it belongs to has none, or switching
+  // status would silently drop a filter still on screen.
+  const products = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const t of tags) {
+      if (statusFilter !== 'all' && t.status !== statusFilter) continue
+      if (t.product) m.set(t.product, (m.get(t.product) ?? 0) + 1)
+    }
+    if (productFilter && !m.has(productFilter)) m.set(productFilter, 0)
+    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+  }, [tags, statusFilter, productFilter])
 
   // Which of a customer's animals this piece came off. Only ever set by hand:
   // a seal carries a customer, not a carcass, and nothing in the data says
@@ -165,6 +183,10 @@ export default function CureTagsTab() {
           <option value="done">✓ Done</option>
           <option value="all">All tags</option>
         </select>
+        <select value={productFilter} onChange={e => setProductFilter(e.target.value)} style={{ ...INPUT, width: 200 }}>
+          <option value="">All products</option>
+          {products.map(([p, n]) => <option key={p} value={p}>{p} ({n})</option>)}
+        </select>
         <input
           placeholder="Search customer or tag #…"
           value={search} onChange={e => setSearch(e.target.value)}
@@ -181,7 +203,9 @@ export default function CureTagsTab() {
             <div style={{ padding: '2rem', textAlign: 'center', color: C.amber }}>{err}</div>
           ) : !rows.length ? (
             <div style={{ padding: '2rem', textAlign: 'center', color: C.lightBrown }}>
-              {statusFilter === 'curing' ? 'Nothing in cure. Tags scanned on the cut floor land here.' : 'No tags for these filters.'}
+              {statusFilter === 'curing' && !productFilter
+                ? 'Nothing in cure. Tags scanned on the cut floor land here.'
+                : 'No tags for these filters.'}
             </div>
           ) : (
             <table style={{ borderCollapse: 'collapse', fontSize: '0.85rem', minWidth: '100%' }}>

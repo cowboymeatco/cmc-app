@@ -9,6 +9,7 @@ import { speciesIcon, speciesFromDescription } from '@/lib/cutSchedule'
 import CustomerPicker, { resolveCiScan, type CustomerName } from './CustomerPicker'
 import AnimalStart, { type AnimalPick } from './AnimalStart'
 import { isCarcassTag } from '@/lib/carcassTag'
+import { weightInName } from '@/lib/label'
 const C = {
   dark:       '#1A0A04',
   darkBrown:  '#351E0E',
@@ -2473,6 +2474,34 @@ export default function ScannerPage() {
   const closedWeight   = boxes.filter(b => b.is_closed).reduce((s, b) => s + (Number(b.total_weight_lbs) || 0), 0)
   const borderColor    = flash === 'ok' ? C.green : flash === 'warn' ? C.yellow : flash === 'bad' ? C.red : isOpen ? 'rgba(201,168,130,0.5)' : 'rgba(166,120,90,0.2)'
   const totalInputLbs  = inputs.reduce((s, i) => s + (Number(i.weight_lbs) || 0), 0)
+
+  // ── The session name says one hog, the scanned tag says another ───────────
+  // Three of Jason Stensvad's hogs hung together at 123, 143 and 162 lb. The
+  // bench named a session "JASON STENSVAD 143#" and scanned tag 14 — the 123 lb
+  // hog — into it, so the packout slip billed that customer somebody else's
+  // hanging weight, and the cut card resolved off the wrong animal with it
+  // (Jill, 2026-09-22). Nothing said a word: two hogs of one customer look
+  // identical to every check we had.
+  //
+  // The weight the crew typed is the check. It is read off the inputs, not
+  // remembered from the scan, so it is still standing when the session is
+  // reopened tomorrow — and it only WARNS: which hog is which is a fact about
+  // the rail, and the floor is who knows it.
+  const carcassMismatch = useMemo(() => {
+    const claimed = weightInName(customer)
+    if (!claimed) return null
+    const weights = inputs
+      .filter(i => i.input_type === 'carcass')
+      .map(i => Number(i.weight_lbs))
+      .filter(w => Number.isFinite(w) && w > 0)
+    if (!weights.length) return null
+    const near = (w: number) => Math.abs(w - claimed) <= 2
+    // A half of a whole-carcass weight is the same animal, said differently.
+    if (weights.some(w => near(w) || near(w / 2))) return null
+    const sum = weights.reduce((t, w) => t + w, 0)
+    if (near(sum) || near(sum / 2)) return null
+    return { claimed, scanned: weights }
+  }, [customer, inputs])
   // A closed active box is already inside closedWeight — adding its scans
   // again would double-count it in the yield.
   const totalOutputLbs = closedWeight + (isOpen ? totalWeight : 0)
@@ -3512,6 +3541,21 @@ export default function ScannerPage() {
 
         {/* ── Inputs panel ── */}
         <div style={{ flexShrink: 0 }}>
+          {carcassMismatch && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem',
+              padding: '0.4rem 0.7rem', borderRadius: 4,
+              background: 'rgba(217,119,6,0.15)', border: `1px solid ${C.yellow}`,
+            }}>
+              <span style={{ fontSize: '0.95rem', flexShrink: 0 }}>⚠</span>
+              <span style={{ fontSize: '0.78rem', color: C.cream, lineHeight: 1.35 }}>
+                This session is named <strong>{carcassMismatch.claimed} lb</strong>, but the carcass scanned into it
+                weighs <strong>{carcassMismatch.scanned.map(w => w.toFixed(1)).join(' + ')} lb</strong>.
+                {' '}If that&rsquo;s the wrong animal, pull it out below and scan the right tag — the cut card and the
+                packout slip both come off it.
+              </span>
+            </div>
+          )}
           <div
             onClick={() => setShowInputs(p => !p)}
             style={{

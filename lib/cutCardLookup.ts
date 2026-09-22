@@ -21,6 +21,23 @@ export const normName = (n: string) =>
 
 export interface CIMatch { cards: CICard[]; via: string; name: string }
 
+type CIRow = { data?: unknown; customer_name?: string; customer_id?: string | null; species?: string | null }
+
+// Which of these cards belongs to the session on the bench.
+//
+// A carcass and an appointment are both wider than one order — a split hog
+// carries two cards, a five-hog drop-off carries five — so neither can name a
+// card on its own. One card means no question to answer. More than one, and
+// only the session's own name may choose; failing that the caller has to look
+// elsewhere, because picking any of them is picking a stranger's order.
+function theOneFor(rows: CIRow[], customerName: string): CIRow | null {
+  const cards = rows.filter(r => r?.data)
+  if (cards.length <= 1) return cards[0] ?? null
+  const target = normName(customerName)
+  const named  = target ? cards.filter(r => normName(r.customer_name ?? '') === target) : []
+  return named.length === 1 ? named[0] : null
+}
+
 // Find the customer's cut card. Tries the databased links first, but in
 // practice most sessions have neither — carcass_assignments has a handful of
 // rows and no cutting instruction carries an appointment_id — so the name match
@@ -64,13 +81,23 @@ export async function resolveCuttingInstruction(customerName: string, packDate: 
       .in('harvest_log_id', harvestIds)
       .not('linked_cutting_instruction_id', 'is', null)
     const ciIds = [...new Set((ca.data ?? []).map(r => r.linked_cutting_instruction_id).filter(Boolean))]
-    if (ciIds.length === 1) {
-      const ci = await supabase.from('cutting_instructions').select('data, customer_name, species').eq('id', ciIds[0]).maybeSingle()
-      const hit = pick(ci.data, 'carcass')
+    if (ciIds.length) {
+      const ci = await supabase.from('cutting_instructions').select('data, customer_name, species').in('id', ciIds)
+      // One carcass can carry two orders — a hog split down the middle between
+      // two customers, both cards assigned to tag 09. The carcass says whose
+      // animal it is, not whose half is on THIS bench, so the session's own
+      // name picks between them (Jill, 2026-09-21).
+      const hit = pick(theOneFor(ci.data ?? [], customerName), 'carcass')
       if (hit) return hit
     }
 
-    // 2. Appointment key, for once cut cards start carrying one.
+    // 2. Appointment key. A drop-off is a whole appointment — five hogs, five
+    // cards — so the appointment alone does NOT name a card. This used to take
+    // the most recently edited one, which handed the Art Adame bench Rolph
+    // Pankratz's card and told it to pack ground pork against a pork sausage
+    // order (Jill, 2026-09-21). Only a name match gets to speak for a shared
+    // appointment; with none, the honest answer is to fall through to the name
+    // search below rather than print somebody else's intent.
     const hl = await supabase.from('harvest_log').select('appointment_id').in('id', harvestIds)
     const appts = [...new Set((hl.data ?? []).map(r => r.appointment_id).filter(Boolean))]
     if (appts.length) {
@@ -78,10 +105,7 @@ export async function resolveCuttingInstruction(customerName: string, packDate: 
         .from('cutting_instructions')
         .select('data, customer_name, species')
         .in('appointment_id', appts)
-        .order('last_modified', { ascending: false })
-        .limit(1)
-        .maybeSingle()
-      const hit = pick(ci.data, 'appointment')
+      const hit = pick(theOneFor(ci.data ?? [], customerName), 'appointment')
       if (hit) return hit
     }
   }
