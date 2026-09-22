@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import type { HarvestAppointment } from '@/lib/types'
 import { makeCode39Barcode } from '@/lib/label'
+import { QBO_SERVICE_ITEMS } from '@/lib/billingRules'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -14,10 +15,30 @@ interface RawInstruction {
   status:     string
   species?:   string   // top-level column — v2 wizard writes species here, not in data
   data:       Record<string, any>
-  // Negotiated processing rate for this one animal. A column rather than a key
-  // in `data`, because the public wizard rewrites `data` wholesale whenever the
-  // customer edits their card. null = standard pricing.
+  // Negotiated rates for this one animal, mirroring the two lines QBO actually
+  // invoices. Columns rather than keys in `data`, because the public wizard
+  // rewrites `data` wholesale whenever the customer edits their card.
+  // null = the standard rate for that line.
   processing_price_per_lb?: number | string | null
+  kill_price_per_lb?: number | string | null
+}
+
+// What the card would bill at if nobody touched it. Read off the QBO service
+// items the charge detector already bills from, so the reference on screen
+// can't drift away from the invoice. Lamb and goat are a flat fee per head,
+// not $/lb, so there is no per-pound standard to quote for them.
+function standardRates(species: string, portion?: string | null): { kill: number | null; proc: number | null; flat: number | null } {
+  const sp = String(species || '').toLowerCase()
+  const isQuarter = String(portion || '').toLowerCase().startsWith('quarter')
+  if (sp === 'beef') {
+    return { kill: QBO_SERVICE_ITEMS.beefKill.rate, proc: (isQuarter ? QBO_SERVICE_ITEMS.procQuarters : QBO_SERVICE_ITEMS.procWholeHalf).rate, flat: null }
+  }
+  if (sp === 'pork' || sp === 'hog') {
+    return { kill: QBO_SERVICE_ITEMS.hogKill.rate, proc: QBO_SERVICE_ITEMS.hogProcessing.rate, flat: null }
+  }
+  if (sp === 'lamb' || sp === 'sheep') return { kill: null, proc: null, flat: QBO_SERVICE_ITEMS.lambSheepFlat.rate }
+  if (sp === 'goat') return { kill: null, proc: null, flat: QBO_SERVICE_ITEMS.goatFlat.rate }
+  return { kill: null, proc: null, flat: null }
 }
 
 // v1 stores species in data; v2 stores it as a top-level column
@@ -1708,7 +1729,8 @@ export default function CuttingInstructionsPage() {
   // to the id means moving to another card closes it on its own, instead of an
   // effect racing to put one customer's price away before the next one shows.
   const [rateEditingId, setRateEditingId] = useState<string | null>(null)
-  const [rateDraft,   setRateDraft]   = useState('')
+  const [rateKillDraft, setRateKillDraft] = useState('')
+  const [rateProcDraft, setRateProcDraft] = useState('')
   const [rateSaving,  setRateSaving]  = useState(false)
   const [rateError,   setRateError]   = useState('')
   const [showCopyPicker, setShowCopyPicker] = useState(false)
@@ -1999,23 +2021,30 @@ export default function CuttingInstructionsPage() {
   // own processing, and anything stored in `data` would be overwritten the next
   // time they edited their card anyway (Jill, 2026-09-22 — Charlie: one set
   // price per card, not per cut).
-  async function saveRate(id: string, raw: string) {
+  async function saveRate(id: string, killRaw: string, procRaw: string) {
     setRateSaving(true)
     setRateError('')
+    const clean = (s: string) => (s.trim() === '' ? null : s.trim())
     try {
       const res = await fetch('/api/cutting-instructions', {
         method:  'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ ids: [id], processing_price_per_lb: raw.trim() === '' ? null : raw.trim() }),
+        body:    JSON.stringify({
+          ids: [id],
+          kill_price_per_lb:       clean(killRaw),
+          processing_price_per_lb: clean(procRaw),
+        }),
       })
       const out = await res.json().catch(() => ({}))
-      if (!res.ok) { setRateError(out?.error || 'Could not save that rate'); return }
-      const saved = raw.trim() === '' ? null : Number(raw.trim())
-      setSelected(prev => prev && prev.id === id ? { ...prev, processing_price_per_lb: saved } : prev)
-      setInstructions(prev => prev.map(i => i.id === id ? { ...i, processing_price_per_lb: saved } : i))
+      if (!res.ok) { setRateError(out?.error || 'Could not save those rates'); return }
+      const kill = clean(killRaw) === null ? null : Number(killRaw.trim())
+      const proc = clean(procRaw) === null ? null : Number(procRaw.trim())
+      const apply = <T extends RawInstruction>(c: T): T => ({ ...c, kill_price_per_lb: kill, processing_price_per_lb: proc })
+      setSelected(prev => prev && prev.id === id ? apply(prev) : prev)
+      setInstructions(prev => prev.map(i => i.id === id ? apply(i) : i))
       setRateEditingId(null)
     } catch {
-      setRateError('Could not save that rate')
+      setRateError('Could not save those rates')
     } finally {
       setRateSaving(false)
     }
@@ -2545,13 +2574,20 @@ export default function CuttingInstructionsPage() {
                             out is not an answer. It rides in the status column
                             rather than beside the name, which is the one cell
                             that gets ellipsised away on a narrow list. */}
-                        {ci.processing_price_per_lb != null && (
-                          <span
-                            title={`Processing billed at $${Number(ci.processing_price_per_lb).toFixed(2)}/lb on this card, not the standard rate.`}
-                            style={{ fontSize: '0.66rem', fontWeight: 700, padding: '0.05rem 0.3rem', borderRadius: 4, background: 'rgba(76,175,80,0.22)', color: '#8fd694', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
-                            ${Number(ci.processing_price_per_lb).toFixed(2)}
-                          </span>
-                        )}
+                        {(() => {
+                          const parts = [
+                            ci.kill_price_per_lb       != null ? `K $${Number(ci.kill_price_per_lb).toFixed(2)}` : '',
+                            ci.processing_price_per_lb != null ? `C $${Number(ci.processing_price_per_lb).toFixed(2)}` : '',
+                          ].filter(Boolean)
+                          if (!parts.length) return null
+                          return (
+                            <span
+                              title={`Priced off the standard rate on this card — ${parts.join(', ').replace('K ', 'kill ').replace('C ', 'cut & wrap ')} per lb. Anything not listed bills at the standard rate.`}
+                              style={{ fontSize: '0.66rem', fontWeight: 700, padding: '0.05rem 0.3rem', borderRadius: 4, background: 'rgba(76,175,80,0.22)', color: '#8fd694', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
+                              {parts.join(' · ')}
+                            </span>
+                          )
+                        })()}
                       </div>
                     </div>
                   )
@@ -2612,57 +2648,97 @@ export default function CuttingInstructionsPage() {
               </div>
             </div>
 
-            {/* Processing rate for this animal. Office-side, and it stays off
-                the printed cut card on purpose: page 1 is the cutters' and page
-                2 is the packagers', and neither of them bills anything. */}
-            <div style={{ padding: '0.55rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.15)', display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', flexShrink: 0 }}>
-              <span style={{ fontSize: '0.68rem', color: 'var(--light-brown)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Processing rate</span>
-              {rateEditingId === selected.id ? (
-                <>
-                  <span style={{ color: 'var(--tan)', fontSize: '0.9rem' }}>$</span>
-                  <input
-                    autoFocus
-                    type="number" step="0.01" min="0" inputMode="decimal"
-                    value={rateDraft}
-                    onChange={e => setRateDraft(e.target.value)}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter') saveRate(selected.id, rateDraft)
-                      if (e.key === 'Escape') { setRateEditingId(null); setRateError('') }
-                    }}
-                    placeholder="blank = standard"
-                    style={{ width: 130, background: 'rgba(0,0,0,0.3)', color: 'var(--cream)', border: '1px solid rgba(166,120,90,0.35)', borderRadius: 3, padding: '0.3rem 0.5rem', fontSize: '0.88rem' }}
-                  />
-                  <span style={{ color: 'var(--tan)', fontSize: '0.82rem' }}>/ lb</span>
-                  <button onClick={() => saveRate(selected.id, rateDraft)} disabled={rateSaving} style={btnStyle('var(--med-brown)')}>
-                    {rateSaving ? 'Saving…' : 'Save'}
-                  </button>
-                  <button onClick={() => { setRateEditingId(null); setRateError('') }} disabled={rateSaving} style={btnStyle('transparent', 'var(--tan)')}>Cancel</button>
-                </>
-              ) : (
-                <>
-                  {selected.processing_price_per_lb == null ? (
-                    <span style={{ color: 'var(--tan)', fontSize: '0.88rem' }}>Standard</span>
+            {/* Rates for this one animal. TWO of them, because QBO invoices
+                custom work as a kill line and a processing line, and a single
+                combined number would have to be split again at invoicing time
+                (Charlie, 2026-09-22). Office-side, and off the printed cut card
+                on purpose: page 1 is the cutters' and page 2 is the packagers',
+                and neither of them bills anything. */}
+            {(() => {
+              const std  = standardRates(selectedSpecies, selected.data?.portion)
+              const kill = selected.kill_price_per_lb
+              const proc = selected.processing_price_per_lb
+              const custom = kill != null || proc != null
+              const money = (n: number | string) => `$${Number(n).toFixed(2)}`
+              // An override on one line plus the standard on the other still
+              // adds up to what the animal costs, so the all-in prints whenever
+              // both halves are known — which is also the number the website
+              // quotes, and the one worth sanity-checking a deal against.
+              const allInKill = kill ?? std.kill
+              const allInProc = proc ?? std.proc
+              const allIn = allInKill != null && allInProc != null ? Number(allInKill) + Number(allInProc) : null
+              const shown = (label: string, val: number | string | null | undefined, fallback: number | null) => (
+                <span style={{ fontSize: '0.82rem', color: 'var(--tan)' }}>
+                  {label}{' '}
+                  {val != null ? (
+                    <span style={{ color: 'var(--cream)', fontWeight: 700, fontFamily: 'monospace' }}>{money(val)}</span>
+                  ) : fallback != null ? (
+                    <span style={{ color: 'var(--light-brown)' }}>standard {money(fallback)}</span>
                   ) : (
-                    <span style={{ color: 'var(--cream)', fontSize: '0.95rem', fontWeight: 700, fontFamily: 'monospace' }}>
-                      ${Number(selected.processing_price_per_lb).toFixed(2)}<span style={{ fontWeight: 400, fontFamily: 'inherit', fontSize: '0.8rem', color: 'var(--tan)' }}> / lb · custom</span>
-                    </span>
+                    <span style={{ color: 'var(--light-brown)' }}>standard</span>
                   )}
-                  <button
-                    onClick={() => {
-                      setRateDraft(selected.processing_price_per_lb == null ? '' : String(selected.processing_price_per_lb))
-                      setRateError('')
-                      setRateEditingId(selected.id)
-                    }}
-                    style={{ ...btnStyle('transparent', 'var(--tan)'), border: '1px solid rgba(166,120,90,0.3)' }}>
-                    {selected.processing_price_per_lb == null ? '＄ Set a price for this card' : '✏️ Change'}
-                  </button>
-                </>
-              )}
-              {rateError && <span style={{ color: '#e69a9a', fontSize: '0.78rem' }}>{rateError}</span>}
-              <span style={{ color: 'var(--light-brown)', fontSize: '0.72rem', marginLeft: 'auto' }}>
-                One price for the whole card. Blank bills at the standard rate.
-              </span>
-            </div>
+                </span>
+              )
+              return (
+                <div style={{ padding: '0.55rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.15)', display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', flexShrink: 0 }}>
+                  <span style={{ fontSize: '0.68rem', color: 'var(--light-brown)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Rates</span>
+                  {rateEditingId === selected.id ? (
+                    <>
+                      {([['Kill', rateKillDraft, setRateKillDraft, std.kill], ['Cut & wrap', rateProcDraft, setRateProcDraft, std.proc]] as const).map(([label, val, set, fallback], i) => (
+                        <span key={label} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                          <span style={{ color: 'var(--tan)', fontSize: '0.8rem' }}>{label}</span>
+                          <span style={{ color: 'var(--tan)', fontSize: '0.85rem' }}>$</span>
+                          <input
+                            autoFocus={i === 0}
+                            type="number" step="0.01" min="0" inputMode="decimal"
+                            value={val}
+                            onChange={e => set(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') saveRate(selected.id, rateKillDraft, rateProcDraft)
+                              if (e.key === 'Escape') { setRateEditingId(null); setRateError('') }
+                            }}
+                            placeholder={fallback != null ? fallback.toFixed(2) : 'standard'}
+                            style={{ width: 92, background: 'rgba(0,0,0,0.3)', color: 'var(--cream)', border: '1px solid rgba(166,120,90,0.35)', borderRadius: 3, padding: '0.3rem 0.5rem', fontSize: '0.88rem' }}
+                          />
+                        </span>
+                      ))}
+                      <span style={{ color: 'var(--tan)', fontSize: '0.8rem' }}>/ lb</span>
+                      <button onClick={() => saveRate(selected.id, rateKillDraft, rateProcDraft)} disabled={rateSaving} style={btnStyle('var(--med-brown)')}>
+                        {rateSaving ? 'Saving…' : 'Save'}
+                      </button>
+                      <button onClick={() => { setRateEditingId(null); setRateError('') }} disabled={rateSaving} style={btnStyle('transparent', 'var(--tan)')}>Cancel</button>
+                    </>
+                  ) : (
+                    <>
+                      {shown('Kill', kill, std.kill)}
+                      <span style={{ color: 'rgba(166,120,90,0.4)' }}>·</span>
+                      {shown('Cut & wrap', proc, std.proc)}
+                      {allIn != null && (
+                        <span style={{ fontSize: '0.8rem', color: custom ? '#8fd694' : 'var(--light-brown)' }}>
+                          = <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>${allIn.toFixed(2)}</span> / lb all-in
+                        </span>
+                      )}
+                      <button
+                        onClick={() => {
+                          setRateKillDraft(kill == null ? '' : String(kill))
+                          setRateProcDraft(proc == null ? '' : String(proc))
+                          setRateError('')
+                          setRateEditingId(selected.id)
+                        }}
+                        style={{ ...btnStyle('transparent', 'var(--tan)'), border: '1px solid rgba(166,120,90,0.3)' }}>
+                        {custom ? '✏️ Change' : '＄ Price this card'}
+                      </button>
+                    </>
+                  )}
+                  {rateError && <span style={{ color: '#e69a9a', fontSize: '0.78rem' }}>{rateError}</span>}
+                  <span style={{ color: 'var(--light-brown)', fontSize: '0.72rem', marginLeft: 'auto', textAlign: 'right' }}>
+                    {std.flat != null
+                      ? `Standard for ${selectedSpecies.toLowerCase()} is a flat $${std.flat}/head, not per pound.`
+                      : 'One price each for the whole card. Blank bills at the standard rate.'}
+                  </span>
+                </div>
+              )
+            })()}
 
             {/* Multi-head warnings. These sit above everything else in the
                 detail panel because both of them change what the floor should

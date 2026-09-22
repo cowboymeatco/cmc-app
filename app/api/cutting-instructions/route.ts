@@ -56,17 +56,21 @@ export async function POST(req: NextRequest) {
 // appointment and intentionally never cleared here â€” an unlinked or archived
 // card still belongs to the same person.
 //
-// processing_price_per_lb (optional) is the negotiated rate for this one
-// animal — see the column comment. Sent on its own, without a status, because
-// pricing a card is not a status change and must not quietly move it out of
-// the queue it's sitting in.
+// kill_price_per_lb / processing_price_per_lb (optional) are the negotiated
+// rates for this one animal — see the column comments. TWO of them, because
+// QBO invoices custom work as a kill line and a processing line and a single
+// combined number would have to be split again at invoicing time (Charlie,
+// 2026-09-22). Sent on their own, without a status, because pricing a card is
+// not a status change and must not quietly move it out of the queue it's
+// sitting in.
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
-  const { ids, status, customer_id, processing_price_per_lb } = body as {
+  const { ids, status, customer_id, processing_price_per_lb, kill_price_per_lb } = body as {
     ids: string[]
     status?: string
     customer_id?: string | null
     processing_price_per_lb?: number | string | null
+    kill_price_per_lb?: number | string | null
   }
 
   // Omitting the field leaves the existing link alone, so archive/restore never
@@ -77,19 +81,31 @@ export async function PATCH(req: NextRequest) {
   // stayed filed under First State Bank of Forsyth after being re-linked to her
   // own slot, because that slot had no resolved customer at the moment of
   // linking and the stale id silently survived.
-  const updates: { status?: string; customer_id?: string | null; processing_price_per_lb?: number | null } = {}
+  const updates: {
+    status?: string; customer_id?: string | null
+    processing_price_per_lb?: number | null; kill_price_per_lb?: number | null
+  } = {}
   if (status !== undefined) updates.status = status
   if (customer_id !== undefined) updates.customer_id = customer_id || null
-  // Blank clears back to standard pricing. A typed 0 is kept as 0 — "no
-  // processing charge on this one" is a real answer and is not the same as
-  // "charge the standard rate", so it can't be folded into null.
-  if (processing_price_per_lb !== undefined) {
-    const raw = typeof processing_price_per_lb === 'string' ? processing_price_per_lb.trim() : processing_price_per_lb
-    const n = raw === '' || raw === null ? null : Number(raw)
-    if (n !== null && (!Number.isFinite(n) || n < 0)) {
-      return NextResponse.json({ error: 'processing_price_per_lb must be a number of 0 or more, or blank' }, { status: 400 })
+  // Blank clears back to the standard rate. A typed 0 is kept as 0 — "no
+  // charge on this one" is a real answer and is not the same as "charge the
+  // standard rate", so it can't be folded into null.
+  const rate = (v: number | string | null | undefined): number | null | 'bad' => {
+    const raw = typeof v === 'string' ? v.trim() : v
+    if (raw === '' || raw === null) return null
+    const n = Number(raw)
+    return Number.isFinite(n) && n >= 0 ? n : 'bad'
+  }
+  for (const [key, val] of [
+    ['processing_price_per_lb', processing_price_per_lb],
+    ['kill_price_per_lb',       kill_price_per_lb],
+  ] as const) {
+    if (val === undefined) continue
+    const n = rate(val)
+    if (n === 'bad') {
+      return NextResponse.json({ error: `${key} must be a number of 0 or more, or blank` }, { status: 400 })
     }
-    updates.processing_price_per_lb = n
+    updates[key] = n
   }
   if (!Object.keys(updates).length) {
     return NextResponse.json({ error: 'nothing to update' }, { status: 400 })
