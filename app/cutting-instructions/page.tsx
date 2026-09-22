@@ -14,6 +14,10 @@ interface RawInstruction {
   status:     string
   species?:   string   // top-level column — v2 wizard writes species here, not in data
   data:       Record<string, any>
+  // Negotiated processing rate for this one animal. A column rather than a key
+  // in `data`, because the public wizard rewrites `data` wholesale whenever the
+  // customer edits their card. null = standard pricing.
+  processing_price_per_lb?: number | string | null
 }
 
 // v1 stores species in data; v2 stores it as a top-level column
@@ -1698,6 +1702,15 @@ export default function CuttingInstructionsPage() {
   // Copy-this-card-onto-another-share flow: which portion the copy is for, and
   // whether one is being made right now.
   const [showTakenAppts, setShowTakenAppts] = useState(false)
+  // Custom processing rate on the selected card: whether the field is open,
+  // what's typed in it, and how the save went.
+  // Which card's rate box is open, rather than a bare "is open" flag: tying it
+  // to the id means moving to another card closes it on its own, instead of an
+  // effect racing to put one customer's price away before the next one shows.
+  const [rateEditingId, setRateEditingId] = useState<string | null>(null)
+  const [rateDraft,   setRateDraft]   = useState('')
+  const [rateSaving,  setRateSaving]  = useState(false)
+  const [rateError,   setRateError]   = useState('')
   const [showCopyPicker, setShowCopyPicker] = useState(false)
   const [copyPortion, setCopyPortion]   = useState('half')
   const [copying, setCopying]           = useState(false)
@@ -1978,6 +1991,33 @@ export default function CuttingInstructionsPage() {
     load()
     if (selected && ids.includes(selected.id)) {
       setSelected(prev => prev ? { ...prev, status } : null)
+    }
+  }
+
+  // The negotiated rate for this one animal. Office-side only, and deliberately
+  // not in the customer's wizard: a customer must not be able to price their
+  // own processing, and anything stored in `data` would be overwritten the next
+  // time they edited their card anyway (Jill, 2026-09-22 — Charlie: one set
+  // price per card, not per cut).
+  async function saveRate(id: string, raw: string) {
+    setRateSaving(true)
+    setRateError('')
+    try {
+      const res = await fetch('/api/cutting-instructions', {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ ids: [id], processing_price_per_lb: raw.trim() === '' ? null : raw.trim() }),
+      })
+      const out = await res.json().catch(() => ({}))
+      if (!res.ok) { setRateError(out?.error || 'Could not save that rate'); return }
+      const saved = raw.trim() === '' ? null : Number(raw.trim())
+      setSelected(prev => prev && prev.id === id ? { ...prev, processing_price_per_lb: saved } : prev)
+      setInstructions(prev => prev.map(i => i.id === id ? { ...i, processing_price_per_lb: saved } : i))
+      setRateEditingId(null)
+    } catch {
+      setRateError('Could not save that rate')
+    } finally {
+      setRateSaving(false)
     }
   }
 
@@ -2497,7 +2537,22 @@ export default function CuttingInstructionsPage() {
                         }}>
                         {harvest.date && !harvest.scheduled ? '~' : ''}{fmtShortDate(harvest.date)}
                       </div>
-                      <div><StatusBadge status={ci.status} needsCarcass={(carcassStates[ci.id] ?? []).some(s => s.state === 'ambiguous')} /></div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                        <StatusBadge status={ci.status} needsCarcass={(carcassStates[ci.id] ?? []).some(s => s.state === 'ambiguous')} />
+                        {/* A card off the standard rate says so in the list. At
+                            invoicing time the question is which of these is
+                            priced differently, and opening 272 cards to find
+                            out is not an answer. It rides in the status column
+                            rather than beside the name, which is the one cell
+                            that gets ellipsised away on a narrow list. */}
+                        {ci.processing_price_per_lb != null && (
+                          <span
+                            title={`Processing billed at $${Number(ci.processing_price_per_lb).toFixed(2)}/lb on this card, not the standard rate.`}
+                            style={{ fontSize: '0.66rem', fontWeight: 700, padding: '0.05rem 0.3rem', borderRadius: 4, background: 'rgba(76,175,80,0.22)', color: '#8fd694', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
+                            ${Number(ci.processing_price_per_lb).toFixed(2)}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   )
                 })}
@@ -2555,6 +2610,58 @@ export default function CuttingInstructionsPage() {
                 <button onClick={deleteSelected} style={btnStyle('rgba(150,40,40,0.22)', '#e69a9a')}>🗑 Delete</button>
                 <button onClick={() => setSelected(null)} style={btnStyle('transparent', 'var(--tan)')}>✕</button>
               </div>
+            </div>
+
+            {/* Processing rate for this animal. Office-side, and it stays off
+                the printed cut card on purpose: page 1 is the cutters' and page
+                2 is the packagers', and neither of them bills anything. */}
+            <div style={{ padding: '0.55rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.15)', display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', flexShrink: 0 }}>
+              <span style={{ fontSize: '0.68rem', color: 'var(--light-brown)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Processing rate</span>
+              {rateEditingId === selected.id ? (
+                <>
+                  <span style={{ color: 'var(--tan)', fontSize: '0.9rem' }}>$</span>
+                  <input
+                    autoFocus
+                    type="number" step="0.01" min="0" inputMode="decimal"
+                    value={rateDraft}
+                    onChange={e => setRateDraft(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') saveRate(selected.id, rateDraft)
+                      if (e.key === 'Escape') { setRateEditingId(null); setRateError('') }
+                    }}
+                    placeholder="blank = standard"
+                    style={{ width: 130, background: 'rgba(0,0,0,0.3)', color: 'var(--cream)', border: '1px solid rgba(166,120,90,0.35)', borderRadius: 3, padding: '0.3rem 0.5rem', fontSize: '0.88rem' }}
+                  />
+                  <span style={{ color: 'var(--tan)', fontSize: '0.82rem' }}>/ lb</span>
+                  <button onClick={() => saveRate(selected.id, rateDraft)} disabled={rateSaving} style={btnStyle('var(--med-brown)')}>
+                    {rateSaving ? 'Saving…' : 'Save'}
+                  </button>
+                  <button onClick={() => { setRateEditingId(null); setRateError('') }} disabled={rateSaving} style={btnStyle('transparent', 'var(--tan)')}>Cancel</button>
+                </>
+              ) : (
+                <>
+                  {selected.processing_price_per_lb == null ? (
+                    <span style={{ color: 'var(--tan)', fontSize: '0.88rem' }}>Standard</span>
+                  ) : (
+                    <span style={{ color: 'var(--cream)', fontSize: '0.95rem', fontWeight: 700, fontFamily: 'monospace' }}>
+                      ${Number(selected.processing_price_per_lb).toFixed(2)}<span style={{ fontWeight: 400, fontFamily: 'inherit', fontSize: '0.8rem', color: 'var(--tan)' }}> / lb · custom</span>
+                    </span>
+                  )}
+                  <button
+                    onClick={() => {
+                      setRateDraft(selected.processing_price_per_lb == null ? '' : String(selected.processing_price_per_lb))
+                      setRateError('')
+                      setRateEditingId(selected.id)
+                    }}
+                    style={{ ...btnStyle('transparent', 'var(--tan)'), border: '1px solid rgba(166,120,90,0.3)' }}>
+                    {selected.processing_price_per_lb == null ? '＄ Set a price for this card' : '✏️ Change'}
+                  </button>
+                </>
+              )}
+              {rateError && <span style={{ color: '#e69a9a', fontSize: '0.78rem' }}>{rateError}</span>}
+              <span style={{ color: 'var(--light-brown)', fontSize: '0.72rem', marginLeft: 'auto' }}>
+                One price for the whole card. Blank bills at the standard rate.
+              </span>
             </div>
 
             {/* Multi-head warnings. These sit above everything else in the
