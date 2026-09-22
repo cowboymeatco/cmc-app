@@ -2694,8 +2694,17 @@ export default function CuttingInstructionsPage() {
               )
             })()}
 
-            {/* Linked badge */}
-            {selected.status === 'linked' && (() => {
+            {/* Linked badge, and the carcass picker that lives inside it.
+                Driven by the LINK ITSELF — a slot on a check-in pointing at
+                this card — and not by the `status` string, which is a label
+                somebody has to remember to write. A card the customer filled in
+                through the portal is attached to its slot by
+                linkSheetToBuyerEntry but keeps `status = 'submitted'`, so
+                gating on the string hid this whole panel, carcass picker and
+                all, from exactly the cards nobody in the office had touched
+                yet. Austin Herth and Ryan Silvis sat in "⚠ 2 need a carcass"
+                with no way to give them one (Charlie, 2026-09-22). */}
+            {(() => {
               // Every animal this card is linked to — one line each, so a hog
               // and a half shows both instead of just whichever came first.
               // Keyed on the SLOT: a producer running several head against one
