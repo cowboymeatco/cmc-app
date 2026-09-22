@@ -1697,6 +1697,7 @@ export default function CuttingInstructionsPage() {
   const [pickerCarcasses, setPickerCarcasses] = useState<Record<string, { tag: string; earTag: string; lbs: number | null }[]>>({})
   // Copy-this-card-onto-another-share flow: which portion the copy is for, and
   // whether one is being made right now.
+  const [showTakenAppts, setShowTakenAppts] = useState(false)
   const [showCopyPicker, setShowCopyPicker] = useState(false)
   const [copyPortion, setCopyPortion]   = useState('half')
   const [copying, setCopying]           = useState(false)
@@ -2093,14 +2094,36 @@ export default function CuttingInstructionsPage() {
     return !earliest || a.harvest_date < earliest ? a.harvest_date : earliest
   }, '')
 
-  const linkableAppts = appointments.filter(a =>
+  const inLinkingEra = (a: HarvestAppointment) =>
     a.status !== 'NoShow' && a.status !== 'Declined' &&
     // No link has ever been made yet — don't filter anything out on day one.
     (!linkingEraStart || a.harvest_date >= linkingEraStart) &&
-    a.customers?.some(c => !c.linked_cutting_instruction_id) &&
     sameSpecies(a.species, selectedSpecies)
+
+  const linkableAppts = appointments.filter(a =>
+    inLinkingEra(a) && a.customers?.some(c => !c.linked_cutting_instruction_id)
   ).sort((a, b) => a.harvest_date.localeCompare(b.harvest_date))
-  const linkableIds = linkableAppts.map(a => a.id).join(',')
+
+  // An appointment whose every share already has a card drops out of the list
+  // above, and so does a share that's taken — which reads from the bench as the
+  // booking having vanished. Jill went looking for Austin Herth's beef and
+  // found no appointment; his share was already spoken for by a duplicate of
+  // the very card she was holding (2026-09-22). Keeping the working list short
+  // is the point, so these stay behind a toggle — but they stay FINDABLE.
+  const takenAppts = appointments.filter(a =>
+    inLinkingEra(a) && !a.customers?.some(c => !c.linked_cutting_instruction_id)
+  ).sort((a, b) => a.harvest_date.localeCompare(b.harvest_date))
+
+  const shownAppts = showTakenAppts ? [...linkableAppts, ...takenAppts].sort((a, b) => a.harvest_date.localeCompare(b.harvest_date)) : linkableAppts
+  const linkableIds = shownAppts.map(a => a.id).join(',')
+
+  // The card already sitting on a share, so a taken slot can say who has it
+  // rather than simply not being there.
+  const cardHolding = (id?: string | null) => {
+    if (!id) return null
+    const c = instructions.find(i => i.id === id)
+    return c ? (String(c.data?.customerName ?? '') || 'a card') : 'a card that no longer exists'
+  }
 
   // Weights for the picker, fetched only while it's open — the list is short
   // and this keeps the page load free of a call nobody needs until they link.
@@ -2160,6 +2183,69 @@ export default function CuttingInstructionsPage() {
     const tagged = (pickerCarcasses[apptId] ?? []).filter(c => c.earTag)
     if (!tagged.length) return null
     return tagged.some(c => c.earTag.toUpperCase() === named) ? null : named
+  }
+
+  // One appointment's shares, both pickers, every share shown. A taken one is
+  // spelled out rather than dropped: "not in the list" and "already has a card"
+  // look identical from the bench, and only one of them is something the person
+  // standing there can act on.
+  function apptShares(
+    a: HarvestAppointment,
+    onPick: (apptId: string, idx: number) => void,
+    busy: boolean,
+    busyLabel: string,
+  ) {
+    return (
+      <div key={a.id} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: '4px', padding: '0.85rem 1rem', marginBottom: '0.75rem' }}>
+        <div style={{ fontWeight: 700, color: 'var(--cream)', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+          {speciesEmblem(a.species)} {a.species} · {new Date(a.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
+          {a.source && <span style={{ color: 'var(--tan)', fontWeight: 400, marginLeft: '0.5rem' }}>· {a.source}</span>}
+          {hangingNote(a.id)}
+        </div>
+        {a.customers?.map(c => {
+          const taken = !!c.linked_cutting_instruction_id
+          if (taken) {
+            return (
+              // A plain line, not a box: a big kill day is sixteen of these and
+              // they have to read as context under the shares you can act on,
+              // never as sixteen more buttons.
+              <div key={c.id} style={{ padding: '0.1rem 0.75rem', marginBottom: '0.15rem', color: 'var(--light-brown)', fontSize: '0.76rem' }}>
+                {c.customer_name || 'Unnamed customer'} ({c.portion}) · has a card — {cardHolding(c.linked_cutting_instruction_id)}
+              </div>
+            )
+          }
+          const mismatch = earTagMismatch(a.id, c.customer_name || '')
+          return (
+            <div key={c.id}>
+              <button onClick={() => onPick(a.id, a.customers.indexOf(c))} disabled={busy}
+                style={{ display: 'block', width: '100%', textAlign: 'left', background: 'rgba(117,71,27,0.25)', border: '1px solid rgba(166,120,90,0.2)', borderRadius: '3px', padding: '0.5rem 0.75rem', marginBottom: mismatch ? '0.15rem' : '0.35rem', color: 'var(--cream)', cursor: busy ? 'wait' : 'pointer', fontSize: '0.85rem', opacity: busy ? 0.6 : 1 }}>
+                {busy ? busyLabel : `→ ${c.customer_name || 'Unnamed customer'} (${c.portion})`}
+              </button>
+              {mismatch && (
+                <div style={{ color: '#E8883A', fontSize: '0.72rem', marginBottom: '0.35rem', paddingLeft: '0.25rem' }}>
+                  ⚠ Name says {mismatch}, but no carcass on this appointment was ear-tagged {mismatch} at receiving — check before linking.
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
+  // The line that stops a fruitless hunt: say the spoken-for bookings exist and
+  // offer them, instead of leaving the list looking like the whole truth.
+  function takenApptsToggle() {
+    if (!takenAppts.length) return null
+    return (
+      <button
+        onClick={() => setShowTakenAppts(v => !v)}
+        style={{ display: 'block', width: '100%', textAlign: 'left', background: 'transparent', border: 'none', color: 'var(--tan)', fontSize: '0.78rem', cursor: 'pointer', padding: '0.35rem 0.25rem', marginBottom: '0.5rem', textDecoration: 'underline' }}>
+        {showTakenAppts
+          ? 'Hide bookings where every share is taken'
+          : `${takenAppts.length} more ${selectedSpecies.toLowerCase()} booking${takenAppts.length === 1 ? '' : 's'} — every share already has a card. Show ${takenAppts.length === 1 ? 'it' : 'them'}`}
+      </button>
+    )
   }
 
   const sections = sectionsFor(selectedSpecies)
@@ -2655,35 +2741,14 @@ export default function CuttingInstructionsPage() {
               Linking <strong style={{ color: 'var(--cream)' }}>{selected.data?.customerName}</strong>'s {selectedSpecies} instructions to a scheduled animal.
             </p>
 
-            {linkableAppts.length === 0 ? (
+            {shownAppts.length === 0 ? (
               <p style={{ color: 'var(--tan)', textAlign: 'center', padding: '2rem' }}>No {selectedSpecies.toLowerCase()} appointments need instructions yet.</p>
             ) : (
-              linkableAppts.map(a => (
-                <div key={a.id} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: '4px', padding: '0.85rem 1rem', marginBottom: '0.75rem' }}>
-                  <div style={{ fontWeight: 700, color: 'var(--cream)', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
-                    {speciesEmblem(a.species)} {a.species} · {new Date(a.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
-                    {a.source && <span style={{ color: 'var(--tan)', fontWeight: 400, marginLeft: '0.5rem' }}>· {a.source}</span>}
-                    {hangingNote(a.id)}
-                  </div>
-                  {a.customers?.filter(c => !c.linked_cutting_instruction_id).map((c, idx) => {
-                    const mismatch = earTagMismatch(a.id, c.customer_name || '')
-                    return (
-                      <div key={c.id}>
-                        <button onClick={() => linkToCustomer(a.id, a.customers.indexOf(c))} disabled={linking}
-                          style={{ display: 'block', width: '100%', textAlign: 'left', background: 'rgba(117,71,27,0.25)', border: '1px solid rgba(166,120,90,0.2)', borderRadius: '3px', padding: '0.5rem 0.75rem', marginBottom: mismatch ? '0.15rem' : '0.35rem', color: 'var(--cream)', cursor: 'pointer', fontSize: '0.85rem' }}>
-                          {linking ? 'Linking…' : `→ ${c.customer_name || 'Unnamed customer'} (${c.portion})`}
-                        </button>
-                        {mismatch && (
-                          <div style={{ color: '#E8883A', fontSize: '0.72rem', marginBottom: '0.35rem', paddingLeft: '0.25rem' }}>
-                            ⚠ Name says {mismatch}, but no carcass on this appointment was ear-tagged {mismatch} at receiving — check before linking.
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
+              shownAppts.map(a => (
+                apptShares(a, linkToCustomer, linking, 'Linking…')
               ))
             )}
+            {takenApptsToggle()}
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
               <button onClick={() => setShowLinkPicker(false)} style={btnStyle('transparent', 'var(--tan)')}>Cancel</button>
@@ -2715,35 +2780,14 @@ export default function CuttingInstructionsPage() {
               ))}
             </select>
 
-            {linkableAppts.length === 0 ? (
+            {shownAppts.length === 0 ? (
               <p style={{ color: 'var(--tan)', textAlign: 'center', padding: '2rem' }}>No {selectedSpecies.toLowerCase()} animal has a share waiting for instructions.</p>
             ) : (
-              linkableAppts.map(a => (
-                <div key={a.id} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: '4px', padding: '0.85rem 1rem', marginBottom: '0.75rem' }}>
-                  <div style={{ fontWeight: 700, color: 'var(--cream)', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
-                    {speciesEmblem(a.species)} {a.species} · {new Date(a.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
-                    {a.source && <span style={{ color: 'var(--tan)', fontWeight: 400, marginLeft: '0.5rem' }}>· {a.source}</span>}
-                    {hangingNote(a.id)}
-                  </div>
-                  {a.customers?.filter(c => !c.linked_cutting_instruction_id).map(c => {
-                    const mismatch = earTagMismatch(a.id, c.customer_name || '')
-                    return (
-                      <div key={c.id}>
-                        <button onClick={() => copyToShare(a.id, a.customers.indexOf(c))} disabled={copying || linking}
-                          style={{ display: 'block', width: '100%', textAlign: 'left', background: 'rgba(117,71,27,0.25)', border: '1px solid rgba(166,120,90,0.2)', borderRadius: '3px', padding: '0.5rem 0.75rem', marginBottom: mismatch ? '0.15rem' : '0.35rem', color: 'var(--cream)', cursor: copying ? 'wait' : 'pointer', fontSize: '0.85rem', opacity: copying ? 0.6 : 1 }}>
-                          {copying ? 'Copying…' : `→ ${c.customer_name || 'Unnamed customer'} (${c.portion})`}
-                        </button>
-                        {mismatch && (
-                          <div style={{ color: '#E8883A', fontSize: '0.72rem', marginBottom: '0.35rem', paddingLeft: '0.25rem' }}>
-                            ⚠ Name says {mismatch}, but no carcass on this appointment was ear-tagged {mismatch} at receiving — check before linking.
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
+              shownAppts.map(a => (
+                apptShares(a, copyToShare, copying || linking, 'Copying…')
               ))
             )}
+            {takenApptsToggle()}
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
               <button onClick={() => setShowCopyPicker(false)} disabled={copying} style={btnStyle('transparent', 'var(--tan)')}>Cancel</button>
