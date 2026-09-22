@@ -61,6 +61,16 @@ function sameSpecies(a?: string | null, b?: string | null): boolean {
   return !!a && !!b && speciesKey(a) === speciesKey(b)
 }
 
+// Who each share of a split portion goes to, as the wizard saved them: one slot
+// per letter, A first, null where the buyer left it blank (Jill, 2026-09-22 —
+// the second buyer used to get squeezed into the one name field). '' when the
+// card names no shares, so an ordinary card prints exactly as it did.
+function shareNamesText(d: { shareNames?: unknown } | undefined): string {
+  const names: unknown[] = Array.isArray(d?.shareNames) ? d.shareNames : []
+  if (!names.some(n => String(n ?? '').trim())) return ''
+  return names.map((n, i) => `${String.fromCharCode(65 + i)}: ${String(n ?? '').trim() || '—'}`).join(' · ')
+}
+
 // Falls back to a generic cut rather than a cow — an unknown species showing a
 // beef emblem is exactly the bug this replaced (Charlie, 2026-07-22).
 const SPECIES_EMBLEM: Record<string, string> = { beef: '🐄', pork: '🐖', lamb: '🐑', goat: '🐐' }
@@ -542,6 +552,7 @@ function renderV2Detail(ci: RawInstruction) {
         <V2Field label="Email" value={d.customerEmail} />
         <V2Field label="Harvest Date" value={d.killDate} />
         <V2Field label="Portion" value={v2fmt(d.portion)} />
+        <V2Field label="Shares" value={shareNamesText(d) || undefined} />
         {/* Grinding it all replaces every primal answer, so it reads up here
             with the portion rather than as a missing section below. */}
         <V2Field label="Cut Style" value={d.grindWhole ? 'GRIND WHOLE ANIMAL — no steaks or roasts' : undefined} />
@@ -1161,6 +1172,7 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
        <div style="padding:6px 11px;border-right:1px solid #C9A882">
          <div style="font-size:12px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Animal</div>
          <div style="font-size:24px;font-weight:bold">${species}${d.portion ? ' · ' + fmt(d.portion) : ''}</div>
+         ${shareNamesText(d) ? `<div style="font-size:17px;font-weight:bold;margin-top:1px">${esc(shareNamesText(d))}</div>` : ''}
          <div style="font-size:16px;color:#555;margin-top:1px">Harvest Date: ${harvestDate}</div>
          ${/* This card is ONE animal out of several the customer dropped off.
               It prints because a smokehouse order can be pinned to a single
@@ -1261,6 +1273,8 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
     <div style="flex:1;min-width:0">
       <div style="font-size:30px;font-weight:bold">${d.customerName ?? '—'}${secondaryName ? ` <span style="font-size:18px;font-weight:normal;color:#666">(${secondaryName})</span>` : ''}
         <span style="font-size:22px;font-weight:bold;color:#75471B;margin-left:12px;white-space:nowrap">${species}${d.portion ? ' · ' + fmt(d.portion) : ''}</span></div>
+      ${/* Whose share is whose, right under the name the boxes are matched by. */''}
+      ${shareNamesText(d) ? `<div style="font-size:20px;font-weight:bold;margin-top:3px">Shares — ${esc(shareNamesText(d))}</div>` : ''}
       <div style="font-size:16px;color:#555;margin-top:5px;display:flex;flex-wrap:wrap;column-gap:12px;row-gap:2px">
         <span style="white-space:nowrap">Harvested <span style="font-weight:bold;color:#1A0A04">${harvestDate}</span></span>
         <span style="white-space:nowrap">Producer: <span style="font-weight:bold;color:#1A0A04">${carcass.producer || wline(110)}</span></span>
