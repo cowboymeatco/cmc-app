@@ -78,6 +78,8 @@ export async function POST(req: NextRequest) {
       status:        'pending',
       customer_id:   src.customer_id,
       submitted_by:  src.submitted_by,
+      // Another share of the same animal goes out on the same producer label.
+      scale_label:   src.scale_label ?? null,
       data,
     }])
     .select()

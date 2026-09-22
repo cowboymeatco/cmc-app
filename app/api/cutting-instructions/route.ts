@@ -63,14 +63,19 @@ export async function POST(req: NextRequest) {
 // 2026-09-22). Sent on their own, without a status, because pricing a card is
 // not a status change and must not quietly move it out of the queue it's
 // sitting in.
+//
+// scale_label (optional) is the producer-specific label this card packs on —
+// see scripts/2026-09-22_cutting_instruction_scale_label.sql. Blank clears it
+// back to the house label. Same deal as the rates: sent on its own, no status.
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
-  const { ids, status, customer_id, processing_price_per_lb, kill_price_per_lb } = body as {
+  const { ids, status, customer_id, processing_price_per_lb, kill_price_per_lb, scale_label } = body as {
     ids: string[]
     status?: string
     customer_id?: string | null
     processing_price_per_lb?: number | string | null
     kill_price_per_lb?: number | string | null
+    scale_label?: string | null
   }
 
   // Omitting the field leaves the existing link alone, so archive/restore never
@@ -84,6 +89,7 @@ export async function PATCH(req: NextRequest) {
   const updates: {
     status?: string; customer_id?: string | null
     processing_price_per_lb?: number | null; kill_price_per_lb?: number | null
+    scale_label?: string | null
   } = {}
   if (status !== undefined) updates.status = status
   if (customer_id !== undefined) updates.customer_id = customer_id || null
@@ -106,6 +112,13 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: `${key} must be a number of 0 or more, or blank` }, { status: 400 })
     }
     updates[key] = n
+  }
+  if (scale_label !== undefined) {
+    const label = String(scale_label ?? '').trim()
+    if (label.length > 80) {
+      return NextResponse.json({ error: 'scale_label must be 80 characters or fewer' }, { status: 400 })
+    }
+    updates.scale_label = label || null
   }
   if (!Object.keys(updates).length) {
     return NextResponse.json({ error: 'nothing to update' }, { status: 400 })

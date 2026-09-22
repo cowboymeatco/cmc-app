@@ -21,6 +21,9 @@ interface RawInstruction {
   // null = the standard rate for that line.
   processing_price_per_lb?: number | string | null
   kill_price_per_lb?: number | string | null
+  // Producer-specific label on the scale (e.g. Blegen Galloway's), set by the
+  // office. A column for the same reason as the rates. null = house label.
+  scale_label?: string | null
 }
 
 // What the card would bill at if nobody touched it. Read off the QBO service
@@ -1128,6 +1131,16 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
        </div>`
     : ''
 
+  // A producer with their own label on the scale. The packager is the one who
+  // picks the label, so it bands across the packaging sheet the way the grind
+  // order does — outlined rather than filled, since it changes the label, not
+  // the cutting (Jill, 2026-09-22). Page 2 only; the cutters don't need it.
+  const scaleLabelBand = ci.scale_label
+    ? `<div style="border:3px solid #1A0A04;padding:4px 12px;font-size:19px;font-weight:bold;letter-spacing:0.06em;margin-bottom:8px">
+         🏷 SCALE LABEL: ${esc(ci.scale_label.toUpperCase())} — NOT THE HOUSE LABEL
+       </div>`
+    : ''
+
   // A business account carries two names and the customer picked which one
   // headlines (it's the customer_name everything joins on). The other prints
   // small so the floor can still recognize "87 Rentals" as Michael's hog.
@@ -1235,6 +1248,7 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
   ${hdr('Packaging Sheet' + ofN, inspectionBadge(carcass))}
   ${unassignedBand(carcass)}
   ${grindBand}
+  ${scaleLabelBand}
   ${/* Scanning this at the packing scanner opens the customer's session under
        this exact name — no typing, and the slip in hand is the check that the
        right session is open (Charlie, 2026-08-27). Same code as page 1's. */''}
@@ -1733,6 +1747,11 @@ export default function CuttingInstructionsPage() {
   const [rateProcDraft, setRateProcDraft] = useState('')
   const [rateSaving,  setRateSaving]  = useState(false)
   const [rateError,   setRateError]   = useState('')
+  // Same shape for the scale label box.
+  const [labelEditingId, setLabelEditingId] = useState<string | null>(null)
+  const [labelDraft,  setLabelDraft]  = useState('')
+  const [labelSaving, setLabelSaving] = useState(false)
+  const [labelError,  setLabelError]  = useState('')
   const [showCopyPicker, setShowCopyPicker] = useState(false)
   const [copyPortion, setCopyPortion]   = useState('half')
   const [copying, setCopying]           = useState(false)
@@ -2047,6 +2066,32 @@ export default function CuttingInstructionsPage() {
       setRateError('Could not save those rates')
     } finally {
       setRateSaving(false)
+    }
+  }
+
+  // Which producer label this card packs on. Office-side for the same reasons
+  // as the rates, and it prints on the packaging sheet, because the packager is
+  // the one standing at the scale picking the label (Jill, 2026-09-22).
+  async function saveScaleLabel(id: string, raw: string) {
+    setLabelSaving(true)
+    setLabelError('')
+    try {
+      const res = await fetch('/api/cutting-instructions', {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ ids: [id], scale_label: raw.trim() || null }),
+      })
+      const out = await res.json().catch(() => ({}))
+      if (!res.ok) { setLabelError(out?.error || 'Could not save that label'); return }
+      const label = raw.trim() || null
+      const apply = <T extends RawInstruction>(c: T): T => ({ ...c, scale_label: label })
+      setSelected(prev => prev && prev.id === id ? apply(prev) : prev)
+      setInstructions(prev => prev.map(i => i.id === id ? apply(i) : i))
+      setLabelEditingId(null)
+    } catch {
+      setLabelError('Could not save that label')
+    } finally {
+      setLabelSaving(false)
     }
   }
 
@@ -2588,6 +2633,13 @@ export default function CuttingInstructionsPage() {
                             </span>
                           )
                         })()}
+                        {ci.scale_label && (
+                          <span
+                            title={`Packs on the ${ci.scale_label} scale label, not the house label.`}
+                            style={{ fontSize: '0.66rem', fontWeight: 700, padding: '0.05rem 0.3rem', borderRadius: 4, background: 'rgba(201,168,130,0.2)', color: 'var(--tan)', whiteSpace: 'nowrap', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            🏷 {ci.scale_label}
+                          </span>
+                        )}
                       </div>
                     </div>
                   )
@@ -2735,6 +2787,68 @@ export default function CuttingInstructionsPage() {
                     {std.flat != null
                       ? `Standard for ${selectedSpecies.toLowerCase()} is a flat $${std.flat}/head, not per pound.`
                       : 'One price each for the whole card. Blank bills at the standard rate.'}
+                  </span>
+                </div>
+              )
+            })()}
+
+            {/* Producer label on the scale. The Hobart carries producer-
+                specific formats beside the house ones, so a producer like
+                Blegen Galloway gets their own marketing on the package — and
+                nothing on the card said which customers do (Jill,
+                2026-09-22). Prints on the packaging sheet. Suggestions come
+                from the labels already on other cards, so one producer keeps
+                one spelling. */}
+            {(() => {
+              const label = selected.scale_label
+              const known = Array.from(new Set(
+                instructions.map(i => i.scale_label?.trim()).filter((l): l is string => !!l)
+              )).sort((a, b) => a.localeCompare(b))
+              return (
+                <div style={{ padding: '0.55rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.15)', display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', flexShrink: 0 }}>
+                  <span style={{ fontSize: '0.68rem', color: 'var(--light-brown)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Scale label</span>
+                  {labelEditingId === selected.id ? (
+                    <>
+                      <input
+                        autoFocus
+                        list="scale-label-options"
+                        maxLength={80}
+                        value={labelDraft}
+                        onChange={e => setLabelDraft(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') saveScaleLabel(selected.id, labelDraft)
+                          if (e.key === 'Escape') { setLabelEditingId(null); setLabelError('') }
+                        }}
+                        placeholder="e.g. Blegen Galloway (510) — blank for house label"
+                        style={{ width: 300, maxWidth: '100%', background: 'rgba(0,0,0,0.3)', color: 'var(--cream)', border: '1px solid rgba(166,120,90,0.35)', borderRadius: 3, padding: '0.3rem 0.5rem', fontSize: '0.88rem' }}
+                      />
+                      <datalist id="scale-label-options">
+                        {known.map(l => <option key={l} value={l} />)}
+                      </datalist>
+                      <button onClick={() => saveScaleLabel(selected.id, labelDraft)} disabled={labelSaving} style={btnStyle('var(--med-brown)')}>
+                        {labelSaving ? 'Saving…' : 'Save'}
+                      </button>
+                      <button onClick={() => { setLabelEditingId(null); setLabelError('') }} disabled={labelSaving} style={btnStyle('transparent', 'var(--tan)')}>Cancel</button>
+                    </>
+                  ) : (
+                    <>
+                      {label
+                        ? <span style={{ fontSize: '0.88rem', color: 'var(--cream)', fontWeight: 700 }}>🏷 {label}</span>
+                        : <span style={{ fontSize: '0.82rem', color: 'var(--light-brown)' }}>House label</span>}
+                      <button
+                        onClick={() => {
+                          setLabelDraft(label ?? '')
+                          setLabelError('')
+                          setLabelEditingId(selected.id)
+                        }}
+                        style={{ ...btnStyle('transparent', 'var(--tan)'), border: '1px solid rgba(166,120,90,0.3)' }}>
+                        {label ? '✏️ Change' : '🏷 Set producer label'}
+                      </button>
+                    </>
+                  )}
+                  {labelError && <span style={{ color: '#e69a9a', fontSize: '0.78rem' }}>{labelError}</span>}
+                  <span style={{ color: 'var(--light-brown)', fontSize: '0.72rem', marginLeft: 'auto', textAlign: 'right' }}>
+                    Prints on the packaging sheet so the packager switches the scale.
                   </span>
                 </div>
               )
