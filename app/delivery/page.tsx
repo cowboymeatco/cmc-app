@@ -1324,6 +1324,56 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
   // The delivery_scans row the last Release wrote — the packing slip prints
   // off it (Charlie, 2026-09-09: "a packing slip ... after they are scanned in").
   const [lastDeliveryId, setLastDeliveryId] = useState<string | null>(null)
+  // A box whose big label isn't on yet can still go on the count, checked on
+  // by hand off its order card (Charlie, 2026-09-23). byHand remembers which,
+  // so the release notes say so; pinned is an order pulled up without a scan.
+  const [byHand,  setByHand]  = useState<Set<string>>(new Set())
+  const [pinned,  setPinned]  = useState<string[]>([])
+  const [freezer, setFreezer] = useState<SessionLite[]>([])
+
+  useEffect(() => {
+    fetch('/api/processing/sessions')
+      .then(r => r.json())
+      .then((data: unknown) => {
+        if (!Array.isArray(data)) return
+        setFreezer((data as SessionLite[])
+          .filter(s => s.status === 'complete' || s.status === 'baker_storage')
+          .sort((a, b) => a.customer_name.localeCompare(b.customer_name)))
+      })
+      .catch(() => {})
+  }, [])
+
+  async function pullUpOrder(key: string) {
+    const s = freezer.find(x => sessionKey(x) === key)
+    if (!s) return
+    if (sessions[key]) { setPinned(prev => prev.includes(key) ? prev : [...prev, key]); return }
+    const res = await fetch(`/api/delivery/loadout?customer=${encodeURIComponent(s.customer_name)}&date=${s.session_date}`).catch(() => null)
+    const data = await res?.json().catch(() => null)
+    if (!res?.ok || !data?.session) { say({ kind: 'err', title: 'Could not load that order', detail: s.customer_name }, 6000); return }
+    setSessions(prev => ({ ...prev, [key]: data.session as LoadOutSession }))
+    setPinned(prev => prev.includes(key) ? prev : [...prev, key])
+  }
+
+  function checkInByHand(sess: LoadOutSession, b: LoadOutSession['boxes'][number]) {
+    if (scanned.some(s => s.box.id === b.id)) return
+    const box: LoadOutBox = {
+      id: b.id, serial_number: b.serial_number, customer_name: sess.customer_name, pack_date: sess.session_date,
+      box_number: b.box_number, is_closed: b.is_closed, total_weight_lbs: b.total_weight_lbs,
+      box_label: null, picked_up_at: b.picked_up_at, picked_up_by: null,
+    }
+    setScanned(prev => [...prev, { box, scannedAt: new Date().toISOString() }])
+    setByHand(prev => new Set(prev).add(b.id))
+    say({ kind: 'ok', title: `Box ${b.box_number} · ${sess.customer_name} — checked on by hand`, detail: 'No box label scanned; the release notes will say so.' })
+    scanRef.current?.focus()
+  }
+
+  // A sign for the side of the pallet — the boxes of this order on the load,
+  // or every one still in the freezer if none are on it yet.
+  function openPalletSign(customer: string, date: string, boxNumbers: number[]) {
+    const p = new URLSearchParams({ customer, date })
+    if (boxNumbers.length) p.set('boxes', boxNumbers.join(','))
+    window.open(`/api/delivery/pallet-sign?${p}`, '_blank')
+  }
 
   // Before Release the slip is a preview of what's scanned; after, it's the record.
   function openPackingSlip() {
@@ -1452,6 +1502,7 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
 
   function removeScan(id: string) {
     setScanned(prev => prev.filter(s => s.box.id !== id))
+    setByHand(prev => { const n = new Set(prev); n.delete(id); return n })
     scanRef.current?.focus()
   }
 
@@ -1464,13 +1515,15 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
     setScanned([])
     setSessions({})
     setCarcasses([])
+    setByHand(new Set())
+    setPinned([])
     setFlash(null)
     scanRef.current?.focus()
   }
 
   // One card per session on the load, in the order they were first scanned.
   const cards = (() => {
-    const order: string[] = []
+    const order: string[] = [...pinned]
     for (const s of scanned) {
       const k = sessionKey({ customer_name: s.box.customer_name, session_date: s.box.pack_date })
       if (!order.includes(k)) order.push(k)
@@ -1494,6 +1547,9 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
   async function release() {
     if (!canRelease) return
     setReleasing(true)
+    const handLines = scanned.filter(s => byHand.has(s.box.id))
+      .map(s => `${s.box.customer_name} box ${s.box.box_number}`)
+    const handNote = handLines.length ? `Checked on by hand, no box label: ${handLines.join(', ')}` : ''
     let res: Response
     try {
       res = await fetch('/api/delivery/loadout', {
@@ -1501,7 +1557,7 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           released_by: releasedBy.trim(),
-          notes,
+          notes: [notes.trim(), handNote].filter(Boolean).join('\n'),
           serials: scanned.map(s => s.box.serial_number).filter(Boolean),
           carcass_codes: carcasses.map(c => c.carcass.code),
         }),
@@ -1539,6 +1595,8 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
     setScanned([])
     setSessions({})
     setCarcasses([])
+    setByHand(new Set())
+    setPinned([])
     setNotes('')
     onSaved()
     scanRef.current?.focus()
@@ -1608,6 +1666,26 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
           />
           <div style={{ fontSize: '0.74rem', color: C.lightBrown, marginTop: '0.3rem' }}>
             The serial under the barcode on every CMC box label &mdash; or the tag on a hanging carcass.
+          </div>
+        </div>
+
+        {/* No big label on the box yet — pull the order up and check boxes on by hand */}
+        <div style={{ marginBottom: '0.9rem' }}>
+          <label style={LABEL}>No box label yet? Pull up the order</label>
+          <select
+            style={{ ...INPUT, cursor: 'pointer' }}
+            value=""
+            onChange={e => { if (e.target.value) pullUpOrder(e.target.value) }}
+          >
+            <option value="">Pick an order in the freezer…</option>
+            {freezer.map(s => (
+              <option key={sessionKey(s)} value={sessionKey(s)}>
+                {s.customer_name} · packed {new Date(s.session_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · {s.box_count} box{s.box_count !== 1 ? 'es' : ''}
+              </option>
+            ))}
+          </select>
+          <div style={{ fontSize: '0.74rem', color: C.lightBrown, marginTop: '0.3rem' }}>
+            Then tap <b>✋ Check on</b> beside each box going out.
           </div>
         </div>
 
@@ -1732,7 +1810,7 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
           )}
 
           {cards.map(({ key, sess, onThisLoad, scannedIds, remaining, weight }) => {
-            const complete = remaining.length === 0
+            const complete = remaining.length === 0 && onThisLoad.length > 0
             return (
               <div key={key} style={{
                 border: `1px solid ${complete ? 'rgba(76,175,80,0.4)' : 'rgba(217,119,6,0.35)'}`,
@@ -1747,6 +1825,17 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
                       {weight > 0 && ` · ${weight.toFixed(1)} lbs on this load`}
                     </div>
                   </div>
+                  <button
+                    onClick={() => openPalletSign(
+                      sess?.customer_name ?? onThisLoad[0].box.customer_name,
+                      sess?.session_date ?? onThisLoad[0].box.pack_date,
+                      onThisLoad.map(s => s.box.box_number),
+                    )}
+                    title="Print a sign for the side of this order's pallet"
+                    style={{ marginLeft: 'auto', flexShrink: 0, background: 'none', border: '1px solid rgba(201,168,130,0.45)', borderRadius: 3, color: C.tan, cursor: 'pointer', fontSize: '0.74rem', padding: '0.25rem 0.6rem' }}
+                  >
+                    🪧 Pallet Sign
+                  </button>
                   <span style={{
                     flexShrink: 0, fontSize: '0.72rem', fontWeight: 700, borderRadius: 99, padding: '3px 10px',
                     background: complete ? 'rgba(76,175,80,0.18)' : 'rgba(217,119,6,0.18)',
@@ -1785,6 +1874,18 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
                           <span style={{ color: C.lightBrown, fontSize: '0.72rem', fontStyle: 'italic' }}>
                             left {new Date(b.picked_up_at!).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                           </span>
+                        )}
+                        {onLoad && byHand.has(b.id) && (
+                          <span style={{ color: C.yellow, fontSize: '0.72rem', fontStyle: 'italic' }}>✋ no label</span>
+                        )}
+                        {!onLoad && !already && sess && (
+                          <button
+                            onClick={() => checkInByHand(sess, b)}
+                            title="Box has no label yet — put it on the count by hand"
+                            style={{ marginLeft: 'auto', background: 'none', border: '1px solid rgba(217,119,6,0.5)', borderRadius: 3, color: C.yellow, cursor: 'pointer', fontSize: '0.72rem', padding: '0.15rem 0.5rem' }}
+                          >
+                            ✋ Check on
+                          </button>
                         )}
                         {onLoad && (
                           <button

@@ -36,12 +36,45 @@ async function sessionBoxes(customer_name: string, pack_date: string) {
   return (data ?? []) as BoxRow[]
 }
 
+// The order as Load Out draws it — every box, with what's already gone.
+async function sessionPayload(customer_name: string, session_date: string) {
+  const siblings = await sessionBoxes(customer_name, session_date)
+  const { data: session } = await supabase
+    .from('processing_sessions')
+    .select('status')
+    .eq('customer_name', customer_name)
+    .eq('session_date', session_date)
+    .maybeSingle()
+  return {
+    customer_name,
+    session_date,
+    status:    session?.status ?? 'scanning',
+    box_count: siblings.length,
+    boxes: siblings.map(s => ({
+      id: s.id, serial_number: s.serial_number, box_number: s.box_number,
+      is_closed: s.is_closed, total_weight_lbs: Number(s.total_weight_lbs) || 0,
+      picked_up_at: s.picked_up_at,
+    })),
+  }
+}
+
 // GET /api/delivery/loadout?serial=CMC260724373E
 // Resolves one scanned box label to its box and the session it belongs to, so
 // the floor sees "Ben Herzog · box 2 of 3" the instant the gun beeps.
+// GET /api/delivery/loadout?customer=<name>&date=YYYY-MM-DD
+// The same order card without a scan — for boxes that haven't had their big
+// label put on yet, which get checked onto the load by hand (Charlie, 2026-09-23).
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const serial = (searchParams.get('serial') ?? '').trim().toUpperCase()
+
+  const byName = (searchParams.get('customer') ?? '').trim()
+  const byDate = (searchParams.get('date') ?? '').trim()
+  if (!serial && byName && byDate) {
+    const session = await sessionPayload(byName, byDate)
+    if (!session.box_count) return NextResponse.json({ error: 'no boxes for that order' }, { status: 404 })
+    return NextResponse.json({ session })
+  }
 
   if (!serial) return NextResponse.json({ error: 'serial required' }, { status: 400 })
   if (!SERIAL_RE.test(serial)) {
@@ -57,29 +90,8 @@ export async function GET(req: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   if (!box)  return NextResponse.json({ error: 'box_not_found', serial }, { status: 404 })
 
-  const b       = box as BoxRow
-  const siblings = await sessionBoxes(b.customer_name, b.pack_date)
-  const { data: session } = await supabase
-    .from('processing_sessions')
-    .select('status')
-    .eq('customer_name', b.customer_name)
-    .eq('session_date', b.pack_date)
-    .maybeSingle()
-
-  return NextResponse.json({
-    box: b,
-    session: {
-      customer_name: b.customer_name,
-      session_date:  b.pack_date,
-      status:        session?.status ?? 'scanning',
-      box_count:     siblings.length,
-      boxes: siblings.map(s => ({
-        id: s.id, serial_number: s.serial_number, box_number: s.box_number,
-        is_closed: s.is_closed, total_weight_lbs: Number(s.total_weight_lbs) || 0,
-        picked_up_at: s.picked_up_at,
-      })),
-    },
-  })
+  const b = box as BoxRow
+  return NextResponse.json({ box: b, session: await sessionPayload(b.customer_name, b.pack_date) })
 }
 
 // POST /api/delivery/loadout — the customer drove off with these boxes.
