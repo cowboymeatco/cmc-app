@@ -10,6 +10,7 @@ import CustomerPicker, { resolveCiScan, type CustomerName } from './CustomerPick
 import AnimalStart, { type AnimalPick } from './AnimalStart'
 import { isCarcassTag } from '@/lib/carcassTag'
 import { weightInName } from '@/lib/label'
+import { labelKey, type ScannerProducerSet } from '@/lib/producerLabels'
 const C = {
   dark:       '#1A0A04',
   darkBrown:  '#351E0E',
@@ -655,7 +656,7 @@ export default function ScannerPage() {
   const [addingInput,   setAddingInput]   = useState(false)
 
   // ── Weight entry modal (box products with no embedded weight) ────────────────
-  const [weightModal, setWeightModal] = useState<{ plu: string; itemName: string } | null>(null)
+  const [weightModal, setWeightModal] = useState<{ plu: string; itemName: string; labelWarn?: string | null } | null>(null)
   const [weightEntry, setWeightEntry] = useState('')
   const weightInputRef = useRef<HTMLInputElement>(null)
 
@@ -1010,6 +1011,61 @@ export default function ScannerPage() {
   useEffect(() => {
     offCardRef.current = { keysForPlu, expectedKeys: new Set(expectedKeys), hasCard: !!expected }
   }, [keysForPlu, expectedKeys, expected])
+
+  // ── Producer label sets ───────────────────────────────────────────────────
+  // A producer who sells under their own label has their own PLUs — copies of
+  // house items on the producer's label format — loaded on the scale while
+  // their animals are packed (/producer-labels, Charlie 2026-09-23). A package
+  // off one of those is recorded under the house PLU it copies, so boxes,
+  // yields and the still-to-pack list never need to know; what the gun checks
+  // is that the label matches the session. The scale can't be told which label
+  // to use, so this is where a wrong one gets caught — before it's in a box.
+  const [producerSets, setProducerSets] = useState<ScannerProducerSet[]>([])
+  const producerRef = useRef<{
+    byPlu: Record<string, { house_plu: string; key: string; name: string }>
+    byKey: Record<string, { name: string; houseToPlu: Record<string, string> }>
+  }>({ byPlu: {}, byKey: {} })
+  const sessionLabelKeysRef = useRef<string[]>([])
+  useEffect(() => {
+    fetch('/api/producer-labels?scanner=1').then(r => r.json()).then((j: { sets?: ScannerProducerSet[] }) => {
+      const sets = Array.isArray(j?.sets) ? j.sets : []
+      const byPlu: typeof producerRef.current.byPlu = {}
+      const byKey: typeof producerRef.current.byKey = {}
+      for (const st of sets) {
+        const houseToPlu: Record<string, string> = {}
+        for (const it of st.items) {
+          byPlu[it.plu_number] = { house_plu: it.house_plu, key: st.key, name: st.name }
+          houseToPlu[it.house_plu] = it.plu_number
+        }
+        byKey[st.key] = { name: st.name, houseToPlu }
+      }
+      producerRef.current = { byPlu, byKey }
+      setProducerSets(sets)
+    }).catch(() => {})
+  }, [])
+  useEffect(() => {
+    sessionLabelKeysRef.current = (expected?.scaleLabels ?? []).map(labelKey)
+  }, [expected])
+
+  // The PLU a scanned package is recorded under, and what's wrong with its
+  // label for this session, if anything. Refs only — doScan is a stable callback.
+  function resolveProducerPlu(scanned: string): { plu: string; labelWarn: string | null } {
+    const { byPlu, byKey } = producerRef.current
+    const sessionKeys = sessionLabelKeysRef.current
+    const theirs = byPlu[scanned]
+    if (theirs) {
+      return {
+        plu: theirs.house_plu,
+        labelWarn: sessionKeys.includes(theirs.key) ? null : `ON ${theirs.name.toUpperCase()}'S LABEL — not this session's`,
+      }
+    }
+    for (const k of sessionKeys) {
+      const set = byKey[k]
+      const should = set?.houseToPlu[scanned]
+      if (should) return { plu: scanned, labelWarn: `HOUSE LABEL — ${set.name} packs on PLU ${should}: reprint it` }
+    }
+    return { plu: scanned, labelWarn: null }
+  }
   function checkOffCard(scan: ScanLine, plu: string, itemName: string): boolean {
     const ex = offCardRef.current
     if (!ex.hasCard) return false
@@ -1164,10 +1220,11 @@ export default function ScannerPage() {
     const decoded = decodeBarcode(raw)
     if (!decoded) {
       // Check if it's a Hobart-format barcode with a valid PLU but no weight (box/each product)
-      const plu = decodePluFromBarcode(raw)
-      if (plu) {
+      const scannedPlu = decodePluFromBarcode(raw)
+      if (scannedPlu) {
+        const { plu, labelWarn } = resolveProducerPlu(scannedPlu)
         const itemName = pluMapRef.current[plu] ?? retiredPluRef.current[plu] ?? `PLU ${plu}`
-        setWeightModal({ plu, itemName })
+        setWeightModal({ plu, itemName, labelWarn })
         setWeightEntry('')
         setTimeout(() => weightInputRef.current?.focus(), 80)
       } else {
@@ -1180,7 +1237,9 @@ export default function ScannerPage() {
       return
     }
 
-    const { plu, weightLbs } = decoded
+    const { weightLbs } = decoded
+    // A producer PLU is saved under the house item it copies; see resolveProducerPlu.
+    const { plu, labelWarn } = resolveProducerPlu(decoded.plu)
     const retiredName = retiredPluRef.current[plu]
     const itemName = pluMapRef.current[plu] ?? retiredName ?? `Unknown Item (PLU ${plu})`
 
@@ -1200,7 +1259,13 @@ export default function ScannerPage() {
       const scan: ScanLine = await res.json()
       setScans(prev => [scan, ...prev])
       setSessionScans(prev => [...prev, scan])
-      if (retiredName || !pluMapRef.current[plu]) {
+      if (labelWarn) {
+        // Saved — the package is in the box — but it went out on the wrong label.
+        setLastKind('warn')
+        setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb  —  ${labelWarn}`)
+        setFlash('warn')
+        setTimeout(() => setFlash(null), 5000)
+      } else if (retiredName || !pluMapRef.current[plu]) {
         // Scan is saved (the meat is in the box), but this PLU was deleted from
         // the app — the scale should no longer have it.
         setLastKind('warn')
@@ -2134,7 +2199,7 @@ export default function ScannerPage() {
     const weightLbs = parseFloat(weightEntry)
     if (!weightLbs || weightLbs <= 0) return
 
-    const { plu, itemName } = weightModal
+    const { plu, itemName, labelWarn } = weightModal
     setWeightModal(null)
     setWeightEntry('')
     processingRef.current = true
@@ -2151,7 +2216,12 @@ export default function ScannerPage() {
       const scan: ScanLine = await res.json()
       setScans(prev => [scan, ...prev])
       setSessionScans(prev => [...prev, scan])
-      if (!pluMapRef.current[plu]) {
+      if (labelWarn) {
+        setLastKind('warn')
+        setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb  —  ${labelWarn}`)
+        setFlash('warn')
+        setTimeout(() => setFlash(null), 5000)
+      } else if (!pluMapRef.current[plu]) {
         setLastKind('warn')
         setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb  —  DELETED PLU ${plu}: remove it from the scale`)
         setFlash('warn')
@@ -3229,9 +3299,20 @@ export default function ScannerPage() {
           display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap',
         }}>
           <span>🏷 SCALE LABEL: {expected!.scaleLabels!.join(' / ').toUpperCase()}</span>
-          <span style={{ fontSize: '0.75rem', fontWeight: 600, letterSpacing: 0 }}>
-            Switch the scale to this label — not the house label.
-          </span>
+          {expected!.scaleLabels!.map(l => {
+            // Whether this label has a PLU set, and whether it's on the scales.
+            const set = producerSets.find(ps => ps.key === labelKey(l))
+            const nums = set?.items.map(i => Number(i.plu_number)).filter(Number.isFinite) ?? []
+            return (
+              <span key={l} style={{ fontSize: '0.75rem', fontWeight: 600, letterSpacing: 0 }}>
+                {!set
+                  ? 'Switch the scale to this label — not the house label.'
+                  : !set.loaded_at
+                    ? `⚠ ${set.name}'s PLUs aren't marked as on the scales — load them (Producer Labels) before packing.`
+                    : `Key ${set.name}'s PLUs${nums.length ? ` (${Math.min(...nums)}–${Math.max(...nums)})` : ''}, not the house ones — a house label gets flagged.`}
+              </span>
+            )
+          })}
         </div>
       )}
 
@@ -4168,6 +4249,11 @@ export default function ScannerPage() {
             <div style={{ color: C.lightBrown, fontSize: '0.82rem', marginBottom: '1.5rem', fontFamily: 'monospace' }}>
               PLU {weightModal.plu}
             </div>
+            {weightModal.labelWarn && (
+              <div style={{ color: C.yellow, fontSize: '0.85rem', fontWeight: 700, marginTop: '-1rem', marginBottom: '1.25rem' }}>
+                ⚠ {weightModal.labelWarn}
+              </div>
+            )}
             <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.65rem' }}>
               Weight (lbs)
             </div>

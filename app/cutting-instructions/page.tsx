@@ -4,6 +4,7 @@ import Link from 'next/link'
 import type { HarvestAppointment } from '@/lib/types'
 import { makeCode39Barcode } from '@/lib/label'
 import { QBO_SERVICE_ITEMS } from '@/lib/billingRules'
+import { labelKey } from '@/lib/producerLabels'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1766,6 +1767,9 @@ export default function CuttingInstructionsPage() {
   const [labelDraft,  setLabelDraft]  = useState('')
   const [labelSaving, setLabelSaving] = useState(false)
   const [labelError,  setLabelError]  = useState('')
+  // Producer label sets by name (/producer-labels). A card's Scale label is
+  // matched to one of these; one that matches nothing can't be loaded or checked.
+  const [producerSets, setProducerSets] = useState<string[]>([])
   const [showCopyPicker, setShowCopyPicker] = useState(false)
   const [copyPortion, setCopyPortion]   = useState('half')
   const [copying, setCopying]           = useState(false)
@@ -1933,6 +1937,12 @@ export default function CuttingInstructionsPage() {
       setUnlinking('')
     }
   }
+
+  useEffect(() => {
+    fetch('/api/producer-labels?scanner=1').then(r => r.json())
+      .then(j => setProducerSets(Array.isArray(j?.sets) ? j.sets.map((x: { name: string }) => x.name) : []))
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     load()
@@ -2815,9 +2825,14 @@ export default function CuttingInstructionsPage() {
                 one spelling. */}
             {(() => {
               const label = selected.scale_label
-              const known = Array.from(new Set(
-                instructions.map(i => i.scale_label?.trim()).filter((l): l is string => !!l)
-              )).sort((a, b) => a.localeCompare(b))
+              // Producer sets first — those are the names that load and get
+              // checked — then anything already typed on another card.
+              const setKeys = new Set(producerSets.map(labelKey))
+              const known = Array.from(new Set([
+                ...producerSets,
+                ...instructions.map(i => i.scale_label?.trim()).filter((l): l is string => !!l && !setKeys.has(labelKey(l))),
+              ])).sort((a, b) => a.localeCompare(b))
+              const noSet = !!label && !setKeys.has(labelKey(label))
               return (
                 <div style={{ padding: '0.55rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.15)', display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', flexShrink: 0 }}>
                   <span style={{ fontSize: '0.68rem', color: 'var(--light-brown)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Scale label</span>
@@ -2861,6 +2876,12 @@ export default function CuttingInstructionsPage() {
                     </>
                   )}
                   {labelError && <span style={{ color: '#e69a9a', fontSize: '0.78rem' }}>{labelError}</span>}
+                  {noSet && labelEditingId !== selected.id && (
+                    <span style={{ color: '#f0b866', fontSize: '0.75rem' }}>
+                      ⚠ No PLU set called this — nothing to load, and the scanner can&apos;t check it.{' '}
+                      <Link href="/producer-labels" style={{ color: 'var(--tan)' }}>Producer Labels</Link>
+                    </span>
+                  )}
                   <span style={{ color: 'var(--light-brown)', fontSize: '0.72rem', marginLeft: 'auto', textAlign: 'right' }}>
                     Prints on the packaging sheet so the packager switches the scale.
                   </span>

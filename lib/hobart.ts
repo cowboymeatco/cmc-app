@@ -179,7 +179,10 @@ export function inferLabelFormat(plu: HobartPlu, book: HobartPlu[]): string | nu
 
 // Build one RT89 PLU record body (no trailing RS). `labelFormat` is the inferred
 // fallback for a PLU with no captured record; it never overrides a real one.
-export function buildRT89(plu: HobartPlu, labelFormat?: string | null): string {
+// `force` sets fields outright, over everything else — only a producer copy
+// uses it (buildProducerRT89), to put the producer's label format on a record
+// that is otherwise the house item's own.
+export function buildRT89(plu: HobartPlu, labelFormat?: string | null, force?: Record<string, string>): string {
   const pluNo = sanitize(String(plu.plu_number ?? '').trim())
   const overrides: Record<string, string> = {
     'd#': sanitize(String(plu.department ?? '0').trim()) || '0',
@@ -205,6 +208,7 @@ export function buildRT89(plu: HobartPlu, labelFormat?: string | null): string {
   // No captured record → l1 would fall to the fresh-cut default. Use what the
   // book says this item's siblings print on, when it says anything confident.
   if (!skel && labelFormat) overrides['l1'] = sanitize(String(labelFormat).trim())
+  for (const [code, v] of Object.entries(force ?? {})) overrides[code] = sanitize(String(v))
   const fields = RT89_TEMPLATE.map(([code, def]) =>
     code + (code in overrides ? overrides[code]
           : skel && code in skel ? sanitize(String(skel[code] ?? ''))
@@ -236,6 +240,45 @@ export function buildHtFile(plus: HobartPlu[], book: HobartPlu[] = plus): string
   // book rather than the fresh-cut default — see inferLabelFormat().
   return texts.join('') + plus.map((p) =>
     buildRT89(p, p.skeleton ? null : inferLabelFormat(p, book)) + RS).join('')
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Producer label sets (scripts/2026-09-23_producer_labels.sql).
+//
+// A producer PLU is the house item's own scale record under another number,
+// printed on the producer's label format. Everything else — price, tare, unit,
+// department, every field the app doesn't own — comes from the house item, so
+// the package is the same product with somebody else's label on it.
+//
+// Two things differ from a plain copy:
+//   • up (the UPC the barcode is printed from) is the producer's number, not the
+//     house item's. The scanner reads the PLU off the barcode, and it has to see
+//     the producer number to know which label the package went out on.
+//   • Ec points at the HOUSE item's ingredient statement rather than a copy of
+//     it. The house statement is already on the scale (it goes with every push),
+//     and a set exists to cost the scale as little memory as possible — the
+//     reason sets come on and off at all (Charlie, 2026-09-23).
+// ──────────────────────────────────────────────────────────────────────────────
+
+export interface ProducerPlu {
+  house: HobartPlu
+  plu_number: string
+  item_name: string
+}
+
+export function buildProducerRT89(p: ProducerPlu, labelFormat: string): string {
+  const pluNo = String(p.plu_number).trim()
+  const hasText = String(p.house.ingredients ?? '').trim() !== ''
+  return buildRT89(
+    { ...p.house, plu_number: pluNo, item_name: p.item_name, upc: pluNo },
+    null,
+    { l1: String(labelFormat).trim(), Ec: hasText ? String(p.house.plu_number).trim() : '' },
+  )
+}
+
+// A whole set as one .ht file — PLU records only; see above for why no RT97.
+export function buildProducerHtFile(items: ProducerPlu[], labelFormat: string): string {
+  return items.map((p) => buildProducerRT89(p, labelFormat) + RS).join('')
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

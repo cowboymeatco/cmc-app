@@ -1173,6 +1173,16 @@ function ExportTab() {
           Needs the kiosk watcher running (<code>watch.bat</code>) and the scales awake.
         </p>
       </div>
+
+      {/* Producer sets never ride the push above — they go on the scale only
+          while that producer's animals are being packed. */}
+      <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1rem 1.5rem', marginTop: '1.25rem', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+        <span style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '0.95rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>🏷 Producer Labels</span>
+        <span style={{ color: C.tan, fontSize: '0.8rem', flex: '1 1 320px' }}>
+          A producer&apos;s own PLUs on their own label format (Blegen Galloway&apos;s), loaded only while their animals are being packed.
+        </span>
+        <Link href="/producer-labels" style={{ color: C.tan, fontSize: '0.82rem', fontWeight: 600 }}>Open Producer Labels →</Link>
+      </div>
     </div>
   )
 }
