@@ -1330,6 +1330,18 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
   const [byHand,  setByHand]  = useState<Set<string>>(new Set())
   const [pinned,  setPinned]  = useState<string[]>([])
   const [freezer, setFreezer] = useState<SessionLite[]>([])
+  const [orderQuery, setOrderQuery] = useState('')
+
+  // Every word typed has to appear in the name or the packed date, in any
+  // order — "vassau 2" or "jun 24" both find 26175 Vassau Standard 2.
+  const orderMatches = (() => {
+    const words = orderQuery.toLowerCase().split(/\s+/).filter(Boolean)
+    if (!words.length) return []
+    return freezer.filter(s => {
+      const hay = `${s.customer_name} ${new Date(s.session_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${s.session_date}`.toLowerCase()
+      return words.every(w => hay.includes(w))
+    }).slice(0, 8)
+  })()
 
   useEffect(() => {
     fetch('/api/processing/sessions')
@@ -1352,6 +1364,7 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
     if (!res?.ok || !data?.session) { say({ kind: 'err', title: 'Could not load that order', detail: s.customer_name }, 6000); return }
     setSessions(prev => ({ ...prev, [key]: data.session as LoadOutSession }))
     setPinned(prev => prev.includes(key) ? prev : [...prev, key])
+    scanRef.current?.focus()
   }
 
   function checkInByHand(sess: LoadOutSession, b: LoadOutSession['boxes'][number]) {
@@ -1672,18 +1685,37 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
         {/* No big label on the box yet — pull the order up and check boxes on by hand */}
         <div style={{ marginBottom: '0.9rem' }}>
           <label style={LABEL}>No box label yet? Pull up the order</label>
-          <select
-            style={{ ...INPUT, cursor: 'pointer' }}
-            value=""
-            onChange={e => { if (e.target.value) pullUpOrder(e.target.value) }}
-          >
-            <option value="">Pick an order in the freezer…</option>
-            {freezer.map(s => (
-              <option key={sessionKey(s)} value={sessionKey(s)}>
-                {s.customer_name} · packed {new Date(s.session_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · {s.box_count} box{s.box_count !== 1 ? 'es' : ''}
-              </option>
-            ))}
-          </select>
+          <input
+            style={INPUT}
+            value={orderQuery}
+            onChange={e => setOrderQuery(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && orderMatches.length) { e.preventDefault(); pullUpOrder(sessionKey(orderMatches[0])); setOrderQuery('') }
+              if (e.key === 'Escape') setOrderQuery('')
+            }}
+            placeholder={`Search ${freezer.length} orders in the freezer…`}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          {orderQuery.trim() && (
+            <div style={{ border: '1px solid rgba(166,120,90,0.35)', borderTop: 'none', borderRadius: '0 0 3px 3px', maxHeight: 260, overflowY: 'auto' }}>
+              {orderMatches.length === 0 && (
+                <div style={{ padding: '0.5rem 0.75rem', color: C.lightBrown, fontSize: '0.8rem' }}>No order in the freezer matches.</div>
+              )}
+              {orderMatches.map(s => (
+                <button
+                  key={sessionKey(s)}
+                  onClick={() => { pullUpOrder(sessionKey(s)); setOrderQuery('') }}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', background: 'rgba(255,255,255,0.03)', border: 'none', borderBottom: '1px solid rgba(166,120,90,0.12)', padding: '0.5rem 0.75rem', cursor: 'pointer', color: C.cream, fontSize: '0.84rem' }}
+                >
+                  {s.customer_name}
+                  <span style={{ color: C.lightBrown, fontSize: '0.76rem' }}>
+                    {' '}· packed {new Date(s.session_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · {s.box_count} box{s.box_count !== 1 ? 'es' : ''}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
           <div style={{ fontSize: '0.74rem', color: C.lightBrown, marginTop: '0.3rem' }}>
             Then tap <b>✋ Check on</b> beside each box going out.
           </div>
