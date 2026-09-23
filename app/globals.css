@@ -19,6 +19,15 @@ body {
   min-height: 100vh;
 }
 
+/* Native <select> dropdowns open on a white OS list but inherit our cream
+   text — white on white. Give every option list the app's dark palette. */
+select option,
+select optgroup {
+  background-color: var(--dark-brown);
+  color: var(--cream);
+}
+select option:disabled { color: var(--light-brown); }
+
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: var(--dark); }
 ::-webkit-scrollbar-thumb { background: var(--med-brown); border-radius: 3px; }
