@@ -142,6 +142,7 @@ interface ExpectedCard {
   lines:   ExpectedLine[]
   links:   PluLink[]
   cure:    string[]   // seal-picker products the sheet(s) order, in picker order
+  scaleLabels?: string[] // producer labels set on the card(s); empty = house label
 }
 
 interface ScanLine {
@@ -3214,6 +3215,25 @@ export default function ScannerPage() {
           <Link href="/processing?tab=browser" style={{ color: C.lightBrown, fontSize: '0.75rem', textDecoration: 'none', opacity: 0.6 }}>PLU Browser ›</Link>
         </div>
       </div>
+
+      {/* ── Producer scale label ──
+          The office set a producer's own label on this card (Blegen Galloway
+          and the like), and the scale defaults to the house one. It bands the
+          whole screen, not a chip, because by the time a wrong label is on a
+          package it has already been printed (Charlie, 2026-09-23). Read off
+          the session's resolved card, so it shows however the session opened. */}
+      {(expected?.scaleLabels?.length ?? 0) > 0 && (
+        <div style={{
+          background: C.tan, color: C.dark, padding: '0.5rem 1.25rem', flexShrink: 0,
+          fontSize: '0.95rem', fontWeight: 800, letterSpacing: '0.04em',
+          display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap',
+        }}>
+          <span>🏷 SCALE LABEL: {expected!.scaleLabels!.join(' / ').toUpperCase()}</span>
+          <span style={{ fontSize: '0.75rem', fontWeight: 600, letterSpacing: 0 }}>
+            Switch the scale to this label — not the house label.
+          </span>
+        </div>
+      )}
 
       {/* ── Box tabs ── */}
       <div style={{

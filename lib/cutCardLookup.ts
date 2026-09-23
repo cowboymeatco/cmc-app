@@ -21,7 +21,7 @@ export const normName = (n: string) =>
 
 export interface CIMatch { cards: CICard[]; via: string; name: string }
 
-type CIRow = { data?: unknown; customer_name?: string; customer_id?: string | null; species?: string | null }
+type CIRow = { data?: unknown; customer_name?: string; customer_id?: string | null; species?: string | null; scale_label?: string | null }
 
 // Which of these cards belongs to the session on the bench.
 //
@@ -44,9 +44,9 @@ function theOneFor(rows: CIRow[], customerName: string): CIRow | null {
 // is what actually connects a box to its orders today. How it matched gets
 // printed on the tag, because a name match deserves to be visible.
 export async function resolveCuttingInstruction(customerName: string, packDate: string): Promise<CIMatch | null> {
-  const pick = (row: { data?: unknown; customer_name?: string; customer_id?: string | null; species?: string | null } | null, via: string): CIMatch | null =>
+  const pick = (row: CIRow | null, via: string): CIMatch | null =>
     row?.data
-      ? { cards: [{ data: row.data as Record<string, unknown>, customerId: row.customer_id ?? null, species: row.species ?? null }], via, name: row.customer_name ?? '' }
+      ? { cards: [{ data: row.data as Record<string, unknown>, customerId: row.customer_id ?? null, species: row.species ?? null, scaleLabel: row.scale_label ?? null }], via, name: row.customer_name ?? '' }
       : null
 
   // 0. The session was started off (or scanned against) its animal and knows
@@ -60,7 +60,7 @@ export async function resolveCuttingInstruction(customerName: string, packDate: 
     .maybeSingle()
   const sessionCi = sess.data?.linked_cutting_instruction_id as string | null | undefined
   if (sessionCi) {
-    const ci = await supabase.from('cutting_instructions').select('data, customer_name, customer_id, species').eq('id', sessionCi).maybeSingle()
+    const ci = await supabase.from('cutting_instructions').select('data, customer_name, customer_id, species, scale_label').eq('id', sessionCi).maybeSingle()
     const hit = pick(ci.data, 'session')
     if (hit) return hit
   }
@@ -82,7 +82,7 @@ export async function resolveCuttingInstruction(customerName: string, packDate: 
       .not('linked_cutting_instruction_id', 'is', null)
     const ciIds = [...new Set((ca.data ?? []).map(r => r.linked_cutting_instruction_id).filter(Boolean))]
     if (ciIds.length) {
-      const ci = await supabase.from('cutting_instructions').select('data, customer_name, species').in('id', ciIds)
+      const ci = await supabase.from('cutting_instructions').select('data, customer_name, species, scale_label').in('id', ciIds)
       // One carcass can carry two orders — a hog split down the middle between
       // two customers, both cards assigned to tag 09. The carcass says whose
       // animal it is, not whose half is on THIS bench, so the session's own
@@ -103,7 +103,7 @@ export async function resolveCuttingInstruction(customerName: string, packDate: 
     if (appts.length) {
       const ci = await supabase
         .from('cutting_instructions')
-        .select('data, customer_name, species')
+        .select('data, customer_name, species, scale_label')
         .in('appointment_id', appts)
       const hit = pick(theOneFor(ci.data ?? [], customerName), 'appointment')
       if (hit) return hit
@@ -117,13 +117,13 @@ export async function resolveCuttingInstruction(customerName: string, packDate: 
   // german brat order sat on the whole-hog card (Charlie, 2026-08-01).
   const target = normName(customerName)
   if (!target) return null
-  const all = await supabase.from('cutting_instructions').select('data, customer_name, customer_id, species')
+  const all = await supabase.from('cutting_instructions').select('data, customer_name, customer_id, species, scale_label')
   const matches = (all.data ?? []).filter(r => normName(r.customer_name ?? '') === target)
   if (!matches.length) return null
 
   const cards: CICard[] = matches
     .filter(r => r.data)
-    .map(r => ({ data: r.data as Record<string, unknown>, customerId: r.customer_id ?? null, species: r.species ?? null }))
+    .map(r => ({ data: r.data as Record<string, unknown>, customerId: r.customer_id ?? null, species: r.species ?? null, scaleLabel: r.scale_label ?? null }))
   if (!cards.length) return null
   if (cards.length > 1 && !isSameParty(cards)) return null
 

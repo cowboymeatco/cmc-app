@@ -60,6 +60,9 @@ export async function GET(req: NextRequest) {
     lines,
     links:   links.data ?? [],
     cure:    cureProductsOnSheet(sheetProducts),
+    // Producer labels the office set on the card(s) — the packager has to
+    // switch the scale to it before the first package (Charlie, 2026-09-23).
+    scaleLabels: [...new Set(match.cards.map(c => c.scaleLabel?.trim()).filter((l): l is string => !!l))],
   })
 }
 
