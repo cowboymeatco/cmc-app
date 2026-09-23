@@ -69,7 +69,12 @@ function sameSpecies(a?: string | null, b?: string | null): boolean {
 function shareNamesText(d: { shareNames?: unknown } | undefined): string {
   const names: unknown[] = Array.isArray(d?.shareNames) ? d.shareNames : []
   if (!names.some(n => String(n ?? '').trim())) return ''
-  return names.map((n, i) => `${String.fromCharCode(65 + i)}: ${String(n ?? '').trim() || '—'}`).join(' · ')
+  // A share with no name is labeled with just its letter (Charlie, 2026-09-23).
+  return names.map((n, i) => {
+    const letter = String.fromCharCode(65 + i)
+    const name = String(n ?? '').trim()
+    return name ? `${letter}: ${name}` : letter
+  }).join(' · ')
 }
 
 // Falls back to a generic cut rather than a cow — an unknown species showing a
