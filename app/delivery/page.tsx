@@ -1340,17 +1340,17 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
     return freezer.filter(s => {
       const hay = `${s.customer_name} ${new Date(s.session_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${s.session_date}`.toLowerCase()
       return words.every(w => hay.includes(w))
-    }).slice(0, 8)
+    }).slice(0, 25)
   })()
 
   useEffect(() => {
-    fetch('/api/processing/sessions')
+    // Every order with a box still in the freezer, whatever its session
+    // status says — most sit at scanning or value_add long after packing.
+    fetch('/api/delivery/loadout?freezer=1')
       .then(r => r.json())
       .then((data: unknown) => {
         if (!Array.isArray(data)) return
-        setFreezer((data as SessionLite[])
-          .filter(s => s.status === 'complete' || s.status === 'baker_storage')
-          .sort((a, b) => a.customer_name.localeCompare(b.customer_name)))
+        setFreezer(data as SessionLite[])
       })
       .catch(() => {})
   }, [])

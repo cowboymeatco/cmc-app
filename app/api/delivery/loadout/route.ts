@@ -68,6 +68,19 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const serial = (searchParams.get('serial') ?? '').trim().toUpperCase()
 
+  // GET ?freezer=1 — every order with a box not yet picked up, for the
+  // "no box label yet" search. Read from a grouped view: the boxes themselves
+  // are well past PostgREST's 1,000-row cap.
+  if (searchParams.get('freezer')) {
+    const { data, error } = await supabase
+      .from('v_freezer_orders')
+      .select('customer_name, session_date, box_count, total_weight')
+      .order('session_date', { ascending: false })
+      .limit(2000)
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json((data ?? []).map(r => ({ ...r, status: 'in_freezer', total_weight: Number(r.total_weight) || 0 })))
+  }
+
   const byName = (searchParams.get('customer') ?? '').trim()
   const byDate = (searchParams.get('date') ?? '').trim()
   if (!serial && byName && byDate) {
