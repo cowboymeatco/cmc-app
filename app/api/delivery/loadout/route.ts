@@ -121,6 +121,10 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const body = await req.json()
   const releasedBy: string = (body.released_by ?? body.driver ?? '').trim()
+  // A semi run can drop orders at Baker Transfer & Storage rather than hand
+  // them to the customer (Charlie, 2026-09-24): same stamps, but a finished
+  // order parks at baker_storage instead of picked_up.
+  const destination = body.destination === 'baker_storage' ? 'baker_storage' : 'customer'
   const notes: string      = body.notes ?? ''
   const pickedUpAt: string = body.picked_up_at ?? new Date().toISOString()
 
@@ -183,7 +187,7 @@ export async function POST(req: NextRequest) {
       ],
       notes,
       status:       'pending',
-      destination:  'customer',
+      destination,
       session_refs: [...new Map(
         boxes.map(b => [`${b.customer_name}|${b.pack_date}`, { customer_name: b.customer_name, session_date: b.pack_date }])
       ).values()],
@@ -213,7 +217,7 @@ export async function POST(req: NextRequest) {
     if (remaining === 0) {
       await supabase
         .from('processing_sessions')
-        .update({ status: 'picked_up', updated_at: new Date().toISOString() })
+        .update({ status: destination === 'baker_storage' ? 'baker_storage' : 'picked_up', updated_at: new Date().toISOString() })
         .eq('customer_name', s.customer_name)
         .eq('session_date', s.pack_date)
       sessionsClosed.push({ customer_name: s.customer_name, session_date: s.pack_date })

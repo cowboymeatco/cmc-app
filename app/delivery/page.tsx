@@ -1380,12 +1380,30 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
     scanRef.current?.focus()
   }
 
-  // A sign for the side of the pallet — the boxes of this order on the load,
-  // or every one still in the freezer if none are on it yet.
-  function openPalletSign(customer: string, date: string, boxNumbers: number[]) {
-    const p = new URLSearchParams({ customer, date })
-    if (boxNumbers.length) p.set('boxes', boxNumbers.join(','))
-    window.open(`/api/delivery/pallet-sign?${p}`, '_blank')
+  // Where the load is going, and which pallet each order rides on. Several
+  // small orders share a pallet on a semi run, and the receiving end (Baker)
+  // has to tell who is who — so the sign is per pallet, naming every customer
+  // on it (Charlie, 2026-09-24). Orders default to pallet 1.
+  const [destination, setDestination] = useState<Destination>('customer')
+  const [palletOf,    setPalletOf]    = useState<Record<string, number>>({})
+
+  // One sheet per pallet in use: each order's boxes on this load, or every
+  // box of it still in the freezer if none are checked on yet.
+  function printPalletSigns() {
+    const byPallet = new Map<number, { c: string; d: string; b: number[] }[]>()
+    for (const card of cards) {
+      const n = palletOf[card.key] ?? 1
+      const c = card.sess?.customer_name ?? card.onThisLoad[0]?.box.customer_name
+      const d = card.sess?.session_date ?? card.onThisLoad[0]?.box.pack_date
+      if (!c || !d) continue
+      const list = byPallet.get(n) ?? []
+      list.push({ c, d, b: card.onThisLoad.map(s => s.box.box_number) })
+      byPallet.set(n, list)
+    }
+    const pallets = [...byPallet.entries()].sort((a, b) => a[0] - b[0]).map(([, orders]) => orders)
+    if (!pallets.length) return
+    const load = { to: destination === 'baker_storage' ? 'Baker Storage' : '', pallets }
+    window.open(`/api/delivery/pallet-sign?load=${encodeURIComponent(JSON.stringify(load))}`, '_blank')
   }
 
   // Before Release the slip is a preview of what's scanned; after, it's the record.
@@ -1530,6 +1548,7 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
     setCarcasses([])
     setByHand(new Set())
     setPinned([])
+    setPalletOf({})
     setFlash(null)
     scanRef.current?.focus()
   }
@@ -1570,6 +1589,7 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           released_by: releasedBy.trim(),
+          destination,
           notes: [notes.trim(), handNote].filter(Boolean).join('\n'),
           serials: scanned.map(s => s.box.serial_number).filter(Boolean),
           carcass_codes: carcasses.map(c => c.carcass.code),
@@ -1610,6 +1630,7 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
     setCarcasses([])
     setByHand(new Set())
     setPinned([])
+    setPalletOf({})
     setNotes('')
     onSaved()
     scanRef.current?.focus()
@@ -1735,6 +1756,22 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
         })()}
 
         <div style={{ marginBottom: '0.9rem' }}>
+          <label style={LABEL}>Going to</label>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            {(['customer', 'baker_storage'] as Destination[]).map(d => (
+              <button key={d} onClick={() => setDestination(d)} style={{
+                flex: 1, padding: '0.5rem', borderRadius: 3, cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600,
+                background: destination === d ? DEST_CFG[d].color : 'transparent',
+                color: destination === d ? C.dark : C.tan,
+                border: `1px solid ${destination === d ? DEST_CFG[d].color : 'rgba(166,120,90,0.35)'}`,
+              }}>
+                {DEST_CFG[d].icon} {DEST_CFG[d].label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ marginBottom: '0.9rem' }}>
           <label style={LABEL}>Released By *</label>
           <input style={INPUT} value={releasedBy} onChange={e => setReleasedBy(e.target.value)} placeholder="Who handed it over" />
         </div>
@@ -1751,13 +1788,22 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
         >
           {releasing ? 'Releasing…' : carcasses.length && !scanned.length
             ? `🐄 Release ${carcasses.length} Carcass${carcasses.length !== 1 ? 'es' : ''} to Customer`
-            : `📦 Release ${scanned.length || ''} Box${scanned.length !== 1 ? 'es' : ''}${carcasses.length ? ` + ${carcasses.length} Carcass${carcasses.length !== 1 ? 'es' : ''}` : ''} to Customer`}
+            : `📦 Release ${scanned.length || ''} Box${scanned.length !== 1 ? 'es' : ''}${carcasses.length ? ` + ${carcasses.length} Carcass${carcasses.length !== 1 ? 'es' : ''}` : ''} to ${destination === 'baker_storage' ? 'Baker Storage' : 'Customer'}`}
         </button>
         {(scanned.length > 0 || carcasses.length > 0) && !releasedBy.trim() && (
           <div style={{ color: C.yellow, fontSize: '0.76rem', marginTop: '0.5rem', textAlign: 'center' }}>
             Enter who&rsquo;s releasing it first.
           </div>
         )}
+        {cards.length > 0 && (() => {
+          const n = new Set(cards.map(c => palletOf[c.key] ?? 1)).size
+          return (
+            <button onClick={printPalletSigns}
+              style={{ ...BTN('transparent', C.tan), width: '100%', padding: '0.55rem', fontSize: '0.82rem', marginTop: '0.6rem', border: '1px solid rgba(201,168,130,0.45)' }}>
+              🪧 Print Pallet Signs ({n} pallet{n !== 1 ? 's' : ''}, {cards.length} customer{cards.length !== 1 ? 's' : ''})
+            </button>
+          )
+        })()}
         {(scanned.length > 0 || carcasses.length > 0) && (
           <button onClick={openPackingSlip}
             style={{ ...BTN('transparent', C.tan), width: '100%', padding: '0.55rem', fontSize: '0.82rem', marginTop: '0.6rem', border: '1px solid rgba(201,168,130,0.45)' }}>
@@ -1857,17 +1903,17 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
                       {weight > 0 && ` · ${weight.toFixed(1)} lbs on this load`}
                     </div>
                   </div>
-                  <button
-                    onClick={() => openPalletSign(
-                      sess?.customer_name ?? onThisLoad[0].box.customer_name,
-                      sess?.session_date ?? onThisLoad[0].box.pack_date,
-                      onThisLoad.map(s => s.box.box_number),
-                    )}
-                    title="Print a sign for the side of this order's pallet"
-                    style={{ marginLeft: 'auto', flexShrink: 0, background: 'none', border: '1px solid rgba(201,168,130,0.45)', borderRadius: 3, color: C.tan, cursor: 'pointer', fontSize: '0.74rem', padding: '0.25rem 0.6rem' }}
-                  >
-                    🪧 Pallet Sign
-                  </button>
+                  <label style={{ marginLeft: 'auto', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '0.35rem', color: C.tan, fontSize: '0.74rem' }}
+                    title="Which pallet this order rides on — the sign lists every customer on a pallet">
+                    🪧 Pallet
+                    <select
+                      value={palletOf[key] ?? 1}
+                      onChange={e => setPalletOf(prev => ({ ...prev, [key]: Number(e.target.value) }))}
+                      style={{ background: C.darkBrown, color: C.cream, border: '1px solid rgba(201,168,130,0.45)', borderRadius: 3, fontSize: '0.8rem', padding: '0.15rem 0.3rem', cursor: 'pointer' }}
+                    >
+                      {Array.from({ length: Math.max(cards.length, 1) + 1 }, (_, i) => i + 1).map(n => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                  </label>
                   <span style={{
                     flexShrink: 0, fontSize: '0.72rem', fontWeight: 700, borderRadius: 99, padding: '3px 10px',
                     background: complete ? 'rgba(76,175,80,0.18)' : 'rgba(217,119,6,0.18)',
