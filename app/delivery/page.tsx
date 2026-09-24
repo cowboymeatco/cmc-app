@@ -739,30 +739,9 @@ function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
 
   const picked = picks.map(id => deliveries.find(d => d.id === id)).filter(Boolean) as DeliveryScan[]
 
-  // The names printed on the boxes' own labels, listed under the customer on
-  // the sign — what Baker matches against. The typed delivery name stays the
-  // headline: box names can be a first name alone or a string of sessions.
-  const [boxNames, setBoxNames] = useState<Record<string, string[]>>({})
-  const labeled = (d: DeliveryScan) => {
-    const n = boxNames[d.id] ?? []
-    if (!n.length) return ''
-    return `labeled ${n.slice(0, 2).join(' / ')}${n.length > 2 ? ` +${n.length - 2} more` : ''}`
-  }
-
   function togglePickD(d: DeliveryScan) {
     if (picks.includes(d.id)) { setPicks(prev => prev.filter(x => x !== d.id)); return }
     setPicks(prev => [...prev, d.id])
-    const serials = (d.barcodes ?? []).map(l => l.barcode).filter(b => identifyBarcode(b) === 'box_serial')
-    if (serials.length && !boxNames[d.id]) {
-      fetch(`/api/delivery/boxes?serials=${encodeURIComponent(serials.join(','))}`)
-        .then(r => r.json())
-        .then((info: unknown) => {
-          if (!info || typeof info !== 'object') return
-          const names = [...new Set(Object.values(info as Record<string, LoggedBox>).map(b => b.customer_name).filter(Boolean))]
-          if (names.length) setBoxNames(prev => ({ ...prev, [d.id]: names }))
-        })
-        .catch(() => {})
-    }
     // A delivery already on a pallet keeps it.
     const saved = d.barcodes?.find(l => l.pallet)
     if (saved?.pallet) {
@@ -778,16 +757,14 @@ function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
     setPalletMsg('')
   }
 
-  // "1 box · 5 packages" — what a delivery put on the pallet.
-  function lineSummary(d: DeliveryScan): string {
-    let boxes = 0, pkgs = 0
-    for (const l of d.barcodes ?? []) {
+  // Boxes a delivery put on the pallet — box labels plus anything typed in by
+  // hand ("meat box 1"); loose packages off the scale and carcass tags aren't
+  // boxes. The sign carries just this count (Charlie, 2026-09-24).
+  function boxCount(d: DeliveryScan): number {
+    return (d.barcodes ?? []).filter(l => {
       const t = identifyBarcode(l.barcode)
-      if (t === 'ean13') pkgs++
-      else if (t !== 'carcass') boxes++
-    }
-    return [boxes ? `${boxes} box${boxes !== 1 ? 'es' : ''}` : '', pkgs ? `${pkgs} package${pkgs !== 1 ? 's' : ''}` : '']
-      .filter(Boolean).join(' · ') || 'nothing scanned'
+      return t !== 'ean13' && t !== 'carcass'
+    }).length
   }
 
   const palletOfPick = (id: string) => palletOfD[id] ?? 1
@@ -815,7 +792,7 @@ function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
   function printPalletSignsD() {
     const out = stops.map((stop, i) => ({
       n: i + 1, stop: stop.trim(),
-      orders: picked.filter(d => palletOfPick(d.id) === i + 1).map(d => ({ c: d.customer, note: [lineSummary(d), labeled(d)].filter(Boolean).join(' · ') })),
+      orders: picked.filter(d => palletOfPick(d.id) === i + 1).map(d => ({ c: d.customer, count: boxCount(d) })),
     })).filter(p => p.orders.length)
     if (!out.length) return
     const allBaker = picked.every(d => d.destination === 'baker_storage')
@@ -988,9 +965,8 @@ function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
                     <div style={{ minWidth: 0 }}>
                       <div style={{ color: C.cream, fontWeight: 600, fontSize: '0.88rem' }}>{d.customer}</div>
                       <div style={{ color: C.lightBrown, fontSize: '0.74rem' }}>
-                        {new Date(d.delivered_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · {lineSummary(d)}
+                        {new Date(d.delivered_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · {boxCount(d)} box{boxCount(d) !== 1 ? 'es' : ''}
                         {d.destination === 'baker_storage' ? ' · 🚚 Baker' : ''}
-                        {labeled(d) && ` · ${labeled(d)}`}
                       </div>
                     </div>
                   </div>
