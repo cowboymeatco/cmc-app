@@ -31,6 +31,27 @@ function daysSince(sessionDate: string): number {
 
 const sessionKey = (s: { customer_name: string; session_date: string }) => `${s.customer_name}|${s.session_date}`
 
+// Every word typed has to appear in the name or the packed date, in any
+// order — "vassau 2" or "jun 24" both find 26175 Vassau Standard 2.
+function matchOrders<T extends { customer_name: string; session_date: string }>(list: T[], query: string, max = 25): T[] {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+  if (!words.length) return []
+  return list.filter(s => {
+    const hay = `${s.customer_name} ${new Date(s.session_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${s.session_date}`.toLowerCase()
+    return words.every(w => hay.includes(w))
+  }).slice(0, max)
+}
+
+// Every order with a box still in the freezer, whatever its session status
+// says — most sit at scanning or value_add long after packing.
+async function fetchFreezerOrders(): Promise<SessionLite[]> {
+  const data = await fetch('/api/delivery/loadout?freezer=1').then(r => r.json()).catch(() => null)
+  return Array.isArray(data) ? data as SessionLite[] : []
+}
+
+// One order's boxes, for checking on by hand the ones with no label yet.
+interface OrderBox { id: string; serial_number: string | null; box_number: number; total_weight_lbs: number; picked_up_at: string | null }
+
 // ── Barcode type detection ────────────────────────────────────────────────────
 type BarcodeType = 'ean13' | 'carcass' | 'cmc_box' | 'box_serial' | 'unknown'
 
@@ -175,27 +196,61 @@ function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Reco
   const f = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm(p => ({ ...p, [k]: e.target.value }))
 
-  // Everything sitting in the freezer is loadable; a Baker run can also be
-  // hauling something back out of the locker to its owner.
-  useEffect(() => {
-    fetch('/api/processing/sessions')
-      .then(r => r.json())
-      .then((data: unknown) => {
-        if (!Array.isArray(data)) return
-        setSessions((data as SessionLite[]).filter(s => s.status === 'complete' || s.status === 'baker_storage'))
-      })
-      .catch(() => {})
+  // Everything with a box in the freezer is loadable; a Baker run can also be
+  // hauling something back out of the locker to its owner. Session status is
+  // only borrowed for the IN BAKER badge — it's no guide to what's still here.
+  const loadSessions = useCallback(async () => {
+    const [orders, statuses] = await Promise.all([
+      fetchFreezerOrders(),
+      fetch('/api/processing/sessions').then(r => r.json()).catch(() => null),
+    ])
+    const statusOf = new Map<string, string>()
+    if (Array.isArray(statuses)) for (const x of statuses as SessionLite[]) statusOf.set(sessionKey(x), x.status)
+    setSessions(orders.map(o => ({ ...o, status: statusOf.get(sessionKey(o)) ?? o.status })))
   }, [])
+  useEffect(() => { loadSessions() }, [loadSessions])
 
-  const loadable = sessions
-    .filter(s => destination === 'baker_storage' ? s.status === 'complete' : true)
-    .sort((a, b) => a.session_date.localeCompare(b.session_date))
+  // 461 orders is too many to scroll: the picked ones stay on top, then
+  // whatever the search finds, or the newest few with nothing typed.
+  const [sessQuery, setSessQuery] = useState('')
+  const eligible = sessions.filter(s => destination === 'baker_storage' ? s.status !== 'baker_storage' : true)
+  const loadable = [
+    ...eligible.filter(s => picked.includes(sessionKey(s))),
+    ...(sessQuery.trim() ? matchOrders(eligible, sessQuery, 40) : eligible.slice(0, 30))
+      .filter(s => !picked.includes(sessionKey(s))),
+  ]
+
+  // Boxes of each picked order, so one with no big label yet can still be
+  // checked onto the run by hand (Charlie, 2026-09-24) — its serial goes in
+  // the barcode list exactly as a scan would. byHand feeds the saved notes.
+  const [orderBoxes, setOrderBoxes] = useState<Record<string, OrderBox[]>>({})
+  const [byHand, setByHand] = useState<Set<string>>(new Set())
+
+  async function loadOrderBoxes(s: SessionLite) {
+    const key = sessionKey(s)
+    if (orderBoxes[key]) return
+    const res = await fetch(`/api/delivery/loadout?customer=${encodeURIComponent(s.customer_name)}&date=${s.session_date}`).catch(() => null)
+    const data = await res?.json().catch(() => null)
+    if (data?.session?.boxes) setOrderBoxes(prev => ({ ...prev, [key]: data.session.boxes as OrderBox[] }))
+  }
+
+  function checkOnByHand(serials: string[]) {
+    const have = new Set(barcodes.map(b => b.barcode.toUpperCase()))
+    const add = serials.filter(x => x && !have.has(x.toUpperCase()))
+    if (!add.length) return
+    const now = new Date().toISOString()
+    setBarcodes(prev => [...prev, ...add.map(barcode => ({ barcode, scannedAt: now }))])
+    setByHand(prev => { const n = new Set(prev); add.forEach(x => n.add(x.toUpperCase())); return n })
+    setLastAdded(`✓ Checked on by hand: ${add.length} box${add.length !== 1 ? 'es' : ''}`)
+    setTimeout(() => setLastAdded(''), 2500)
+  }
 
   const pickedSessions = sessions.filter(s => picked.includes(sessionKey(s)))
 
   function togglePick(s: SessionLite) {
     const key = sessionKey(s)
     setPicked(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key])
+    if (!picked.includes(key)) loadOrderBoxes(s)
   }
 
   // One picked session names the run; several make it a multi-stop haul.
@@ -224,12 +279,22 @@ function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Reco
   }
 
   function removeBarcode(idx: number) {
+    const gone = barcodes[idx]?.barcode.toUpperCase()
     setBarcodes(prev => prev.filter((_, i) => i !== idx))
+    if (gone) setByHand(prev => { const n = new Set(prev); n.delete(gone); return n })
   }
 
   async function handleSubmit() {
     if (!canSave) return
     setSaving(true)
+    // Name the boxes that went on without a label scan, so the record says so.
+    const handLines: string[] = []
+    for (const [key, boxes] of Object.entries(orderBoxes)) {
+      for (const b of boxes) {
+        if (b.serial_number && byHand.has(b.serial_number.toUpperCase())) handLines.push(`${key.split('|')[0]} box ${b.box_number}`)
+      }
+    }
+    const handNote = handLines.length ? `Checked on by hand, no box label: ${handLines.join(', ')}` : ''
     const res = await fetch('/api/delivery', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -237,6 +302,7 @@ function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Reco
       // instant so it sorts consistently with API-defaulted UTC rows.
       body: JSON.stringify({
         ...form,
+        notes:        [form.notes.trim(), handNote].filter(Boolean).join('\n'),
         customer:     derivedCustomer,
         delivered_at: new Date(form.delivered_at).toISOString(),
         barcodes,
@@ -259,13 +325,11 @@ function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Reco
     setForm({ delivered_at: isoDateTime(), driver: '', customer: '', notes: '' })
     setBarcodes([])
     setPicked([])
-    // Picked sessions have changed status — refresh so they leave the list
-    fetch('/api/processing/sessions')
-      .then(r => r.json())
-      .then((data: unknown) => {
-        if (Array.isArray(data)) setSessions((data as SessionLite[]).filter(s => s.status === 'complete' || s.status === 'baker_storage'))
-      })
-      .catch(() => {})
+    setByHand(new Set())
+    setOrderBoxes({})
+    setSessQuery('')
+    // Picked sessions have changed status — refresh so the badges follow
+    loadSessions()
     onSaved()
     setTimeout(() => setSuccess(''), 5000)
   }
@@ -348,10 +412,18 @@ function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Reco
           <label style={LABEL}>
             Sessions on this run {picked.length > 0 && <span style={{ color: C.tan }}>· {picked.length} selected</span>}
           </label>
+          <input
+            style={{ ...INPUT, marginBottom: '0.4rem' }}
+            value={sessQuery}
+            onChange={e => setSessQuery(e.target.value)}
+            placeholder={`Search ${eligible.length} orders in the freezer…`}
+            autoComplete="off"
+            spellCheck={false}
+          />
           <div style={{ border: '1px solid rgba(166,120,90,0.35)', borderRadius: 3, maxHeight: 190, overflowY: 'auto', background: 'rgba(255,255,255,0.03)' }}>
             {loadable.length === 0 ? (
               <p style={{ color: C.lightBrown, fontSize: '0.8rem', padding: '0.9rem', margin: 0, textAlign: 'center' }}>
-                Nothing in the freezer to load.
+                {sessQuery.trim() ? 'No order in the freezer matches.' : 'Nothing in the freezer to load.'}
               </p>
             ) : loadable.map(s => {
               const key = sessionKey(s)
@@ -393,6 +465,56 @@ function NewDeliveryTab({ onSaved, pluMap }: { onSaved: () => void; pluMap: Reco
               : 'Selected sessions get marked picked up on save.'}
           </div>
         </div>
+
+        {/* Boxes of the picked orders — the ones without a label go on by hand */}
+        {pickedSessions.length > 0 && (() => {
+          const onList = new Set(barcodes.map(b => b.barcode.toUpperCase()))
+          return (
+            <div style={{ marginBottom: '0.9rem' }}>
+              <label style={LABEL}>No box label yet? Check boxes on by hand</label>
+              <div style={{ border: '1px solid rgba(166,120,90,0.35)', borderRadius: 3, maxHeight: 260, overflowY: 'auto', background: 'rgba(255,255,255,0.03)' }}>
+                {pickedSessions.map(s => {
+                  const key   = sessionKey(s)
+                  const boxes = (orderBoxes[key] ?? []).filter(b => !b.picked_up_at)
+                  const left  = boxes.filter(b => b.serial_number && !onList.has(b.serial_number.toUpperCase()))
+                  return (
+                    <div key={key} style={{ borderBottom: '1px solid rgba(166,120,90,0.15)', padding: '0.45rem 0.75rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+                        <span style={{ color: C.cream, fontSize: '0.82rem', fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.customer_name}</span>
+                        {left.length > 1 && (
+                          <button onClick={() => checkOnByHand(left.map(b => b.serial_number!))}
+                            style={{ flexShrink: 0, background: 'none', border: '1px solid rgba(217,119,6,0.5)', borderRadius: 3, color: C.yellow, cursor: 'pointer', fontSize: '0.72rem', padding: '0.15rem 0.5rem' }}>
+                            ✋ Check on all {left.length}
+                          </button>
+                        )}
+                      </div>
+                      {!orderBoxes[key] && <div style={{ color: C.lightBrown, fontSize: '0.74rem' }}>Loading boxes…</div>}
+                      {boxes.map(b => {
+                        const on = !!b.serial_number && onList.has(b.serial_number.toUpperCase())
+                        const hand = on && byHand.has(b.serial_number!.toUpperCase())
+                        return (
+                          <div key={b.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.2rem 0' }}>
+                            <span style={{ color: on ? C.green : C.yellow, fontSize: '0.9rem', lineHeight: 1 }}>{on ? '☑' : '☐'}</span>
+                            <span style={{ color: C.cream, fontSize: '0.8rem', minWidth: 48 }}>Box {b.box_number}</span>
+                            <span style={{ color: C.tan, fontSize: '0.74rem' }}>{b.total_weight_lbs > 0 ? `${b.total_weight_lbs.toFixed(1)} lb` : ''}</span>
+                            {hand && <span style={{ color: C.yellow, fontSize: '0.72rem', fontStyle: 'italic' }}>✋ no label</span>}
+                            {!on && b.serial_number && (
+                              <button onClick={() => checkOnByHand([b.serial_number!])}
+                                title="Box has no label yet — put it on the run by hand"
+                                style={{ marginLeft: 'auto', background: 'none', border: '1px solid rgba(217,119,6,0.5)', borderRadius: 3, color: C.yellow, cursor: 'pointer', fontSize: '0.72rem', padding: '0.1rem 0.5rem' }}>
+                                ✋ Check on
+                              </button>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })()}
 
         {/* Barcode scanner section */}
         <div style={{ marginBottom: '0.9rem' }}>
@@ -1332,28 +1454,9 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
   const [freezer, setFreezer] = useState<SessionLite[]>([])
   const [orderQuery, setOrderQuery] = useState('')
 
-  // Every word typed has to appear in the name or the packed date, in any
-  // order — "vassau 2" or "jun 24" both find 26175 Vassau Standard 2.
-  const orderMatches = (() => {
-    const words = orderQuery.toLowerCase().split(/\s+/).filter(Boolean)
-    if (!words.length) return []
-    return freezer.filter(s => {
-      const hay = `${s.customer_name} ${new Date(s.session_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${s.session_date}`.toLowerCase()
-      return words.every(w => hay.includes(w))
-    }).slice(0, 25)
-  })()
+  const orderMatches = matchOrders(freezer, orderQuery)
 
-  useEffect(() => {
-    // Every order with a box still in the freezer, whatever its session
-    // status says — most sit at scanning or value_add long after packing.
-    fetch('/api/delivery/loadout?freezer=1')
-      .then(r => r.json())
-      .then((data: unknown) => {
-        if (!Array.isArray(data)) return
-        setFreezer(data as SessionLite[])
-      })
-      .catch(() => {})
-  }, [])
+  useEffect(() => { fetchFreezerOrders().then(setFreezer) }, [])
 
   async function pullUpOrder(key: string) {
     const s = freezer.find(x => sessionKey(x) === key)
