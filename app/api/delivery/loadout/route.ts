@@ -125,6 +125,9 @@ export async function POST(req: NextRequest) {
   // them to the customer (Charlie, 2026-09-24): same stamps, but a finished
   // order parks at baker_storage instead of picked_up.
   const destination = body.destination === 'baker_storage' ? 'baker_storage' : 'customer'
+  // Serial → the pallet it rode on and where that pallet was going.
+  const palletOf: Record<string, { pallet?: number; stop?: string }> =
+    body.pallet_of && typeof body.pallet_of === 'object' ? body.pallet_of : {}
   const notes: string      = body.notes ?? ''
   const pickedUpAt: string = body.picked_up_at ?? new Date().toISOString()
 
@@ -180,7 +183,13 @@ export async function POST(req: NextRequest) {
       driver:       releasedBy,
       customer,
       barcodes: [
-        ...boxes.map(b => ({ barcode: b.serial_number ?? '', scannedAt: pickedUpAt })),
+        ...boxes.map(b => {
+          const p = palletOf[(b.serial_number ?? '').toUpperCase()]
+          return {
+            barcode: b.serial_number ?? '', scannedAt: pickedUpAt,
+            ...(p?.pallet ? { pallet: p.pallet, stop: String(p.stop ?? '').trim() } : {}),
+          }
+        }),
         // prev_status is what the rail said before the truck left with it, so
         // pulling the carcass back off this load restores it exactly.
         ...knownCarcasses.map(c => ({ barcode: c.code, scannedAt: pickedUpAt, prev_status: c.status })),

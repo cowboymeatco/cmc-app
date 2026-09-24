@@ -1478,34 +1478,61 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
       box_label: null, picked_up_at: b.picked_up_at, picked_up_by: null,
     }
     setScanned(prev => [...prev, { box, scannedAt: new Date().toISOString() }])
+    setPalletOfBox(prev => ({ ...prev, [box.id]: activePallet }))
     setByHand(prev => new Set(prev).add(b.id))
     say({ kind: 'ok', title: `Box ${b.box_number} · ${sess.customer_name} — checked on by hand`, detail: 'No box label scanned; the release notes will say so.' })
     scanRef.current?.focus()
   }
 
-  // Where the load is going, and which pallet each order rides on. Several
-  // small orders share a pallet on a semi run, and the receiving end (Baker)
-  // has to tell who is who — so the sign is per pallet, naming every customer
-  // on it (Charlie, 2026-09-24). Orders default to pallet 1.
-  const [destination, setDestination] = useState<Destination>('customer')
-  const [palletOf,    setPalletOf]    = useState<Record<string, number>>({})
+  // Where the load is going, and the pallets it's built on (Charlie,
+  // 2026-09-24). Several small orders share a pallet on a semi run and each
+  // pallet drops at one stop, so a box goes onto whichever pallet is ACTIVE
+  // when it's scanned or checked on; the sign names the stop and every
+  // customer on the pallet, and Release saves pallet + stop on each box line.
+  const [destination,  setDestination]  = useState<Destination>('customer')
+  const [pallets,      setPallets]      = useState<{ stop: string }[]>([{ stop: '' }])
+  const [activePallet, setActivePallet] = useState(1)
+  const [palletOfBox,  setPalletOfBox]  = useState<Record<string, number>>({})
+  // Today's scheduled run, so a pallet's stop is a tap, not typing.
+  const [runStops, setRunStops] = useState<string[]>([])
+  useEffect(() => {
+    const today = new Date().toLocaleDateString('en-CA')
+    fetch('/api/delivery/runs?upcoming=1').then(r => r.json()).then((runs: unknown) => {
+      if (!Array.isArray(runs)) return
+      const stops = (runs as { run_date: string; stops?: { customer?: string; town?: string }[] }[])
+        .filter(r => r.run_date === today)
+        .flatMap(r => r.stops ?? [])
+        .map(st => [st.customer, st.town].filter(Boolean).join(', '))
+        .filter(Boolean)
+      setRunStops([...new Set(stops)])
+    }).catch(() => {})
+  }, [])
 
-  // One sheet per pallet in use: each order's boxes on this load, or every
-  // box of it still in the freezer if none are checked on yet.
+  const palletNo = (boxId: string) => palletOfBox[boxId] ?? 1
+
+  function newPallet() {
+    setPallets(prev => [...prev, { stop: prev[prev.length - 1]?.stop ?? '' }])
+    setActivePallet(pallets.length + 1)
+    scanRef.current?.focus()
+  }
+
+  // One sheet per pallet with anything on it: its stop, then each order's
+  // boxes riding on that pallet.
   function printPalletSigns() {
-    const byPallet = new Map<number, { c: string; d: string; b: number[] }[]>()
-    for (const card of cards) {
-      const n = palletOf[card.key] ?? 1
-      const c = card.sess?.customer_name ?? card.onThisLoad[0]?.box.customer_name
-      const d = card.sess?.session_date ?? card.onThisLoad[0]?.box.pack_date
-      if (!c || !d) continue
-      const list = byPallet.get(n) ?? []
-      list.push({ c, d, b: card.onThisLoad.map(s => s.box.box_number) })
-      byPallet.set(n, list)
-    }
-    const pallets = [...byPallet.entries()].sort((a, b) => a[0] - b[0]).map(([, orders]) => orders)
-    if (!pallets.length) return
-    const load = { to: destination === 'baker_storage' ? 'Baker Storage' : '', pallets }
+    const out = pallets.map((p, i) => {
+      const n = i + 1
+      const orders = new Map<string, { c: string; d: string; b: number[] }>()
+      for (const s of scanned) {
+        if (palletNo(s.box.id) !== n) continue
+        const k = sessionKey({ customer_name: s.box.customer_name, session_date: s.box.pack_date })
+        const o = orders.get(k) ?? { c: s.box.customer_name, d: s.box.pack_date, b: [] }
+        o.b.push(s.box.box_number)
+        orders.set(k, o)
+      }
+      return { n, stop: p.stop.trim(), orders: [...orders.values()] }
+    }).filter(p => p.orders.length)
+    if (!out.length) return
+    const load = { to: destination === 'baker_storage' ? 'Baker Storage' : '', pallets: out }
     window.open(`/api/delivery/pallet-sign?load=${encodeURIComponent(JSON.stringify(load))}`, '_blank')
   }
 
@@ -1574,6 +1601,7 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
 
     setSessions(prev => ({ ...prev, [sessionKey({ customer_name: session.customer_name, session_date: session.session_date })]: session }))
     setScanned(prev => [...prev, { box, scannedAt: new Date().toISOString() }])
+    setPalletOfBox(prev => ({ ...prev, [box.id]: activePallet }))
 
     if (box.picked_up_at) {
       say({
@@ -1651,7 +1679,9 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
     setCarcasses([])
     setByHand(new Set())
     setPinned([])
-    setPalletOf({})
+    setPalletOfBox({})
+    setPallets([{ stop: '' }])
+    setActivePallet(1)
     setFlash(null)
     scanRef.current?.focus()
   }
@@ -1693,6 +1723,11 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
         body: JSON.stringify({
           released_by: releasedBy.trim(),
           destination,
+          // Which pallet (and stop) each box rode on, saved on its manifest line.
+          pallet_of: Object.fromEntries(scanned.filter(s => s.box.serial_number).map(s => {
+            const n = palletNo(s.box.id)
+            return [s.box.serial_number!.toUpperCase(), { pallet: n, stop: pallets[n - 1]?.stop.trim() ?? '' }]
+          })),
           notes: [notes.trim(), handNote].filter(Boolean).join('\n'),
           serials: scanned.map(s => s.box.serial_number).filter(Boolean),
           carcass_codes: carcasses.map(c => c.carcass.code),
@@ -1733,7 +1768,9 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
     setCarcasses([])
     setByHand(new Set())
     setPinned([])
-    setPalletOf({})
+    setPalletOfBox({})
+    setPallets([{ stop: '' }])
+    setActivePallet(1)
     setNotes('')
     onSaved()
     scanRef.current?.focus()
@@ -1779,6 +1816,41 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
             </div>
           )
         })()}
+
+        {/* Pallets — every scan or check-on lands on the ACTIVE one */}
+        <div style={{ marginBottom: '0.9rem' }}>
+          <label style={LABEL}>Building pallet</label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginBottom: '0.4rem' }}>
+            {pallets.map((p, i) => {
+              const n = i + 1
+              const on = n === activePallet
+              const count = scanned.filter(x => palletNo(x.box.id) === n).length
+              return (
+                <button key={n} onClick={() => { setActivePallet(n); scanRef.current?.focus() }} style={{
+                  borderRadius: 3, padding: '0.35rem 0.6rem', fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer',
+                  background: on ? C.tan : 'transparent', color: on ? C.dark : C.tan,
+                  border: `1px solid ${on ? C.tan : 'rgba(201,168,130,0.45)'}`,
+                }} title={p.stop || 'No destination yet'}>
+                  P{n} · {count}
+                </button>
+              )
+            })}
+            <button onClick={newPallet} style={{ borderRadius: 3, padding: '0.35rem 0.6rem', fontSize: '0.8rem', cursor: 'pointer', background: 'transparent', color: C.lightBrown, border: '1px dashed rgba(166,120,90,0.5)' }}>
+              + New pallet
+            </button>
+          </div>
+          <input
+            style={INPUT}
+            list="pallet-destinations"
+            value={pallets[activePallet - 1]?.stop ?? ''}
+            onChange={e => { const v = e.target.value; setPallets(prev => prev.map((p, i) => i === activePallet - 1 ? { stop: v } : p)) }}
+            placeholder={`Pallet ${activePallet} destination — e.g. Baker Storage / US Foods`}
+            autoComplete="off"
+          />
+          <datalist id="pallet-destinations">
+            {[...new Set([...runStops, 'Baker Storage', 'Baker Storage / Customer pickup', 'Baker Storage / US Foods', ...pallets.map(p => p.stop.trim()).filter(Boolean)])].map(d => <option key={d} value={d} />)}
+          </datalist>
+        </div>
 
         {/* Scan field — big, monospace, always the focus target */}
         <div style={{ marginBottom: '0.9rem' }}>
@@ -1899,11 +1971,12 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
           </div>
         )}
         {cards.length > 0 && (() => {
-          const n = new Set(cards.map(c => palletOf[c.key] ?? 1)).size
+          const n = new Set(scanned.map(x => palletNo(x.box.id))).size
+          if (!n) return null
           return (
             <button onClick={printPalletSigns}
               style={{ ...BTN('transparent', C.tan), width: '100%', padding: '0.55rem', fontSize: '0.82rem', marginTop: '0.6rem', border: '1px solid rgba(201,168,130,0.45)' }}>
-              🪧 Print Pallet Signs ({n} pallet{n !== 1 ? 's' : ''}, {cards.length} customer{cards.length !== 1 ? 's' : ''})
+              🪧 Print Pallet Signs ({n} pallet{n !== 1 ? 's' : ''})
             </button>
           )
         })()}
@@ -2006,17 +2079,6 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
                       {weight > 0 && ` · ${weight.toFixed(1)} lbs on this load`}
                     </div>
                   </div>
-                  <label style={{ marginLeft: 'auto', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '0.35rem', color: C.tan, fontSize: '0.74rem' }}
-                    title="Which pallet this order rides on — the sign lists every customer on a pallet">
-                    🪧 Pallet
-                    <select
-                      value={palletOf[key] ?? 1}
-                      onChange={e => setPalletOf(prev => ({ ...prev, [key]: Number(e.target.value) }))}
-                      style={{ background: C.darkBrown, color: C.cream, border: '1px solid rgba(201,168,130,0.45)', borderRadius: 3, fontSize: '0.8rem', padding: '0.15rem 0.3rem', cursor: 'pointer' }}
-                    >
-                      {Array.from({ length: Math.max(cards.length, 1) + 1 }, (_, i) => i + 1).map(n => <option key={n} value={n}>{n}</option>)}
-                    </select>
-                  </label>
                   <span style={{
                     flexShrink: 0, fontSize: '0.72rem', fontWeight: 700, borderRadius: 99, padding: '3px 10px',
                     background: complete ? 'rgba(76,175,80,0.18)' : 'rgba(217,119,6,0.18)',
@@ -2055,6 +2117,16 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
                           <span style={{ color: C.lightBrown, fontSize: '0.72rem', fontStyle: 'italic' }}>
                             left {new Date(b.picked_up_at!).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                           </span>
+                        )}
+                        {onLoad && (
+                          <select
+                            value={palletNo(b.id)}
+                            onChange={e => setPalletOfBox(prev => ({ ...prev, [b.id]: Number(e.target.value) }))}
+                            title="Which pallet this box is on"
+                            style={{ background: C.darkBrown, color: C.tan, border: '1px solid rgba(201,168,130,0.35)', borderRadius: 3, fontSize: '0.72rem', padding: '0.05rem 0.2rem', cursor: 'pointer' }}
+                          >
+                            {pallets.map((_, i) => <option key={i} value={i + 1}>P{i + 1}</option>)}
+                          </select>
                         )}
                         {onLoad && byHand.has(b.id) && (
                           <span style={{ color: C.yellow, fontSize: '0.72rem', fontStyle: 'italic' }}>✋ no label</span>

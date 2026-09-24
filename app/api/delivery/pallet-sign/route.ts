@@ -5,7 +5,8 @@ import { supabase } from '@/lib/supabase'
 export const dynamic = 'force-dynamic'
 
 // GET /api/delivery/pallet-sign?load=<json>
-//   load = { to?: string, pallets: { c: customer_name, d: YYYY-MM-DD, b?: box_numbers[] }[][] }
+//   load = { to?: string, pallets: { n?: number, stop?: string, orders: { c: customer_name, d: YYYY-MM-DD, b?: box_numbers[] }[] }[] }
+//   stop is where that pallet is going ("Baker Storage / US Foods") and prints big.
 //
 // One sheet per pallet, every customer on it named big enough to read from
 // across a freezer (Charlie, 2026-09-24: several small orders share one
@@ -17,11 +18,16 @@ const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;
 interface OrderRef { c: string; d: string; b?: number[] }
 
 export async function GET(req: NextRequest) {
-  let load: { to?: string; pallets?: OrderRef[][] }
+  let load: { to?: string; pallets?: { n?: number; stop?: string; orders?: OrderRef[] }[] }
   try { load = JSON.parse(new URL(req.url).searchParams.get('load') ?? '') } catch { load = {} }
-  const pallets = (load.pallets ?? [])
-    .map(p => (Array.isArray(p) ? p : []).filter(o => o?.c && /^\d{4}-\d{2}-\d{2}$/.test(o.d)))
-    .filter(p => p.length)
+  const sheets = (load.pallets ?? [])
+    .map((p, i) => ({
+      n: Number(p?.n) || i + 1,
+      stop: String(p?.stop ?? '').trim(),
+      orders: (Array.isArray(p?.orders) ? p.orders : []).filter(o => o?.c && /^\d{4}-\d{2}-\d{2}$/.test(o.d)),
+    }))
+    .filter(p => p.orders.length)
+  const pallets = sheets.map(p => p.orders)
   if (!pallets.length) return NextResponse.json({ error: 'load with at least one order required' }, { status: 400 })
 
   // Every box of every order named, in one query per order (a load is a handful).
@@ -67,8 +73,9 @@ export async function GET(req: NextRequest) {
   <div class="sheet">
     <div class="top">
       <span>Cowboy Meat Co.${to ? ` &rarr; ${esc(to)}` : ''}</span>
-      <span>Pallet ${i + 1} of ${pallets.length}</span>
+      <span>Pallet ${sheets[i].n} of ${Math.max(...sheets.map(x => x.n))}</span>
     </div>
+    ${sheets[i].stop ? `<div class="dest">&rarr; ${esc(sheets[i].stop)}</div>` : ''}
     ${rows}
     <div class="foot">${p.length} customer${p.length !== 1 ? 's' : ''} &nbsp;·&nbsp; ${boxes} box${boxes !== 1 ? 'es' : ''} on this pallet</div>
   </div>`
@@ -87,6 +94,7 @@ export async function GET(req: NextRequest) {
   .sheet { border: 6px solid #000; padding: 0.3in 0.4in; min-height: 7.2in; display: flex; flex-direction: column; page-break-after: always; margin-bottom: 0.4in; }
   .sheet:last-child { page-break-after: auto; }
   .top { display: flex; justify-content: space-between; font-size: 16pt; font-weight: bold; letter-spacing: 0.12em; text-transform: uppercase; border-bottom: 4px solid #000; padding-bottom: 8px; margin-bottom: 6px; }
+  .dest { font-size: 30pt; font-weight: 900; text-transform: uppercase; background: #000; color: #fff; padding: 6px 12px; margin: 4px 0 6px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .cust { border-bottom: 2px solid #000; padding: 10px 0 8px; page-break-inside: avoid; }
   .name { font-weight: 900; line-height: 1.02; text-transform: uppercase; word-break: break-word; }
   .line { display: flex; justify-content: space-between; gap: 24px; font-size: 15pt; margin-top: 4px; }
