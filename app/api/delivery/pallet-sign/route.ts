@@ -15,7 +15,9 @@ export const dynamic = 'force-dynamic'
 
 const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!))
 
-interface OrderRef { c: string; d: string; b?: number[] }
+// An order off the freezer (c + d + box numbers), or — for a pallet rebuilt
+// from logged deliveries — just a name and a line saying what's there.
+interface OrderRef { c: string; d?: string; b?: number[]; note?: string }
 
 export async function GET(req: NextRequest) {
   let load: { to?: string; pallets?: { n?: number; stop?: string; orders?: OrderRef[] }[] }
@@ -24,7 +26,7 @@ export async function GET(req: NextRequest) {
     .map((p, i) => ({
       n: Number(p?.n) || i + 1,
       stop: String(p?.stop ?? '').trim(),
-      orders: (Array.isArray(p?.orders) ? p.orders : []).filter(o => o?.c && /^\d{4}-\d{2}-\d{2}$/.test(o.d)),
+      orders: (Array.isArray(p?.orders) ? p.orders : []).filter(o => o?.c && (o.note != null || /^\d{4}-\d{2}-\d{2}$/.test(o.d ?? ''))),
     }))
     .filter(p => p.orders.length)
   const pallets = sheets.map(p => p.orders)
@@ -33,6 +35,7 @@ export async function GET(req: NextRequest) {
   // Every box of every order named, in one query per order (a load is a handful).
   const orders = new Map<string, { box_number: number; total_weight_lbs: number | null; picked_up_at: string | null }[]>()
   for (const o of pallets.flat()) {
+    if (o.note != null) continue
     const k = `${o.c}|${o.d}`
     if (orders.has(k)) continue
     const { data, error } = await supabase
@@ -52,6 +55,11 @@ export async function GET(req: NextRequest) {
     // Fewer customers on the pallet → bigger names.
     const nameSize = p.length === 1 ? 72 : p.length === 2 ? 50 : p.length <= 4 ? 38 : 28
     const rows = p.map(o => {
+      if (o.note != null) return `
+      <div class="cust">
+        <div class="name" style="font-size:${o.c.length > 26 ? Math.round(nameSize * 0.75) : nameSize}pt">${esc(o.c)}</div>
+        <div class="line"><span><b>${esc(o.note)}</b></span></div>
+      </div>`
       const all  = orders.get(`${o.c}|${o.d}`) ?? []
       const want = new Set(o.b ?? [])
       const on   = want.size ? all.filter(b => want.has(b.box_number)) : all.filter(b => !b.picked_up_at)
@@ -61,11 +69,12 @@ export async function GET(req: NextRequest) {
         <div class="name" style="font-size:${o.c.length > 26 ? Math.round(nameSize * 0.75) : nameSize}pt">${esc(o.c)}</div>
         <div class="line">
           <span><b>${on.length}${on.length !== all.length ? ` of ${all.length}` : ''} box${on.length !== 1 ? 'es' : ''}</b>${on.length ? ` &nbsp;·&nbsp; Box ${on.map(b => b.box_number).join(' · ')}` : ''}</span>
-          <span>${lbs > 0 ? `${lbs.toFixed(1)} lb &nbsp;·&nbsp; ` : ''}packed ${esc(fmt(o.d))}</span>
+          <span>${lbs > 0 ? `${lbs.toFixed(1)} lb &nbsp;·&nbsp; ` : ''}packed ${esc(fmt(o.d!))}</span>
         </div>
       </div>`
     }).join('')
     const boxes = p.reduce((n, o) => {
+      if (o.note != null) return n
       const all = orders.get(`${o.c}|${o.d}`) ?? []
       return n + (o.b?.length ? all.filter(b => o.b!.includes(b.box_number)).length : all.filter(b => !b.picked_up_at).length)
     }, 0)
@@ -77,7 +86,7 @@ export async function GET(req: NextRequest) {
     </div>
     ${sheets[i].stop ? `<div class="dest">&rarr; ${esc(sheets[i].stop)}</div>` : ''}
     ${rows}
-    <div class="foot">${p.length} customer${p.length !== 1 ? 's' : ''} &nbsp;·&nbsp; ${boxes} box${boxes !== 1 ? 'es' : ''} on this pallet</div>
+    <div class="foot">${p.length} customer${p.length !== 1 ? 's' : ''}${boxes ? ` &nbsp;·&nbsp; ${boxes} box${boxes !== 1 ? 'es' : ''} on this pallet` : ''}</div>
   </div>`
   }).join('')
 

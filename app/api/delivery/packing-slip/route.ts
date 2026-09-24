@@ -1,14 +1,14 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
-import { generatePackingSlip, SlipBox, SlipDelivery, SlipLoose, SlipCarcass } from '@/lib/packingSlip'
+import { generatePackingSlip, SlipBox, SlipDelivery, SlipLoose, SlipCarcass, SlipPallet } from '@/lib/packingSlip'
 import { shortItemName } from '@/lib/itemName'
 import { resolveCarcasses } from '@/lib/carcassDelivery'
 import { isCarcassTag } from '@/lib/carcassTag'
 
 export const dynamic = 'force-dynamic'
 
-// GET /api/delivery/packing-slip?id=<delivery_scans.id>
+// GET /api/delivery/packing-slip?id=<delivery_scans.id>[,<id>…]
 // GET /api/delivery/packing-slip?serials=CMC2607...,CMC2607...&driver=&customer=&notes=
 // GET /api/delivery/packing-slip?barcodes=<any mix of box serials and package barcodes>&...
 //
@@ -16,6 +16,24 @@ export const dynamic = 'force-dynamic'
 // a line to sign. By delivery id it is the record — Load Out stamps each box
 // with delivery_id, and older rows still carry the serials in barcodes. By
 // serials it is a preview of the load before Release is pressed.
+//
+// Pallets (2026-09-24): a delivery whose manifest lines carry pallet + stop
+// prints one page per pallet. A preview passes them as
+// &pallets=[{"n":1,"stop":"…","serials":["CMC…"]}].
+
+// Manifest lines → pallets, in pallet order.
+function palletsFrom(lines: { barcode?: string; pallet?: number; stop?: string }[]): SlipPallet[] {
+  const by = new Map<number, SlipPallet>()
+  for (const l of lines) {
+    const n = Number(l.pallet)
+    if (!n || !l.barcode) continue
+    const p = by.get(n) ?? { n, stop: '', serials: [] }
+    if (!p.stop && l.stop) p.stop = String(l.stop)
+    p.serials.push(String(l.barcode))
+    by.set(n, p)
+  }
+  return [...by.values()].sort((a, b) => a.n - b.n)
+}
 
 const BOX_COLS = 'id, serial_number, customer_name, pack_date, box_number, is_final, box_label, total_weight_lbs'
 
@@ -87,19 +105,33 @@ export async function GET(req: NextRequest) {
   // Every code on the load, whichever way we were called — carcass tags are
   // picked back out of it below.
   let allCodes: string[] = []
+  let pallets: SlipPallet[] = []
 
   if (id) {
-    const { data: d, error } = await supabase.from('delivery_scans').select('*').eq('id', id).maybeSingle()
+    // Several ids (comma-separated) print as one load — a pallet built after
+    // the fact out of deliveries logged one customer at a time (2026-09-24).
+    const ids = [...new Set(id.split(',').map(x => x.trim()).filter(Boolean))]
+    const { data: ds, error } = await supabase.from('delivery_scans').select('*').in('id', ids)
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-    if (!d)    return NextResponse.json({ error: 'delivery not found' }, { status: 404 })
-    delivery = { id: d.id, delivered_at: d.delivered_at, driver: d.driver ?? '', customer: d.customer ?? '', notes: d.notes ?? '', destination: d.destination ?? 'customer' }
+    if (!ds?.length) return NextResponse.json({ error: 'delivery not found' }, { status: 404 })
+    const list = ids.map(x => ds.find(d => d.id === x)).filter(Boolean) as typeof ds
+    const uniq = (xs: string[]) => [...new Set(xs.map(x => x.trim()).filter(Boolean))]
+    delivery = {
+      id:           list.length === 1 ? list[0].id : null,
+      delivered_at: list.map(d => d.delivered_at).sort()[0],
+      driver:       uniq(list.map(d => d.driver ?? '')).join(' / '),
+      customer:     uniq(list.map(d => d.customer ?? '')).join(' / '),
+      notes:        uniq(list.map(d => d.notes ?? '')).join(' · '),
+      destination:  list.every(d => d.destination === 'baker_storage') ? 'baker_storage' : 'customer',
+    }
 
-    const { data: stamped } = await supabase.from('boxes').select(BOX_COLS).eq('delivery_id', id)
+    const { data: stamped } = await supabase.from('boxes').select(BOX_COLS).in('delivery_id', ids)
     rows = (stamped ?? []) as BoxRow[]
 
+    const lines = list.flatMap(d => (d.barcodes ?? []) as { barcode?: string; pallet?: number; stop?: string }[])
     // A delivery logged before boxes carried delivery_id (or one keyed in by
     // hand on New Delivery) still names its boxes by serial in barcodes.
-    const serials = ((d.barcodes ?? []) as { barcode?: string }[])
+    const serials = lines
       .map(b => String(b.barcode ?? '').trim().toUpperCase())
       .filter(s => /^CMC\d{6}[A-Z0-9]{4}$/.test(s))
     const have = new Set(rows.map(r => (r.serial_number ?? '').toUpperCase()))
@@ -108,8 +140,15 @@ export async function GET(req: NextRequest) {
       const { data: extra } = await supabase.from('boxes').select(BOX_COLS).in('serial_number', missing)
       rows = rows.concat((extra ?? []) as BoxRow[])
     }
-    allCodes = ((d.barcodes ?? []) as { barcode?: string }[]).map(b => String(b.barcode ?? ''))
-    loose = await looseItems(allCodes)
+    allCodes = lines.map(b => String(b.barcode ?? ''))
+    pallets = palletsFrom(lines)
+    if (pallets.length) {
+      // Packages ride on their pallet's page; only pallet-less lines go loose.
+      for (const p of pallets) p.loose = await looseItems(lines.filter(l => Number(l.pallet) === p.n).map(l => String(l.barcode ?? '')))
+      loose = await looseItems(lines.filter(l => !Number(l.pallet)).map(l => String(l.barcode ?? '')))
+    } else {
+      loose = await looseItems(allCodes)
+    }
   } else {
     // ?serials= is box serials only (Load Out); ?barcodes= is whatever the New
     // Delivery gun read — serials print as boxes, the rest as loose packages.
@@ -125,6 +164,15 @@ export async function GET(req: NextRequest) {
       rows = (data ?? []) as BoxRow[]
     }
     allCodes = codes
+    try {
+      const raw = JSON.parse(searchParams.get('pallets') ?? '[]')
+      if (Array.isArray(raw)) pallets = raw
+        .map((p: { n?: unknown; stop?: unknown; serials?: unknown }) => ({
+          n: Number(p?.n) || 0, stop: String(p?.stop ?? ''),
+          serials: Array.isArray(p?.serials) ? p.serials.map(String) : [],
+        }))
+        .filter((p: SlipPallet) => p.n && p.serials.length)
+    } catch { /* no pallets — one sheet */ }
     loose = await looseItems(codes)
     const customer = (searchParams.get('customer') ?? '').trim()
       || [...new Set(rows.map(r => r.customer_name))].join(' / ')
@@ -146,7 +194,7 @@ export async function GET(req: NextRequest) {
       producer: c.producer, owner: c.owner, harvest_date: c.harvest_date,
       side: c.side, weightLbs: c.weight_lbs,
     }))
-  return new NextResponse(generatePackingSlip(delivery, boxes, loose, carcasses), {
+  return new NextResponse(generatePackingSlip(delivery, boxes, loose, carcasses, pallets), {
     headers: { 'Content-Type': 'text/html;charset=utf-8', 'Cache-Control': 'no-store' },
   })
 }

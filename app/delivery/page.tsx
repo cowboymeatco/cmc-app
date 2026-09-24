@@ -725,6 +725,110 @@ function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
 
   const filtered = deliveries.filter(d => filter === 'all' || d.status === filter)
 
+  // Build pallets after the fact out of logged deliveries (Charlie,
+  // 2026-09-24): a semi pallet often carries several customers, each logged
+  // as its own delivery. Pick them, put each on a pallet, name where each
+  // pallet is going; Save writes pallet + stop onto every line, and the signs
+  // and per-pallet packing slip print across all of them.
+  const [building,  setBuilding]  = useState(false)
+  const [picks,     setPicks]     = useState<string[]>([])
+  const [palletOfD, setPalletOfD] = useState<Record<string, number>>({})
+  const [stops,     setStops]     = useState<string[]>([''])
+  const [palletBusy, setPalletBusy] = useState(false)
+  const [palletMsg,  setPalletMsg]  = useState('')
+
+  const picked = picks.map(id => deliveries.find(d => d.id === id)).filter(Boolean) as DeliveryScan[]
+
+  // The names printed on the boxes' own labels, listed under the customer on
+  // the sign — what Baker matches against. The typed delivery name stays the
+  // headline: box names can be a first name alone or a string of sessions.
+  const [boxNames, setBoxNames] = useState<Record<string, string[]>>({})
+  const labeled = (d: DeliveryScan) => {
+    const n = boxNames[d.id] ?? []
+    if (!n.length) return ''
+    return `labeled ${n.slice(0, 2).join(' / ')}${n.length > 2 ? ` +${n.length - 2} more` : ''}`
+  }
+
+  function togglePickD(d: DeliveryScan) {
+    if (picks.includes(d.id)) { setPicks(prev => prev.filter(x => x !== d.id)); return }
+    setPicks(prev => [...prev, d.id])
+    const serials = (d.barcodes ?? []).map(l => l.barcode).filter(b => identifyBarcode(b) === 'box_serial')
+    if (serials.length && !boxNames[d.id]) {
+      fetch(`/api/delivery/boxes?serials=${encodeURIComponent(serials.join(','))}`)
+        .then(r => r.json())
+        .then((info: unknown) => {
+          if (!info || typeof info !== 'object') return
+          const names = [...new Set(Object.values(info as Record<string, LoggedBox>).map(b => b.customer_name).filter(Boolean))]
+          if (names.length) setBoxNames(prev => ({ ...prev, [d.id]: names }))
+        })
+        .catch(() => {})
+    }
+    // A delivery already on a pallet keeps it.
+    const saved = d.barcodes?.find(l => l.pallet)
+    if (saved?.pallet) {
+      const n = saved.pallet
+      setPalletOfD(prev => ({ ...prev, [d.id]: n }))
+      setStops(prev => {
+        const next = [...prev]
+        while (next.length < n) next.push('')
+        if (!next[n - 1] && saved.stop) next[n - 1] = saved.stop
+        return next
+      })
+    }
+    setPalletMsg('')
+  }
+
+  // "1 box · 5 packages" — what a delivery put on the pallet.
+  function lineSummary(d: DeliveryScan): string {
+    let boxes = 0, pkgs = 0
+    for (const l of d.barcodes ?? []) {
+      const t = identifyBarcode(l.barcode)
+      if (t === 'ean13') pkgs++
+      else if (t !== 'carcass') boxes++
+    }
+    return [boxes ? `${boxes} box${boxes !== 1 ? 'es' : ''}` : '', pkgs ? `${pkgs} package${pkgs !== 1 ? 's' : ''}` : '']
+      .filter(Boolean).join(' · ') || 'nothing scanned'
+  }
+
+  const palletOfPick = (id: string) => palletOfD[id] ?? 1
+
+  async function savePalletsD(): Promise<boolean> {
+    setPalletBusy(true)
+    let failed = 0
+    const updated: DeliveryScan[] = []
+    for (const d of picked) {
+      const n = palletOfPick(d.id)
+      const barcodes = (d.barcodes ?? []).map(l => ({ ...l, pallet: n, stop: (stops[n - 1] ?? '').trim() }))
+      const res = await fetch('/api/delivery', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: d.id, barcodes }),
+      }).catch(() => null)
+      const j = await res?.json().catch(() => null)
+      if (res?.ok && j?.id) updated.push(j); else failed++
+    }
+    setDeliveries(prev => prev.map(x => updated.find(u => u.id === x.id) ?? x))
+    setPalletBusy(false)
+    setPalletMsg(failed ? `⚠ ${failed} deliver${failed !== 1 ? 'ies' : 'y'} did not save — try again` : `✓ Pallets saved on ${updated.length} deliver${updated.length !== 1 ? 'ies' : 'y'}`)
+    return !failed
+  }
+
+  function printPalletSignsD() {
+    const out = stops.map((stop, i) => ({
+      n: i + 1, stop: stop.trim(),
+      orders: picked.filter(d => palletOfPick(d.id) === i + 1).map(d => ({ c: d.customer, note: [lineSummary(d), labeled(d)].filter(Boolean).join(' · ') })),
+    })).filter(p => p.orders.length)
+    if (!out.length) return
+    const allBaker = picked.every(d => d.destination === 'baker_storage')
+    const load = { to: allBaker ? 'Baker Storage' : '', pallets: out }
+    window.open(`/api/delivery/pallet-sign?load=${encodeURIComponent(JSON.stringify(load))}`, '_blank')
+  }
+
+  // The slip reads pallets off the saved lines, so save first.
+  async function printPalletSlipsD() {
+    if (!(await savePalletsD())) return
+    window.open(`/api/delivery/packing-slip?id=${encodeURIComponent(picks.join(','))}`, '_blank')
+  }
+
   async function markReviewed(d: DeliveryScan) {
     setMarking(true)
     const res = await fetch('/api/delivery', {
@@ -762,6 +866,12 @@ function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
           <span style={{ marginLeft: 'auto', fontSize: '0.78rem', color: C.lightBrown, alignSelf: 'center' }}>
             {filtered.length}
           </span>
+          <button onClick={() => { setBuilding(b => !b); setPalletMsg('') }}
+            style={{ padding: '0.3rem 0.7rem', borderRadius: 99, cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600,
+              border: `1px solid ${building ? C.tan : 'rgba(201,168,130,0.4)'}`,
+              background: building ? C.tan : 'transparent', color: building ? C.dark : C.tan }}>
+            🪧 {building ? 'Done' : 'Pallets'}
+          </button>
         </div>
 
         <div style={{ overflowY: 'auto', flex: 1 }}>
@@ -781,7 +891,7 @@ function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
             return (
               <div
                 key={d.id}
-                onClick={() => setSelected(d)}
+                onClick={() => building ? togglePickD(d) : setSelected(d)}
                 style={{
                   padding: '1rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.12)',
                   cursor: 'pointer', background: selected?.id === d.id ? 'rgba(166,120,90,0.12)' : 'transparent',
@@ -789,7 +899,11 @@ function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.3rem' }}>
-                  <span style={{ color: C.cream, fontWeight: 600, fontSize: '0.9rem' }}>{d.customer}</span>
+                  <span style={{ color: C.cream, fontWeight: 600, fontSize: '0.9rem' }}>
+                    {building && <span style={{ color: picks.includes(d.id) ? C.green : C.lightBrown, marginRight: '0.4rem' }}>{picks.includes(d.id) ? '☑' : '☐'}</span>}
+                    {d.customer}
+                    {!building && d.barcodes?.some(l => l.pallet) && <span style={{ color: C.tan, fontSize: '0.72rem', marginLeft: '0.4rem' }}>🪧P{d.barcodes.find(l => l.pallet)!.pallet}</span>}
+                  </span>
                   <StatusBadge status={d.status} />
                 </div>
                 <div style={{ fontSize: '0.78rem', color: C.tan }}>
@@ -823,7 +937,82 @@ function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
 
       {/* Right — detail */}
       <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1.5rem', overflowY: 'auto' }}>
-        {!selected ? (
+        {building ? (
+          <div>
+            <h3 style={{ color: C.cream, fontFamily: 'Georgia, serif', fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 0.35rem' }}>
+              🪧 Build pallets
+            </h3>
+            <p style={{ color: C.lightBrown, fontSize: '0.8rem', margin: '0 0 1rem', lineHeight: 1.5 }}>
+              Tick the deliveries on the left that rode together, put each on a pallet, and say where each pallet is going.
+            </p>
+            {palletMsg && (
+              <div style={{ color: palletMsg.startsWith('⚠') ? C.yellow : C.green, fontSize: '0.84rem', marginBottom: '0.75rem' }}>{palletMsg}</div>
+            )}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginBottom: '1rem' }}>
+              {stops.map((stop, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span style={{ color: C.tan, fontWeight: 700, fontSize: '0.82rem', minWidth: 70 }}>
+                    P{i + 1} · {picked.filter(d => palletOfPick(d.id) === i + 1).length}
+                  </span>
+                  <input
+                    style={{ ...INPUT, padding: '0.4rem 0.6rem' }}
+                    list="log-pallet-destinations"
+                    value={stop}
+                    onChange={e => { const v = e.target.value; setStops(prev => prev.map((x, j) => j === i ? v : x)) }}
+                    placeholder="Destination — e.g. Baker Storage / US Foods"
+                  />
+                </div>
+              ))}
+              <datalist id="log-pallet-destinations">
+                {[...new Set(['Baker Storage', 'Baker Storage / Customer pickup', 'Baker Storage / US Foods', ...stops.map(x => x.trim()).filter(Boolean)])].map(x => <option key={x} value={x} />)}
+              </datalist>
+              <button onClick={() => setStops(prev => [...prev, prev[prev.length - 1] ?? ''])}
+                style={{ alignSelf: 'flex-start', background: 'none', border: '1px dashed rgba(166,120,90,0.5)', borderRadius: 3, color: C.lightBrown, cursor: 'pointer', fontSize: '0.78rem', padding: '0.3rem 0.7rem' }}>
+                + Pallet
+              </button>
+            </div>
+
+            {picked.length === 0 ? (
+              <p style={{ color: C.lightBrown, fontSize: '0.85rem', textAlign: 'center', padding: '1.5rem' }}>← Tick deliveries to put them on pallets</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginBottom: '1rem' }}>
+                {picked.map(d => (
+                  <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: 3, padding: '0.5rem 0.75rem' }}>
+                    <select
+                      value={palletOfPick(d.id)}
+                      onChange={e => setPalletOfD(prev => ({ ...prev, [d.id]: Number(e.target.value) }))}
+                      style={{ background: C.darkBrown, color: C.cream, border: '1px solid rgba(201,168,130,0.45)', borderRadius: 3, fontSize: '0.82rem', padding: '0.2rem 0.3rem', cursor: 'pointer' }}
+                    >
+                      {stops.map((_, j) => <option key={j} value={j + 1}>P{j + 1}</option>)}
+                    </select>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ color: C.cream, fontWeight: 600, fontSize: '0.88rem' }}>{d.customer}</div>
+                      <div style={{ color: C.lightBrown, fontSize: '0.74rem' }}>
+                        {new Date(d.delivered_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · {lineSummary(d)}
+                        {d.destination === 'baker_storage' ? ' · 🚚 Baker' : ''}
+                        {labeled(d) && ` · ${labeled(d)}`}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {picked.length > 0 && (
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <button onClick={() => savePalletsD()} disabled={palletBusy} style={{ ...BTN(C.green, C.dark), opacity: palletBusy ? 0.6 : 1 }}>
+                  {palletBusy ? 'Saving…' : 'Save pallets'}
+                </button>
+                <button onClick={printPalletSignsD} style={{ ...BTN('transparent', C.tan), border: '1px solid rgba(201,168,130,0.45)' }}>
+                  🪧 Pallet Signs
+                </button>
+                <button onClick={printPalletSlipsD} disabled={palletBusy} style={{ ...BTN('transparent', C.tan), border: '1px solid rgba(201,168,130,0.45)' }}>
+                  🖨 Packing Slip per Pallet
+                </button>
+              </div>
+            )}
+          </div>
+        ) : !selected ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '60%', color: C.lightBrown, fontSize: '0.9rem' }}>
             ← Select a delivery to view
           </div>
@@ -1546,6 +1735,12 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
     if (carcasses.length) p.set('barcodes', carcasses.map(c => c.carcass.code).join(','))
     if (releasedBy.trim()) p.set('driver', releasedBy.trim())
     if (notes.trim())      p.set('notes',  notes.trim())
+    // A page per pallet, same as the saved delivery will print.
+    const slipPallets = pallets.map((pl, i) => ({
+      n: i + 1, stop: pl.stop.trim(),
+      serials: scanned.filter(x => palletNo(x.box.id) === i + 1 && x.box.serial_number).map(x => x.box.serial_number!),
+    })).filter(pl => pl.serials.length)
+    if (slipPallets.length > 1 || slipPallets[0]?.stop) p.set('pallets', JSON.stringify(slipPallets))
     window.open(`/api/delivery/packing-slip?${p}`, '_blank')
   }
 

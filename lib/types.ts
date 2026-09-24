@@ -387,7 +387,8 @@ export interface DeliveryScan {
   delivered_at: string
   driver:       string
   customer:     string
-  barcodes:     { barcode: string; scannedAt: string }[]
+  // pallet + stop: which pallet the line rode on and where it was going (2026-09-24)
+  barcodes:     { barcode: string; scannedAt: string; pallet?: number; stop?: string; prev_status?: string }[]
   notes:        string
   status:       string   // 'pending' | 'reviewed'
   // Where the run dropped the product. 'baker_storage' = the locker in Baker,

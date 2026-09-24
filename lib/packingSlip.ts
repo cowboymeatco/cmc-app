@@ -75,11 +75,18 @@ function rollUp(scans: SlipBox['scans']) {
     .sort((a, b) => b.weight - a.weight)
 }
 
-export function generatePackingSlip(
+// A pallet on the load (Charlie, 2026-09-24): Load Out saves which pallet
+// each box rode on and where that pallet was going, so the slip can print one
+// page per pallet — the paper that stays with that pallet at its drop.
+export interface SlipPallet { n: number; stop: string; serials: string[]; loose?: SlipLoose[] }
+
+// One sheet: header, who it's for, the boxes, totals, a line to sign.
+function slipPage(
   delivery: SlipDelivery,
   boxes: SlipBox[],
-  loose: SlipLoose[] = [],
-  carcasses: SlipCarcass[] = [],
+  loose: SlipLoose[],
+  carcasses: SlipCarcass[],
+  pallet?: { n: number; of: number; stop: string },
 ): string {
   // Group by packing session (customer + pack date), sessions in the order
   // their first box appears, boxes by number inside each.
@@ -193,6 +200,73 @@ export function generatePackingSlip(
 
   const dest = delivery.destination === 'baker_storage' ? 'Baker Storage · 706 Daniels St, Billings, MT 59101' : ''
 
+  return `
+<div class="page">
+  <div class="head">
+    <div class="brand">
+      <img src="/cmc-logo.png" alt="">
+      <div>
+        <div class="name">${SHOP.name.toUpperCase()}</div>
+        <div class="addr">${SHOP.line1}<br>${SHOP.line2}<br>${SHOP.est}</div>
+      </div>
+    </div>
+    <div class="title">
+      <h1>PACKING SLIP</h1>
+      <div class="when">${fmtDate(delivery.delivered_at)}</div>
+      ${pallet ? `<div class="pallet">Pallet ${pallet.n} of ${pallet.of}</div>` : ''}
+    </div>
+  </div>
+
+  <div class="meta">
+    <div><div class="k">Deliver to</div><div class="v">${esc(pallet?.stop || delivery.customer)}</div>${dest ? `<div>${esc(dest)}</div>` : ''}</div>
+    <div><div class="k">${delivery.destination === 'baker_storage' ? 'Driver' : 'Released by'}</div><div class="v">${esc(delivery.driver || '—')}</div></div>
+    ${delivery.notes ? `<div class="notes"><div class="k">Notes</div><div class="v">${esc(delivery.notes)}</div></div>` : ''}
+  </div>
+
+  ${carcassHTML}${sections}${looseHTML}${!sections && !looseHTML && !carcassHTML ? '<p><i>Nothing scanned on this delivery.</i></p>' : ''}
+
+  <div class="totals">
+    ${grandCarcasses ? `<span>Carcasses <b>${grandCarcasses}</b></span>` : ''}
+    <span>Boxes <b>${grandBoxes}</b></span>
+    <span>Packages <b>${grandCuts}</b></span>
+    <span>Total <b>${grandWeight.toFixed(1)} lb</b></span>
+  </div>
+
+  <div class="sign">
+    <div class="line">Received by (print &amp; sign)</div>
+    <div class="line">Date</div>
+  </div>
+  <div class="foot">Check each box off as it comes off the truck. Weights are the packed box weights off the scale.${delivery.id ? ` · Delivery ${esc(delivery.id.slice(0, 8))}` : ''}</div>
+</div>`
+}
+
+export function generatePackingSlip(
+  delivery: SlipDelivery,
+  boxes: SlipBox[],
+  loose: SlipLoose[] = [],
+  carcasses: SlipCarcass[] = [],
+  pallets: SlipPallet[] = [],
+): string {
+  let pages: string
+  if (pallets.length) {
+    // One page per pallet, its loose packages with it; whatever rode on no
+    // pallet (the loose/carcasses passed in, a box with no pallet line) gets
+    // a last page of its own.
+    const of = Math.max(...pallets.map(p => p.n))
+    const placed = new Set<string>()
+    const sheets = [...pallets].sort((a, b) => a.n - b.n).map(p => {
+      const want = new Set(p.serials.map(x => x.toUpperCase()))
+      const mine = boxes.filter(b => want.has((b.serial_number ?? '').toUpperCase()))
+      mine.forEach(b => placed.add(b.id))
+      return mine.length || p.loose?.length ? slipPage(delivery, mine, p.loose ?? [], [], { n: p.n, of, stop: p.stop }) : ''
+    }).filter(Boolean)
+    const rest = boxes.filter(b => !placed.has(b.id))
+    if (rest.length || loose.length || carcasses.length) sheets.push(slipPage(delivery, rest, loose, carcasses))
+    pages = sheets.join('')
+  } else {
+    pages = slipPage(delivery, boxes, loose, carcasses)
+  }
+
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -237,46 +311,15 @@ export function generatePackingSlip(
   .sign { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 34px; }
   .sign .line { border-top: 1px solid #000; padding-top: 4px; font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.1em; color: #333; }
   .foot { margin-top: 18px; font-size: 8pt; color: #555; text-align: center; }
+  .page + .page { page-break-before: always; margin-top: 0.4in; }
+  .title .pallet { font-size: 13pt; font-weight: bold; margin-top: 4px; letter-spacing: 0.06em; }
   .noprint { position: fixed; top: 8px; right: 8px; }
   .noprint button { font: inherit; padding: 6px 14px; cursor: pointer; }
 </style>
 </head>
 <body>
   <div class="noprint"><button onclick="window.print()">🖨 Print</button></div>
-  <div class="head">
-    <div class="brand">
-      <img src="/cmc-logo.png" alt="">
-      <div>
-        <div class="name">${SHOP.name.toUpperCase()}</div>
-        <div class="addr">${SHOP.line1}<br>${SHOP.line2}<br>${SHOP.est}</div>
-      </div>
-    </div>
-    <div class="title">
-      <h1>PACKING SLIP</h1>
-      <div class="when">${fmtDate(delivery.delivered_at)}</div>
-    </div>
-  </div>
-
-  <div class="meta">
-    <div><div class="k">Deliver to</div><div class="v">${esc(delivery.customer)}</div>${dest ? `<div>${esc(dest)}</div>` : ''}</div>
-    <div><div class="k">${delivery.destination === 'baker_storage' ? 'Driver' : 'Released by'}</div><div class="v">${esc(delivery.driver || '—')}</div></div>
-    ${delivery.notes ? `<div class="notes"><div class="k">Notes</div><div class="v">${esc(delivery.notes)}</div></div>` : ''}
-  </div>
-
-  ${carcassHTML}${sections}${looseHTML}${!sections && !looseHTML && !carcassHTML ? '<p><i>Nothing scanned on this delivery.</i></p>' : ''}
-
-  <div class="totals">
-    ${grandCarcasses ? `<span>Carcasses <b>${grandCarcasses}</b></span>` : ''}
-    <span>Boxes <b>${grandBoxes}</b></span>
-    <span>Packages <b>${grandCuts}</b></span>
-    <span>Total <b>${grandWeight.toFixed(1)} lb</b></span>
-  </div>
-
-  <div class="sign">
-    <div class="line">Received by (print &amp; sign)</div>
-    <div class="line">Date</div>
-  </div>
-  <div class="foot">Check each box off as it comes off the truck. Weights are the packed box weights off the scale.${delivery.id ? ` · Delivery ${esc(delivery.id.slice(0, 8))}` : ''}</div>
+  ${pages}
   <script>
     // Print straight away when opened from the app, same as the box label.
     window.addEventListener('load', function () { setTimeout(function () { window.print() }, 250) })
