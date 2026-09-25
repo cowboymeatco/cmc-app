@@ -13,6 +13,17 @@ import { parseSmokehouseOrders, roundJerkyLabel, classifyBoxProduct, allocateInt
 // "CMB Grind All", etc. Override per-print with ?format=std or ?format=cmb.
 const isCMBCustomer = (name: string) => /^\s*(cmb\b|central\s+montana)/i.test(name || '')
 
+// CMB's beef isn't always packed under CMB's name. A case for one of their own
+// customers is a business-account card — "Thomas Cuisine" on the boxes, with
+// Central Montana Beef as the contact behind it — and it still ships on CMB's
+// US Foods label (Charlie, 2026-09-25). So when the box name doesn't say CMB,
+// the session's cut card gets asked: either name on it counts.
+async function cardSaysCMB(box: BoxRecord): Promise<boolean> {
+  const match = await resolveCuttingInstruction(box.customer_name, box.pack_date)
+  return !!match?.cards.some(c =>
+    ['customerName', 'businessName', 'contactName'].some(k => isCMBCustomer(String(c.data?.[k] ?? ''))))
+}
+
 // A box is work-in-progress when it isn't finished product leaving the plant —
 // it's headed to value add. Recognised two ways, either of which the crew is
 // already doing: the box recipient says so ("WIP", "Value Add"), or the whole
@@ -287,7 +298,8 @@ export async function GET(req: NextRequest) {
 
   const format = searchParams.get('format')
   const useWIP = format === 'wip' || (format == null && await isWIPBox(box))
-  const useCMB = format === 'cmb' || (!useWIP && isCMBCustomer(box.customer_name) && format !== 'std')
+  const useCMB = format === 'cmb' || (!useWIP && format !== 'std' &&
+    (isCMBCustomer(box.customer_name) || await cardSaysCMB(box)))
 
   // The WIP tag carries the same inspection flags as the finished box label, so
   // value add can see what level the product left the processing room under.
