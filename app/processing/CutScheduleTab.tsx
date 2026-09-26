@@ -397,14 +397,28 @@ export default function CutScheduleTab() {
       e.type === 'break' && e.key === key ? { ...e, break_date } : e))
   }
 
-  // Called here and will also be called by the processing scanner
-  const handleMarkCut = async (entry: ScheduleEntry) => {
+  // Called here and will also be called by the processing scanner.
+  //
+  // 'delivered' is for a carcass that leaves the rail whole — hanging beef or
+  // hog that goes out the door uncut (Charlie, 2026-09-25). It comes off the
+  // cooler the same as a cut one, but it is not a cut: 'cut' is what the
+  // charge detector bills cut & wrap on and what the revenue book counts as
+  // processing head, so marking a delivered carcass "Cut ✓" billed knife work
+  // nobody did. Load Out sets the same status when a carcass tag is scanned.
+  const handleMarkCut = async (entry: ScheduleEntry, status: 'cut' | 'delivered' = 'cut') => {
+    if (status === 'delivered' && !window.confirm(
+      `Mark this carcass${entry.carcass_tag ? ` (tag ${entry.carcass_tag})` : ''} as delivered WHOLE?
+
+` +
+      `It comes off the cooler list but does not count as cut and no cut & wrap is charged. ` +
+      `If it was cut, use Cut ✓ instead.`
+    )) return
     // Cut status lives on the harvest log (the physical carcass), so a split
     // animal can only be marked cut as a whole. The row is now the carcass
     // rather than one buyer's portion, so the warning reads off its own cut
     // customers — the check used to look for sibling ROWS, which no longer
     // exist, and would have gone quiet without anyone noticing.
-    if (entry.cut_customers.length > 1) {
+    if (status === 'cut' && entry.cut_customers.length > 1) {
       const others = entry.cut_customers.map(c => `${c.portion} — ${c.name}`).join(', ')
       const ok = window.confirm(
         `This carcass${entry.carcass_tag ? ` (tag ${entry.carcass_tag})` : ''} is split between ${others}. ` +
@@ -417,7 +431,7 @@ export default function CutScheduleTab() {
       await fetch('/api/harvest', {
         method:  'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ id: entry.harvest_log_id, status: 'cut' }),
+        body:    JSON.stringify({ id: entry.harvest_log_id, status }),
       })
       // Drop every row of this carcass and re-rank, so stale rank gaps can't
       // corrupt the anchor math in handleRecalculate.
@@ -789,7 +803,7 @@ export default function CutScheduleTab() {
           {/* Column headers */}
           <div style={{
             display: 'grid',
-            gridTemplateColumns: '24px 30px 1fr 80px 56px 64px 84px 52px 44px 30px 58px',
+            gridTemplateColumns: '24px 30px 1fr 80px 56px 64px 84px 52px 44px 30px 88px',
             gap: '0.5rem', padding: '0 0.75rem', marginBottom: '0.4rem',
           }}>
             {['', '#', 'Customer', 'Species', 'Cut', 'Hang Wt', 'Hanging', 'Sheet', 'Score', '', ''].map((h, i) => (
@@ -971,7 +985,7 @@ export default function CutScheduleTab() {
                     onDragEnd={handleDragEnd}
                     style={{
                       display: 'grid',
-                      gridTemplateColumns: '24px 30px 1fr 80px 56px 64px 84px 52px 44px 30px 58px',
+                      gridTemplateColumns: '24px 30px 1fr 80px 56px 64px 84px 52px 44px 30px 88px',
                       gap: '0.5rem', alignItems: 'center',
                       background: 'rgba(0,0,0,0.18)',
                       border: `1px dashed ${isOver ? C.amber : tooEarly ? 'rgba(239,68,68,0.55)' : 'rgba(166,120,90,0.35)'}`,
@@ -1051,7 +1065,7 @@ export default function CutScheduleTab() {
                   onDragEnd={handleDragEnd}
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: '24px 30px 1fr 80px 56px 64px 84px 52px 44px 30px 58px',
+                    gridTemplateColumns: '24px 30px 1fr 80px 56px 64px 84px 52px 44px 30px 88px',
                     gap: '0.5rem', alignItems: 'center',
                     background: C.dark,
                     borderTop:    `1px solid ${isOver ? C.amber : entry.locked ? 'rgba(239,68,68,0.35)' : 'rgba(166,120,90,0.18)'}`,
@@ -1376,7 +1390,8 @@ export default function CutScheduleTab() {
                     {entry.locked ? '🔒' : '🔓'}
                   </button>
 
-                  {/* Mark as Cut */}
+                  {/* Mark as Cut / delivered whole */}
+                  <div style={{ display: 'flex', gap: 3 }}>
                   <button
                     title="Mark as cut — removes from cooler list"
                     onClick={e => { e.stopPropagation(); handleMarkCut(entry) }}
@@ -1392,6 +1407,24 @@ export default function CutScheduleTab() {
                   >
                     {cutting.has(entry.key) ? '…' : 'Cut ✓'}
                   </button>
+
+                  {/* Delivered whole — off the rail, not a cut */}
+                  <button
+                    title="Delivered whole — off the cooler list, not counted as cut, no cut & wrap"
+                    onClick={e => { e.stopPropagation(); handleMarkCut(entry, 'delivered') }}
+                    disabled={cutting.has(entry.key)}
+                    style={{
+                      height: 24, padding: '0 6px',
+                      background: 'rgba(166,120,90,0.1)',
+                      border: '1px solid rgba(166,120,90,0.35)',
+                      borderRadius: 3, cursor: cutting.has(entry.key) ? 'not-allowed' : 'pointer',
+                      fontSize: '0.72rem', color: C.tan,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap',
+                    }}
+                  >
+                    🚚
+                  </button>
+                  </div>
                 </div>
               )
             })

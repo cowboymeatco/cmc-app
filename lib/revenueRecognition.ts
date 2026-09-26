@@ -407,6 +407,10 @@ export function buildRevenueRecognition(input: BuildInput): RevenueRecognition {
       dayOf(h.harvest_date).headHarvested += 1
     }
 
+    // A carcass that went out the door whole was never cut — no cut & wrap is
+    // earned or coming, and it isn't a processing head (Charlie, 2026-09-25).
+    if (h.status === 'delivered') continue
+
     // ── Cut & wrap, on the day the carcass is broken ─────────────────────────
     // Best day first: a pack scan is what actually happened, the live plan is
     // where the crew put it, and the hang projection is the fallback so a

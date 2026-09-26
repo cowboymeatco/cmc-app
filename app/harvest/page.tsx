@@ -1152,6 +1152,42 @@ function HarvestLogTab() {
     load()
   }
 
+  // Flip over/under 30 months after the kill (Jill, 2026-09-25 — dentition or
+  // papers often settle it after check-in). The cut card and carcass tags read
+  // the harvest record, the worksheet reads the check-in record, so both move
+  // together or the two would disagree about SRM removal. The check-in record
+  // pairs on appointment + ear tag; with no unique match it's left alone and
+  // said so, rather than guessed.
+  const [ageSaving, setAgeSaving] = useState<string | null>(null)
+  async function toggleOver30(l: HarvestLog) {
+    const next = !l.over_30_months
+    if (!window.confirm(
+      `Mark ${l.ear_tag ? `ET ${l.ear_tag}` : `#${l.harvest_order ?? '?'}`} as ${next ? 'OVER' : 'UNDER'} 30 months?` +
+      (next ? '\n\nThe vertebral column is SRM and must be removed.' : '')
+    )) return
+    setAgeSaving(l.id)
+    try {
+      const res = await fetch('/api/harvest', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: l.id, over_30_months: next }) })
+      const j   = await res.json().catch(() => ({}))
+      if (j.error) { alert(`Save failed: ${j.error}`); return }
+      setLogs(p => p.map(x => x.id === l.id ? { ...x, over_30_months: next } : x))
+
+      if (l.appointment_id) {
+        const rRes = await fetch(`/api/receiving?type=animal&appointment_id=${encodeURIComponent(l.appointment_id)}`)
+        const rec  = await rRes.json().catch(() => null)
+        const animals: { id: string; ear_tag: string | null }[] = Array.isArray(rec) ? rec : []
+        const match = animals.filter(a => (a.ear_tag || '') === (l.ear_tag || ''))
+        if (match.length === 1) {
+          await fetch('/api/receiving', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'animal', id: match[0].id, over_30_months: next }) })
+        } else {
+          alert('Saved on the harvest record. The check-in record couldn\'t be matched by ear tag, so the kill worksheet may still show the old age.')
+        }
+      }
+    } finally {
+      setAgeSaving(null)
+    }
+  }
+
   // Summary stats
   const totalHead = logs.length
   const totalHCW  = logs.reduce((s, l) => s + (l.hot_carcass_weight_lbs ?? 0), 0)
@@ -1267,9 +1303,17 @@ function HarvestLogTab() {
                           species never capture it, so a blank default would misread
                           as "confirmed under 30 months" (Jill, 2026-08-19). */}
                       {l.species !== 'Beef' ? <span style={{ color: C.lightBrown }}>—</span>
-                        : l.over_30_months
-                          ? <span style={{ color: C.red, fontSize: '0.72rem', fontWeight: 700 }}>Over 30mo</span>
-                          : <span style={{ color: C.green, fontSize: '0.72rem' }}>Under 30mo</span>}
+                        : (
+                          <button onClick={() => toggleOver30(l)} disabled={ageSaving === l.id}
+                            title="Click to change over / under 30 months"
+                            style={{
+                              background: 'transparent', cursor: ageSaving === l.id ? 'wait' : 'pointer', whiteSpace: 'nowrap',
+                              border: `1px dashed ${l.over_30_months ? C.red : C.green}88`, borderRadius: 3, padding: '1px 6px',
+                              color: l.over_30_months ? C.red : C.green, fontSize: '0.72rem', fontWeight: l.over_30_months ? 700 : 400,
+                            }}>
+                            {ageSaving === l.id ? '…' : l.over_30_months ? 'Over 30mo' : 'Under 30mo'} ✎
+                          </button>
+                        )}
                     </td>
                     <td style={{ padding: '0.5rem 0.75rem', color: C.cream }}>{l.live_weight_lbs ?? '—'}</td>
                     <td style={{ padding: '0.5rem 0.75rem', color: C.cream }}>{l.half_1_weight_lbs ?? '—'}</td>
