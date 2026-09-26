@@ -1,0 +1,7 @@
+# Kiosk-only: secrets, bundled runtimes and generated output never belong in git.
+config.json
+node/
+hct/
+out/
+backup-*/
+*.jar

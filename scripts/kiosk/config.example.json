@@ -1,0 +1,9 @@
+{
+  "hctDir": "hct",
+  "commonsCli": "commons-cli-1.9.0.jar",
+  "scales": ["192.168.1.190", "192.168.1.191", "192.168.1.192"],
+  "pollSeconds": 2,
+  "dayChangeHour": 4,
+  "supabaseUrl": "",
+  "supabaseKey": ""
+}
