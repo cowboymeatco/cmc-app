@@ -1182,6 +1182,7 @@ function ExportTab() {
           A producer&apos;s own PLUs on their own label format (Blegen Galloway&apos;s), loaded only while their animals are being packed.
         </span>
         <Link href="/producer-labels" style={{ color: C.tan, fontSize: '0.82rem', fontWeight: 600 }}>Open Producer Labels →</Link>
+        <Link href="/scale-check" style={{ color: C.tan, fontSize: '0.82rem', fontWeight: 600 }}>Scale Check →</Link>
       </div>
     </div>
   )

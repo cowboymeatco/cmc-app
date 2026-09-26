@@ -29,6 +29,12 @@ interface ProducerSet {
   items: SetItem[]; cards: SetCard[]
 }
 interface Unmatched { label: string; cards: number }
+// From the kiosk's last read of the scales (/api/scale-reads, /scale-check):
+// what the set's label format holds, and how much of the set each scale has.
+interface ScaleInfo {
+  format_texts: string[]
+  byScale: { ip: string; found: number; format_on_scale: boolean | null }[]
+}
 interface HousePlu {
   plu_number: string; item_name: string; species: string | null; active: boolean
   ht_skeleton: Record<string, string> | null
@@ -74,6 +80,7 @@ export default function ProducerLabelsPage() {
   const [newName, setNewName]     = useState('')
   const [newFmt, setNewFmt]       = useState('')
   const [busy, setBusy]           = useState(false)
+  const [scaleInfo, setScaleInfo] = useState<Record<string, ScaleInfo>>({})
 
   const load = useCallback(() =>
     fetch('/api/producer-labels')
@@ -89,6 +96,10 @@ export default function ProducerLabelsPage() {
     load()
     fetch('/api/processing?active=true').then(r => r.json())
       .then(d => setHouse(Array.isArray(d) ? d : [])).catch(() => {})
+    fetch('/api/scale-reads').then(r => r.json())
+      .then(d => setScaleInfo(Object.fromEntries(
+        (Array.isArray(d?.producerSets) ? d.producerSets : []).map((p: ScaleInfo & { name: string }) => [p.name, p]))))
+      .catch(() => {})
   }, [load])
 
   async function run(body: Record<string, unknown>) {
@@ -159,15 +170,16 @@ export default function ProducerLabelsPage() {
         {sets === null && !error && <div style={{ color: C.lightBrown }}>Loading…</div>}
         {sets?.length === 0 && <div style={{ color: C.lightBrown, fontSize: '0.9rem' }}>No producer labels yet.</div>}
 
-        {sets?.map(s => <SetPanel key={s.id} set={s} house={house} busy={busy} run={run} />)}
+        {sets?.map(s => <SetPanel key={s.id} set={s} house={house} busy={busy} run={run} scale={scaleInfo[s.name]} />)}
       </main>
     </div>
   )
 }
 
-function SetPanel({ set: s, house, busy, run }: {
+function SetPanel({ set: s, house, busy, run, scale }: {
   set: ProducerSet; house: HousePlu[]; busy: boolean
   run: (body: Record<string, unknown>) => Promise<boolean>
+  scale?: ScaleInfo
 }) {
   const [editing, setEditing]   = useState(false)
   const [name, setName]         = useState(s.name)
@@ -207,6 +219,9 @@ function SetPanel({ set: s, house, busy, run }: {
             <h2 style={{ margin: 0, fontFamily: 'Georgia, serif', fontSize: '1.05rem', color: C.cream }}>🏷 {s.name}</h2>
             <span style={{ fontSize: '0.8rem', color: s.label_format ? C.tan : C.amber }}>
               Label format <strong style={{ fontFamily: 'monospace' }}>{s.label_format ?? 'not set'}</strong>
+              {/* What the scale's own copy of that format holds — the logo is
+                  the check that the number really is this producer's label. */}
+              {scale?.format_texts.length ? <span style={{ color: C.lightBrown }}> · {scale.format_texts.slice(0, 2).join(' · ')}</span> : null}
             </span>
             <span style={{ fontSize: '0.8rem', color: C.lightBrown, fontFamily: 'monospace' }}>
               PLUs {s.plu_block_start}–{s.plu_block_start + 999}
@@ -218,6 +233,20 @@ function SetPanel({ set: s, house, busy, run }: {
           {loaded ? `● On the scales since ${fmtDate(s.loaded_at)}` : '○ Off the scales'}
         </span>
       </div>
+
+      {/* The last read of the scales, when there's been one: is the set
+          actually there, whatever the Mark loaded button says. */}
+      {scale && scale.byScale.length > 0 && s.items.length > 0 && (
+        <div style={{ padding: '0.45rem 1.1rem', borderBottom: '1px solid rgba(166,120,90,0.15)', display: 'flex', gap: '0.9rem', flexWrap: 'wrap', fontSize: '0.78rem' }}>
+          <span style={{ color: C.lightBrown }}>Last scale read:</span>
+          {scale.byScale.map(b => (
+            <span key={b.ip} style={{ fontFamily: 'monospace', color: b.found === s.items.length ? C.green : b.found ? C.amber : C.lightBrown }}>
+              .{b.ip.split('.').pop()} {b.found}/{s.items.length}{b.format_on_scale === false ? ' · format missing!' : ''}
+            </span>
+          ))}
+          <Link href="/scale-check" style={{ color: C.tan, marginLeft: 'auto' }}>Scale Check →</Link>
+        </div>
+      )}
 
       <div style={{ padding: '0.75rem 1.1rem', display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', borderBottom: '1px solid rgba(166,120,90,0.15)' }}>
         <span style={{ fontSize: '0.85rem', color: call.color, fontWeight: 600, flex: '1 1 320px' }}>{call.text}</span>
