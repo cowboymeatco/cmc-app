@@ -72,7 +72,14 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => ({})) as { requested_by?: string }
+  const body = await req.json().catch(() => ({})) as { requested_by?: string; scales?: unknown }
+  // Which scales to read; none named means all of them. One at a time lets the
+  // office leave a scale alone while someone is packing on it (Charlie,
+  // 2026-09-26: not .191 while Eric was on jerky).
+  const scales = Array.isArray(body.scales) ? body.scales.map(String) : null
+  if (scales && (!scales.length || scales.some(ip => !/^192\.168\.1\.\d{1,3}$/.test(ip)))) {
+    return NextResponse.json({ error: 'scales must be shop scale IPs, e.g. 192.168.1.190' }, { status: 400 })
+  }
   // One at a time — a second click while the kiosk is still reading would
   // just read the same scales twice.
   const { data: open } = await supabaseAdmin
@@ -85,7 +92,7 @@ export async function POST(req: NextRequest) {
 
   const { data, error } = await supabaseAdmin
     .from('scale_read_requests')
-    .insert({ requested_by: String(body.requested_by ?? 'app').slice(0, 60) })
+    .insert({ requested_by: String(body.requested_by ?? 'app').slice(0, 60), scales })
     .select()
     .single()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
