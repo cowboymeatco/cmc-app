@@ -364,12 +364,20 @@ export default function CutScheduleTab() {
       e.type === 'carcass' && e.key === key ? { ...e, entry_notes: note } : e))
 
   // ── Day breaks ────────────────────────────────────────────────────────────────
+  // A new day starts EMPTY, just below the No Cut Day pile and above the first
+  // existing day — or at the end if there are none. It used to go on the very
+  // top, and everything below a break is scheduled, so it swallowed the whole
+  // rail, every unplaced booking included: "I start with 209 carcasses in one
+  // day" (Charlie, 2026-09-25). Here nothing sits under it until he drags
+  // something there, and he picks its date.
   const handleAddBreak = () =>
     setEntries(prev => {
       const newBreak: BreakItem = {
         type: 'break', key: `break_${crypto.randomUUID()}`, rank: 0, break_date: '',
       }
-      return [newBreak, ...prev].map((e, i) => ({ ...e, rank: i + 1 }))
+      const firstBreak = prev.findIndex(e => e.type === 'break')
+      const at = firstBreak === -1 ? prev.length : firstBreak
+      return [...prev.slice(0, at), newBreak, ...prev.slice(at)].map((e, i) => ({ ...e, rank: i + 1 }))
     })
 
   const handleRemoveBreak = (key: string) => {
@@ -683,7 +691,7 @@ export default function CutScheduleTab() {
           <button
             onClick={handleAddBreak}
             disabled={loading || carcasses.length === 0}
-            title="Insert a day break, then drag it to where one day's cutting ends"
+            title="Add an empty cutting day above the first one — set its date, then drag carcasses under it"
             style={{
               background: 'rgba(245,158,11,0.12)', color: C.amber,
               border: `1px solid rgba(245,158,11,0.45)`, borderRadius: 4,
