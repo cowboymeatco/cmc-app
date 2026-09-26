@@ -27,11 +27,13 @@ const C = {
 interface Flavor { id: string; product: string; val: string; label: string; plu_number: string | null }
 interface Recipe {
   id: string; wizard_flavor_id: string | null; product: string; label: string
-  seasoning_name: string | null; seasoning_supplier: string | null; seasoning_lb_per_100: number | null
-  cure_name: string | null; cure_oz_per_100: number | null; other_adds: string | null
+  seasoning_id: string | null; seasoning_lb_per_100: number | null
+  cure_id: string | null; cure_oz_per_100: number | null; other_adds: string | null
   casing_type: string | null; casing_size: string | null; steps: string | null; notes: string | null
   updated_by: string | null; updated_at: string
 }
+// What a recipe's seasoning and cure point at — managed on the Seasonings tab.
+export interface Supply { id: string; name: string; kind: 'bought' | 'blend'; supplier: string | null }
 interface Profile { id: string; profile_key: string; display_name: string; lbs_per_batch: number | null; units_per_batch: number | null; unit_label: string | null }
 
 // One line of the book: a wizard flavour (maybe no recipe yet) or a house row.
@@ -69,7 +71,7 @@ function saveName(n: string) { try { localStorage.setItem(NAME_KEY, n) } catch {
 
 // "Written down" = the seasoning and its ratio exist. Cure and casing don't
 // apply to every product (jerky has no casing), so they show as chips instead.
-const isFilled = (r: Recipe | null) => !!r && !!r.seasoning_name && r.seasoning_lb_per_100 != null
+const isFilled = (r: Recipe | null) => !!r && !!r.seasoning_id && r.seasoning_lb_per_100 != null
 
 function Chip({ on, children }: { on: boolean; children: React.ReactNode }) {
   const color = on ? C.green : C.lightBrown
@@ -85,6 +87,7 @@ export default function RecipesTab() {
   const [flavors,  setFlavors]  = useState<Flavor[]>([])
   const [recipes,  setRecipes]  = useState<Recipe[]>([])
   const [profiles, setProfiles] = useState<Profile[]>([])
+  const [supplies, setSupplies] = useState<Supply[]>([])
   const [loading,  setLoading]  = useState(true)
   const [error,    setError]    = useState('')
   const [name,     setName]     = useState('')
@@ -98,7 +101,7 @@ export default function RecipesTab() {
       const res = await fetch('/api/smokehouse-recipes', { cache: 'no-store' })
       const j = await res.json()
       if (!res.ok) throw new Error(j.error ?? 'Load failed')
-      setFlavors(j.flavors); setRecipes(j.recipes); setProfiles(j.profiles); setError('')
+      setFlavors(j.flavors); setRecipes(j.recipes); setProfiles(j.profiles); setSupplies(j.supplies); setError('')
     } catch (e) { setError((e as Error).message) }
     setLoading(false)
   }, [])
@@ -115,6 +118,7 @@ export default function RecipesTab() {
   const all = [...GROUPS.map(g => g.product), HOUSE].flatMap(linesFor)
   const filled = all.filter(l => isFilled(l.recipe)).length
 
+  const onSupplyAdded = (sp: Supply) => setSupplies(prev => [...prev, sp].sort((a, b) => a.name.localeCompare(b.name)))
   const onSaved = (r: Recipe) => {
     setRecipes(prev => [...prev.filter(x => x.id !== r.id), r])
     setOpen(null)
@@ -156,23 +160,26 @@ export default function RecipesTab() {
         <Group key={g.product} title={g.title} lines={linesFor(g.product)} onlyBlank={onlyBlank}
           profile={g.profileKey ? profiles.find(p => p.profile_key === g.profileKey) ?? null : null}
           onProfileSaved={p => setProfiles(prev => prev.map(x => x.id === p.id ? { ...x, lbs_per_batch: p.lbs_per_batch } : x))}
-          open={open} setOpen={setOpen} name={name} onSaved={onSaved} onDeleted={() => {}} />
+          open={open} setOpen={setOpen} name={name} onSaved={onSaved} onDeleted={() => {}}
+          supplies={supplies} onSupplyAdded={onSupplyAdded} />
       ))}
 
       <Group title="House products (hot dogs, bacon cure, ham brine…)" lines={linesFor(HOUSE)} onlyBlank={onlyBlank}
         profile={null} onProfileSaved={() => {}}
         open={open} setOpen={setOpen} name={name} onSaved={onSaved}
         onDeleted={id => { setRecipes(prev => prev.filter(r => r.id !== id)); setOpen(null) }}
+        supplies={supplies} onSupplyAdded={onSupplyAdded}
         addHouse />
     </div>
   )
 }
 
-function Group({ title, lines, onlyBlank, profile, onProfileSaved, open, setOpen, name, onSaved, onDeleted, addHouse }: {
+function Group({ title, lines, onlyBlank, profile, onProfileSaved, open, setOpen, name, onSaved, onDeleted, addHouse, supplies, onSupplyAdded }: {
   title: string; lines: Line[]; onlyBlank: boolean
   profile: Profile | null; onProfileSaved: (p: Profile) => void
   open: string | null; setOpen: (k: string | null) => void
   name: string; onSaved: (r: Recipe) => void; onDeleted: (id: string) => void; addHouse?: boolean
+  supplies: Supply[]; onSupplyAdded: (s: Supply) => void
 }) {
   const done = lines.filter(l => isFilled(l.recipe)).length
   const shown = onlyBlank ? lines.filter(l => !isFilled(l.recipe)) : lines
@@ -187,12 +194,14 @@ function Group({ title, lines, onlyBlank, profile, onProfileSaved, open, setOpen
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
         {shown.map(l => open === l.key
-          ? <Editor key={l.key} line={l} name={name} onSaved={onSaved} onCancel={() => setOpen(null)} onDeleted={onDeleted} />
-          : <Row key={l.key} line={l} onClick={() => setOpen(l.key)} />)}
+          ? <Editor key={l.key} line={l} name={name} onSaved={onSaved} onCancel={() => setOpen(null)} onDeleted={onDeleted}
+              supplies={supplies} onSupplyAdded={onSupplyAdded} />
+          : <Row key={l.key} line={l} supplies={supplies} onClick={() => setOpen(l.key)} />)}
         {shown.length === 0 && !addHouse && <div style={{ color: C.lightBrown, fontSize: '0.8rem' }}>All written down.</div>}
         {addHouse && (open === newKey
           ? <Editor line={{ key: newKey, product: '', label: '', plu: null, flavorId: null, recipe: null }} house
-              name={name} onSaved={onSaved} onCancel={() => setOpen(null)} onDeleted={onDeleted} />
+              name={name} onSaved={onSaved} onCancel={() => setOpen(null)} onDeleted={onDeleted}
+              supplies={supplies} onSupplyAdded={onSupplyAdded} />
           : <button style={{ ...BTN('transparent', C.tan), border: '1px dashed rgba(166,120,90,0.45)', alignSelf: 'flex-start' }}
               onClick={() => setOpen(newKey)}>+ Add a house product</button>)}
       </div>
@@ -229,8 +238,9 @@ function LoadSize({ profile, onSaved }: { profile: Profile; onSaved: (p: Profile
   )
 }
 
-function Row({ line, onClick }: { line: Line; onClick: () => void }) {
+function Row({ line, supplies, onClick }: { line: Line; supplies: Supply[]; onClick: () => void }) {
   const r = line.recipe
+  const seasoning = supplies.find(x => x.id === r?.seasoning_id)?.name
   const filled = isFilled(r)
   return (
     <button onClick={onClick} style={{
@@ -244,8 +254,8 @@ function Row({ line, onClick }: { line: Line; onClick: () => void }) {
         {line.plu && <span style={{ color: C.lightBrown, fontFamily: 'monospace', fontWeight: 400, fontSize: '0.75rem', marginLeft: '0.5rem' }}>PLU {line.plu}</span>}
       </span>
       <span style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
-        <Chip on={filled}>{filled ? `${r!.seasoning_lb_per_100} lb/100` : 'Seasoning'}</Chip>
-        <Chip on={!!r?.cure_name}>Cure</Chip>
+        <Chip on={filled}>{filled ? `${seasoning ?? 'Seasoning'} · ${r!.seasoning_lb_per_100} lb/100` : 'Seasoning'}</Chip>
+        <Chip on={!!r?.cure_id}>Cure</Chip>
         <Chip on={!!r?.casing_type}>{r?.casing_type ?? 'Casing'}</Chip>
         <Chip on={!!r?.steps}>Steps</Chip>
       </span>
@@ -258,19 +268,52 @@ function Row({ line, onClick }: { line: Line; onClick: () => void }) {
   )
 }
 
-type Form = Record<'product' | 'label' | 'seasoning_name' | 'seasoning_supplier' | 'seasoning_lb_per_100' |
-  'cure_name' | 'cure_oz_per_100' | 'other_adds' | 'casing_type' | 'casing_size' | 'steps' | 'notes', string>
+type Form = Record<'product' | 'label' | 'seasoning_id' | 'seasoning_lb_per_100' |
+  'cure_id' | 'cure_oz_per_100' | 'other_adds' | 'casing_type' | 'casing_size' | 'steps' | 'notes', string>
 
-function Editor({ line, house, name, onSaved, onCancel, onDeleted }: {
+// Pick a supply, or name a new one right here — making someone leave the recipe
+// to go create a seasoning first is how recipes stay half-written.
+function SupplyPicker({ value, onChange, supplies, name, onSupplyAdded, placeholder }: {
+  value: string; onChange: (id: string) => void; supplies: Supply[]
+  name: string; onSupplyAdded: (s: Supply) => void; placeholder: string
+}) {
+  const [err, setErr] = useState('')
+  const pick = async (v: string) => {
+    if (v !== '__new') { onChange(v); return }
+    if (!name.trim()) { setErr('Type your name at the top first.'); return }
+    const n = prompt('Name of the new seasoning / cure (as on the bag):')?.trim()
+    if (!n) return
+    const res = await fetch('/api/smokehouse-supplies', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: n, kind: 'bought', updated_by: name }),
+    })
+    const j = await res.json()
+    if (!res.ok) { setErr(j.error ?? 'Could not add'); return }
+    setErr(''); onSupplyAdded(j); onChange(j.id)
+  }
+  return (
+    <>
+      <select style={INPUT} value={value} onChange={e => pick(e.target.value)}>
+        <option value="">{placeholder}</option>
+        {supplies.map(s => <option key={s.id} value={s.id}>{s.name}{s.kind === 'blend' ? ' (house blend)' : s.supplier ? ` — ${s.supplier}` : ''}</option>)}
+        <option value="__new">＋ New…</option>
+      </select>
+      {err && <div style={{ color: C.red, fontSize: '0.75rem', marginTop: '0.2rem' }}>{err}</div>}
+    </>
+  )
+}
+
+function Editor({ line, house, name, onSaved, onCancel, onDeleted, supplies, onSupplyAdded }: {
   line: Line; house?: boolean; name: string
   onSaved: (r: Recipe) => void; onCancel: () => void; onDeleted: (id: string) => void
+  supplies: Supply[]; onSupplyAdded: (s: Supply) => void
 }) {
   const r = line.recipe
   const s = (v: string | number | null | undefined) => v == null ? '' : String(v)
   const [form, setForm] = useState<Form>({
     product: r?.product ?? line.product, label: r?.label ?? line.label,
-    seasoning_name: s(r?.seasoning_name), seasoning_supplier: s(r?.seasoning_supplier),
-    seasoning_lb_per_100: s(r?.seasoning_lb_per_100), cure_name: s(r?.cure_name),
+    seasoning_id: s(r?.seasoning_id),
+    seasoning_lb_per_100: s(r?.seasoning_lb_per_100), cure_id: s(r?.cure_id),
     cure_oz_per_100: s(r?.cure_oz_per_100), other_adds: s(r?.other_adds),
     casing_type: s(r?.casing_type), casing_size: s(r?.casing_size), steps: s(r?.steps), notes: s(r?.notes),
   })
@@ -297,6 +340,7 @@ function Editor({ line, house, name, onSaved, onCancel, onDeleted }: {
         ...form,
         product: house ? (form.product.trim() || HOUSE) : line.product,
         seasoning_lb_per_100: seas, cure_oz_per_100: cure,
+        seasoning_id: form.seasoning_id || null, cure_id: form.cure_id || null,
         id: r?.id, wizard_flavor_id: line.flavorId, updated_by: name,
       }),
     })
@@ -331,13 +375,20 @@ function Editor({ line, house, name, onSaved, onCancel, onDeleted }: {
       )}
 
       <div style={grid}>
-        <div><label style={LABEL}>Seasoning</label><input style={INPUT} value={form.seasoning_name} onChange={f('seasoning_name')} placeholder="Name on the bag" /></div>
-        <div><label style={LABEL}>Supplier</label><input style={INPUT} value={form.seasoning_supplier} onChange={f('seasoning_supplier')} /></div>
+        <div>
+          <label style={LABEL}>Seasoning</label>
+          <SupplyPicker value={form.seasoning_id} onChange={v => setForm(p => ({ ...p, seasoning_id: v }))}
+            supplies={supplies} name={name} onSupplyAdded={onSupplyAdded} placeholder="— pick the seasoning —" />
+        </div>
         <div><label style={LABEL}>lb seasoning per 100 lb meat</label><input style={INPUT} inputMode="decimal" value={form.seasoning_lb_per_100} onChange={f('seasoning_lb_per_100')} /></div>
       </div>
 
       <div style={grid}>
-        <div><label style={LABEL}>Cure</label><input style={INPUT} value={form.cure_name} onChange={f('cure_name')} placeholder="Blank if none" /></div>
+        <div>
+          <label style={LABEL}>Cure</label>
+          <SupplyPicker value={form.cure_id} onChange={v => setForm(p => ({ ...p, cure_id: v }))}
+            supplies={supplies} name={name} onSupplyAdded={onSupplyAdded} placeholder="— none —" />
+        </div>
         <div><label style={LABEL}>oz cure per 100 lb meat</label><input style={INPUT} inputMode="decimal" value={form.cure_oz_per_100} onChange={f('cure_oz_per_100')} /></div>
         <div>
           <label style={LABEL}>Casing</label>

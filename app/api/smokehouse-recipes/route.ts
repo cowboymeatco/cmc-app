@@ -10,23 +10,24 @@ export const dynamic = 'force-dynamic'
 
 const FIELDS = [
   'product', 'label',
-  'seasoning_name', 'seasoning_supplier', 'seasoning_lb_per_100',
-  'cure_name', 'cure_oz_per_100', 'other_adds',
+  'seasoning_id', 'seasoning_lb_per_100',
+  'cure_id', 'cure_oz_per_100', 'other_adds',
   'casing_type', 'casing_size', 'steps', 'notes',
 ] as const
 
 // GET /api/smokehouse-recipes — every active wizard flavour (filled in or not),
-// the free house-product rows, and the cook profiles' pounds per load, so the
-// book shows what's still blank.
+// the free house-product rows, the cook profiles' pounds per load, and the
+// supplies a recipe's seasoning and cure are picked from.
 export async function GET() {
-  const [flav, rec, prof] = await Promise.all([
+  const [flav, rec, prof, sup] = await Promise.all([
     supabase.from('wizard_flavors').select('id, product, val, label, plu_number, sort_order').eq('active', true).order('sort_order'),
     supabaseAdmin.from('smokehouse_recipes').select('*'),
     supabase.from('cook_profile').select('id, profile_key, display_name, lbs_per_batch, units_per_batch, unit_label').eq('active', true),
+    supabaseAdmin.from('smokehouse_supplies').select('id, name, kind, supplier').eq('active', true).order('name'),
   ])
-  const err = flav.error ?? rec.error ?? prof.error
+  const err = flav.error ?? rec.error ?? prof.error ?? sup.error
   if (err) return NextResponse.json({ error: err.message }, { status: 500 })
-  return NextResponse.json({ flavors: flav.data ?? [], recipes: rec.data ?? [], profiles: prof.data ?? [] })
+  return NextResponse.json({ flavors: flav.data ?? [], recipes: rec.data ?? [], profiles: prof.data ?? [], supplies: sup.data ?? [] })
 }
 
 // POST /api/smokehouse-recipes — save one recipe. `id` updates; otherwise a

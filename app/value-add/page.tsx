@@ -13,8 +13,9 @@ import { cookInJob } from '@/lib/cookMatch'
 import ScheduleTab from './ScheduleTab'
 import CureTab from './CureTab'
 import RecipesTab from './RecipesTab'
+import SeasoningsTab from './SeasoningsTab'
 
-type Tab = 'active' | 'schedule' | 'cure' | 'recipes' | 'new' | 'history'
+type Tab = 'active' | 'schedule' | 'cure' | 'recipes' | 'seasonings' | 'new' | 'history'
 
 // What /api/value-add/box-weight returns per job: the proposal plus which job
 // it belongs to and what the job already had recorded.
@@ -1251,7 +1252,8 @@ export default function ValueAddPage() {
   // /value-add?tab=recipes — a link straight to the recipe book to hand to
   // whoever is writing formulations down.
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get('tab') === 'recipes') setTab('recipes')
+    const t = new URLSearchParams(window.location.search).get('tab')
+    if (t === 'recipes' || t === 'seasonings') setTab(t)
   }, [])
 
   useEffect(() => {
@@ -1313,6 +1315,7 @@ export default function ValueAddPage() {
     { id: 'schedule' as Tab, label: '📅 Schedule' },
     { id: 'cure'     as Tab, label: '🧂 In Cure' },
     { id: 'recipes'  as Tab, label: '📖 Recipes' },
+    { id: 'seasonings' as Tab, label: '🛒 Seasonings' },
     { id: 'new'      as Tab, label: '+ New Job' },
     { id: 'history'  as Tab, label: '📜 History' },
   ]
@@ -1350,6 +1353,7 @@ export default function ValueAddPage() {
         {tab === 'schedule' && <ScheduleTab />}
         {tab === 'cure'     && <CureTab key={newKey} />}
         {tab === 'recipes'  && <RecipesTab />}
+        {tab === 'seasonings' && <SeasoningsTab />}
         {tab === 'new'      && <NewJobTab key={newKey} onSaved={() => { setNewKey(k => k + 1); setTab('active') }} orders={orders} cuttingInstructions={cuttingInstructions} pluList={pluList} />}
         {tab === 'history'  && <HistoryTab />}
       </main>
