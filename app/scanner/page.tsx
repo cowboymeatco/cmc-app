@@ -154,6 +154,7 @@ interface ScanLine {
   weight_lbs: number
   quantity:   number
   created_at?: string   // set by the server; drives the live lbs/hr pace
+  barcode?:   string | null   // what the gun read — how Take out finds the exact package
 }
 
 // Quarter-aware yield: response from /api/processing/yield when this session
@@ -657,6 +658,14 @@ export default function ScannerPage() {
 
   // ── Weight entry modal (box products with no embedded weight) ────────────────
   const [weightModal, setWeightModal] = useState<{ plu: string; itemName: string; labelWarn?: string | null } | null>(null)
+  // Take out: while it's on, a package scanned at the open box comes OUT of it
+  // instead of going in — no hunting down the line to tap × (Charlie,
+  // 2026-09-27). Always for one box: it switches off when the box changes or closes.
+  const [takeOut, setTakeOut] = useState(false)
+  const takeOutRef = useRef(false)
+  useEffect(() => { takeOutRef.current = takeOut }, [takeOut])
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- a different box always starts in Add
+  useEffect(() => { setTakeOut(false) }, [activeBox?.id, activeBox?.is_closed])
   const [weightEntry, setWeightEntry] = useState('')
   const weightInputRef = useRef<HTMLInputElement>(null)
 
@@ -780,6 +789,9 @@ export default function ScannerPage() {
   const inputsRef     = useRef<ProcessingInput[]>([])
   const boxesRef      = useRef<BoxRecord[]>([])
   const unpackBoxRef  = useRef<((serial: string) => void) | null>(null)
+  // A box label scanned anywhere opens Edit Box on that box (Charlie, 2026-09-27).
+  const editBoxScanRef = useRef<((serial: string) => void) | null>(null)
+  const takeOutScanRef = useRef<((raw: string) => Promise<void>) | null>(null)
   // The scan bar's buffer, mirrored synchronously. The gun fires faster than
   // React re-renders, so the DOM input's value can't be trusted to hold what
   // has already been typed — this ref is what the next character appends to.
@@ -803,6 +815,8 @@ export default function ScannerPage() {
   inputsRef.current     = inputs
   boxesRef.current      = boxes
   unpackBoxRef.current  = unpackBox
+  editBoxScanRef.current = openEditBoxFor
+  takeOutScanRef.current = takeOutScan
   applyScanRef.current  = applyScanInput
   traySealRef.current   = handleTraySeal
   ciScanRef.current     = handleCiScan
@@ -1139,6 +1153,7 @@ export default function ScannerPage() {
           sealBufRef.current = ''
           if (isCureTagNumber(code)) traySealRef.current?.(code)
           else if (isCarcassTag(code)) carcassHomeRef.current?.(code)
+          else if (BOX_SERIAL_RE.test(code)) editBoxScanRef.current?.(code.toUpperCase())
           else ciScanRef.current?.(code)
           return
         }
@@ -1216,6 +1231,8 @@ export default function ScannerPage() {
     if (!box || box.is_closed) return
 
     setFlash(null)
+
+    if (takeOutRef.current) { await takeOutScanRef.current?.(raw); scanRef.current?.focus(); return }
 
     const decoded = decodeBarcode(raw)
     if (!decoded) {
@@ -1326,14 +1343,17 @@ export default function ScannerPage() {
     pumpScanQueue()
   }, [scanValue, pumpScanQueue])
 
-  // A produced box serial in the scan bar means "take this box apart". Caught
-  // here rather than in onChange so it works however the characters arrived —
-  // the gun can also feed the bar through the global key redirect above.
+  // A produced box serial in the scan bar opens Edit Box on that box. It used to
+  // take the box apart on the spot, which is the wrong guess for someone who
+  // scanned the label to add a package to it — so now the crew picks: edit the
+  // contents, or repack the lot (Charlie, 2026-09-27). Caught here rather than
+  // in onChange so it works however the characters arrived — the gun can also
+  // feed the bar through the global key redirect above.
   useEffect(() => {
     if (!BOX_SERIAL_RE.test(scanValue)) return
     const code = scanValue.toUpperCase()
     setScan('')
-    unpackBoxRef.current?.(code)
+    editBoxScanRef.current?.(code)
   }, [scanValue])
 
   // A gun delivers its 13 digits in well under a second, so digits still sitting
@@ -1889,6 +1909,7 @@ export default function ScannerPage() {
   async function closeBox() {
     const box = activeBox
     if (!box || box.is_closed) return
+    setTakeOut(false)
     const snap = scansRef.current
     const res  = await fetch('/api/boxes', {
       method:  'PATCH',
@@ -2114,6 +2135,105 @@ export default function ScannerPage() {
       setRepackSerial('')
       setRepackPeek(null)
     }
+  }
+
+  // ── Edit Box ──────────────────────────────────────────────────────────────────
+  // A box label scanned anywhere — in a session or from the session list — opens
+  // Edit Box on that box. From there it's either "edit the contents" (open the
+  // box in its own session, reopened, ready to scan in or Take out) or "repack
+  // entire contents" (the old serial-scan behaviour, now one deliberate button).
+  function openEditBoxFor(serial: string) {
+    setRepackSerial(serial)
+    setRepackPeek(null)
+    setRepackStartErr('')
+    setShowRepackStart(true)
+    peekRepackBox(serial)
+  }
+
+  async function editBoxContents() {
+    const box = repackPeek
+    if (!box || !pluLoaded) return
+    setRepackStartBusy(true)
+    try {
+      setShowRepackStart(false)
+      const sorted = await startSessionFromExisting(box.customer_name, box.pack_date)
+      const target = sorted.find(b => b.id === box.id) ?? box
+      // No "are you sure" here: choosing Edit contents on a scanned label is
+      // the answer. Closing it again recomputes the totals and prints the label.
+      if (target.is_closed) {
+        await fetch('/api/boxes', {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: target.id, is_closed: false }),
+        })
+      }
+      const opened = { ...target, is_closed: false }
+      setBoxes(prev => prev.map(b => b.id === opened.id ? opened : b))
+      setActiveBox(opened)
+      const res  = await fetch(`/api/boxes/scans?box_id=${opened.id}`)
+      const data = await res.json().catch(() => [])
+      setScans(Array.isArray(data) ? ([...data] as ScanLine[]).reverse() : [])
+      setTakeOut(false)
+      setLastKind('ok')
+      setLastItem(`Box ${opened.box_number} open — scan to add, or turn on Take out to remove · Close Box prints the new label`)
+      setFlash('ok')
+      setTimeout(() => setFlash(null), 3500)
+      setTimeout(() => scanRef.current?.focus(), 80)
+    } finally {
+      setRepackStartBusy(false)
+      setRepackSerial('')
+      setRepackPeek(null)
+    }
+  }
+
+  // Repack entire contents. Inside a session the box is taken apart INTO that
+  // session — it may be another customer's box being repacked here, as before.
+  // From the session list it lands back on the box's own customer.
+  async function repackEntireBox() {
+    const box = repackPeek
+    if (!box || !pluLoaded) return
+    if (!startedRef.current) return startRepackSession()
+    setShowRepackStart(false)
+    const serial = (box.serial_number ?? repackSerial).toUpperCase()
+    setRepackSerial('')
+    setRepackPeek(null)
+    await unpackBox(serial)
+  }
+
+  // ── Take out: scan a package to remove it from the open box ──────────────────
+  // Matched on the exact barcode the gun read when it went in; failing that, the
+  // same PLU at the same weight. A package with no weight on its label can only
+  // be matched by PLU, so that's only trusted when there's exactly one of it.
+  // Refs and setters only — doScan is a stable callback.
+  async function takeOutScan(raw: string) {
+    const box = activeBoxRef.current
+    if (!box || box.is_closed) return
+    const lines = scansRef.current
+    const decoded = decodeBarcode(raw)
+    const pluOnly = decoded ? null : decodePluFromBarcode(raw)
+    const scannedPlu = decoded?.plu ?? pluOnly
+    if (!scannedPlu) {
+      setFlash('bad'); setLastKind('bad'); setLastItem('Not a package barcode'); setTimeout(() => setFlash(null), 1800)
+      return
+    }
+    const { plu } = resolveProducerPlu(scannedPlu)
+    let hit = lines.find(l => l.barcode === raw)
+    if (!hit && decoded) hit = lines.find(l => l.plu_number === plu && Math.abs(Number(l.weight_lbs) - decoded.weightLbs) < 0.005)
+    if (!hit && !decoded) {
+      const same = lines.filter(l => l.plu_number === plu)
+      if (same.length === 1) hit = same[0]
+    }
+    if (!hit) {
+      setFlash('warn'); setLastKind('warn')
+      setLastItem(`${pluMapRef.current[plu] ?? `PLU ${plu}`}${decoded ? ` · ${decoded.weightLbs.toFixed(2)} lb` : ''} — not in Box ${box.box_number}. Nothing removed${decoded ? '' : '; tap × on the line instead'}.`)
+      setTimeout(() => setFlash(null), 4000)
+      return
+    }
+    await fetch(`/api/boxes/scans?id=${hit.id}`, { method: 'DELETE' })
+    setScans(prev => prev.filter(x => x.id !== hit!.id))
+    setSessionScans(prev => prev.filter(x => x.id !== hit!.id))
+    setFlash('ok'); setLastKind('ok')
+    setLastItem(`➖ Took out ${hit.item_name} · ${Number(hit.weight_lbs).toFixed(2)} lb from Box ${box.box_number}`)
+    setTimeout(() => setFlash(null), 2500)
   }
 
   // ── Unpack a produced box for repack ─────────────────────────────────────────
@@ -2880,10 +3000,10 @@ export default function ScannerPage() {
                   <button
                     onClick={() => { setNewMenu(false); setRepackSerial(''); setRepackPeek(null); setRepackStartErr(''); setShowRepackStart(true) }}
                     style={{ display: 'block', width: '100%', textAlign: 'left', background: 'transparent', border: 'none', color: C.cream, padding: '0.75rem 1.1rem', fontSize: '0.88rem', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                    ♻ Repack boxes…
+                    ✏️ Edit a box…
                   </button>
                   <div style={{ padding: '0 1.1rem 0.75rem', fontSize: '0.7rem', color: C.lightBrown, lineHeight: 1.4, maxWidth: 250 }}>
-                    Scan a packed box&apos;s serial to take it apart and pack it again.
+                    Scan a packed box&apos;s label to add to it, take from it, or repack the whole box.
                   </div>
                 </div>
               </>
@@ -3032,16 +3152,18 @@ export default function ScannerPage() {
           </div>
         </div>
 
-        {/* Start a repack — the box serial picks the session, not a typed name */}
+        {/* Edit Box — the box serial picks the session, not a typed name. Opened
+            from the menu or by scanning a box label anywhere (Charlie, 2026-09-27). */}
         {showRepackStart && (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '1rem' }}
             onClick={() => { if (!repackStartBusy) setShowRepackStart(false) }}>
             <div onClick={e => e.stopPropagation()} style={{ background: C.darkBrown, border: '1px solid rgba(166,120,90,0.35)', borderRadius: 8, padding: '2rem', width: '100%', maxWidth: 420 }}>
-              <h2 style={{ fontFamily: 'Georgia, serif', color: C.cream, fontSize: '1.1rem', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 0.4rem' }}>Repack Boxes</h2>
+              <h2 style={{ fontFamily: 'Georgia, serif', color: C.cream, fontSize: '1.1rem', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 0.4rem' }}>Edit Box</h2>
               <p style={{ color: C.lightBrown, fontSize: '0.78rem', lineHeight: 1.5, margin: '0 0 1.25rem' }}>
-                Scan the serial off the box you&apos;re taking apart. Its weight moves back to
-                the inputs and the box goes away, so nothing gets counted twice — then
-                scan the packages into new boxes and print fresh labels.
+                Scan the label on the box. <strong style={{ color: C.cream }}>Edit contents</strong> opens it
+                so you can scan packages in or take them out — closing it prints the new label.
+                <strong style={{ color: C.cream }}> Repack entire contents</strong> takes the whole box apart
+                so its packages can go into new boxes.
               </p>
               <label style={LBL}>Box serial</label>
               <input
@@ -3050,7 +3172,7 @@ export default function ScannerPage() {
                 value={repackSerial}
                 placeholder="CMC260801A1B2"
                 onChange={e => { const v = e.target.value.toUpperCase(); setRepackSerial(v); peekRepackBox(v) }}
-                onKeyDown={e => { if (e.key === 'Enter' && repackPeek) startRepackSession() }}
+                onKeyDown={e => { if (e.key === 'Enter' && repackPeek) editBoxContents() }}
               />
               {repackStartErr && (
                 <div style={{ color: C.red, fontSize: '0.8rem', marginTop: '0.6rem' }}>{repackStartErr}</div>
@@ -3063,14 +3185,23 @@ export default function ScannerPage() {
                   </span>
                 </div>
               )}
-              <div style={{ display: 'flex', gap: '0.6rem', marginTop: '1.5rem' }}>
+              <button onClick={editBoxContents} disabled={!repackPeek || repackStartBusy || !pluLoaded}
+                style={{ width: '100%', marginTop: '1.5rem', background: repackPeek ? C.tan : C.medBrown, color: C.dark, border: 'none', borderRadius: 4, padding: '0.8rem', fontSize: '0.95rem', fontWeight: 700, cursor: repackPeek ? 'pointer' : 'not-allowed', opacity: repackStartBusy ? 0.7 : 1 }}>
+                {repackStartBusy ? '⟳ Opening…' : '✏️ Edit contents'}
+              </button>
+              <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.6rem' }}>
                 <button onClick={() => setShowRepackStart(false)} disabled={repackStartBusy}
-                  style={{ flex: 1, background: 'transparent', border: '1px solid rgba(166,120,90,0.3)', color: C.lightBrown, borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', cursor: 'pointer' }}>
+                  style={{ flex: 1, background: 'transparent', border: '1px solid rgba(166,120,90,0.3)', color: C.lightBrown, borderRadius: 4, padding: '0.7rem', fontSize: '0.88rem', cursor: 'pointer' }}>
                   Cancel
                 </button>
-                <button onClick={startRepackSession} disabled={!repackPeek || repackStartBusy || !pluLoaded}
-                  style={{ flex: 2, background: repackPeek ? C.tan : C.medBrown, color: C.dark, border: 'none', borderRadius: 4, padding: '0.75rem', fontSize: '0.9rem', fontWeight: 700, cursor: repackPeek ? 'pointer' : 'not-allowed', opacity: repackStartBusy ? 0.7 : 1 }}>
-                  {repackStartBusy ? '⟳ Opening…' : '♻ Unpack & start'}
+                {/* Taking the whole box apart. Inside a session it lands in that
+                    session — say whose, since it may not be the box's own. */}
+                <button onClick={repackEntireBox} disabled={!repackPeek || repackStartBusy || !pluLoaded}
+                  title={started && repackPeek && repackPeek.customer_name !== customer
+                    ? `The box is ${repackPeek.customer_name}'s — its packages come into ${customer}'s session`
+                    : 'The box goes away and its weight comes back in as an input, so nothing is counted twice'}
+                  style={{ flex: 2, background: 'transparent', border: '1px solid rgba(166,120,90,0.45)', color: repackPeek ? C.tan : C.lightBrown, borderRadius: 4, padding: '0.7rem', fontSize: '0.88rem', fontWeight: 600, cursor: repackPeek ? 'pointer' : 'not-allowed' }}>
+                  ♻ Repack entire contents{started && repackPeek && repackPeek.customer_name !== customer ? ` into ${customer}` : ''}
                 </button>
               </div>
             </div>
@@ -3360,7 +3491,7 @@ export default function ScannerPage() {
           onClick={() => scanRef.current?.focus()}
           style={{
             flexShrink: 0, background: 'rgba(255,255,255,0.04)',
-            border: `2px solid ${borderColor}`, borderRadius: 6,
+            border: `2px solid ${takeOut && !flash ? '#E8883A' : borderColor}`, borderRadius: 6,
             padding: '0.85rem 1.25rem', display: 'flex', alignItems: 'center',
             gap: '1rem', cursor: 'text', transition: 'border-color 0.25s',
           }}
@@ -3387,6 +3518,7 @@ export default function ScannerPage() {
             placeholder={
               !activeBox            ? 'Select or create a box above'
               : activeBox.is_closed ? 'Box closed — add a new box to continue'
+              : takeOut             ? `TAKE OUT — scan a package to remove it from Box ${activeBox.box_number}`
               : 'Scan barcode…'
             }
             style={{
@@ -3396,6 +3528,20 @@ export default function ScannerPage() {
           />
           {scanValue && (
             <button onClick={e => { e.stopPropagation(); setScan('') }} style={{ background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '1.3rem', lineHeight: 1 }}>×</button>
+          )}
+          {/* Add ↔ Take out. Lives in the scan bar because it changes what the
+              next scan does; switches itself back to Add when the box changes. */}
+          {isOpen && (
+            <button
+              onClick={e => { e.stopPropagation(); setTakeOut(t => !t); setTimeout(() => scanRef.current?.focus(), 50) }}
+              title={takeOut ? 'Back to adding packages' : 'Scan packages to take them OUT of this box'}
+              style={{
+                flexShrink: 0, borderRadius: 4, padding: '0.45rem 0.8rem', fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
+                background: takeOut ? '#E8883A' : 'transparent', color: takeOut ? C.dark : C.lightBrown,
+                border: `1px solid ${takeOut ? '#E8883A' : 'rgba(166,120,90,0.4)'}`,
+              }}>
+              {takeOut ? '➕ Back to adding' : '➖ Take out'}
+            </button>
           )}
         </div>
 
