@@ -158,3 +158,13 @@ create table if not exists public.clover_card_deposits (
   created_at      timestamptz not null default now()
 );
 alter table public.clover_card_deposits enable row level security;
+
+-- The 5:00 PM register close email (app/api/cron/register-report). One row per
+-- shop day it was sent for, so a retried cron can't email the same day twice.
+create table if not exists public.clover_daily_report_log (
+  business_date  date primary key,
+  sent_at        timestamptz not null default now(),
+  recipients     text[] not null,
+  subject        text
+);
+alter table public.clover_daily_report_log enable row level security;
