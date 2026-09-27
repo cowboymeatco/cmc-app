@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import InvoiceSlips, { SlipInvoice } from '@/components/InvoiceSlips'
+import CloverDailySales from '@/components/CloverDailySales'
 
 // Billing: producer -> QuickBooks customer recognition (phase 1), then
 // billable events review + accumulating invoices (next phases).
@@ -638,6 +639,9 @@ Only do this if the invoice was deleted on purpose or re-done under a new number
             </>
           )}
         </div>
+
+        {/* ── Register sales → QuickBooks ────────────────────────────── */}
+        <CloverDailySales />
 
         {/* ── Status ─────────────────────────────────────────────────── */}
         <div style={{ ...CARD, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
