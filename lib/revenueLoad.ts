@@ -25,6 +25,9 @@ export async function loadRevenueRecognition(start: string, end: string, today: 
       .gte('harvest_date', from).lte('harvest_date', end),
     supabaseAdmin.from('harvest_appointments')
       .select('id, harvest_date, species, head_count, producer_id, customers')
+      // A no-show or declined booking never reaches the floor — counting it
+      // left a phantom head on 9/24 after TJ Cape's beef didn't come in.
+      .not('status', 'in', '("NoShow","Declined")')
       .gte('harvest_date', from).lte('harvest_date', end),
     // The plan is one ordered list under a single schedule_date, so it can't
     // be date-filtered here; the newest few dozen rows always cover it.
