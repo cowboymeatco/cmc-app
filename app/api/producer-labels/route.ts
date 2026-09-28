@@ -144,9 +144,9 @@ export async function POST(req: NextRequest) {
       const used = await usedNumbers()
       if (start == null) {
         start = nextBlockStart(sets.map(s => s.plu_block_start), used)
-        if (start == null) return bad('No free block of PLU numbers left under 100000')
+        if (start == null) return bad(`No free producer block left between ${PRODUCER_BLOCK_MIN} and ${PRODUCER_BLOCK_LAST}`)
       } else if (!Number.isInteger(start) || start < PRODUCER_BLOCK_MIN || start > PRODUCER_BLOCK_LAST || start % PRODUCER_BLOCK_SIZE !== 0) {
-        return bad(`A block starts on a thousand between ${PRODUCER_BLOCK_MIN} and ${PRODUCER_BLOCK_LAST}`)
+        return bad(`A block starts on a hundred between ${PRODUCER_BLOCK_MIN} and ${PRODUCER_BLOCK_LAST}`)
       } else if (sets.some(s => s.plu_block_start === start)) {
         return bad(`${start} is already another producer's block`)
       }

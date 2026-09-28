@@ -163,7 +163,7 @@ export default function ProducerLabelsPage() {
           </label>
           <button disabled={busy || !newName.trim()} onClick={() => createSet(newName, newFmt)} style={btn(C.tan)}>+ New producer label</button>
           <span style={{ fontSize: '0.75rem', color: C.lightBrown }}>
-            Gets its own block of 1,000 PLU numbers from 20000 up. The format can be filled in later.
+            Gets its own block of 100 four-digit PLU numbers between 9100 and 9899. The format can be filled in later.
           </span>
         </div>
 
