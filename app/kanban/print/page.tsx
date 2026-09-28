@@ -2,7 +2,7 @@
 import { use, useEffect, useMemo, useState } from 'react'
 import QRCode from 'qrcode'
 import {
-  CARD_TYPE_LABEL, CATEGORIES, CATEGORY_COLOR, cardLabel, leadDays, money, qtyText,
+  CARD_TYPE_LABEL, CATEGORIES, CATEGORY_COLOR, qtyText,
   type Item, type Vendor,
 } from '@/lib/kanban'
 import { C, Banner, BigButton, KanbanHeader, cardStyle, inputStyle } from '../ui'
@@ -11,17 +11,16 @@ import { C, Banner, BigButton, KanbanHeader, cardStyle, inputStyle } from '../ui
 // KANBAN CARDS, PRINTED
 //
 // One physical card per card in the loop — a two-bin item prints "card 1 of 2"
-// and "card 2 of 2", one for each bin. Everything a standard kanban card
-// carries: part name and number, where it lives (point of use + backstock),
-// the quantity one card orders, the reorder signal, supplier and their item #,
-// lead time, price, and a QR that opens the pull page for that exact card.
+// and "card 2 of 2", one for each bin — with a QR that opens the pull page for
+// that exact card.
 //
-// Letter paper, four to a page, ink on white: they get laminated and zip-tied
-// to the bin. Each card fills a 4¼" × 5½" quarter of the sheet, so they print
-// straight onto Avery quarter-sheet postcard stock (4 per Letter sheet) instead
-// of being cut by hand; the border sits 0.3" in because most printers can't
-// reach the paper edge (Charlie, 2026-09-28, ordering card stock). The colour band is the category, so a card on the wrong shelf
-// stands out from across the room.
+// 3×5 index cards, printed landscape (5" wide × 3" tall), three to a Letter
+// sheet in one centred column to match Avery printable index cards; they get
+// laminated and zip-tied to the bin. A 3×5 only holds what the crew reads at
+// the bin — name, where it's used, how much to order, who from — plus the QR
+// and which card of the loop this is (Charlie, 2026-09-28). The rest lives on
+// the item's page. The colour band is the category, so a card on the wrong
+// shelf stands out from across the room.
 // ══════════════════════════════════════════════════════════════════════════════
 
 export default function PrintCardsPage({ searchParams }: { searchParams: Promise<{ ids?: string }> }) {
@@ -103,7 +102,6 @@ export default function PrintCardsPage({ searchParams }: { searchParams: Promise
       <div className="ksheet">
         {cards.map(({ item, seq }) => {
           const v = vendorById.get(item.vendor_id ?? '')
-          const lead = leadDays(item, v).days
           const color = CATEGORY_COLOR[item.category] ?? '#999'
           const ou = item.order_unit ?? item.unit
           return (
@@ -114,28 +112,24 @@ export default function PrintCardsPage({ searchParams }: { searchParams: Promise
               </div>
               <div className="top">
                 <div className="left">
-                  <div className="no">{cardLabel(item.card_no)}</div>
                   <div className="name">{item.name}</div>
-                  {item.description && <div className="desc">{item.description}</div>}
+                  <table className="facts">
+                    <tbody>
+                      <tr><th>ORDER QTY</th><td className="big">{qtyText(item.order_qty, ou)}</td></tr>
+                      {/* A reorder-point card is useless without its trigger. */}
+                      {item.card_type === 'reorder_point' && item.reorder_point != null && (
+                        <tr><th>REORDER AT</th><td className="big">{qtyText(item.reorder_point, item.unit)}</td></tr>
+                      )}
+                      <tr><th>USE AT</th><td>{item.location ?? '—'}</td></tr>
+                      <tr><th>VENDOR</th><td>{v?.name ?? '—'}</td></tr>
+                    </tbody>
+                  </table>
                 </div>
                 {codes[`${item.id}:${seq}`]
                   // eslint-disable-next-line @next/next/no-img-element
                   ? <img className="qr" src={codes[`${item.id}:${seq}`]} alt="" />
                   : <div className="qr" />}
               </div>
-              <table className="facts">
-                <tbody>
-                  <tr><th>ORDER QTY</th><td className="big">{qtyText(item.order_qty, ou)}</td></tr>
-                  {item.card_type === 'reorder_point' && item.reorder_point != null && (
-                    <tr><th>REORDER AT</th><td className="big">{qtyText(item.reorder_point, item.unit)}</td></tr>
-                  )}
-                  {item.bin_qty != null && <tr><th>BIN HOLDS</th><td>{qtyText(item.bin_qty, item.unit)}</td></tr>}
-                  <tr><th>USE AT</th><td>{item.location ?? '—'}</td></tr>
-                  {item.backstock_location && <tr><th>BACKSTOCK</th><td>{item.backstock_location}</td></tr>}
-                  <tr><th>VENDOR</th><td>{v?.name ?? '—'}{item.vendor_sku ? ` · #${item.vendor_sku}` : ''}</td></tr>
-                  <tr><th>LEAD / PRICE</th><td>{[lead != null ? `${lead} days` : null, item.price != null ? `${money(item.price)}${ou ? `/${ou}` : ''}` : null].filter(Boolean).join(' · ') || '—'}</td></tr>
-                </tbody>
-              </table>
               <div className="foot">
                 <span>Card <b>{seq}</b> of {item.cards_in_loop}</span>
                 <span>{item.card_type === 'two_bin' ? 'Bin empty? Scan or pull this card.' : 'At the line? Scan or pull this card.'}</span>
@@ -146,33 +140,32 @@ export default function PrintCardsPage({ searchParams }: { searchParams: Promise
       </div>
 
       <style jsx global>{`
-        .ksheet { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; padding: 0 16px; max-width: 900px; margin: 0 auto; }
-        .kcard { background: #fff; color: #000; border: 1.5px solid #333; border-radius: 6px; overflow: hidden;
+        .ksheet { display: grid; grid-template-columns: repeat(auto-fill, 5in); justify-content: center; gap: 12px; padding: 0 16px; }
+        .kcard { width: 5in; height: 3in; box-sizing: border-box; background: #fff; color: #000; border: 1.5px solid #333;
+                 border-radius: 6px; overflow: hidden; display: flex; flex-direction: column;
                  font-family: Arial, sans-serif; break-inside: avoid; page-break-inside: avoid; }
-        .kcard .band { display: flex; justify-content: space-between; padding: 4px 10px; font-size: 9pt; font-weight: bold;
+        .kcard .band { display: flex; justify-content: space-between; padding: 3px 10px; font-size: 8pt; font-weight: bold;
                        color: #000; text-transform: uppercase; letter-spacing: 0.04em;
                        -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-        .kcard .top { display: flex; gap: 8px; padding: 8px 10px 4px; }
+        .kcard .top { flex: 1; display: flex; gap: 10px; padding: 6px 10px 0; min-height: 0; }
         .kcard .left { flex: 1; min-width: 0; }
-        .kcard .no { font-family: monospace; font-size: 11pt; color: #444; }
-        .kcard .name { font-size: 15pt; font-weight: bold; line-height: 1.1; }
-        .kcard .desc { font-size: 9pt; color: #444; margin-top: 2px; }
-        .kcard .qr { width: 1.15in; height: 1.15in; flex-shrink: 0; background: #eee; }
-        .kcard .facts { width: 100%; border-collapse: collapse; font-size: 9.5pt; }
-        .kcard .facts th { text-align: left; font-size: 7.5pt; color: #555; padding: 2px 10px; width: 1in; white-space: nowrap; font-weight: bold; }
-        .kcard .facts td { padding: 2px 10px 2px 0; }
-        .kcard .facts td.big { font-size: 13pt; font-weight: bold; }
+        .kcard .name { font-size: 18pt; font-weight: bold; line-height: 1.1; margin-bottom: 4px;
+                       display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+        .kcard .qr { width: 1.3in; height: 1.3in; flex-shrink: 0; background: #eee; }
+        .kcard .facts { width: 100%; border-collapse: collapse; font-size: 13pt; }
+        .kcard .facts th { text-align: left; font-size: 7.5pt; color: #555; padding: 5px 8px 5px 0; width: 0.8in; white-space: nowrap; font-weight: bold; }
+        .kcard .facts td { padding: 5px 0; line-height: 1.15; }
+        .kcard .facts td.big { font-size: 16pt; font-weight: bold; }
         .kcard .facts tr + tr { border-top: 1px solid #ddd; }
-        .kcard .foot { display: flex; justify-content: space-between; border-top: 1.5px solid #333; padding: 4px 10px;
-                       font-size: 8pt; margin-top: 4px; }
+        .kcard .foot { display: flex; justify-content: space-between; border-top: 1.5px solid #333; padding: 3px 10px;
+                       font-size: 8pt; }
         @media print {
           .no-print { display: none !important; }
           html, body { background: #fff !important; }
-          @page { size: letter portrait; margin: 0; }
-          .ksheet { padding: 0; gap: 0; max-width: none;
-                    grid-template-columns: repeat(2, 4.25in); grid-auto-rows: 5.5in; }
-          .kcard { margin: 0.3in; display: flex; flex-direction: column; }
-          .kcard .foot { margin-top: auto; }
+          /* Three 5×3 cards stacked down the middle of a Letter sheet. */
+          @page { size: letter portrait; margin: 1in 1.75in; }
+          .ksheet { display: block; padding: 0; }
+          .kcard { border-radius: 0; }
         }
       `}</style>
     </div>
