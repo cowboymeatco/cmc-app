@@ -177,6 +177,9 @@ interface DailyLaborDay {
   grossBy: Record<EnterpriseKey, number>
   headHarvested: number
   headCut: number
+  headOwn: number
+  ownKillValue: number
+  scheduledHarvest: number
   hours: number
   laborDollars: number
   people: { name: string; hours: number; rate: number | null }[]
@@ -1594,8 +1597,17 @@ export default function ExecPage() {
                         return (
                           <tr key={d.date} title={crew || 'no one clocked in'} style={{ borderTop: '1px solid rgba(166,120,90,0.12)' }}>
                             <td style={{ padding: '0.35rem 0.5rem', whiteSpace: 'nowrap' }}>{dayLabel(d.date)}{d.date === daily.today ? ' · today' : ''}</td>
-                            <td style={cell}>{d.headHarvested || d.headCut ? `${d.headHarvested} / ${d.headCut}` : '—'}</td>
-                            <td style={cell}>{d.grossBy.harvest ? usd(d.grossBy.harvest) : '—'}</td>
+                            <td style={cell} title={d.headOwn ? `${d.headOwn} of our own animals killed — no kill fee` : undefined}>
+                              {d.headHarvested || d.headCut || d.headOwn ? `${d.headHarvested}${d.headOwn ? ` +${d.headOwn} own` : ''} / ${d.headCut}` : '—'}
+                            </td>
+                            <td style={cell} title={[
+                              d.ownKillValue ? `+${usd(d.ownKillValue)} our own animals at kill rates (not revenue)` : '',
+                              d.scheduledHarvest && d.date < daily.today ? `${usd(d.scheduledHarvest)} booked but never logged in harvest` : '',
+                            ].filter(Boolean).join('\n') || undefined}>
+                              {d.grossBy.harvest ? usd(d.grossBy.harvest) : '—'}
+                              {d.ownKillValue > 0 && <div style={{ fontSize: '0.7rem', color: C.lightBrown }}>+{usd(d.ownKillValue)} own</div>}
+                              {d.scheduledHarvest > 0 && d.date < daily.today && <div style={{ fontSize: '0.7rem', color: COST_COLOR }}>⚠ booked, not logged</div>}
+                            </td>
                             <td style={cell}>{d.grossBy.processing ? usd(d.grossBy.processing) : '—'}</td>
                             <td style={cell}>{d.grossBy.valueAdd ? usd(d.grossBy.valueAdd) : '—'}</td>
                             <td style={cell}>{retail ? usd(retail) : '—'}</td>

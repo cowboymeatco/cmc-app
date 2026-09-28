@@ -1988,6 +1988,45 @@ export default function ScannerPage() {
     openPrintWindow(closed, snap, labelFlags)
   }
 
+  // ── Box is empty: the rest was pulled without being scanned out ────────────
+  // Charlie, 2026-09-28: every package he could find was taken out and the box
+  // was empty, but lines were still on it. Those are written off as missing —
+  // kept on record, not silently deleted — and the box is retired.
+  async function writeOffEmptyBox() {
+    const box = activeBox
+    if (!box || box.is_closed) return
+    const left = scansRef.current
+    const lbs  = left.reduce((s, sc) => s + (Number(sc.weight_lbs) || 0), 0)
+    const what = left.length
+      ? `${left.length} package${left.length !== 1 ? 's' : ''} · ${lbs.toFixed(2)} lb`
+      : 'nothing'
+    const note = window.prompt(
+      `Box ${box.box_number} is physically empty?\n\n${what} still on this box will be written off as MISSING ` +
+      `(pulled without scanning out) and the box retired.\n\nOptional note:`, '')
+    if (note === null) return
+    setTakeOut(false)
+    const res  = await fetch('/api/boxes/writeoff', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ box_id: box.id, reason: 'missing', note: note.trim() || null }),
+    })
+    const data = await res.json().catch(() => ({} as { error?: string }))
+    if (!res.ok) {
+      setLastKind('bad'); setLastItem((data as { error?: string }).error ?? 'Could not write off that box')
+      setFlash('bad'); setTimeout(() => setFlash(null), 4000)
+      return
+    }
+    const remaining = boxesRef.current.filter(b => b.id !== box.id)
+    setBoxes(remaining)
+    setSessionScans(prev => prev.filter(sc => sc.box_id !== box.id))
+    const next = remaining[remaining.length - 1] ?? null
+    if (next) await switchBox(next)
+    else { setActiveBox(null); setScans([]) }
+    setLastKind('warn')
+    setLastItem(`Box ${box.box_number} written off — ${what} recorded as missing`)
+    setFlash('warn'); setTimeout(() => setFlash(null), 5000)
+    loadSessions()
+  }
+
   // ── Reopen a closed box ──────────────────────────────────────────────────────
   // Closing was one-way, so a box shut by mistake — or one that turns out to have
   // room left — meant a hand edit in the database. The totals stay as they are;
@@ -3696,6 +3735,15 @@ export default function ScannerPage() {
                 >
                   {boxPrintsWIP(activeBox) ? '🖨 Box label' : '🏷 WIP'}
                 </button>
+                {isOpen && (
+                  <button
+                    onClick={writeOffEmptyBox}
+                    title="The box is physically empty but packages are still listed — write the rest off as missing"
+                    style={{ background: 'transparent', border: `1px solid ${C.red}`, borderRadius: 3, padding: '0.4rem 0.75rem', color: C.red, fontSize: '0.78rem', cursor: 'pointer', fontWeight: 700 }}
+                  >
+                    ∅ Box is empty
+                  </button>
+                )}
                 {isOpen && (
                   <button
                     onClick={closeBox}

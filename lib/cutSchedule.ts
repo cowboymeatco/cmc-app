@@ -228,6 +228,29 @@ export function autoDateBreaks(list: ListItem[]): ListItem[] {
   })
 }
 
+/**
+ * Move a dated day break, together with every row under it down to the next
+ * break, to where its date falls among the other dated breaks.
+ *
+ * Charlie, 2026-09-28: "I made this first slot into saturday. Is there a way to
+ * move that into place?" — redating a break only changed its label, so the
+ * Saturday day sat above Tuesday, and dragging moves one row at a time, leaving
+ * its carcasses behind. The day moves as a block, so nothing changes day.
+ */
+export function moveDayIntoDateOrder(list: ListItem[], key: string): ListItem[] {
+  const start = list.findIndex(e => e.key === key)
+  if (start === -1) return list
+  const brk = list[start]
+  if (brk.type !== 'break' || !brk.break_date) return list
+  let end = start + 1
+  while (end < list.length && list[end].type !== 'break') end++
+  const block = list.slice(start, end)
+  const rest = [...list.slice(0, start), ...list.slice(end)]
+  let at = rest.findIndex(e => e.type === 'break' && !!e.break_date && e.break_date > brk.break_date)
+  if (at === -1) at = rest.length
+  return [...rest.slice(0, at), ...block, ...rest.slice(at)]
+}
+
 /** Days hung by the scheduled cut day. Never below what it has hung already —
  * a break dated in the past doesn't un-hang an animal. */
 export function hangAtCut(harvestDate: string, cutDate: string | undefined, daysHanging: number): number {
