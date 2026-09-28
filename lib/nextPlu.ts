@@ -5,6 +5,12 @@
 // the whole book. Taken = in plu_items (active or not) or ever scanned into a
 // box (view v_used_plu_numbers) — a deleted PLU's number can still be on a
 // Hobart and printed on old boxes, so it never comes back.
+//
+// 9100–9899 sits inside the cheese range but belongs to producer label sets
+// (lib/producerLabels). It is never offered here, and its numbers don't count
+// toward "highest used" — otherwise the first Blegen PLU at 9113 would make the
+// next cheese 9114.
+import { isProducerNumber } from './producerLabels'
 
 // Same ranges as detectSpecies() in the Processing and Scanner pages.
 export const SPECIES_RANGES: Record<string, [number, number]> = {
@@ -33,15 +39,15 @@ export function nextOpenPlu(used: Set<number>, opts: { from?: string; species?: 
   const from = parseInt((opts.from ?? '').trim(), 10)
   if (!isNaN(from) && from > 0) {
     const end = rangeOf(from)?.[1] ?? from + 100000
-    for (let n = from; n <= end; n++) if (!used.has(n)) return n
+    for (let n = from; n <= end; n++) if (!used.has(n) && !isProducerNumber(n)) return n
     return null
   }
   const range = opts.species ? SPECIES_RANGES[opts.species] : undefined
   if (!range) return null
   const [lo, hi] = range
   let max = lo - 1
-  for (const n of used) if (n >= lo && n <= hi && n > max) max = n
-  for (let n = max + 1; n <= hi; n++) if (!used.has(n)) return n
-  for (let n = lo; n <= hi; n++) if (!used.has(n)) return n
+  for (const n of used) if (n >= lo && n <= hi && n > max && !isProducerNumber(n)) max = n
+  for (let n = max + 1; n <= hi; n++) if (!used.has(n) && !isProducerNumber(n)) return n
+  for (let n = lo; n <= hi; n++) if (!used.has(n) && !isProducerNumber(n)) return n
   return null
 }
