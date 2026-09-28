@@ -28,6 +28,13 @@ export interface DailyLaborDay {
   grossBy: Record<EnterpriseKey, number>
   headHarvested: number
   headCut: number
+  /** Our own animals killed — no kill fee, so not in grossBy.harvest. */
+  headOwn: number
+  /** What those own animals' kill fees would have been at service rates. */
+  ownKillValue: number
+  /** Booked head that never reached harvest_log. Counted in headHarvested
+   *  but not in gross, so on a past day it means a missing log entry. */
+  scheduledHarvest: number
   hours: number
   laborDollars: number
   people: { name: string; hours: number; rate: number | null }[]
@@ -68,6 +75,9 @@ export async function GET(req: NextRequest) {
           grossBy: d.earned,
           headHarvested: d.headHarvested,
           headCut: d.headCut,
+          headOwn: d.headOwn,
+          ownKillValue: d.ownKillValue,
+          scheduledHarvest: d.scheduled.harvest,
           hours: crew.reduce((a, p) => a + p.hours, 0),
           laborDollars,
           people,

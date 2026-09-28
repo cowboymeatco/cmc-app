@@ -141,6 +141,11 @@ export interface RevenueDay {
   headHarvested: number
   headCut: number
   headOwn: number
+  /** Kill fee our own animals would have paid at the service rates. NOT
+   *  revenue — we don't invoice ourselves — but without it an own-heavy kill
+   *  day reads like a slow one (9/24: 16 of 20 head were ours, harvest showed
+   *  $1,023; Charlie, 2026-09-28). */
+  ownKillValue: number
 }
 
 export interface EnterpriseTotal {
@@ -333,7 +338,7 @@ export function buildRevenueRecognition(input: BuildInput): RevenueRecognition {
         date,
         earned: zeroByEnterprise(),
         scheduled: zeroByEnterprise(),
-        total: 0, headHarvested: 0, headCut: 0, headOwn: 0,
+        total: 0, headHarvested: 0, headCut: 0, headOwn: 0, ownKillValue: 0,
       }
       byDay.set(date, d)
     }
@@ -375,7 +380,15 @@ export function buildRevenueRecognition(input: BuildInput): RevenueRecognition {
     // so the head count stays visible.
     if (isExcludedProducer(h.producer ?? '')) {
       coverage.ownHead += 1
-      if (inWindow(h.harvest_date)) dayOf(h.harvest_date).headOwn += 1
+      if (inWindow(h.harvest_date)) {
+        const d = dayOf(h.harvest_date)
+        d.headOwn += 1
+        if (!isFlatAllIn(species)) {
+          const w = h.hot_carcass_weight_lbs && h.hot_carcass_weight_lbs > 0 ? h.hot_carcass_weight_lbs : speciesAvgLbs[species] ?? null
+          const kill = killFeeCharge(species, w, WHOLE, tag)
+          if (kill) d.ownKillValue += kill.amount
+        }
+      }
       continue
     }
 
@@ -507,6 +520,7 @@ export function buildRevenueRecognition(input: BuildInput): RevenueRecognition {
       total += row.earned[k] + row.scheduled[k]
     }
     row.total = r2(total)
+    row.ownKillValue = r2(row.ownKillValue)
     days.push(row)
   }
 
