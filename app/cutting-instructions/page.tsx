@@ -25,6 +25,9 @@ interface RawInstruction {
   // Producer-specific label on the scale (e.g. Blegen Galloway's), set by the
   // office. A column for the same reason as the rates. null = house label.
   scale_label?: string | null
+  // Office-set drop-off this card belongs to. Cards sharing it list as one row
+  // and print together — see scripts/2026-09-28_cutting_instruction_drop_off.sql.
+  drop_off_id?: string | null
 }
 
 // What the card would bill at if nobody touched it. Read off the QBO service
@@ -117,6 +120,40 @@ function declaredHead(ci: RawInstruction): number {
   const n = Number(ci.data?.headCount)
   // Every card written before the question existed is a single animal.
   return Number.isFinite(n) && n >= 1 && n <= 99 ? Math.floor(n) : 1
+}
+
+// ── Drop-off groups ──────────────────────────────────────────────────────────
+// The office can tie several cards together as one drop-off (Charlie,
+// 2026-09-28: Daniels' twelve lambs, CMB's five beef — "in reality they are all
+// one session"). Grouping is manual, never inferred from name and date: the
+// same customer can send two different jobs in one day.
+//
+// Printing a group puts every set of identical cards on ONE cut card and
+// packaging sheet with an animal list for the tags. "Identical" means the floor
+// would cut them the same way: everything the sheet prints, less what
+// genuinely differs per animal — which head of the drop-off it is, the date the
+// customer guessed at, and the "Copied from…" line the copy button stamps on.
+const PER_ANIMAL_KEYS = new Set(['headIndex', 'killDate'])
+const COPY_NOTE = /^Copied from this customer's .* card — same cuts, .* share\.$/
+
+function stableJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(stableJson).join(',')}]`
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>
+    return `{${Object.keys(o).sort().filter(k => o[k] !== undefined).map(k => `${JSON.stringify(k)}:${stableJson(o[k])}`).join(',')}}`
+  }
+  return JSON.stringify(v ?? null)
+}
+
+function stripCopyNote(notes: unknown): string {
+  return String(notes ?? '').split('\n').filter(l => !COPY_NOTE.test(l.trim())).join('\n').trim()
+}
+
+function cutSignature(ci: RawInstruction): string {
+  const d: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(ci.data ?? {})) if (!PER_ANIMAL_KEYS.has(k)) d[k] = v
+  d.notes = stripCopyNote(ci.data?.notes)
+  return stableJson({ d, species: speciesKey(speciesOf(ci)), label: ci.scale_label ?? null })
 }
 
 // Smokehouse orders the customer pinned to a single animal. These must NOT be
@@ -779,13 +816,45 @@ function renderV2Detail(ci: RawInstruction) {
 //
 // isLastCard suppresses the trailing page break so a batch doesn't end on a
 // blank sheet.
-function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], carcassArg: CarcassInfo | CarcassInfo[] = EMPTY_CARCASS, isLastCard = true): string {
-  const carcassList = (Array.isArray(carcassArg) ? carcassArg : [carcassArg])
+//
+// herd: every animal of a drop-off group that shares these exact cuts. Two or
+// more print as ONE cut card + packaging sheet (ci's cuts, the herd's tags on an
+// animal list after them) instead of a pair each — see cutSignature.
+type HerdAnimal = { ci: RawInstruction; carcass: CarcassInfo }
+function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], carcassArg: CarcassInfo | CarcassInfo[] = EMPTY_CARCASS, isLastCard = true, herd: HerdAnimal[] = []): string {
+  const herdN = herd.length > 1 ? herd.length : 0
+  // One value when every animal agrees, undefined when they don't.
+  const agreed = <T,>(xs: T[]): T | undefined => xs.every(x => x === xs[0]) ? xs[0] : undefined
+  const herdKill  = herd.map(h => h.carcass.killType)
+  const herdAge   = herd.map(h => h.carcass.over30)
+  const killMixed = herdN > 0 && agreed(herdKill) === undefined
+  const ageMixed  = herdN > 0 && agreed(herdAge) === undefined
+  // Several producers is worth saying; no producer yet is a line to write on.
+  const producerMixed = herdN > 0 && agreed(herd.map(h => h.carcass.producer)) === undefined
+  const carcassList = herdN
+    // The sheet's one "carcass" is whatever the whole herd has in common; the
+    // per-animal tag, weight and anything that differs go on the animal list.
+    ? [{
+        ...EMPTY_CARCASS, state: 'assigned' as CarcassState,
+        killType: agreed(herdKill) ?? '',
+        over30:   agreed(herdAge) ?? null,
+        producer: agreed(herd.map(h => h.carcass.producer)) ?? '',
+        lot:      agreed(herd.map(h => h.carcass.lot)) ?? '',
+      }]
+    : (Array.isArray(carcassArg) ? carcassArg : [carcassArg])
   const carcasses   = carcassList.length ? carcassList : [EMPTY_CARCASS]
-  const d = ci.data ?? {}
+  // The copy button's "Copied from…" line means nothing on a sheet that is
+  // every animal at once, and it prints on both pages, so it comes off here.
+  const d: Record<string, any> = herdN
+    ? { ...(ci.data ?? {}), notes: stripCopyNote(ci.data?.notes) }
+    : ci.data ?? {}
   // Prefer the plant's own harvest date over whatever the customer typed on
   // the intake form — see harvestDateFor for why the two disagree.
-  const harvestDate = harvestDateFor(ci, appointments).date ?? d.killDate ?? '—'
+  const herdDates = herd.map(h => harvestDateFor(h.ci, appointments).date ?? h.ci.data?.killDate ?? '—')
+  const harvestDate = herdN
+    ? (agreed(herdDates) ?? 'several — see animal list')
+    : harvestDateFor(ci, appointments).date ?? d.killDate ?? '—'
+  const notes = d.notes
   const species = ci.data?.species ?? ci.species ?? 'Beef'
   const name = d.customerName ?? '—'
   const sp = species.toLowerCase()
@@ -1184,7 +1253,9 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
               It prints because a smokehouse order can be pinned to a single
               head, and the crew has to know this is a multi-head job before
               they read a "one animal only" line further down. */
-           declaredHead(ci) > 1
+           herdN
+             ? `<div style="font-size:16px;margin-top:2px;font-weight:bold">${herdN} animals on this sheet — same cuts on each</div>`
+           : declaredHead(ci) > 1
              ? `<div style="font-size:16px;margin-top:2px;font-weight:bold">Animal ${headIndexOf(ci)} of ${declaredHead(ci)} this drop-off</div>`
              : ''}
          ${/* One answer for the whole order, so it rides in the header where it
@@ -1194,7 +1265,9 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
            // Custom Exempt can never be sold, so it prints loud and inverted;
            // USDA prints as a quieter outline. Unknown gets a line to write on
            // rather than silence, since the floor must not have to assume.
-           carcass.killType === 'Custom'
+           killMixed
+             ? `<div style="margin-top:4px;display:inline-block;background:#1A0A04;color:#F2E8D9;font-size:14px;font-weight:bold;letter-spacing:0.06em;padding:2px 7px">MIXED INSPECTION — CHECK EACH ANIMAL ON THE LIST</div>`
+           : carcass.killType === 'Custom'
              ? `<div style="margin-top:4px;display:inline-block;background:#1A0A04;color:#F2E8D9;font-size:14px;font-weight:bold;letter-spacing:0.06em;padding:2px 7px">${killTypeLabel(carcass.killType)}</div>`
              : carcass.killType
                ? `<div style="margin-top:4px;display:inline-block;border:1.5px solid #1A0A04;font-size:14px;font-weight:bold;letter-spacing:0.06em;padding:1px 6px">${killTypeLabel(carcass.killType)}</div>`
@@ -1205,6 +1278,8 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
            // and can't go in the box. Beef only; pork/lamb/goat have no such
            // rule, and an unknown age gets a line rather than a wrong answer.
            !isBeef ? ''
+             : ageMixed
+               ? `<div style="margin-top:4px;display:inline-block;background:#1A0A04;color:#F2E8D9;font-size:14px;font-weight:bold;letter-spacing:0.06em;padding:2px 7px">SOME OVER 30 MONTHS — CHECK EACH ON THE LIST</div>`
              : carcass.over30 === true
                ? `<div style="margin-top:4px;display:inline-block;background:#1A0A04;color:#F2E8D9;font-size:14px;font-weight:bold;letter-spacing:0.06em;padding:2px 7px">OVER 30 MONTHS — REMOVE VERTEBRAL COLUMN</div>`
                : carcass.over30 === false
@@ -1212,12 +1287,17 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
                  : `<div style="font-size:16px;color:#555;margin-top:3px">Over / Under 30 mo: ${wline(110)}</div>`
          }
        </div>
-       <div style="padding:6px 11px">
+       ${herdN ? `<div style="padding:6px 11px">
+         <div style="font-size:12px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Producer · Animals</div>
+         <div style="font-size:20px;font-weight:bold;line-height:1.2">${producerMixed ? 'Several — see list' : esc(carcass.producer) || wline(150)}</div>
+         <div style="font-size:18px;font-weight:bold;margin-top:3px">${herdN} animals${carcass.lot ? ` · Lot&nbsp;# ${esc(carcass.lot)}` : ''}</div>
+         <div style="font-size:18px;margin-top:3px">Tags &amp; hanging weights: <span style="font-weight:bold">animal list, last page</span></div>
+       </div>` : `<div style="padding:6px 11px">
          <div style="font-size:12px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">Producer · Lot / Tag</div>
          <div style="font-size:20px;font-weight:bold;line-height:1.2">${carcass.producer || wline(150)}</div>
          <div style="font-size:18px;font-weight:bold;margin-top:3px">Lot&nbsp;# ${carcass.lot || wline(56)} &nbsp;·&nbsp; Tag&nbsp;# ${carcass.tag || wline(46)}</div>
          <div style="font-size:18px;margin-top:3px">Hanging Wt: <span style="font-weight:bold">${carcass.hcw != null ? `${carcass.hcw} lbs` : wline(70)}</span></div>
-       </div>
+       </div>`}
      </div>`
 
   // The packager boxes and labels the meat, so whether it can ever be sold has
@@ -1226,7 +1306,9 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
   // dark header bar: Custom Exempt fills, USDA outlines. An unknown kill type
   // says so rather than printing nothing, which would read as saleable.
   const inspectionBadge = (carcass: CarcassInfo) =>
-    carcass.killType === 'Custom'
+    killMixed
+      ? `<div style="background:#F2E8D9;color:#1A0A04;font-size:15px;font-weight:bold;letter-spacing:0.06em;padding:3px 10px">MIXED INSPECTION — SEE ANIMAL LIST</div>`
+    : carcass.killType === 'Custom'
       ? `<div style="background:#F2E8D9;color:#1A0A04;font-size:15px;font-weight:bold;letter-spacing:0.06em;padding:3px 10px">${killTypeLabel(carcass.killType)}</div>`
       : carcass.killType
         ? `<div style="border:1.5px solid #C9A882;font-size:15px;font-weight:bold;letter-spacing:0.06em;padding:2px 9px">${killTypeLabel(carcass.killType)}</div>`
@@ -1239,13 +1321,69 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
   // to this exact sheet — one instruction, one animal (Charlie, 2026-09-01).
   const ciBarcode = makeCode39Barcode(`CI-${String(ci.id).replace(/-/g, '').slice(0, 8).toUpperCase()}`)
 
+  // A herd sheet says what it is before anything else: the quantities below
+  // are one animal's, and the floor repeats them per head. Any animal still
+  // without a carcass is named here, since the combined sheet has no per-animal
+  // band to carry that warning.
+  const herdUnassigned = herd.filter(h => h.carcass.state === 'ambiguous')
+  const herdBand = !herdN ? '' :
+    `<div style="border:3px solid #1A0A04;margin-bottom:8px">
+       <div style="background:#1A0A04;color:#F2E8D9;padding:5px 12px;font-size:19px;font-weight:bold;letter-spacing:0.08em">
+         ${herdN} ANIMALS ON THIS SHEET — CUT EACH ONE THIS WAY
+       </div>
+       <div style="padding:5px 12px;font-size:15px">
+         Every count and weight below is <strong>per animal</strong>, except a line marked ONE ANIMAL ONLY.
+         Tags, hanging weights and each animal&rsquo;s own barcode are on the animal list.
+         ${herdUnassigned.length ? `<br><strong>⚠ ${herdUnassigned.length} of these ${herdUnassigned.length === 1 ? 'has' : 'have'} no carcass assigned — DO NOT CUT ${herdUnassigned.length === 1 ? 'it' : 'them'} until assigned (marked on the list).</strong>` : ''}
+       </div>
+     </div>`
+
+  // The last page of a herd sheet: one line per animal, with the card's own
+  // barcode so a cure seal still ties to the exact animal it came off.
+  const animalList = (last: boolean) => !herdN ? '' : `
+<!-- PAGE 3: ANIMAL LIST -->
+<div class="page${last ? '' : ' pagebreak'}">
+  ${hdr(`Animal List — ${herdN} Animals`)}
+  <div style="font-size:26px;font-weight:bold;margin-bottom:8px">${esc(d.customerName ?? '—')}
+    <span style="font-size:20px;color:#75471B;margin-left:12px">${esc(species)}${d.portion ? ' · ' + esc(fmt(d.portion)) : ''} · same cuts on each</span></div>
+  <table style="width:100%;border-collapse:collapse;font-size:18px">
+    <thead><tr style="background:#1A0A04;color:#F2E8D9;text-align:left">
+      <th style="padding:5px 8px">#</th><th style="padding:5px 8px">Producer</th><th style="padding:5px 8px">Lot / Tag</th>
+      <th style="padding:5px 8px">Hanging Wt</th><th style="padding:5px 8px">Harvested</th><th style="padding:5px 8px">Inspection</th>
+      ${isBeef ? '<th style="padding:5px 8px">Age</th>' : ''}
+      <th style="padding:5px 8px;text-align:center">Card</th><th style="padding:5px 8px">Cut</th><th style="padding:5px 8px">Packed</th>
+    </tr></thead>
+    <tbody>
+      ${herd.map((h, i) => {
+        const c = h.carcass
+        const td = 'padding:5px 8px;border-bottom:1px solid #C9A882;vertical-align:middle'
+        const code = makeCode39Barcode(`CI-${String(h.ci.id).replace(/-/g, '').slice(0, 8).toUpperCase()}`)
+        const stop = c.state === 'ambiguous'
+        return `<tr${stop ? ' style="background:#F2E8D9"' : ''}>
+          <td style="${td};font-weight:bold">${i + 1}</td>
+          <td style="${td}">${esc(c.producer) || wline(90)}</td>
+          <td style="${td};font-weight:bold">${stop ? '⚠ NOT ASSIGNED — DO NOT CUT' : `${esc(c.lot) || wline(46)} / ${esc(c.tag) || wline(36)}`}</td>
+          <td style="${td}">${c.hcw != null ? `${esc(c.hcw)} lbs` : wline(60)}</td>
+          <td style="${td}">${esc(herdDates[i])}</td>
+          <td style="${td};font-weight:bold">${c.killType === 'Custom' ? 'CUSTOM EXEMPT' : c.killType ? esc(killTypeLabel(c.killType)) : wline(70)}</td>
+          ${isBeef ? `<td style="${td};font-weight:bold">${c.over30 === true ? 'OVER 30 MO' : c.over30 === false ? 'Under 30' : wline(50)}</td>` : ''}
+          <td style="${td};width:130px"><div style="width:120px;margin:0 auto">${code}</div></td>
+          <td style="${td};font-size:24px">☐</td><td style="${td};font-size:24px">☐</td>
+        </tr>`
+      }).join('')}
+    </tbody>
+  </table>
+</div>`
+
   return carcasses.map((carcass, ci_) => {
   // "1 of 2" only when there really are several, so a normal single-animal
   // card reads exactly as it always has.
-  const ofN  = carcasses.length > 1 ? ` — Animal ${ci_ + 1} of ${carcasses.length}` : ''
+  const ofN  = herdN ? ` — ${herdN} Animals, Same Cuts`
+    : carcasses.length > 1 ? ` — Animal ${ci_ + 1} of ${carcasses.length}` : ''
   // Only the very last page of the whole document skips the break; in a batch,
-  // every earlier card still has to break before the next one starts.
-  const last = isLastCard && ci_ === carcasses.length - 1
+  // every earlier card still has to break before the next one starts. A herd
+  // sheet's animal list comes after its packaging sheet, so that always breaks.
+  const last = isLastCard && ci_ === carcasses.length - 1 && !herdN
   return `
 <!-- PAGE 1: CUT CARD — 3-column section layout -->
 <div class="page pagebreak">
@@ -1253,6 +1391,7 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
        <div style="width:150px;margin:0 auto">${ciBarcode}</div>
        <div style="font-size:9px;color:#75471B;letter-spacing:0.05em;margin-top:1px">SCAN AT SCANNER — OPENS THIS ANIMAL&rsquo;S SESSION</div>
      </div>`)}
+  ${herdBand}
   ${unassignedBand(carcass)}
   ${grindBand}
   ${infoGrid(carcass)}
@@ -1264,6 +1403,7 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
 <!-- PAGE 2: PACKAGING SHEET — 3-column table layout -->
 <div class="page packsheet${last ? '' : ' pagebreak'}">
   ${hdr('Packaging Sheet' + ofN, inspectionBadge(carcass))}
+  ${herdBand}
   ${unassignedBand(carcass)}
   ${grindBand}
   ${scaleLabelBand}
@@ -1283,9 +1423,12 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
       ${shareNamesText(d) ? `<div style="font-size:20px;font-weight:bold;margin-top:3px">Shares — ${esc(shareNamesText(d))}</div>` : ''}
       <div style="font-size:16px;color:#555;margin-top:5px;display:flex;flex-wrap:wrap;column-gap:12px;row-gap:2px">
         <span style="white-space:nowrap">Harvested <span style="font-weight:bold;color:#1A0A04">${harvestDate}</span></span>
+        ${herdN ? `
+        <span style="white-space:nowrap">Producer: <span style="font-weight:bold;color:#1A0A04">${producerMixed ? 'several — see list' : esc(carcass.producer) || wline(110)}</span></span>
+        <span style="white-space:nowrap"><span style="font-weight:bold;color:#1A0A04">${herdN} animals</span> — tags &amp; weights on the animal list</span>` : `
         <span style="white-space:nowrap">Producer: <span style="font-weight:bold;color:#1A0A04">${carcass.producer || wline(110)}</span></span>
         <span style="white-space:nowrap">Lot # <span style="font-weight:bold;color:#1A0A04">${carcass.lot || wline(46)}</span> · Tag # <span style="font-weight:bold;color:#1A0A04">${carcass.tag || wline(38)}</span></span>
-        <span style="white-space:nowrap">Hanging Wt: <span style="font-weight:bold;color:#1A0A04">${carcass.hcw != null ? `${carcass.hcw} lbs` : wline(58)}</span></span>
+        <span style="white-space:nowrap">Hanging Wt: <span style="font-weight:bold;color:#1A0A04">${carcass.hcw != null ? `${carcass.hcw} lbs` : wline(58)}</span></span>`}
         ${d.steakPack ? `<span style="white-space:nowrap">Steaks: <span style="font-weight:bold;color:#1A0A04">${esc(String(d.steakPack))} per pack</span></span>` : ''}
       </div>
     </div>
@@ -1297,7 +1440,7 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
   <div class="packgrid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
     ${packCols.map(col => `<div class="packcol">${col.length ? buildPackTable(col) : ''}</div>`).join('')}
   </div>
-  ${d.notes ? `<div style="margin-top:10px;border:1px solid #C9A882;padding:8px"><div style="font-size:12px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px">Special Notes</div><div style="font-size:18px">${d.notes}</div></div>` : ''}
+  ${notes ? `<div style="margin-top:10px;border:1px solid #C9A882;padding:8px"><div style="font-size:12px;color:#75471B;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px">Special Notes</div><div style="font-size:18px">${notes}</div></div>` : ''}
   <div style="margin-top:auto;padding-top:18px;display:grid;grid-template-columns:1fr 1fr;gap:20px">
     <div style="border-top:1px solid #888;padding-top:5px;font-size:13px;color:#75471B;text-transform:uppercase;letter-spacing:0.08em">Packed by / Date</div>
     ${
@@ -1316,7 +1459,7 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
     }
   </div>
 </div>`
-}).join('\n')
+}).join('\n') + animalList(isLastCard)
 }
 
 // The document shell every printed card sits in. Landscape matches the wall
@@ -1685,12 +1828,40 @@ function printV2CutCard(ci: RawInstruction, appointments: HarvestAppointment[], 
 
 // A whole batch in one document, so the crew gets a single print job instead of
 // opening every card in turn (Jill, 2026-07-21).
-function printV2CutCards(items: { ci: RawInstruction; carcasses: CarcassInfo[] }[], appointments: HarvestAppointment[]) {
+// An item with a herd prints that whole herd on one sheet (see v2CardPages).
+function printV2CutCards(items: { ci: RawInstruction; carcasses: CarcassInfo[]; herd?: HerdAnimal[] }[], appointments: HarvestAppointment[]) {
   if (!items.length) return
   const body = items
-    .map((it, i) => v2CardPages(it.ci, appointments, it.carcasses, i === items.length - 1))
+    .map((it, i) => v2CardPages(it.ci, appointments, it.carcasses, i === items.length - 1, it.herd))
     .join('\n')
-  openPrintable(cardDocument(`Cut Cards — ${items.length} card${items.length === 1 ? '' : 's'}`, body))
+  const sheets = items.length
+  openPrintable(cardDocument(`Cut Cards — ${sheets} sheet${sheets === 1 ? '' : 's'}`, body))
+}
+
+// Turns picked cards into print items. Cards of one drop-off group that would
+// be cut the same way collapse into one herd item; everything else — cards on
+// their own, and a group's odd one out — prints exactly as before. Order
+// follows the list, each herd sitting where its first card does.
+function herdItems(cards: { ci: RawInstruction; carcasses: CarcassInfo[] }[]): { ci: RawInstruction; carcasses: CarcassInfo[]; herd?: HerdAnimal[] }[] {
+  const byKey = new Map<string, { ci: RawInstruction; carcasses: CarcassInfo[] }[]>()
+  const order: string[] = []
+  cards.forEach((c, i) => {
+    const key = c.ci.drop_off_id ? `g:${c.ci.drop_off_id}|${cutSignature(c.ci)}` : `solo:${i}`
+    if (!byKey.has(key)) { byKey.set(key, []); order.push(key) }
+    byKey.get(key)!.push(c)
+  })
+  return order.map(key => {
+    const set = byKey.get(key)!
+    if (set.length === 1) return set[0]
+    // A card linked to several animals brings each of them along; a card on
+    // none still stands for one animal, with blank lines to write on. Listed
+    // in tag order, which is how they hang on the rail.
+    const herd = set.flatMap(c => c.carcasses.map(carcass => ({ ci: c.ci, carcass })))
+      .sort((a, b) => (a.carcass.lot + '|' + a.carcass.tag.padStart(6, '0')).localeCompare(b.carcass.lot + '|' + b.carcass.tag.padStart(6, '0')))
+    // The sheet is printed off the first card filed — the original, not a copy.
+    const lead = set.reduce((a, b) => a.ci.created_at <= b.ci.created_at ? a : b)
+    return { ci: lead.ci, carcasses: lead.carcasses, herd }
+  })
 }
 
 // ── Test / preview data ───────────────────────────────────────────────────────
@@ -1788,6 +1959,9 @@ export default function CuttingInstructionsPage() {
   // detail panel — clicking a row to read it shouldn't add it to the batch.
   const [picked, setPicked]             = useState<Set<string>>(new Set())
   const [printingBatch, setPrintingBatch] = useState(false)
+  // Drop-off groups open in the list, by drop_off_id.
+  const [openGroups, setOpenGroups]     = useState<Set<string>>(new Set())
+  const [grouping, setGrouping]         = useState(false)
 
   async function load() {
     setLoading(true)
@@ -2414,7 +2588,7 @@ export default function CuttingInstructionsPage() {
     try {
       const appts = await freshAppointments(appointments)
       const items = await Promise.all(v2.map(async ci => ({ ci, carcasses: await carcassInfosFor(ci, appts) })))
-      printV2CutCards(items, appts)
+      printV2CutCards(herdItems(items), appts)
       if (legacy) {
         alert(`Printed ${v2.length} card${v2.length === 1 ? '' : 's'}. ${legacy} older-format card${legacy === 1 ? ' was' : 's were'} skipped — open those individually.`)
       }
@@ -2423,6 +2597,257 @@ export default function CuttingInstructionsPage() {
     }
   }
 
+  // ── Drop-off groups ───────────────────────────────────────────────────────
+  // Every live card in a group, whatever the filters are showing — a group's
+  // size is what's on file, not what's on screen.
+  const groupCards = (dropOffId: string) =>
+    instructions.filter(i => i.drop_off_id === dropOffId && i.status !== 'archived')
+
+  async function setDropOff(ids: string[], dropOffId: string | null): Promise<boolean> {
+    const res = await fetch('/api/cutting-instructions', {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ ids, drop_off_id: dropOffId }),
+    })
+    if (!res.ok) {
+      const out = await res.json().catch(() => ({}))
+      alert(out?.error || 'Could not save that drop-off')
+      return false
+    }
+    const apply = <T extends RawInstruction>(c: T): T => ids.includes(c.id) ? { ...c, drop_off_id: dropOffId } : c
+    setInstructions(prev => prev.map(apply))
+    setSelected(prev => prev ? apply(prev) : prev)
+    return true
+  }
+
+  // Tie the ticked cards together as one drop-off. Only cards for the same
+  // customer and animal — anything else is two jobs, and printing them on one
+  // sheet would put one customer's tags under another's name. Ticking a card
+  // that's already in a group pulls that whole group in, so two groups made by
+  // mistake can be joined by ticking one card of each.
+  async function groupPicked() {
+    const chosen = instructions.filter(i => picked.has(i.id) && i.status !== 'archived')
+    if (chosen.length < 2) { alert('Tick at least two cards to group them as one drop-off.'); return }
+    const who = (i: RawInstruction) => `${String(i.data?.customerName ?? '').trim().toLowerCase()}|${speciesKey(speciesOf(i))}`
+    const kinds = [...new Set(chosen.map(who))]
+    if (kinds.length > 1) {
+      const names = [...new Set(chosen.map(i => `${i.data?.customerName ?? '—'} (${speciesOf(i)})`))]
+      alert(`A drop-off is one customer's animals of one kind. These are:\n\n${names.join('\n')}\n\nTick just one customer's cards.`)
+      return
+    }
+    const existing = [...new Set(chosen.map(i => i.drop_off_id).filter((x): x is string => !!x))]
+    const target = existing[0] ?? crypto.randomUUID()
+    const ids = [...new Set([
+      ...chosen.map(i => i.id),
+      ...instructions.filter(i => i.drop_off_id && existing.includes(i.drop_off_id)).map(i => i.id),
+    ])]
+    setGrouping(true)
+    try {
+      if (await setDropOff(ids, target)) {
+        setPicked(new Set())
+        setOpenGroups(prev => new Set(prev).add(target))
+      }
+    } finally {
+      setGrouping(false)
+    }
+  }
+
+  async function ungroup(dropOffId: string) {
+    const ids = instructions.filter(i => i.drop_off_id === dropOffId).map(i => i.id)
+    if (!confirm(`Split these ${groupCards(dropOffId).length} cards back into separate cards? Nothing on the cards changes.`)) return
+    await setDropOff(ids, null)
+  }
+
+  // Take one card out. A group of one is not a group, so the last card left
+  // behind is let go too.
+  async function removeFromGroup(ci: RawInstruction) {
+    if (!ci.drop_off_id) return
+    const rest = instructions.filter(i => i.drop_off_id === ci.drop_off_id && i.id !== ci.id)
+    const live = rest.filter(i => i.status !== 'archived')
+    await setDropOff(live.length <= 1 ? [ci.id, ...rest.map(i => i.id)] : [ci.id], null)
+  }
+
+  // The list, with each group's cards folded under one row where its newest
+  // card would have been. A group the filters have narrowed to a single card
+  // shows that card on its own, tagged, rather than a group row of one.
+  function listRows() {
+    const shown = new Map<string, RawInstruction[]>()
+    for (const i of filtered) {
+      if (!i.drop_off_id) continue
+      if (!shown.has(i.drop_off_id)) shown.set(i.drop_off_id, [])
+      shown.get(i.drop_off_id)!.push(i)
+    }
+    const done = new Set<string>()
+    return filtered.map(ci => {
+      const g = ci.drop_off_id
+      const members = g ? shown.get(g)! : []
+      if (!g || members.length < 2) return renderCardRow(ci)
+      if (done.has(g)) return null
+      done.add(g)
+      return renderGroupRow(g, members)
+    })
+  }
+
+  const renderGroupRow = (g: string, members: RawInstruction[]) => {
+    const open    = openGroups.has(g)
+    const all     = groupCards(g)
+    const first   = members[0]
+    const allPick = members.every(i => picked.has(i.id))
+    const cutSets = new Set(all.map(cutSignature)).size
+    const dates   = [...new Set(members.map(i => harvestDateFor(i, appointments).date ?? ''))]
+    const hv      = dates.length === 1 ? harvestDateFor(first, appointments) : null
+    const statuses = [...new Set(members.map(i => i.status))]
+    const needs   = members.some(i => needsCarcass(i.id))
+    const toggle  = () => setOpenGroups(prev => { const n = new Set(prev); n.has(g) ? n.delete(g) : n.add(g); return n })
+    return (
+      <div key={`g:${g}`}>
+        <div onClick={toggle}
+          title={open ? 'Fold this drop-off back up' : 'Show the cards in this drop-off'}
+          style={{ display: 'grid', gridTemplateColumns: LIST_GRID_COLS, gap: '0.5rem', alignItems: 'center', padding: '0.7rem 1.1rem', borderBottom: '1px solid rgba(166,120,90,0.1)', cursor: 'pointer', background: open ? 'rgba(117,71,27,0.18)' : 'transparent' }}>
+          <input
+            type="checkbox"
+            checked={allPick}
+            ref={el => { if (el) el.indeterminate = !allPick && members.some(i => picked.has(i.id)) }}
+            onClick={e => e.stopPropagation()}
+            onChange={() => setPicked(prev => {
+              const n = new Set(prev)
+              members.forEach(i => allPick ? n.delete(i.id) : n.add(i.id))
+              return n
+            })}
+            title="Include the whole drop-off in batch print"
+            style={{ width: 15, height: 15, accentColor: 'var(--tan)', cursor: 'pointer' }}
+          />
+          <div style={{ fontWeight: 600, color: 'var(--cream)', fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <span style={{ color: 'var(--tan)', marginRight: '0.35rem', display: 'inline-block', width: '0.8rem' }}>{open ? '▾' : '▸'}</span>
+            {first.data?.customerName ?? '—'}
+            <span
+              title={cutSets === 1
+                ? `${all.length} cards grouped as one drop-off, all on the same cuts — they print on one cut card and packaging sheet with an animal list.`
+                : `${all.length} cards grouped as one drop-off, on ${cutSets} different sets of cuts — each set prints on its own sheet.`}
+              style={{ marginLeft: '0.4rem', fontSize: '0.68rem', fontWeight: 700, padding: '0.05rem 0.35rem', borderRadius: 4, background: 'rgba(201,168,130,0.22)', color: 'var(--cream)', whiteSpace: 'nowrap' }}>
+              🔗 {all.length} head{cutSets > 1 ? ` · ${cutSets} cut sets` : ''}
+            </span>
+            {members.length < all.length && (
+              <span style={{ marginLeft: '0.35rem', fontSize: '0.68rem', color: 'var(--light-brown)' }}>({members.length} shown)</span>
+            )}
+          </div>
+          <div style={{ fontSize: '0.78rem', color: 'var(--tan)' }}>{speciesOf(first)}</div>
+          <div style={{ fontSize: '0.78rem', color: 'var(--tan)', whiteSpace: 'nowrap' }}>{fmtShortDate(first.created_at)}</div>
+          <div style={{ fontSize: '0.78rem', whiteSpace: 'nowrap', color: hv?.scheduled ? 'var(--cream)' : 'var(--tan)', fontStyle: hv?.date && !hv.scheduled ? 'italic' : undefined }}>
+            {hv ? `${hv.date && !hv.scheduled ? '~' : ''}${fmtShortDate(hv.date)}` : 'several'}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+            {statuses.length === 1
+              ? <StatusBadge status={statuses[0]} needsCarcass={needs} />
+              : <span style={{ fontSize: '0.7rem', color: 'var(--tan)' }}>
+                  {statuses.map(st => `${members.filter(i => i.status === st).length} ${st}`).join(' · ')}{needs ? ' · ⚠ carcass' : ''}
+                </span>}
+          </div>
+        </div>
+        {open && (
+          <>
+            {members.map(ci => renderCardRow(ci, true))}
+            <div style={{ padding: '0.35rem 1.1rem 0.5rem 2.1rem', borderBottom: '1px solid rgba(166,120,90,0.15)', borderLeft: '3px solid rgba(201,168,130,0.45)', background: 'rgba(0,0,0,0.18)' }}>
+              <button onClick={() => ungroup(g)}
+                style={{ background: 'none', border: 'none', color: 'var(--tan)', textDecoration: 'underline', cursor: 'pointer', fontSize: '0.75rem', padding: 0 }}>
+                Ungroup these cards
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    )
+  }
+
+  // One card's row in the list. nested = shown inside an expanded drop-off.
+  const renderCardRow = (ci: RawInstruction, nested = false) => {
+    const d         = ci.data ?? {}
+    const name      = d.customerName ?? '—'
+    const species   = speciesOf(ci)
+    const isSel     = selected?.id === ci.id
+    const harvest = harvestDateFor(ci, appointments)
+    return (
+      <div key={ci.id} onClick={() => setSelected(isSel ? null : ci)}
+        style={{ display: 'grid', gridTemplateColumns: LIST_GRID_COLS, gap: '0.5rem', alignItems: 'center', padding: nested ? '0.55rem 1.1rem 0.55rem 2.1rem' : '0.7rem 1.1rem', borderBottom: '1px solid rgba(166,120,90,0.1)', borderLeft: nested ? '3px solid rgba(201,168,130,0.45)' : undefined, cursor: 'pointer', background: isSel ? 'rgba(117,71,27,0.3)' : nested ? 'rgba(0,0,0,0.18)' : 'transparent', transition: 'background 0.15s' }}>
+        {/* stopPropagation so ticking for the batch doesn't also
+            open the card in the detail panel */}
+        <input
+          type="checkbox"
+          checked={picked.has(ci.id)}
+          onClick={e => e.stopPropagation()}
+          onChange={() => togglePicked(ci.id)}
+          title="Include in batch print"
+          style={{ width: 15, height: 15, accentColor: 'var(--tan)', cursor: 'pointer' }}
+        />
+        <div style={{ fontWeight: 600, color: 'var(--cream)', fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {name}
+          {/* In a group whose other cards the filters are hiding. */}
+          {!nested && ci.drop_off_id && groupCards(ci.drop_off_id).length > 1 && (
+            <span title="Part of a drop-off group — its other cards are outside these filters."
+              style={{ marginLeft: '0.4rem', fontSize: '0.68rem', fontWeight: 700, padding: '0.05rem 0.35rem', borderRadius: 4, background: 'rgba(201,168,130,0.22)', color: 'var(--cream)', whiteSpace: 'nowrap' }}>
+              🔗 1 of {groupCards(ci.drop_off_id).length}
+            </span>
+          )}
+          {(() => {
+            const short = headShortfall(ci)
+            if (!short) return null
+            return (
+              <span
+                title={`This customer said they were bringing ${short.declared} head, and only ${short.onFile} cutting card${short.onFile === 1 ? ' is' : 's are'} on file. One card covers one animal — check whether the rest are coming before this is cut.`}
+                style={{ marginLeft: '0.4rem', fontSize: '0.68rem', fontWeight: 700, padding: '0.05rem 0.35rem', borderRadius: 4, background: 'rgba(200,120,20,0.28)', color: '#f0b866', whiteSpace: 'nowrap' }}>
+                ⚠ {short.onFile}/{short.declared} head
+              </span>
+            )
+          })()}
+        </div>
+        <div style={{ fontSize: '0.78rem', color: 'var(--tan)' }}>{species}</div>
+        <div style={{ fontSize: '0.78rem', color: 'var(--tan)', whiteSpace: 'nowrap' }}>{fmtShortDate(ci.created_at)}</div>
+        {/* An unconfirmed date is dimmed and prefixed "~" so it
+            can't be read as the day the animal was killed. */}
+        <div
+          title={harvest.date && !harvest.scheduled
+            ? 'The date the customer wrote on their own form. This card is not linked to a harvest appointment yet, so nothing has confirmed it.'
+            : undefined}
+          style={{
+            fontSize: '0.78rem', whiteSpace: 'nowrap',
+            color: !harvest.date ? 'rgba(166,120,90,0.5)' : harvest.scheduled ? 'var(--cream)' : 'var(--tan)',
+            fontStyle: harvest.date && !harvest.scheduled ? 'italic' : undefined,
+          }}>
+          {harvest.date && !harvest.scheduled ? '~' : ''}{fmtShortDate(harvest.date)}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+          <StatusBadge status={ci.status} needsCarcass={(carcassStates[ci.id] ?? []).some(s => s.state === 'ambiguous')} />
+          {/* A card off the standard rate says so in the list. At
+              invoicing time the question is which of these is
+              priced differently, and opening 272 cards to find
+              out is not an answer. It rides in the status column
+              rather than beside the name, which is the one cell
+              that gets ellipsised away on a narrow list. */}
+          {(() => {
+            const parts = [
+              ci.kill_price_per_lb       != null ? `K $${Number(ci.kill_price_per_lb).toFixed(2)}` : '',
+              ci.processing_price_per_lb != null ? `C $${Number(ci.processing_price_per_lb).toFixed(2)}` : '',
+            ].filter(Boolean)
+            if (!parts.length) return null
+            return (
+              <span
+                title={`Priced off the standard rate on this card — ${parts.join(', ').replace('K ', 'kill ').replace('C ', 'cut & wrap ')} per lb. Anything not listed bills at the standard rate.`}
+                style={{ fontSize: '0.66rem', fontWeight: 700, padding: '0.05rem 0.3rem', borderRadius: 4, background: 'rgba(76,175,80,0.22)', color: '#8fd694', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
+                {parts.join(' · ')}
+              </span>
+            )
+          })()}
+          {ci.scale_label && (
+            <span
+              title={`Packs on the ${ci.scale_label} scale label, not the house label.`}
+              style={{ fontSize: '0.66rem', fontWeight: 700, padding: '0.05rem 0.3rem', borderRadius: 4, background: 'rgba(201,168,130,0.2)', color: 'var(--tan)', whiteSpace: 'nowrap', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              🏷 {ci.scale_label}
+            </span>
+          )}
+        </div>
+      </div>
+    )
+  }
   return (
     <div style={{ minHeight: '100vh', background: 'var(--dark-brown)', display: 'flex', flexDirection: 'column' }}>
 
@@ -2546,9 +2971,19 @@ export default function CuttingInstructionsPage() {
               >
                 {printingBatch ? 'Preparing…' : `🖨 Print ${picked.size} card${picked.size === 1 ? '' : 's'}`}
               </button>
+              {picked.size > 1 && (
+                <button
+                  onClick={groupPicked}
+                  disabled={grouping}
+                  title="Tie these cards together as one drop-off: one row in the list, and one cut card + packaging sheet per set of identical cuts when printed"
+                  style={{ ...btnStyle('var(--med-brown)'), fontWeight: 700, opacity: grouping ? 0.6 : 1, cursor: grouping ? 'not-allowed' : 'pointer' }}
+                >
+                  {grouping ? 'Grouping…' : `🔗 Group as one drop-off`}
+                </button>
+              )}
               <button onClick={() => setPicked(new Set())} style={{ ...btnStyle('transparent', 'var(--tan)'), border: '1px solid rgba(166,120,90,0.3)' }}>Clear</button>
               <span style={{ color: 'var(--light-brown)', fontSize: '0.75rem' }}>
-                Prints as one job, in the order shown.
+                Prints as one job, in the order shown. Grouped cards with the same cuts share one sheet.
               </span>
             </div>
           )}
@@ -2592,87 +3027,7 @@ export default function CuttingInstructionsPage() {
                     <div key={h} style={{ fontSize: '0.62rem', color: 'var(--light-brown)', textTransform: 'uppercase', letterSpacing: '0.1em', whiteSpace: 'nowrap' }}>{h}</div>
                   ))}
                 </div>
-                {filtered.map(ci => {
-                  const d         = ci.data ?? {}
-                  const name      = d.customerName ?? '—'
-                  const species   = speciesOf(ci)
-                  const isSel     = selected?.id === ci.id
-                  const harvest = harvestDateFor(ci, appointments)
-                  return (
-                    <div key={ci.id} onClick={() => setSelected(isSel ? null : ci)}
-                      style={{ display: 'grid', gridTemplateColumns: LIST_GRID_COLS, gap: '0.5rem', alignItems: 'center', padding: '0.7rem 1.1rem', borderBottom: '1px solid rgba(166,120,90,0.1)', cursor: 'pointer', background: isSel ? 'rgba(117,71,27,0.3)' : 'transparent', transition: 'background 0.15s' }}>
-                      {/* stopPropagation so ticking for the batch doesn't also
-                          open the card in the detail panel */}
-                      <input
-                        type="checkbox"
-                        checked={picked.has(ci.id)}
-                        onClick={e => e.stopPropagation()}
-                        onChange={() => togglePicked(ci.id)}
-                        title="Include in batch print"
-                        style={{ width: 15, height: 15, accentColor: 'var(--tan)', cursor: 'pointer' }}
-                      />
-                      <div style={{ fontWeight: 600, color: 'var(--cream)', fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {name}
-                        {(() => {
-                          const short = headShortfall(ci)
-                          if (!short) return null
-                          return (
-                            <span
-                              title={`This customer said they were bringing ${short.declared} head, and only ${short.onFile} cutting card${short.onFile === 1 ? ' is' : 's are'} on file. One card covers one animal — check whether the rest are coming before this is cut.`}
-                              style={{ marginLeft: '0.4rem', fontSize: '0.68rem', fontWeight: 700, padding: '0.05rem 0.35rem', borderRadius: 4, background: 'rgba(200,120,20,0.28)', color: '#f0b866', whiteSpace: 'nowrap' }}>
-                              ⚠ {short.onFile}/{short.declared} head
-                            </span>
-                          )
-                        })()}
-                      </div>
-                      <div style={{ fontSize: '0.78rem', color: 'var(--tan)' }}>{species}</div>
-                      <div style={{ fontSize: '0.78rem', color: 'var(--tan)', whiteSpace: 'nowrap' }}>{fmtShortDate(ci.created_at)}</div>
-                      {/* An unconfirmed date is dimmed and prefixed "~" so it
-                          can't be read as the day the animal was killed. */}
-                      <div
-                        title={harvest.date && !harvest.scheduled
-                          ? 'The date the customer wrote on their own form. This card is not linked to a harvest appointment yet, so nothing has confirmed it.'
-                          : undefined}
-                        style={{
-                          fontSize: '0.78rem', whiteSpace: 'nowrap',
-                          color: !harvest.date ? 'rgba(166,120,90,0.5)' : harvest.scheduled ? 'var(--cream)' : 'var(--tan)',
-                          fontStyle: harvest.date && !harvest.scheduled ? 'italic' : undefined,
-                        }}>
-                        {harvest.date && !harvest.scheduled ? '~' : ''}{fmtShortDate(harvest.date)}
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
-                        <StatusBadge status={ci.status} needsCarcass={(carcassStates[ci.id] ?? []).some(s => s.state === 'ambiguous')} />
-                        {/* A card off the standard rate says so in the list. At
-                            invoicing time the question is which of these is
-                            priced differently, and opening 272 cards to find
-                            out is not an answer. It rides in the status column
-                            rather than beside the name, which is the one cell
-                            that gets ellipsised away on a narrow list. */}
-                        {(() => {
-                          const parts = [
-                            ci.kill_price_per_lb       != null ? `K $${Number(ci.kill_price_per_lb).toFixed(2)}` : '',
-                            ci.processing_price_per_lb != null ? `C $${Number(ci.processing_price_per_lb).toFixed(2)}` : '',
-                          ].filter(Boolean)
-                          if (!parts.length) return null
-                          return (
-                            <span
-                              title={`Priced off the standard rate on this card — ${parts.join(', ').replace('K ', 'kill ').replace('C ', 'cut & wrap ')} per lb. Anything not listed bills at the standard rate.`}
-                              style={{ fontSize: '0.66rem', fontWeight: 700, padding: '0.05rem 0.3rem', borderRadius: 4, background: 'rgba(76,175,80,0.22)', color: '#8fd694', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
-                              {parts.join(' · ')}
-                            </span>
-                          )
-                        })()}
-                        {ci.scale_label && (
-                          <span
-                            title={`Packs on the ${ci.scale_label} scale label, not the house label.`}
-                            style={{ fontSize: '0.66rem', fontWeight: 700, padding: '0.05rem 0.3rem', borderRadius: 4, background: 'rgba(201,168,130,0.2)', color: 'var(--tan)', whiteSpace: 'nowrap', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            🏷 {ci.scale_label}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  )
-                })}
+                {listRows()}
               </>
             )}
           </div>
@@ -2890,6 +3245,33 @@ export default function CuttingInstructionsPage() {
                   <span style={{ color: 'var(--light-brown)', fontSize: '0.72rem', marginLeft: 'auto', textAlign: 'right' }}>
                     Prints on the packaging sheet so the packager switches the scale.
                   </span>
+                </div>
+              )
+            })()}
+
+            {/* Drop-off group membership, and the way back out of it. */}
+            {selected.drop_off_id && groupCards(selected.drop_off_id).length > 1 && (() => {
+              const all = groupCards(selected.drop_off_id!)
+              const same = all.filter(i => cutSignature(i) === cutSignature(selected)).length
+              return (
+                <div style={{ padding: '0.6rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.15)', background: 'rgba(201,168,130,0.1)', display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', flexShrink: 0 }}>
+                  <span style={{ fontSize: '0.82rem', color: 'var(--cream)' }}>
+                    🔗 <strong>One of {all.length} cards in this drop-off.</strong>{' '}
+                    {same === all.length
+                      ? 'All on the same cuts, so they print on one sheet.'
+                      : same > 1
+                        ? `${same} of them share these cuts and print on one sheet together.`
+                        : 'These cuts differ from the rest, so this card prints on its own sheet.'}
+                  </span>
+                  <button
+                    onClick={() => setPicked(new Set(all.map(i => i.id)))}
+                    title="Tick every card in this drop-off so it can be printed together"
+                    style={{ ...btnStyle('rgba(166,120,90,0.2)', 'var(--tan)'), marginLeft: 'auto' }}>
+                    ☑ Tick the whole drop-off
+                  </button>
+                  <button onClick={() => removeFromGroup(selected)} style={btnStyle('transparent', 'var(--tan)')}>
+                    Take this card out
+                  </button>
                 </div>
               )
             })()}

@@ -67,15 +67,20 @@ export async function POST(req: NextRequest) {
 // scale_label (optional) is the producer-specific label this card packs on —
 // see scripts/2026-09-22_cutting_instruction_scale_label.sql. Blank clears it
 // back to the house label. Same deal as the rates: sent on its own, no status.
+//
+// drop_off_id (optional) puts every card in `ids` into one drop-off, or takes
+// them out of it with null — see scripts/2026-09-28_cutting_instruction_drop_off.sql.
+// The office groups by hand; nothing here infers it.
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
-  const { ids, status, customer_id, processing_price_per_lb, kill_price_per_lb, scale_label } = body as {
+  const { ids, status, customer_id, processing_price_per_lb, kill_price_per_lb, scale_label, drop_off_id } = body as {
     ids: string[]
     status?: string
     customer_id?: string | null
     processing_price_per_lb?: number | string | null
     kill_price_per_lb?: number | string | null
     scale_label?: string | null
+    drop_off_id?: string | null
   }
 
   // Omitting the field leaves the existing link alone, so archive/restore never
@@ -90,6 +95,7 @@ export async function PATCH(req: NextRequest) {
     status?: string; customer_id?: string | null
     processing_price_per_lb?: number | null; kill_price_per_lb?: number | null
     scale_label?: string | null
+    drop_off_id?: string | null
   } = {}
   if (status !== undefined) updates.status = status
   if (customer_id !== undefined) updates.customer_id = customer_id || null
@@ -119,6 +125,12 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: 'scale_label must be 80 characters or fewer' }, { status: 400 })
     }
     updates.scale_label = label || null
+  }
+  if (drop_off_id !== undefined) {
+    if (drop_off_id !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(drop_off_id))) {
+      return NextResponse.json({ error: 'drop_off_id must be a uuid or null' }, { status: 400 })
+    }
+    updates.drop_off_id = drop_off_id
   }
   if (!Object.keys(updates).length) {
     return NextResponse.json({ error: 'nothing to update' }, { status: 400 })
