@@ -14,10 +14,10 @@ import { C, Banner, BigButton, KanbanHeader, cardStyle, inputStyle } from '../ui
 // and "card 2 of 2", one for each bin — with a QR that opens the pull page for
 // that exact card.
 //
-// Plain 3×5 index cards fed through the printer one at a time: each card is
-// its own 3" × 5" page with the card turned sideways on it (Charlie,
-// 2026-09-28 — no Avery sheets). The border sits 0.2" in because most
-// printers can't reach the card edge. Then
+// Plain 3×5 index cards fed through the printer's bypass tray one at a time:
+// each card is its own Letter page, drawn in the top-centre 3" × 5" where the
+// tray puts the card (Charlie, 2026-09-28 — no Avery sheets, and his printer
+// has no 3×5 paper size). See the print CSS below. Then
 // they get laminated and zip-tied to the bin. A 3×5 only holds what the crew
 // reads at the bin — name, where it's used, how much to order, who from — plus
 // the QR and which card of the loop this is. The rest lives on
@@ -89,8 +89,10 @@ export default function PrintCardsPage({ searchParams }: { searchParams: Promise
                 Print, laminate, and zip-tie each to its bin. When a bin empties, scan its card with any phone
                 camera and tap once — or drop the card in the kanban post and whoever orders pulls it on the board.
                 <br /><b>Printing on 3×5 cards:</b> load the index cards in the printer&apos;s manual/bypass tray, then in the
-                print dialog set paper size to North America 3x5 (or 3 × 5 in), portrait, scale 100%, print on both
-                sides off, and headers and footers off. Each card prints on its own, sideways on the card.
+                print dialog leave paper size on Letter, portrait, scale 100%, print on both sides off, and headers and
+                footers off. Put one card in the bypass tray, short edge first, with the guides snug. Each card
+                prints on its own page, in the top-centre 3 × 5 of the sheet — try one on plain paper first and lay a
+                card over the dotted outline.
               </div>
               {!ids && (
                 <select value={cat} onChange={e => setCat(e.target.value)} style={{ ...inputStyle, marginBottom: 12 }}>
@@ -170,18 +172,24 @@ export default function PrintCardsPage({ searchParams }: { searchParams: Promise
           html, body { background: #fff !important; margin: 0 !important; padding: 0 !important; }
           /* Trailing space would feed a blank card. */
           .kroot { padding: 0 !important; }
-          /* One card per page, on a page exactly the shape of the paper: 3in wide
-             × 5in tall, Windows' "North America 3x5". A 5×3 landscape page left
-             the browser and the printer driver to agree on a rotation, and they
-             didn't — the card came out shifted and cut off (Charlie,
-             2026-09-28). The card is turned inside the page instead, so nothing
-             downstream has to rotate anything. */
-          @page { size: 3in 5in; margin: 0; }
+          /* One card per Letter page, drawn where a 3×5 card fed into the bypass
+             tray actually lands: centred side to side, against the top edge.
+             Charlie's HP (Color LaserJet Pro MFP 3301) has no 3×5 or custom
+             paper size, and a 3×5 page left browser and driver to disagree on
+             rotation. His first test on Letter showed the tray centres small
+             stock and top-aligns it (Charlie, 2026-09-28). So: print on Letter,
+             and the card is the top-centre 3in × 5in of the page, turned
+             sideways, 0.25in in from the card's edges. A plain-paper test print
+             shows exactly where the card will go. */
+          @page { size: letter portrait; margin: 0; }
           .ksheet { display: block; padding: 0; }
-          .kpage { display: block; position: relative; width: 3in; height: 5in; overflow: hidden;
+          .kpage { display: block; position: relative; width: 8.5in; height: 11in; overflow: hidden;
                    break-after: page; page-break-after: always; }
           .kpage:last-child { break-after: auto; page-break-after: auto; }
-          .kcard { position: absolute; left: 50%; top: 50%; width: 4.6in; height: 2.6in; border-radius: 0;
+          /* The card's 3in × 5in footprint, for lining up on a plain-paper test. */
+          .kpage::before { content: ''; position: absolute; left: 2.75in; top: 0; width: 3in; height: 5in;
+                           border: 0.5px dashed #bbb; box-sizing: border-box; }
+          .kcard { position: absolute; left: 4.25in; top: 2.5in; width: 4.5in; height: 2.5in; border-radius: 0;
                    transform: translate(-50%, -50%) rotate(90deg); }
         }
       `}</style>
