@@ -246,6 +246,9 @@ export default function PrintCardsPage({ searchParams }: { searchParams: Promise
           /* The card's 3in × 5in footprint, for lining up on a plain-paper test. */
           .kpage::before { content: ''; position: absolute; left: calc(2.75in + var(--dx, 0in)); top: var(--dy, 0in);
                            width: 3in; height: 5in; border: 0.5px dashed #bbb; box-sizing: border-box; }
+          /* globals.css hides the last cell of every table in print (the kill
+             sheet's action column), which blanked every value on the card. */
+          .kcard .facts td:last-child { display: table-cell !important; }
           .kcal::before { display: none; }
           .kcell { position: absolute; width: 0.5in; height: 0.5in; box-sizing: border-box; border: 0.5px solid #000;
                    font: bold 7pt Arial, sans-serif; color: #000; padding: 2px; }
