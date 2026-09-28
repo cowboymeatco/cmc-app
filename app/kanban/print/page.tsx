@@ -17,7 +17,10 @@ import { C, Banner, BigButton, KanbanHeader, cardStyle, inputStyle } from '../ui
 // lead time, price, and a QR that opens the pull page for that exact card.
 //
 // Letter paper, four to a page, ink on white: they get laminated and zip-tied
-// to the bin. The colour band is the category, so a card on the wrong shelf
+// to the bin. Each card fills a 4¼" × 5½" quarter of the sheet, so they print
+// straight onto Avery quarter-sheet postcard stock (4 per Letter sheet) instead
+// of being cut by hand; the border sits 0.3" in because most printers can't
+// reach the paper edge (Charlie, 2026-09-28, ordering card stock). The colour band is the category, so a card on the wrong shelf
 // stands out from across the room.
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -165,8 +168,11 @@ export default function PrintCardsPage({ searchParams }: { searchParams: Promise
         @media print {
           .no-print { display: none !important; }
           html, body { background: #fff !important; }
-          @page { size: letter portrait; margin: 0.35in; }
-          .ksheet { padding: 0; gap: 0.2in; max-width: none; }
+          @page { size: letter portrait; margin: 0; }
+          .ksheet { padding: 0; gap: 0; max-width: none;
+                    grid-template-columns: repeat(2, 4.25in); grid-auto-rows: 5.5in; }
+          .kcard { margin: 0.3in; display: flex; flex-direction: column; }
+          .kcard .foot { margin-top: auto; }
         }
       `}</style>
     </div>
