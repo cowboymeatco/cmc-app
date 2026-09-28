@@ -25,6 +25,24 @@ import { C, Banner, BigButton, KanbanHeader, cardStyle, inputStyle } from '../ui
 // shelf stands out from across the room.
 // ══════════════════════════════════════════════════════════════════════════════
 
+const NUDGE_KEY = 'cmc.kanban.cardNudge'
+
+// A labelled half-inch grid over the whole Letter page. Printed on one index
+// card, the squares that land on the card say exactly which part of the page
+// the printer puts there — so the card can be placed from evidence, not a guess.
+function CalibrationPage() {
+  const cells = []
+  for (let y = 0; y < 22; y++) {
+    for (let x = 0; x < 17; x++) {
+      cells.push(
+        <div key={`${x}:${y}`} className="kcell" style={{ left: `${x * 0.5}in`, top: `${y * 0.5}in` }}>
+          {(x * 0.5).toFixed(1)},{(y * 0.5).toFixed(1)}
+        </div>)
+    }
+  }
+  return <div className="kpage kcal">{cells}</div>
+}
+
 export default function PrintCardsPage({ searchParams }: { searchParams: Promise<{ ids?: string }> }) {
   const { ids } = use(searchParams)
   const [items, setItems] = useState<Item[]>([])
@@ -33,6 +51,27 @@ export default function PrintCardsPage({ searchParams }: { searchParams: Promise
   const [error, setError] = useState<string | null>(null)
   const [cat, setCat] = useState('')
   const [codes, setCodes] = useState<Record<string, string>>({})
+  // Where the card lands on the sheet is the printer's call, not ours: a nudge
+  // (inches, + is right/down on the Letter page) lines it up, and is kept per
+  // machine so it's set once at the printer that makes the cards.
+  const [nudge, setNudge] = useState<{ dx: number; dy: number }>({ dx: 0, dy: 0 })
+  const [calibrate, setCalibrate] = useState(false)
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(NUDGE_KEY) ?? 'null')
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring a remembered nudge after mount; reading it during render would mismatch the server HTML
+      if (saved && Number.isFinite(saved.dx) && Number.isFinite(saved.dy)) setNudge({ dx: saved.dx, dy: saved.dy })
+    } catch { /* no saved nudge */ }
+  }, [])
+  const setNudgeAxis = (axis: 'dx' | 'dy', v: string) => {
+    const n = Math.max(-5, Math.min(5, Number(v) || 0))
+    setNudge(prev => {
+      const next = { ...prev, [axis]: n }
+      try { localStorage.setItem(NUDGE_KEY, JSON.stringify(next)) } catch { /* private window */ }
+      return next
+    })
+  }
 
   useEffect(() => {
     let live = true
@@ -76,7 +115,7 @@ export default function PrintCardsPage({ searchParams }: { searchParams: Promise
   const vendorById = new Map(vendors.map(v => [v.id, v]))
 
   return (
-    <div className="kroot" style={{ paddingBottom: 60 }}>
+    <div className="kroot" style={{ paddingBottom: 60, ['--dx' as string]: `${nudge.dx}in`, ['--dy' as string]: `${nudge.dy}in` }}>
       <div className="no-print">
         <KanbanHeader title="Print kanban cards" back="/kanban" />
         <div style={{ padding: 16, maxWidth: 900, margin: '0 auto' }}>
@@ -100,14 +139,31 @@ export default function PrintCardsPage({ searchParams }: { searchParams: Promise
                   {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               )}
-              {cards.length > 0 && <BigButton label="🖨 Print" onClick={() => window.print()} />}
+              {(cards.length > 0 || calibrate) && <BigButton label="🖨 Print" onClick={() => window.print()} />}
+              <div style={{ ...cardStyle, marginTop: 12, color: C.tan, fontSize: 14, lineHeight: 1.5 }}>
+                <b>Lining up on the card.</b> Cards printing blank or cut off? Tick the box, print the grid on one
+                index card, and the numbers that land on it (inches across, down) show where the card sits.
+                Then nudge: + moves the card right / down on the sheet.
+                <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+                  <input type="checkbox" checked={calibrate} onChange={e => setCalibrate(e.target.checked)} />
+                  Print the calibration grid instead of cards
+                </label>
+                <div style={{ display: 'flex', gap: 12, marginTop: 8, flexWrap: 'wrap' }}>
+                  <label>Right/left (in){' '}
+                    <input type="number" step={0.1} value={nudge.dx} onChange={e => setNudgeAxis('dx', e.target.value)} style={{ ...inputStyle, width: 90 }} />
+                  </label>
+                  <label>Down/up (in){' '}
+                    <input type="number" step={0.1} value={nudge.dy} onChange={e => setNudgeAxis('dy', e.target.value)} style={{ ...inputStyle, width: 90 }} />
+                  </label>
+                </div>
+              </div>
             </>
           )}
         </div>
       </div>
 
       <div className="ksheet">
-        {cards.map(({ item, seq }) => {
+        {calibrate ? <CalibrationPage /> : cards.map(({ item, seq }) => {
           const v = vendorById.get(item.vendor_id ?? '')
           const color = CATEGORY_COLOR[item.category] ?? '#999'
           const ou = item.order_unit ?? item.unit
@@ -149,6 +205,7 @@ export default function PrintCardsPage({ searchParams }: { searchParams: Promise
       <style jsx global>{`
         .ksheet { display: grid; grid-template-columns: repeat(auto-fill, 5in); justify-content: center; gap: 12px; padding: 0 16px; }
         .kpage { display: contents; }
+        .kcal { display: none; }
         .kcard { width: 5in; height: 3in; box-sizing: border-box; background: #fff; color: #000; border: 1.5px solid #333;
                  border-radius: 6px; overflow: hidden; display: flex; flex-direction: column;
                  font-family: Arial, sans-serif; break-inside: avoid; page-break-inside: avoid; }
@@ -187,9 +244,13 @@ export default function PrintCardsPage({ searchParams }: { searchParams: Promise
                    break-after: page; page-break-after: always; }
           .kpage:last-child { break-after: auto; page-break-after: auto; }
           /* The card's 3in × 5in footprint, for lining up on a plain-paper test. */
-          .kpage::before { content: ''; position: absolute; left: 2.75in; top: 0; width: 3in; height: 5in;
-                           border: 0.5px dashed #bbb; box-sizing: border-box; }
-          .kcard { position: absolute; left: 4.25in; top: 2.5in; width: 4.5in; height: 2.5in; border-radius: 0;
+          .kpage::before { content: ''; position: absolute; left: calc(2.75in + var(--dx, 0in)); top: var(--dy, 0in);
+                           width: 3in; height: 5in; border: 0.5px dashed #bbb; box-sizing: border-box; }
+          .kcal::before { display: none; }
+          .kcell { position: absolute; width: 0.5in; height: 0.5in; box-sizing: border-box; border: 0.5px solid #000;
+                   font: bold 7pt Arial, sans-serif; color: #000; padding: 2px; }
+          .kcard { position: absolute; left: calc(4.25in + var(--dx, 0in)); top: calc(2.5in + var(--dy, 0in));
+                   width: 4.5in; height: 2.5in; border-radius: 0;
                    transform: translate(-50%, -50%) rotate(90deg); }
         }
       `}</style>
