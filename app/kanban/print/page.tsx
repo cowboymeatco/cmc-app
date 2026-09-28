@@ -14,11 +14,12 @@ import { C, Banner, BigButton, KanbanHeader, cardStyle, inputStyle } from '../ui
 // and "card 2 of 2", one for each bin — with a QR that opens the pull page for
 // that exact card.
 //
-// 3×5 index cards, printed landscape (5" wide × 3" tall), three to a Letter
-// sheet in one centred column to match Avery printable index cards; they get
-// laminated and zip-tied to the bin. A 3×5 only holds what the crew reads at
-// the bin — name, where it's used, how much to order, who from — plus the QR
-// and which card of the loop this is (Charlie, 2026-09-28). The rest lives on
+// Plain 3×5 index cards fed through the printer one at a time: each card is
+// its own 5" × 3" landscape page (Charlie, 2026-09-28 — no Avery sheets). The
+// border sits 0.2" in because most printers can't reach the card edge. Then
+// they get laminated and zip-tied to the bin. A 3×5 only holds what the crew
+// reads at the bin — name, where it's used, how much to order, who from — plus
+// the QR and which card of the loop this is. The rest lives on
 // the item's page. The colour band is the category, so a card on the wrong
 // shelf stands out from across the room.
 // ══════════════════════════════════════════════════════════════════════════════
@@ -74,7 +75,7 @@ export default function PrintCardsPage({ searchParams }: { searchParams: Promise
   const vendorById = new Map(vendors.map(v => [v.id, v]))
 
   return (
-    <div style={{ paddingBottom: 60 }}>
+    <div className="kroot" style={{ paddingBottom: 60 }}>
       <div className="no-print">
         <KanbanHeader title="Print kanban cards" back="/kanban" />
         <div style={{ padding: 16, maxWidth: 900, margin: '0 auto' }}>
@@ -86,6 +87,9 @@ export default function PrintCardsPage({ searchParams }: { searchParams: Promise
                 {cards.length} card{cards.length === 1 ? '' : 's'} for {wanted.length} item{wanted.length === 1 ? '' : 's'} — one per bin.
                 Print, laminate, and zip-tie each to its bin. When a bin empties, scan its card with any phone
                 camera and tap once — or drop the card in the kanban post and whoever orders pulls it on the board.
+                <br /><b>Printing on 3×5 cards:</b> load the index cards in the printer&apos;s manual/bypass tray, then in the
+                print dialog set paper size to 3 × 5 in (Index Card), scale 100%, and turn headers and footers off.
+                Each card prints on its own.
               </div>
               {!ids && (
                 <select value={cat} onChange={e => setCat(e.target.value)} style={{ ...inputStyle, marginBottom: 12 }}>
@@ -161,11 +165,14 @@ export default function PrintCardsPage({ searchParams }: { searchParams: Promise
                        font-size: 8pt; }
         @media print {
           .no-print { display: none !important; }
-          html, body { background: #fff !important; }
-          /* Three 5×3 cards stacked down the middle of a Letter sheet. */
-          @page { size: letter portrait; margin: 1in 1.75in; }
+          html, body { background: #fff !important; margin: 0 !important; padding: 0 !important; }
+          /* Trailing space would feed a blank card. */
+          .kroot { padding: 0 !important; }
+          /* One card per page: a plain 3×5 index card, fed landscape. */
+          @page { size: 5in 3in; margin: 0.2in; }
           .ksheet { display: block; padding: 0; }
-          .kcard { border-radius: 0; }
+          .kcard { width: 4.6in; height: 2.6in; border-radius: 0; break-after: page; page-break-after: always; }
+          .kcard:last-child { break-after: auto; page-break-after: auto; }
         }
       `}</style>
     </div>
