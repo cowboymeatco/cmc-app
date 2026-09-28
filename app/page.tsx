@@ -44,6 +44,7 @@ export default function Dashboard() {
   const [valueAdd,   setValueAdd]   = useState<number | null>(null)
   const [cleaning,   setCleaning]   = useState<number | null>(null)
   const [game,       setGame]       = useState<number | null>(null)
+  const [kanban,     setKanban]     = useState<number | null>(null)
 
   // Red bubble: cutting instructions submitted since the last time the
   // Cutting Instructions page was opened on this device. First visit just
@@ -71,7 +72,8 @@ export default function Dashboard() {
       // peek=1 — reading the dashboard must not open tonight's cleaning shift.
       fetch('/api/cleaning/shift?peek=1').then(r => r.json()),
       fetch('/api/game?count=1').then(r => r.json()),
-    ]).then(([apptRes, procRes, delivRes, ordersRes, vaRes, cleanRes, gameRes]) => {
+      fetch('/api/kanban?count=1').then(r => r.json()),
+    ]).then(([apptRes, procRes, delivRes, ordersRes, vaRes, cleanRes, gameRes, kanbanRes]) => {
       const appts  = apptRes.status    === 'fulfilled' && Array.isArray(apptRes.value)    ? apptRes.value    : []
       const procs  = procRes.status    === 'fulfilled' && Array.isArray(procRes.value)    ? procRes.value    : []
       const deliv  = delivRes.status   === 'fulfilled' && Array.isArray(delivRes.value)   ? delivRes.value   : []
@@ -100,6 +102,8 @@ export default function Dashboard() {
       // Animals still in the building. Zero is worth showing here — out of
       // season that IS the answer, and it means the board was checked.
       setGame(gameRes.status === 'fulfilled' && typeof gameRes.value?.count === 'number' ? gameRes.value.count : null)
+      // Kanban cards pulled and waiting on someone to place the order.
+      setKanban(kanbanRes.status === 'fulfilled' && typeof kanbanRes.value?.count === 'number' ? kanbanRes.value.count : null)
 
       // Null until a shift exists for the night, so the tile shows nothing
       // rather than a misleading zero on a day nobody has started cleaning.
@@ -186,6 +190,13 @@ export default function Dashboard() {
       desc:  'Nightly list · Procedures · Supplies',
       when:  'After production shuts down',
       count: cleaning,
+    },
+    {
+      href: '/kanban',    icon: '🗂️', color: '#D4A017',
+      title: 'Kanban Ordering',
+      desc:  'Supplies · Vendors · Reorder cards',
+      when:  'A bin runs empty — pull the card',
+      count: kanban,
     },
   ]
 
