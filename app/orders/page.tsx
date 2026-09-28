@@ -215,7 +215,7 @@ function NewOrderTab({ onSaved, pluList }: { onSaved: () => void; pluList: PluIt
   }
 
   async function handleSubmit() {
-    if (!form.customer_name || !form.due_date) return
+    if (!canSubmit) return
     setSaving(true)
     await fetch('/api/orders', {
       method: 'POST',
@@ -237,7 +237,7 @@ function NewOrderTab({ onSaved, pluList }: { onSaved: () => void; pluList: PluIt
     setTimeout(() => setSuccess(false), 4000)
   }
 
-  const canSubmit = !!form.customer_name && !!form.due_date
+  const canSubmit = !!form.customer_name && !!form.due_date && !addressNeed(form)?.missing
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '420px 1fr', gap: '1.5rem', height: '100%' }}>
@@ -312,14 +312,14 @@ function NewOrderTab({ onSaved, pluList }: { onSaved: () => void; pluList: PluIt
               <input type="datetime-local" style={INPUT} value={form.delivery_datetime} onChange={f('delivery_datetime')} />
             </div>
             <div>
-              <label style={LABEL}>Delivery Address</label>
+              <label style={LABEL}>Delivery Address *</label>
               <input style={INPUT} value={form.delivery_address} onChange={f('delivery_address')} placeholder="Street, City, State ZIP" />
             </div>
           </div>
         )}
         {form.fulfillment_type === 'shipping' && (
           <div>
-            <label style={LABEL}>Shipping Address</label>
+            <label style={LABEL}>Shipping Address *</label>
             <textarea style={{ ...INPUT, height: 64, resize: 'vertical' }} value={form.shipping_address} onChange={f('shipping_address')} placeholder="Full shipping address" />
           </div>
         )}
@@ -563,11 +563,35 @@ function printOrder(order: RetailOrder) {
   if (w) { w.document.write(html); w.document.close() }
 }
 
+/** Which address a delivery or shipping order needs, and whether it's missing.
+ *  Portal orders arrive with none (the portal never asks), so /orders has to
+ *  say so rather than quietly show nothing (Charlie, 2026-09-28). */
+function addressNeed(o: { fulfillment_type: Fulfillment; delivery_address: string | null; shipping_address: string | null }) {
+  if (o.fulfillment_type === 'pickup') return null
+  const key = o.fulfillment_type === 'shipping' ? 'shipping_address' as const : 'delivery_address' as const
+  return { key, label: o.fulfillment_type === 'shipping' ? 'shipping' : 'delivery', missing: !o[key]?.trim() }
+}
+
 function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOrder; onUpdated: (o: RetailOrder) => void; onDeleted: (id: string) => void; pluList: PluItem[] }) {
   const [advancing, setAdvancing] = useState(false)
   const [deleting, setDeleting]   = useState(false)
   const [editingItem, setEditingItem] = useState<string | null>(null)
   const [filledVal, setFilledVal] = useState('')
+  const need = addressNeed(order)
+  const [addrDraft, setAddrDraft]   = useState('')
+  const [addrSaving, setAddrSaving] = useState(false)
+
+  async function saveAddress() {
+    if (!need || !addrDraft.trim()) return
+    setAddrSaving(true)
+    const res = await fetch('/api/orders', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: order.id, [need.key]: addrDraft.trim() }),
+    })
+    setAddrSaving(false)
+    if (res.ok) { setAddrDraft(''); onUpdated({ ...order, [need.key]: addrDraft.trim() }) }
+  }
 
   // Add item state
   const [showAddItem, setShowAddItem]       = useState(false)
@@ -747,7 +771,17 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
         )}
       </div>
 
-      {(order.delivery_address || order.shipping_address) && (
+      {need?.missing ? (
+        <div style={{ background: 'rgba(229,57,53,0.1)', border: `1px solid ${C.red}`, borderRadius: 4, padding: '0.6rem 0.85rem', fontSize: '0.82rem', color: C.red, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <span>⚠ No {need.label} address{order.customer_phone ? ` — call ${order.customer_phone}` : ''}</span>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <input style={{ ...INPUT, flex: 1 }} value={addrDraft} onChange={e => setAddrDraft(e.target.value)} placeholder="Street, City, State ZIP" />
+            <button style={{ ...BTN(C.tan), opacity: addrDraft.trim() && !addrSaving ? 1 : 0.5 }} disabled={!addrDraft.trim() || addrSaving} onClick={saveAddress}>
+              {addrSaving ? 'Saving…' : 'Save address'}
+            </button>
+          </div>
+        </div>
+      ) : (order.delivery_address || order.shipping_address) && (
         <div style={{ fontSize: '0.82rem', color: C.tan, fontStyle: 'italic' }}>
           {order.delivery_address || order.shipping_address}
         </div>
@@ -990,6 +1024,7 @@ function OrderListTab({ fulfilled, pluList }: { fulfilled: boolean; pluList: Plu
                 Due {new Date(o.due_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                 {overdue(o) ? ' — OVERDUE' : ''}
                 {' · '}{o.fulfillment_type.charAt(0).toUpperCase() + o.fulfillment_type.slice(1)}
+                {addressNeed(o)?.missing && <span style={{ color: C.red }}> · ⚠ no address</span>}
               </div>
               <FillBar items={o.retail_order_items} />
             </div>
@@ -1004,7 +1039,7 @@ function OrderListTab({ fulfilled, pluList }: { fulfilled: boolean; pluList: Plu
             ← Select an order to view
           </div>
         ) : (
-          <OrderDetail order={selected} onUpdated={handleUpdated} onDeleted={handleDeleted} pluList={pluList} />
+          <OrderDetail key={selected.id} order={selected} onUpdated={handleUpdated} onDeleted={handleDeleted} pluList={pluList} />
         )}
       </div>
     </div>
