@@ -200,7 +200,19 @@ export function buildRT89(plu: HobartPlu, labelFormat?: string | null, force?: R
   // preserved rubbish — 51 PLUs pointed at text numbers the scale does not have,
   // and BEEF EYE OF ROUND ROAST pointed at a pork bacon cure statement and
   // printed it (2026-08-13). No statement here now means no statement there.
-  overrides['Ec'] = String(plu.ingredients ?? '').trim() !== '' ? pluNo : ''
+  //
+  // r# is the field the label actually prints the statement from, so it gets
+  // the same pointer. Ec alone was never enough: in the captured book 132 of
+  // the 133 records with only r# set carry a statement, and 43 of the 44 with
+  // only Ec set carry none (ground beef, salmon). The pork cuts share one text
+  // (r#1000, "INGREDIENTS: PORK."), the cured hams another (r#4). Existing items
+  // printed their statements only because r# survived in their skeleton; a new
+  // PLU has no skeleton, so its r# fell to the blank default and the label came
+  // out with no ingredients even though the text and Ec both reached the scale
+  // (PLU 9998 SMOKED MOZZARELLA CHEESE, Charlie, 2026-09-28).
+  const textRef = String(plu.ingredients ?? '').trim() !== '' ? pluNo : ''
+  overrides['Ec'] = textRef
+  overrides['r#'] = textRef
   // Prefer this item's own on-scale values for everything we don't override.
   // Falling back to the PLU-100 skeleton is only right for a PLU the scale has
   // never seen; using it for an existing item rewrites its label format.
@@ -254,7 +266,7 @@ export function buildHtFile(plus: HobartPlu[], book: HobartPlu[] = plus): string
 //   • up (the UPC the barcode is printed from) is the producer's number, not the
 //     house item's. The scanner reads the PLU off the barcode, and it has to see
 //     the producer number to know which label the package went out on.
-//   • Ec points at the HOUSE item's ingredient statement rather than a copy of
+//   • Ec and r# point at the HOUSE item's ingredient statement rather than a copy of
 //     it. The house statement is already on the scale (it goes with every push),
 //     and a set exists to cost the scale as little memory as possible — the
 //     reason sets come on and off at all (Charlie, 2026-09-23).
@@ -269,10 +281,11 @@ export interface ProducerPlu {
 export function buildProducerRT89(p: ProducerPlu, labelFormat: string): string {
   const pluNo = String(p.plu_number).trim()
   const hasText = String(p.house.ingredients ?? '').trim() !== ''
+  const textRef = hasText ? String(p.house.plu_number).trim() : ''
   return buildRT89(
     { ...p.house, plu_number: pluNo, item_name: p.item_name, upc: pluNo },
     null,
-    { l1: String(labelFormat).trim(), Ec: hasText ? String(p.house.plu_number).trim() : '' },
+    { l1: String(labelFormat).trim(), Ec: textRef, 'r#': textRef },
   )
 }
 

@@ -847,7 +847,7 @@ function ExportTab() {
     ))
     setUnlinkedIng(filtered.filter(i =>
       (i.ingredients ?? '').trim() !== '' &&
-      i.ht_skeleton != null && (i.ht_skeleton.Ec ?? '').trim() === ''
+      i.ht_skeleton != null && (i.ht_skeleton['r#'] ?? '').trim() === ''
     ))
     // Evidence is the whole book (falling back to what we have if it hasn't
     // loaded yet) — a sibling outside the current filter still counts.
@@ -988,7 +988,7 @@ function ExportTab() {
         {/* Statement present here, no pointer to it on the scale. The text is
             already in the scale's expanded-text library; the PLU record just
             doesn't reference it, so the label prints blank. A fresh .ht import
-            writes the Ec pointer and fixes it (Charlie's jerky, 2026-07-29). */}
+            writes the r# pointer and fixes it (Charlie's jerky, 2026-07-29). */}
         {unlinkedIng.length > 0 && (
           <div style={{ background: 'rgba(245,158,11,0.10)', border: `1px solid ${C.yellow}`, borderRadius: 4, padding: '0.85rem 1rem', margin: '1rem 0' }}>
             <div style={{ color: C.yellow, fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.3rem' }}>

@@ -108,7 +108,12 @@ export function buildRT89(plu, labelFormat) {
   // A stale pointer used to be left alone; that preserved 51 references to text
   // numbers the scale does not have, and one beef roast printing a pork bacon
   // cure statement (2026-08-13). No statement here means no statement there.
-  overrides['Ec'] = String(plu.ingredients ?? '').trim() !== '' ? pluNo : ''
+  // r# gets the same pointer: it is the field the label prints the statement
+  // from. A new PLU (no skeleton) left r# blank and printed no ingredients even
+  // with the text and Ec on the scale (PLU 9998, 2026-09-28). See lib/hobart.ts.
+  const textRef = String(plu.ingredients ?? '').trim() !== '' ? pluNo : ''
+  overrides['Ec'] = textRef
+  overrides['r#'] = textRef
   // Prefer this item's own on-scale values for everything we don't override.
   // Falling back to the PLU-100 skeleton is only right for a PLU the scale has
   // never seen; using it for an existing item rewrites its label format â€” which
