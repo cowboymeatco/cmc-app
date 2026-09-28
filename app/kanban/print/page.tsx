@@ -15,8 +15,9 @@ import { C, Banner, BigButton, KanbanHeader, cardStyle, inputStyle } from '../ui
 // that exact card.
 //
 // Plain 3×5 index cards fed through the printer one at a time: each card is
-// its own 5" × 3" landscape page (Charlie, 2026-09-28 — no Avery sheets). The
-// border sits 0.2" in because most printers can't reach the card edge. Then
+// its own 3" × 5" page with the card turned sideways on it (Charlie,
+// 2026-09-28 — no Avery sheets). The border sits 0.2" in because most
+// printers can't reach the card edge. Then
 // they get laminated and zip-tied to the bin. A 3×5 only holds what the crew
 // reads at the bin — name, where it's used, how much to order, who from — plus
 // the QR and which card of the loop this is. The rest lives on
@@ -88,8 +89,8 @@ export default function PrintCardsPage({ searchParams }: { searchParams: Promise
                 Print, laminate, and zip-tie each to its bin. When a bin empties, scan its card with any phone
                 camera and tap once — or drop the card in the kanban post and whoever orders pulls it on the board.
                 <br /><b>Printing on 3×5 cards:</b> load the index cards in the printer&apos;s manual/bypass tray, then in the
-                print dialog set paper size to 3 × 5 in (Index Card), scale 100%, and turn headers and footers off.
-                Each card prints on its own.
+                print dialog set paper size to North America 3x5 (or 3 × 5 in), portrait, scale 100%, print on both
+                sides off, and headers and footers off. Each card prints on its own, sideways on the card.
               </div>
               {!ids && (
                 <select value={cat} onChange={e => setCat(e.target.value)} style={{ ...inputStyle, marginBottom: 12 }}>
@@ -109,7 +110,7 @@ export default function PrintCardsPage({ searchParams }: { searchParams: Promise
           const color = CATEGORY_COLOR[item.category] ?? '#999'
           const ou = item.order_unit ?? item.unit
           return (
-            <div key={`${item.id}:${seq}`} className="kcard">
+            <div key={`${item.id}:${seq}`} className="kpage"><div className="kcard">
               <div className="band" style={{ background: color }}>
                 <span>{item.category}</span>
                 <span>{CARD_TYPE_LABEL[item.card_type]}</span>
@@ -138,13 +139,14 @@ export default function PrintCardsPage({ searchParams }: { searchParams: Promise
                 <span>Card <b>{seq}</b> of {item.cards_in_loop}</span>
                 <span>{item.card_type === 'two_bin' ? 'Bin empty? Scan or pull this card.' : 'At the line? Scan or pull this card.'}</span>
               </div>
-            </div>
+            </div></div>
           )
         })}
       </div>
 
       <style jsx global>{`
         .ksheet { display: grid; grid-template-columns: repeat(auto-fill, 5in); justify-content: center; gap: 12px; padding: 0 16px; }
+        .kpage { display: contents; }
         .kcard { width: 5in; height: 3in; box-sizing: border-box; background: #fff; color: #000; border: 1.5px solid #333;
                  border-radius: 6px; overflow: hidden; display: flex; flex-direction: column;
                  font-family: Arial, sans-serif; break-inside: avoid; page-break-inside: avoid; }
@@ -168,11 +170,19 @@ export default function PrintCardsPage({ searchParams }: { searchParams: Promise
           html, body { background: #fff !important; margin: 0 !important; padding: 0 !important; }
           /* Trailing space would feed a blank card. */
           .kroot { padding: 0 !important; }
-          /* One card per page: a plain 3×5 index card, fed landscape. */
-          @page { size: 5in 3in; margin: 0.2in; }
+          /* One card per page, on a page exactly the shape of the paper: 3in wide
+             × 5in tall, Windows' "North America 3x5". A 5×3 landscape page left
+             the browser and the printer driver to agree on a rotation, and they
+             didn't — the card came out shifted and cut off (Charlie,
+             2026-09-28). The card is turned inside the page instead, so nothing
+             downstream has to rotate anything. */
+          @page { size: 3in 5in; margin: 0; }
           .ksheet { display: block; padding: 0; }
-          .kcard { width: 4.6in; height: 2.6in; border-radius: 0; break-after: page; page-break-after: always; }
-          .kcard:last-child { break-after: auto; page-break-after: auto; }
+          .kpage { display: block; position: relative; width: 3in; height: 5in; overflow: hidden;
+                   break-after: page; page-break-after: always; }
+          .kpage:last-child { break-after: auto; page-break-after: auto; }
+          .kcard { position: absolute; left: 50%; top: 50%; width: 4.6in; height: 2.6in; border-radius: 0;
+                   transform: translate(-50%, -50%) rotate(90deg); }
         }
       `}</style>
     </div>
