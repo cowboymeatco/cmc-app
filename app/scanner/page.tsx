@@ -1575,6 +1575,7 @@ export default function ScannerPage() {
     }
     setInputs(existingInputs)
     loadSharedYield(cust, date)
+    if (pick?.ci_id) await pullCardCarcasses(pick.ci_id, cust, date)
   }
 
   // ── Reopen an existing session ───────────────────────────────────────────────
@@ -1705,6 +1706,53 @@ export default function ScannerPage() {
     setLastItem(`📋 ${hit.name} — session open off the cut card · scan packages`)
     setFlash('ok')
     setTimeout(() => setFlash(null), 3000)
+    await pullCardCarcasses(hit.ciId, hit.name, dt)
+  }
+
+  // ── A cut card's carcasses, in as inputs ─────────────────────────────────────
+  // A card linked to several animals prints once, with one barcode, and scanning
+  // it puts every carcass assigned to it into the session (Charlie,
+  // 2026-09-28). Only whole animals: a half or a quarter doesn't say which side
+  // is on the table, so those tags still get scanned. Nothing already cut or
+  // already an input anywhere comes in again — the route refuses a carcass
+  // linked twice, and a card that covers last week's animals must not pull them
+  // into today's yield.
+  async function pullCardCarcasses(ciId: string, cust: string, dt: string) {
+    try {
+      const card: { carcasses?: { harvest_log_id: string; code: string; portion: string; status: string | null }[]; unassigned_slots?: number } =
+        await fetch(`/api/scanner/animal?card=${encodeURIComponent(ciId)}`).then(r => r.json())
+      const all = card.carcasses ?? []
+      if (!all.length && !card.unassigned_slots) return
+      const have: ProcessingInput[] = await fetch(`/api/processing/inputs?customer_name=${encodeURIComponent(cust)}&session_date=${dt}`)
+        .then(r => r.json()).then(d => (Array.isArray(d) ? d : [])).catch(() => [])
+      const added: ProcessingInput[] = []
+      const toScan: string[] = []
+      for (const c of all) {
+        if (have.some(i => i.linked_harvest_id === c.harvest_log_id)) continue
+        if (c.status === 'cut') continue
+        if (c.portion !== 'Whole') { toScan.push(c.code); continue }
+        const res = await fetch('/api/processing/inputs', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_date: dt, customer_name: cust, pack_date: dt, harvest_log_id: c.harvest_log_id,
+            notes: 'Added from the cut card scan (tag not scanned)' }),
+        })
+        if (res.ok) added.push(await res.json())
+      }
+      if (added.length) {
+        setInputs(prev => [...prev, ...added.filter(a => !prev.some(p => p.id === a.id))])
+        setShowInputs(true)
+        loadSharedYield(cust, dt)
+      }
+      const parts = [
+        added.length ? `${added.length} carcass${added.length === 1 ? '' : 'es'} added from the card` : '',
+        toScan.length ? `scan the half/quarter tag${toScan.length === 1 ? '' : 's'}: ${toScan.join(', ')}` : '',
+        card.unassigned_slots ? `⚠ ${card.unassigned_slots} animal${card.unassigned_slots === 1 ? '' : 's'} on this card have no carcass assigned` : '',
+      ].filter(Boolean)
+      if (parts.length) {
+        setLastKind(card.unassigned_slots ? 'bad' : 'ok')
+        setLastItem(`📋 ${cust} — ${parts.join(' · ')}`)
+      }
+    } catch { /* the tags can still be scanned by hand */ }
   }
 
   // ── Rename the open session's customer ───────────────────────────────────────
@@ -2516,7 +2564,7 @@ export default function ScannerPage() {
   }
 
   // ── Add input from CMC box scan or carcass tag scan ──────────────────────────
-  async function addInput(identifier: string) {
+  async function addInput(identifier: string, overrideCardCheck = false) {
     const isCarcass = /^CT-/.test(identifier) || /^\d{5,6}-\w+(-[LR])?$/i.test(identifier)
     setScan('')
     setFlash('ok')
@@ -2536,8 +2584,33 @@ export default function ScannerPage() {
           box_identifier: identifier,
           input_type:     isCarcass ? 'carcass' : 'raw',
           source_type:    isCarcass ? 'general' : 'received_box',
+          // The session's cut card, so a carcass that isn't on it is caught
+          // before it lands in the yield (the route's over-scan guard).
+          card_id:        sessionCiRef.current,
+          override_card_check: overrideCardCheck,
         }),
       })
+      if (res.status === 409) {
+        const why: { reason?: string; error?: string; card_tags?: string[] } = await res.json().catch(() => ({}))
+        if (why.reason === 'not_on_card') {
+          // Loud, and a deliberate yes to go on: this is the over-scan the
+          // card exists to stop (Charlie, 2026-09-28).
+          setFlash('bad')
+          setLastKind('bad')
+          setLastItem(`⚠ ${identifier} is NOT on this cut card — not added`)
+          const ok = window.confirm(
+            `⚠ ${identifier} is not one of the animals on this cut card.\n\n` +
+            `This card's animals: ${(why.card_tags ?? []).join(', ') || '—'}\n\n` +
+            `Add it to this session anyway?`)
+          if (ok) await addInput(identifier, true)
+          return
+        }
+        setFlash('bad')
+        setLastKind('bad')
+        setLastItem(`⚠ ${why.error ?? `${identifier} was not added`}`)
+        return
+      }
+      if (!res.ok) throw new Error('input save failed')
       const inp: ProcessingInput = await res.json()
       setInputs(prev => [...prev, inp])
       setShowInputs(true)

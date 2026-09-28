@@ -822,6 +822,14 @@ function renderV2Detail(ci: RawInstruction) {
 // animal list after them) instead of a pair each — see cutSignature.
 type HerdAnimal = { ci: RawInstruction; carcass: CarcassInfo }
 function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], carcassArg: CarcassInfo | CarcassInfo[] = EMPTY_CARCASS, isLastCard = true, herd: HerdAnimal[] = []): string {
+  // One card on several animals prints the same way: one cut card, one
+  // packaging sheet, ONE barcode, and the animals on the list after them — the
+  // scan puts them all into the session (Charlie, 2026-09-28). It used to print
+  // a page pair per animal, each with the same barcode on it.
+  const own = Array.isArray(carcassArg) ? carcassArg : [carcassArg]
+  if (!herd.length && own.length > 1) herd = own.map(carcass => ({ ci, carcass }))
+  // Every animal off this one card: the list needs no barcode per row.
+  const oneCard = herd.every(h => h.ci.id === ci.id)
   const herdN = herd.length > 1 ? herd.length : 0
   // One value when every animal agrees, undefined when they don't.
   const agreed = <T,>(xs: T[]): T | undefined => xs.every(x => x === xs[0]) ? xs[0] : undefined
@@ -1333,7 +1341,9 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
        </div>
        <div style="padding:5px 12px;font-size:15px">
          Every count and weight below is <strong>per animal</strong>, except a line marked ONE ANIMAL ONLY.
-         Tags, hanging weights and each animal&rsquo;s own barcode are on the animal list.
+         ${oneCard
+           ? 'Tags and hanging weights are on the animal list. Scanning this card puts every assigned animal into the session.'
+           : 'Tags, hanging weights and each animal&rsquo;s own barcode are on the animal list.'}
          ${herdUnassigned.length ? `<br><strong>⚠ ${herdUnassigned.length} of these ${herdUnassigned.length === 1 ? 'has' : 'have'} no carcass assigned — DO NOT CUT ${herdUnassigned.length === 1 ? 'it' : 'them'} until assigned (marked on the list).</strong>` : ''}
        </div>
      </div>`
@@ -1351,13 +1361,13 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
       <th style="padding:5px 8px">#</th><th style="padding:5px 8px">Producer</th><th style="padding:5px 8px">Lot / Tag</th>
       <th style="padding:5px 8px">Hanging Wt</th><th style="padding:5px 8px">Harvested</th><th style="padding:5px 8px">Inspection</th>
       ${isBeef ? '<th style="padding:5px 8px">Age</th>' : ''}
-      <th style="padding:5px 8px;text-align:center">Card</th><th style="padding:5px 8px">Cut</th><th style="padding:5px 8px">Packed</th>
+      ${oneCard ? '' : '<th style="padding:5px 8px;text-align:center">Card</th>'}<th style="padding:5px 8px">Cut</th><th style="padding:5px 8px">Packed</th>
     </tr></thead>
     <tbody>
       ${herd.map((h, i) => {
         const c = h.carcass
         const td = 'padding:5px 8px;border-bottom:1px solid #C9A882;vertical-align:middle'
-        const code = makeCode39Barcode(`CI-${String(h.ci.id).replace(/-/g, '').slice(0, 8).toUpperCase()}`)
+        const code = oneCard ? '' : makeCode39Barcode(`CI-${String(h.ci.id).replace(/-/g, '').slice(0, 8).toUpperCase()}`)
         const stop = c.state === 'ambiguous'
         return `<tr${stop ? ' style="background:#F2E8D9"' : ''}>
           <td style="${td};font-weight:bold">${i + 1}</td>
@@ -1367,7 +1377,7 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
           <td style="${td}">${esc(herdDates[i])}</td>
           <td style="${td};font-weight:bold">${c.killType === 'Custom' ? 'CUSTOM EXEMPT' : c.killType ? esc(killTypeLabel(c.killType)) : wline(70)}</td>
           ${isBeef ? `<td style="${td};font-weight:bold">${c.over30 === true ? 'OVER 30 MO' : c.over30 === false ? 'Under 30' : wline(50)}</td>` : ''}
-          <td style="${td};width:130px"><div style="width:120px;margin:0 auto">${code}</div></td>
+          ${oneCard ? '' : `<td style="${td};width:130px"><div style="width:120px;margin:0 auto">${code}</div></td>`}
           <td style="${td};font-size:24px">☐</td><td style="${td};font-size:24px">☐</td>
         </tr>`
       }).join('')}
@@ -1389,7 +1399,9 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
 <div class="page pagebreak">
   ${hdr('Cut Card' + ofN, `<div style="background:#F2E8D9;padding:4px 10px 2px;text-align:center">
        <div style="width:150px;margin:0 auto">${ciBarcode}</div>
-       <div style="font-size:9px;color:#75471B;letter-spacing:0.05em;margin-top:1px">SCAN AT SCANNER — OPENS THIS ANIMAL&rsquo;S SESSION</div>
+       <div style="font-size:9px;color:#75471B;letter-spacing:0.05em;margin-top:1px">${herdN && oneCard
+         ? `SCAN AT SCANNER — OPENS THE SESSION &amp; ADDS ALL ${herdN} ANIMALS`
+         : 'SCAN AT SCANNER — OPENS THIS ANIMAL&rsquo;S SESSION'}</div>
      </div>`)}
   ${herdBand}
   ${unassignedBand(carcass)}
@@ -1919,6 +1931,14 @@ export default function CuttingInstructionsPage() {
   // you know is usually a name, a phone number or a carcass tag.
   const [search, setSearch] = useState('')
   const [showLinkPicker, setShowLinkPicker] = useState(false)
+  // Link to several animals at once — ticks keyed `c:<appt>:<harvest log>` for a
+  // carcass, `s:<appt>:<slot>` for a share on a booking not yet harvested.
+  const [showMultiLink, setShowMultiLink] = useState(false)
+  const [multiPicked, setMultiPicked]     = useState<Set<string>>(new Set())
+  const [multiLogs, setMultiLogs]         = useState<Record<string, { id: string; tag: string; lbs: number | null }[]>>({})
+  const [multiAsgs, setMultiAsgs]         = useState<any[]>([])
+  const [multiSaving, setMultiSaving]     = useState(false)
+  const [multiError, setMultiError]       = useState('')
   const [linking, setLinking]           = useState(false)
   // Carcasses hanging on each appointment in the link picker, keyed by
   // appointment id. A producer with several animals booked reads as the same
@@ -2550,6 +2570,132 @@ export default function CuttingInstructionsPage() {
     )
   }
 
+  // ── Link to several animals ────────────────────────────────────────────────
+  // One card on a run of animals (Charlie, 2026-09-28): tick the carcasses and
+  // each one takes the next open share on its check-in, linked to this card and
+  // assigned that carcass, in one save. A booking not harvested yet has no
+  // carcasses to tick, so its open shares are ticked instead and the carcasses
+  // get assigned once they're hanging.
+  useEffect(() => {
+    if (!showMultiLink) return
+    const apptIds = linkableAppts.map(a => a.id)
+    if (!apptIds.length) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const logs = await fetch(`/api/harvest?appointment_ids=${encodeURIComponent(apptIds.join(','))}`).then(r => r.json())
+        const list = Array.isArray(logs) ? logs : []
+        const byAppt: Record<string, { id: string; tag: string; lbs: number | null }[]> = {}
+        for (const l of list) {
+          const halves = (l.half_1_weight_lbs ?? 0) + (l.half_2_weight_lbs ?? 0)
+          const lbs = l.hot_carcass_weight_lbs ?? (halves > 0 ? halves : null)
+          ;(byAppt[l.appointment_id] ??= []).push({ id: l.id, tag: l.carcass_tag ?? '', lbs: lbs == null ? null : Number(lbs) })
+        }
+        for (const k of Object.keys(byAppt)) byAppt[k].sort((a, b) => a.tag.localeCompare(b.tag, undefined, { numeric: true }))
+        const asgs = list.length
+          ? await fetch(`/api/carcass-assignments?harvest_log_ids=${encodeURIComponent(list.map((l: any) => l.id).join(','))}`).then(r => r.json())
+          : []
+        if (cancelled) return
+        setMultiLogs(byAppt)
+        setMultiAsgs(Array.isArray(asgs) ? asgs : [])
+      } catch {
+        if (!cancelled) setMultiError('Could not load the carcasses — close and try again.')
+      }
+    })()
+    return () => { cancelled = true }
+    // linkableAppts is rebuilt every render; its ids are what matter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showMultiLink, linkableIds])
+
+  // Who already holds a carcass, so it can't be ticked onto a second card.
+  const carcassHolder = (logId: string): string | null => {
+    const rows = multiAsgs.filter((r: any) => r.harvest_log_id === logId)
+    return rows.length ? rows.map((r: any) => r.customer_name || 'someone').join(', ') : null
+  }
+
+  async function linkSeveral() {
+    if (!selected) return
+    const card = selected
+    setMultiError('')
+    // Work out every booking's changes first, so a booking short of open
+    // shares stops the whole save before anything is written.
+    const plans: { appt: HarvestAppointment; pairs: { slotIdx: number; logId: string | null }[] }[] = []
+    for (const a of linkableAppts) {
+      const logIds  = [...multiPicked].filter(k => k.startsWith(`c:${a.id}:`)).map(k => k.split(':')[2])
+      const slotIds = [...multiPicked].filter(k => k.startsWith(`s:${a.id}:`)).map(k => k.split(':')[2])
+      if (!logIds.length && !slotIds.length) continue
+      if (!sameSpecies(a.species, speciesOf(card))) continue
+      const open = a.customers.map((c, i) => ({ c, i })).filter(x => !x.c.linked_cutting_instruction_id)
+      if (logIds.length > open.length) {
+        setMultiError(`${a.source || 'That check-in'} has ${open.length} open share${open.length === 1 ? '' : 's'} for ${logIds.length} carcasses ticked. Add shares to the check-in first, or tick fewer.`)
+        return
+      }
+      plans.push({
+        appt: a,
+        pairs: logIds.length
+          ? logIds.map((logId, n) => ({ slotIdx: open[n].i, logId }))
+          : slotIds.map(id => ({ slotIdx: a.customers.findIndex(c => c.id === id), logId: null })).filter(p => p.slotIdx >= 0),
+      })
+    }
+    if (!plans.length) { setMultiError('Tick at least one animal.'); return }
+
+    setMultiSaving(true)
+    let customerId: string | null = null
+    try {
+      for (const { appt, pairs } of plans) {
+        const idxs = new Set(pairs.map(p => p.slotIdx))
+        const customers = appt.customers.map((c, i) => idxs.has(i) ? { ...c, linked_cutting_instruction_id: card.id } : c)
+        const res = await fetch('/api/appointments', {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: appt.id, customers }),
+        })
+        if (!res.ok) throw new Error(`Could not link to ${appt.source || 'that check-in'}`)
+        const saved = await res.json().catch(() => null)
+        customerId ??= saved?.customers?.[pairs[0].slotIdx]?.customer_id ?? null
+
+        const withCarcass = pairs.filter(p => p.logId)
+        if (!withCarcass.length) continue
+        // The assignments API replaces a check-in's rows wholesale: keep every
+        // other share's exactly as it is and add this card's.
+        const existing = await fetch(`/api/carcass-assignments?appointment_id=${encodeURIComponent(appt.id)}`).then(r => r.json()).catch(() => [])
+        const slotIds = new Set(withCarcass.map(p => appt.customers[p.slotIdx].id))
+        const keep = (Array.isArray(existing) ? existing : [])
+          .filter((r: any) => !slotIds.has(r.appointment_customer_id))
+          .map((r: any) => ({
+            harvest_log_id: r.harvest_log_id, appointment_customer_id: r.appointment_customer_id,
+            customer_name: r.customer_name, portion: r.portion, linked_cutting_instruction_id: r.linked_cutting_instruction_id,
+          }))
+        const add = withCarcass.map(p => {
+          const slot = appt.customers[p.slotIdx]
+          return {
+            harvest_log_id: p.logId, appointment_customer_id: slot.id, customer_name: slot.customer_name,
+            portion: slot.portion || 'Whole', linked_cutting_instruction_id: card.id,
+          }
+        })
+        const ar = await fetch('/api/carcass-assignments', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ appointment_id: appt.id, assignments: [...keep, ...add] }),
+        })
+        if (!ar.ok) {
+          const body = await ar.json().catch(() => ({}))
+          throw new Error(`Linked, but the carcasses on ${appt.source || 'that check-in'} were not assigned: ${body.error || 'unknown error'}. Assign them on the card.`)
+        }
+      }
+      await fetch('/api/cutting-instructions', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [card.id], status: 'linked', customer_id: customerId }),
+      })
+      setSelected(prev => prev && prev.id === card.id ? { ...prev, status: 'linked' } : prev)
+      setShowMultiLink(false)
+      setMultiPicked(new Set())
+    } catch (e) {
+      setMultiError(e instanceof Error ? e.message : 'Could not link those animals.')
+    } finally {
+      setMultiSaving(false)
+      load()
+    }
+  }
+
   // The line that stops a fruitless hunt: say the spoken-for bookings exist and
   // offer them, instead of leaving the list looking like the whole truth.
   function takenApptsToggle() {
@@ -3048,6 +3194,14 @@ export default function CuttingInstructionsPage() {
                     more than one animal's worth is linked once per animal, and
                     hiding this button once linked left no way to do it. */}
                 {selected.status !== 'archived' && (
+                  <button
+                    onClick={() => { setMultiPicked(new Set()); setMultiError(''); setShowMultiLink(true) }}
+                    title="Put this one card on several carcasses at once. It prints as one cut card with one barcode, and scanning it adds every one of them to the packing session."
+                    style={btnStyle('var(--med-brown)')}>
+                    🔗 Link to several animals
+                  </button>
+                )}
+                {selected.status !== 'archived' && (
                   <button onClick={() => setShowLinkPicker(true)} style={btnStyle('var(--med-brown)')}>
                     {selected.status === 'linked' ? '🔗 Link to another animal' : '🔗 Link to Appointment'}
                   </button>
@@ -3480,6 +3634,72 @@ export default function CuttingInstructionsPage() {
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
               <button onClick={() => setShowLinkPicker(false)} style={btnStyle('transparent', 'var(--tan)')}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showMultiLink && selected && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: '1rem' }} onClick={() => !multiSaving && setShowMultiLink(false)}>
+          <div style={{ background: 'var(--dark)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: '6px', padding: '1.75rem', width: '100%', maxWidth: '620px', maxHeight: '85vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+            <h2 style={{ margin: '0 0 0.5rem', color: 'var(--cream)', fontSize: '1.05rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Link to several animals</h2>
+            <p style={{ margin: '0 0 1.1rem', fontSize: '0.82rem', color: 'var(--tan)', lineHeight: 1.5 }}>
+              Tick every carcass <strong style={{ color: 'var(--cream)' }}>{selected.data?.customerName}</strong>&apos;s {selectedSpecies} card covers.
+              Each one takes an open share on its check-in. The card then prints once, with one barcode, and scanning it at the
+              packing scanner adds all of them to the session.
+            </p>
+
+            {linkableAppts.length === 0 ? (
+              <p style={{ color: 'var(--tan)', textAlign: 'center', padding: '2rem' }}>No {selectedSpecies.toLowerCase()} check-ins have an open share.</p>
+            ) : linkableAppts.map(a => {
+              const logs = multiLogs[a.id] ?? []
+              const open = a.customers.filter(c => !c.linked_cutting_instruction_id)
+              const ticked = [...multiPicked].filter(k => k.startsWith(`c:${a.id}:`) || k.startsWith(`s:${a.id}:`)).length
+              const toggle = (k: string) => setMultiPicked(prev => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n })
+              const row: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: '0.55rem', padding: '0.35rem 0.5rem', borderRadius: 3, fontSize: '0.85rem' }
+              return (
+                <div key={a.id} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: '4px', padding: '0.8rem 1rem', marginBottom: '0.7rem' }}>
+                  <div style={{ fontWeight: 700, color: 'var(--cream)', marginBottom: '0.4rem', fontSize: '0.9rem' }}>
+                    {speciesEmblem(a.species)} {a.species} · {new Date(a.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
+                    {a.source && <span style={{ color: 'var(--tan)', fontWeight: 400, marginLeft: '0.5rem' }}>· {a.source}</span>}
+                    <span style={{ color: 'var(--light-brown)', fontWeight: 400, marginLeft: '0.5rem', fontSize: '0.78rem' }}>
+                      {open.length} open share{open.length === 1 ? '' : 's'}{ticked ? ` · ${ticked} ticked` : ''}
+                    </span>
+                  </div>
+                  {logs.length > 0 ? logs.map(l => {
+                    const k = `c:${a.id}:${l.id}`
+                    const holder = carcassHolder(l.id)
+                    return (
+                      <label key={l.id} style={{ ...row, cursor: holder ? 'default' : 'pointer', color: holder ? 'var(--light-brown)' : 'var(--cream)', background: multiPicked.has(k) ? 'rgba(117,71,27,0.35)' : 'transparent' }}>
+                        <input type="checkbox" disabled={!!holder || multiSaving} checked={multiPicked.has(k)} onChange={() => toggle(k)}
+                          style={{ width: 15, height: 15, accentColor: 'var(--tan)' }} />
+                        <span style={{ fontWeight: 700 }}>Tag #{l.tag || '?'}</span>
+                        {l.lbs != null && <span style={{ color: '#7CAFDD' }}>{l.lbs} lbs</span>}
+                        {holder && <span style={{ fontSize: '0.76rem' }}>· already assigned to {holder}</span>}
+                      </label>
+                    )
+                  }) : open.map(c => {
+                    const k = `s:${a.id}:${c.id}`
+                    return (
+                      <label key={c.id} style={{ ...row, cursor: 'pointer', color: 'var(--cream)', background: multiPicked.has(k) ? 'rgba(117,71,27,0.35)' : 'transparent' }}>
+                        <input type="checkbox" disabled={multiSaving} checked={multiPicked.has(k)} onChange={() => toggle(k)}
+                          style={{ width: 15, height: 15, accentColor: 'var(--tan)' }} />
+                        {c.customer_name || 'Unnamed customer'} ({c.portion})
+                        <span style={{ color: 'var(--light-brown)', fontSize: '0.76rem' }}>· not harvested yet — assign the carcass later</span>
+                      </label>
+                    )
+                  })}
+                </div>
+              )
+            })}
+
+            {multiError && <p style={{ color: '#E8883A', fontSize: '0.82rem', margin: '0.5rem 0' }}>⚠ {multiError}</p>}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
+              <button onClick={() => setShowMultiLink(false)} disabled={multiSaving} style={btnStyle('transparent', 'var(--tan)')}>Cancel</button>
+              <button onClick={linkSeveral} disabled={multiSaving || multiPicked.size === 0}
+                style={{ ...btnStyle('var(--tan)', 'var(--dark-brown)'), fontWeight: 700, opacity: multiSaving || multiPicked.size === 0 ? 0.6 : 1 }}>
+                {multiSaving ? 'Linking…' : `🔗 Link ${multiPicked.size || ''} animal${multiPicked.size === 1 ? '' : 's'}`}
+              </button>
             </div>
           </div>
         </div>
