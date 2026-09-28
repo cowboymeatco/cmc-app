@@ -120,7 +120,7 @@ export async function resolveAnimal(raw: string): Promise<ResolvedAnimal> {
     let appointmentId = (card.appointment_id as string) ?? null
     if (!appointmentId) {
       const { data: appts } = await supabase.from('harvest_appointments').select('id')
-        .contains('customers', [{ linked_cutting_instruction_id: String(card.id) }]).limit(2)
+        .contains('customers', JSON.stringify([{ linked_cutting_instruction_id: String(card.id) }])).limit(2)
       if (appts?.length === 1) appointmentId = String(appts[0].id)
     }
     return {
@@ -253,4 +253,68 @@ export async function animalsOnBooking(appointmentId: string): Promise<{ animals
     status: (r.status as string) ?? null,
   }))
   return { animals, portions }
+}
+
+// ── The carcasses one cut card covers ────────────────────────────────────────
+// A card can sit on several animals — a producer's run of beef on one cut spec
+// is one card linked to every slot (Charlie, 2026-09-28: "link 1 card to
+// multiple carcasses ... then any carcasses linked to that cutting instruction
+// goes in as an input"). The card reaches a carcass through the customer slot
+// it's linked to and that slot's carcass_assignments row; the row's own
+// linked_cutting_instruction_id is only a snapshot, empty when the carcass was
+// assigned at harvest before the card came in, so it's matched on the slot.
+
+export interface CardCarcass {
+  harvest_log_id: string
+  /** YYDDD-TAG — what the carcass tag scans as, whole. */
+  code: string
+  tag: string
+  portion: string
+  weight_lbs: number | null
+  status: string | null
+  appointment_id: string
+}
+
+export interface CardCarcasses {
+  carcasses: CardCarcass[]
+  /** Slots the card is on that have no carcass assigned yet. */
+  unassigned_slots: number
+}
+
+export async function carcassesForCard(cardId: string): Promise<CardCarcasses> {
+  const { data: appts } = await supabase.from('harvest_appointments').select('id, customers')
+    .contains('customers', JSON.stringify([{ linked_cutting_instruction_id: cardId }]))
+  const slots = (appts ?? []).flatMap(a =>
+    (Array.isArray(a.customers) ? a.customers : [])
+      .filter((c: { linked_cutting_instruction_id?: string }) => c?.linked_cutting_instruction_id === cardId)
+      .map((c: { id: string }) => ({ appointment_id: String(a.id), slot_id: String(c.id) })))
+  if (!slots.length) return { carcasses: [], unassigned_slots: 0 }
+
+  const { data: rows } = await supabase.from('carcass_assignments')
+    .select('harvest_log_id, appointment_id, appointment_customer_id, portion')
+    .in('appointment_id', [...new Set(slots.map(s => s.appointment_id))])
+    .in('appointment_customer_id', slots.map(s => s.slot_id))
+  const asgs = rows ?? []
+  const unassigned_slots = slots.filter(s => !asgs.some(r => r.appointment_customer_id === s.slot_id && r.appointment_id === s.appointment_id)).length
+  const ids = [...new Set(asgs.map(r => String(r.harvest_log_id)))]
+  if (!ids.length) return { carcasses: [], unassigned_slots }
+
+  const { data: logs } = await supabase.from('harvest_log')
+    .select('id, carcass_tag, harvest_date, hot_carcass_weight_lbs, half_1_weight_lbs, half_2_weight_lbs, status, appointment_id')
+    .in('id', ids)
+  const carcasses = (logs ?? []).map(l => {
+    const halves = Number(l.half_1_weight_lbs ?? 0) + Number(l.half_2_weight_lbs ?? 0)
+    const hcw = l.hot_carcass_weight_lbs != null ? Number(l.hot_carcass_weight_lbs) : halves > 0 ? halves : null
+    const asg = asgs.find(r => String(r.harvest_log_id) === String(l.id))
+    return {
+      harvest_log_id: String(l.id),
+      code: `${julianYYDDD(String(l.harvest_date))}-${l.carcass_tag}`,
+      tag: String(l.carcass_tag ?? ''),
+      portion: String(asg?.portion ?? 'Whole'),
+      weight_lbs: hcw,
+      status: (l.status as string) ?? null,
+      appointment_id: String(asg?.appointment_id ?? l.appointment_id ?? ''),
+    }
+  }).sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }))
+  return { carcasses, unassigned_slots }
 }

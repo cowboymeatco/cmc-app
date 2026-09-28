@@ -1,12 +1,13 @@
 export const runtime = 'edge'
 export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
-import { animalsOnBooking, coolerAnimals, resolveAnimal } from '@/lib/sessionLinks'
+import { animalsOnBooking, carcassesForCard, coolerAnimals, resolveAnimal } from '@/lib/sessionLinks'
 import { isoDate } from '@/lib/dates'
 
 // GET /api/scanner/animal?code=26252-653        → the animal behind a carcass tag or CI- card code
 // GET /api/scanner/animal?cooler=1&date=YYYY-MM-DD → what's hanging, today's cut schedule first
 // GET /api/scanner/animal?booking=<appointment id>  → the carcasses on a cut card's booking
+// GET /api/scanner/animal?card=<cut card id>        → the carcasses assigned to that card
 //
 // Feeds New Session on /scanner: start from the animal, and the name follows
 // (lib/sessionLinks.ts).
@@ -15,6 +16,8 @@ export async function GET(req: NextRequest) {
   if (q.get('cooler')) {
     return NextResponse.json({ animals: await coolerAnimals(q.get('date') || isoDate()) })
   }
+  const card = q.get('card')
+  if (card) return NextResponse.json(await carcassesForCard(card))
   const booking = q.get('booking')
   if (booking) return NextResponse.json(await animalsOnBooking(booking))
   const code = q.get('code')

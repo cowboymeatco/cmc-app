@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { isoDate } from '@/lib/dates'
 import { julianYYDDD } from '@/lib/label'
-import { cardsForAnimal, fillSessionLinks } from '@/lib/sessionLinks'
+import { cardsForAnimal, carcassesForCard, fillSessionLinks } from '@/lib/sessionLinks'
 
 export const dynamic = 'force-dynamic'
 
@@ -184,6 +184,39 @@ export async function POST(req: NextRequest) {
       if (harvest.appointment_id && !body.linked_appointment_id) {
         body.linked_appointment_id = harvest.appointment_id
       }
+    }
+  }
+
+  // The same code twice in one session puts it into the yield twice and reads
+  // as a plausible number, so it's refused. Another session is fine — two
+  // quarters of one half are cut under two customers' sessions.
+  const sessionName = typeof body.customer_name === 'string' ? body.customer_name.trim() : null
+  if (identifier && sessionName) {
+    const { data: same } = await supabase
+      .from('processing_inputs')
+      .select('id')
+      .eq('customer_name', sessionName)
+      .eq('session_date', body.session_date ?? isoDate())
+      .eq('box_identifier', identifier)
+      .limit(1)
+    if (same?.length) {
+      return NextResponse.json({ error: `${identifier} is already in this session`, reason: 'duplicate' }, { status: 409 })
+    }
+  }
+
+  // Over-scan guard (Charlie, 2026-09-28: "flag any carcasses that weren't
+  // assigned to that cutting instruction so we don't over scan"). When the
+  // session knows its cut card and that card has carcasses assigned, a carcass
+  // that isn't one of them is held back until the scanner confirms it. A card
+  // with nothing assigned yet can't say either way, so it doesn't block.
+  if (body.card_id && linked_harvest_id && !body.override_card_check) {
+    const onCard = await carcassesForCard(String(body.card_id))
+    if (onCard.carcasses.length && !onCard.carcasses.some(c => c.harvest_log_id === linked_harvest_id)) {
+      return NextResponse.json({
+        error: `${identifier ?? 'This carcass'} is not assigned to this cut card`,
+        reason: 'not_on_card',
+        card_tags: onCard.carcasses.map(c => c.code),
+      }, { status: 409 })
     }
   }
 
