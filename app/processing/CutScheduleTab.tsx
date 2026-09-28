@@ -9,7 +9,7 @@ import {
   type PriorityWeights, type ScheduleEntry, type BreakItem, type ListItem, type FutureBooking,
   type FutureItem, type HarvestDay, type CarcassLink,
   DEFAULT_WEIGHTS, WEIGHT_LABELS, buildEntries, loadScheduleData, uniqueCarcasses as uniqueOf,
-  calcScore, speciesColor, speciesIcon, portionBadge, cutDateByKey, hangAtCut, hangColor, autoDateBreaks,
+  calcScore, speciesColor, speciesIcon, portionBadge, cutDateByKey, hangAtCut, hangColor, autoDateBreaks, moveDayIntoDateOrder,
   carcassTotals, FUTURE_WINDOW_DEFAULT_DAYS, FUTURE_WINDOW_CHOICES,
 } from '@/lib/cutSchedule'
 import { isoDate, dateLabel, addDaysISO, mondayOfISO } from '@/lib/dates'
@@ -401,8 +401,10 @@ export default function CutScheduleTab() {
       return
     }
     setBreakError(prev => (prev?.key === key ? null : prev))
-    setEntries(prev => prev.map(e =>
-      e.type === 'break' && e.key === key ? { ...e, break_date } : e))
+    // A dated day takes its carcasses with it to where the date belongs.
+    setEntries(prev => moveDayIntoDateOrder(
+      prev.map(e => e.type === 'break' && e.key === key ? { ...e, break_date } : e), key,
+    ).map((e, i) => ({ ...e, rank: i + 1 })))
   }
 
   // Called here and will also be called by the processing scanner.
@@ -1448,7 +1450,7 @@ export default function CutScheduleTab() {
           }}>
             <span>⠿ Drag to reorder</span>
             <span style={{ color: C.red }}>→ Drag a row onto the No Cut Day box to take its day off</span>
-            <span style={{ color: C.amber }}>➕ Day Break = start of a cutting day; totals the carcasses below it (drag to move) · one per date</span>
+            <span style={{ color: C.amber }}>➕ Day Break = start of a cutting day; totals the carcasses below it (drag to move) · one per date · picking a date moves the day and its carcasses into date order</span>
             <span style={{ color: C.tan }}>🔪 Harvest day = booked on the harvest floor, nothing cut that day (from the harvest calendar — not editable here)</span>
             <span>→ = days hung by the day it&apos;s scheduled to be cut</span>
             <span>🔒 Lock = pin when recalculating</span>
