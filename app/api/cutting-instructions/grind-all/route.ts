@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import {
   buildGrindAllData, grindAllMissing, instructionSpecies, speciesKey,
   type GrindAllChoices,
@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'appointment_id and appointment_customer_id required' }, { status: 400 })
   }
 
-  const { data: appt, error: apptErr } = await supabase
+  const { data: appt, error: apptErr } = await supabaseAdmin
     .from('harvest_appointments')
     .select('id, species, harvest_date, source, customers')
     .eq('id', apptId)
@@ -84,7 +84,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `This card still needs ${missing}.` }, { status: 400 })
   }
 
-  const { data: card, error: insErr } = await supabase
+  const { data: card, error: insErr } = await supabaseAdmin
     .from('cutting_instructions')
     .insert([{
       customer_name: choices.customerName.trim(),
@@ -106,7 +106,7 @@ export async function POST(req: NextRequest) {
   const next = customers.map((c, i) =>
     i === slotIdx ? { ...c, linked_cutting_instruction_id: card.id } : c
   )
-  const { error: linkErr } = await supabase
+  const { error: linkErr } = await supabaseAdmin
     .from('harvest_appointments')
     .update({ customers: next })
     .eq('id', apptId)
@@ -115,7 +115,7 @@ export async function POST(req: NextRequest) {
   // it would sit in the unlinked pile looking like a customer submission. Drop
   // it and let the caller retry.
   if (linkErr) {
-    await supabase.from('cutting_instructions').delete().eq('id', card.id)
+    await supabaseAdmin.from('cutting_instructions').delete().eq('id', card.id)
     return NextResponse.json({ error: linkErr.message }, { status: 500 })
   }
 

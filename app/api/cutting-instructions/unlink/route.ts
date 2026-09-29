@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { unlinkInstruction } from '@/lib/cuttingLinks'
 
 export const dynamic = 'force-dynamic'
@@ -34,13 +34,13 @@ export async function POST(req: NextRequest) {
   // history on /customers.
   let status: string | null = null
   if (remaining === 0) {
-    const { data: row } = await supabase
+    const { data: row } = await supabaseAdmin
       .from('cutting_instructions')
       .select('status')
       .eq('id', id)
       .single()
     if (row?.status === 'linked') {
-      const { error: upErr } = await supabase
+      const { error: upErr } = await supabaseAdmin
         .from('cutting_instructions')
         .update({ status: 'pending' })
         .eq('id', id)

@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // Attach or clear a PLU's generic product photo (product-photos bucket, public).
 // The image is resized client-side before it arrives; here we just store it and
@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
   // Remove: clear the column. The stored object is left in place (like
   // animal-photos — the bucket has no delete policy); nothing points at it.
   if (form.get('remove') === 'true') {
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from('plu_items')
       .update({ photo_url: null, updated_at: new Date().toISOString() })
       .eq('id', id)
@@ -28,16 +28,16 @@ export async function POST(req: NextRequest) {
   const ext  = file.name.split('.').pop()?.toLowerCase() ?? 'jpg'
   const path = `${id}/${Date.now()}.${ext}`
 
-  const { error: upErr } = await supabase.storage
+  const { error: upErr } = await supabaseAdmin.storage
     .from('product-photos')
     .upload(path, file, { contentType: file.type || 'image/jpeg', upsert: true })
   if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 })
 
-  const { data: { publicUrl } } = supabase.storage
+  const { data: { publicUrl } } = supabaseAdmin.storage
     .from('product-photos')
     .getPublicUrl(path)
 
-  const { error: dbErr } = await supabase
+  const { error: dbErr } = await supabaseAdmin
     .from('plu_items')
     .update({ photo_url: publicUrl, updated_at: new Date().toISOString() })
     .eq('id', id)

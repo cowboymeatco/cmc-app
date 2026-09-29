@@ -1,7 +1,7 @@
 export const runtime = 'edge'
 export const dynamic = 'force-dynamic'
 import { NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // GET /api/scanner/customer-names — the names the packing scanner should offer
 // when a session is opened.
@@ -21,15 +21,15 @@ export async function GET() {
   const since = new Date(Date.now() - 120 * 86_400_000).toISOString().slice(0, 10)
 
   const [sheetRes, sessRes, aliasRes] = await Promise.all([
-    supabase.from('cutting_instructions')
+    supabaseAdmin.from('cutting_instructions')
       .select('id, customer_name, species, created_at')
       .neq('status', 'archived')
       .order('created_at', { ascending: false }),
-    supabase.from('processing_sessions')
+    supabaseAdmin.from('processing_sessions')
       .select('customer_name, session_date')
       .gte('session_date', since)
       .order('session_date', { ascending: false }),
-    supabase.from('customer_name_aliases').select('alias, expands_to'),
+    supabaseAdmin.from('customer_name_aliases').select('alias, expands_to'),
   ])
   if (sheetRes.error) return NextResponse.json({ error: sheetRes.error.message }, { status: 500 })
 

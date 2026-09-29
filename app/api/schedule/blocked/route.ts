@@ -1,11 +1,11 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('schedule_blocked_dates')
     .select('*')
     .order('date')
@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
     : body.date ? [body.date] : []
   if (dates.length === 0) return NextResponse.json({ error: 'date(s) required' }, { status: 400 })
   const rows = dates.map((date: string) => ({ date, reason }))
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('schedule_blocked_dates')
     .upsert(rows, { onConflict: 'date' })
     .select()
@@ -37,7 +37,7 @@ export async function DELETE(req: NextRequest) {
   const single = searchParams.get('date')
   const dates = datesParam ? datesParam.split(',').filter(Boolean) : single ? [single] : []
   if (dates.length === 0) return NextResponse.json({ error: 'date(s) required' }, { status: 400 })
-  const { error } = await supabase
+  const { error } = await supabaseAdmin
     .from('schedule_blocked_dates')
     .delete()
     .in('date', dates)

@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 export const dynamic = 'force-dynamic'
 
@@ -31,13 +31,13 @@ export async function POST(req: NextRequest) {
 
   // Collision guard — does anything already live under the new key on this date?
   const [{ data: clashBoxes }, { data: clashSession }] = await Promise.all([
-    supabase
+    supabaseAdmin
       .from('boxes')
       .select('id')
       .eq('customer_name', new_name)
       .eq('pack_date', session_date)
       .limit(1),
-    supabase
+    supabaseAdmin
       .from('processing_sessions')
       .select('id')
       .eq('customer_name', new_name)
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Re-key boxes
-  const { error: bErr } = await supabase
+  const { error: bErr } = await supabaseAdmin
     .from('boxes')
     .update({ customer_name: new_name })
     .eq('customer_name', old_name)
@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
   if (bErr) return NextResponse.json({ error: bErr.message }, { status: 500 })
 
   // Re-key inputs so yield math stays with the session
-  const { error: iErr } = await supabase
+  const { error: iErr } = await supabaseAdmin
     .from('processing_inputs')
     .update({ customer_name: new_name })
     .eq('customer_name', old_name)
@@ -70,7 +70,7 @@ export async function POST(req: NextRequest) {
   // Cure tags are the same customer_name + date key, snapshotted when the seal
   // was scanned — so a rename that skipped them left Processing → In Cure still
   // showing the name the floor first typed (Jill, 2026-09-10).
-  const { error: cErr } = await supabase
+  const { error: cErr } = await supabaseAdmin
     .from('cure_tags')
     .update({ customer_name: new_name })
     .eq('customer_name', old_name)
@@ -78,7 +78,7 @@ export async function POST(req: NextRequest) {
   if (cErr) return NextResponse.json({ error: cErr.message }, { status: 500 })
 
   // Re-key the session record (may not exist — sessions can be boxes-only)
-  const { error: sErr } = await supabase
+  const { error: sErr } = await supabaseAdmin
     .from('processing_sessions')
     .update({ customer_name: new_name, updated_at: new Date().toISOString() })
     .eq('customer_name', old_name)

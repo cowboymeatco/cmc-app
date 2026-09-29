@@ -1,4 +1,4 @@
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import {
   buildShiftItems, autoCloseFor, p1Complete, defaultAssignments,
   type CleaningTask, type ProductionSignal, type BuiltItem, type Priority,
@@ -37,10 +37,10 @@ export interface CrewName { id: string; name: string }
  */
 export async function getProductionSignals(dateISO: string): Promise<ProductionSignal[]> {
   const [harvest, cut, pack, smoke] = await Promise.all([
-    supabase.from('harvest_log').select('id').eq('harvest_date', dateISO).limit(1),
-    supabase.from('cut_schedule_items').select('id').eq('schedule_date', dateISO).limit(1),
-    supabase.from('boxes').select('id').eq('pack_date', dateISO).limit(1),
-    supabase.from('smokehouse_cook').select('id')
+    supabaseAdmin.from('harvest_log').select('id').eq('harvest_date', dateISO).limit(1),
+    supabaseAdmin.from('cut_schedule_items').select('id').eq('schedule_date', dateISO).limit(1),
+    supabaseAdmin.from('boxes').select('id').eq('pack_date', dateISO).limit(1),
+    supabaseAdmin.from('smokehouse_cook').select('id')
       .gte('started_at', `${dateISO}T00:00:00`)
       .lt('started_at',  `${dateISO}T23:59:59`)
       .limit(1),
@@ -58,7 +58,7 @@ export async function getProductionSignals(dateISO: string): Promise<ProductionS
 async function getLastDone(beforeISO: string): Promise<Record<string, string>> {
   // Ordered oldest-first so the later assignment into the map wins, leaving the
   // most recent completion per task.
-  const { data } = await supabase
+  const { data } = await supabaseAdmin
     .from('cleaning_shift_items')
     .select('task_id, done_at, cleaning_shifts!inner(shift_date)')
     .eq('status', 'done')
@@ -78,9 +78,9 @@ async function getLastDone(beforeISO: string): Promise<Record<string, string>> {
 
 export async function buildFor(dateISO: string): Promise<{ items: BuiltItem[]; signals: ProductionSignal[] }> {
   const [tasksRes, areasRes, equipRes, signals, lastDone] = await Promise.all([
-    supabase.from('cleaning_tasks').select('*').eq('active', true),
-    supabase.from('cleaning_areas').select('id, name, sort_order').eq('active', true),
-    supabase.from('assets').select('id, name').eq('active', true),
+    supabaseAdmin.from('cleaning_tasks').select('*').eq('active', true),
+    supabaseAdmin.from('cleaning_areas').select('id, name, sort_order').eq('active', true),
+    supabaseAdmin.from('assets').select('id, name').eq('active', true),
     getProductionSignals(dateISO),
     getLastDone(dateISO),
   ])
@@ -100,7 +100,7 @@ export async function buildFor(dateISO: string): Promise<{ items: BuiltItem[]; s
 
 export async function crewNamed(ids: string[] | null | undefined): Promise<CrewName[]> {
   if (!ids?.length) return []
-  const { data } = await supabase.from('cleaning_crew').select('id, name').in('id', ids)
+  const { data } = await supabaseAdmin.from('cleaning_crew').select('id, name').in('id', ids)
   // Keep check-in order, not the database's.
   const byId = new Map((data ?? []).map(c => [c.id as string, c.name as string]))
   return ids.filter(id => byId.has(id)).map(id => ({ id, name: byId.get(id)! }))
@@ -120,7 +120,7 @@ export async function startShift(
   const { items, signals } = await buildFor(dateISO)
   const areasTonight = [...new Set(items.map(i => i.area_name))]
 
-  const { data: created, error } = await supabase
+  const { data: created, error } = await supabaseAdmin
     .from('cleaning_shifts')
     .insert([{
       shift_date:       dateISO,
@@ -135,14 +135,14 @@ export async function startShift(
   if (error && error.code !== '23505') return { error: error.message }
 
   if (!created) {
-    const { data: raced } = await supabase
+    const { data: raced } = await supabaseAdmin
       .from('cleaning_shifts').select('*').eq('shift_date', dateISO).single()
     if (!raced) return { error: 'could not open a shift' }
     return { shift: raced as ShiftRow, created: false }
   }
 
   if (items.length) {
-    const { error: itemsErr } = await supabase
+    const { error: itemsErr } = await supabaseAdmin
       .from('cleaning_shift_items')
       .insert(items.map(i => ({ ...i, shift_id: created.id })))
     if (itemsErr) return { error: itemsErr.message }
@@ -159,19 +159,19 @@ export async function startShift(
  */
 export async function stampP1(shiftId: string): Promise<string | null> {
   const [{ data: items }, { data: shift }] = await Promise.all([
-    supabase.from('cleaning_shift_items').select('status, priority').eq('shift_id', shiftId).eq('priority', 1),
-    supabase.from('cleaning_shifts').select('p1_complete_at').eq('id', shiftId).single(),
+    supabaseAdmin.from('cleaning_shift_items').select('status, priority').eq('shift_id', shiftId).eq('priority', 1),
+    supabaseAdmin.from('cleaning_shifts').select('p1_complete_at').eq('id', shiftId).single(),
   ])
   const complete = p1Complete((items ?? []) as { status: 'pending' | 'done' | 'na' | 'issue' | 'rolled'; priority: Priority }[])
   const current  = (shift?.p1_complete_at as string | null) ?? null
 
   if (complete && !current) {
     const now = new Date().toISOString()
-    await supabase.from('cleaning_shifts').update({ p1_complete_at: now }).eq('id', shiftId)
+    await supabaseAdmin.from('cleaning_shifts').update({ p1_complete_at: now }).eq('id', shiftId)
     return now
   }
   if (!complete && current) {
-    await supabase.from('cleaning_shifts').update({ p1_complete_at: null }).eq('id', shiftId)
+    await supabaseAdmin.from('cleaning_shifts').update({ p1_complete_at: null }).eq('id', shiftId)
     return null
   }
   return current
@@ -192,14 +192,14 @@ export async function closeShift(
 ): Promise<CloseResult | { error: string }> {
   await stampP1(shiftId)
 
-  const { data: rolledRows, error: rollErr } = await supabase
+  const { data: rolledRows, error: rollErr } = await supabaseAdmin
     .from('cleaning_shift_items')
     .update({ status: 'rolled' })
     .eq('shift_id', shiftId).eq('status', 'pending').in('priority', [2, 3])
     .select('id')
   if (rollErr) return { error: rollErr.message }
 
-  const { data: p1Open } = await supabase
+  const { data: p1Open } = await supabaseAdmin
     .from('cleaning_shift_items').select('id')
     .eq('shift_id', shiftId).eq('status', 'pending').eq('priority', 1)
 
@@ -210,7 +210,7 @@ export async function closeShift(
   }
   if (opts.notes !== undefined) updates.notes = opts.notes.trim() || null
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('cleaning_shifts').update(updates).eq('id', shiftId).select().single()
   if (error) return { error: error.message }
 
@@ -223,7 +223,7 @@ export async function closeShift(
  * cutter's phone at 6 AM is a perfectly good clock if the cron never fired.
  */
 export async function closeStaleShifts(now: Date = new Date()): Promise<{ shift_date: string; rolled: number }[]> {
-  const { data: open } = await supabase
+  const { data: open } = await supabaseAdmin
     .from('cleaning_shifts').select('id, shift_date').eq('status', 'open')
 
   const closed: { shift_date: string; rolled: number }[] = []

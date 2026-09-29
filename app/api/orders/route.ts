@@ -1,6 +1,5 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { isoDate } from '@/lib/dates'
 
@@ -19,10 +18,10 @@ type OrderRow = { id: string; retail_order_items?: { plu_number: string | null; 
 async function attachScans<T extends OrderRow>(orders: T[]): Promise<T[]> {
   const ids = orders.map(o => o.id)
   if (ids.length === 0) return orders
-  const { data: boxes } = await supabase.from('boxes').select('id, order_id').in('order_id', ids)
+  const { data: boxes } = await supabaseAdmin.from('boxes').select('id, order_id').in('order_id', ids)
   if (!boxes?.length) return orders
   const orderOfBox = new Map(boxes.map(b => [b.id as string, b.order_id as string]))
-  const { data: scans } = await supabase
+  const { data: scans } = await supabaseAdmin
     .from('box_scans')
     .select('box_id, plu_number, weight_lbs, quantity')
     .in('box_id', [...orderOfBox.keys()])
@@ -52,7 +51,7 @@ export async function GET(req: NextRequest) {
   const id     = searchParams.get('id')
 
   if (id) {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('retail_orders')
       .select('*, retail_order_items(*)')
       .eq('id', id)
@@ -61,7 +60,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json((await attachScans([data]))[0])
   }
 
-  let query = supabase
+  let query = supabaseAdmin
     .from('retail_orders')
     .select('*, retail_order_items(*)')
     .order('due_date', { ascending: true })
@@ -78,7 +77,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json()
   const { items, ...orderFields } = body
 
-  const { data: order, error: orderErr } = await supabase
+  const { data: order, error: orderErr } = await supabaseAdmin
     .from('retail_orders')
     .insert([{
       customer_name:    orderFields.customer_name,
@@ -114,7 +113,7 @@ export async function POST(req: NextRequest) {
       notes:       it.notes       ?? '',
     }))
 
-    const { error: itemErr } = await supabase
+    const { error: itemErr } = await supabaseAdmin
       .from('retail_order_items')
       .insert(rows)
 
@@ -122,7 +121,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Return the full order with items
-  const { data: full } = await supabase
+  const { data: full } = await supabaseAdmin
     .from('retail_orders')
     .select('*, retail_order_items(*)')
     .eq('id', order.id)
@@ -136,7 +135,7 @@ export async function PATCH(req: NextRequest) {
   const body = await req.json()
   const { id, ...updates } = body
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('retail_orders')
     .update({ ...updates, updated_at: new Date().toISOString() })
     .eq('id', id)
@@ -163,13 +162,13 @@ export async function DELETE(req: NextRequest) {
   // good (Charlie, 2026-09-04: "Jennifer Kamstra's order was a dud. How do I
   // get rid of it."). Read the link first; cancel the portal side only once
   // the delete has actually gone through.
-  const { data: existing } = await supabase
+  const { data: existing } = await supabaseAdmin
     .from('retail_orders')
     .select('portal_order_id')
     .eq('id', id)
     .maybeSingle()
 
-  const { error } = await supabase
+  const { error } = await supabaseAdmin
     .from('retail_orders')
     .delete()
     .eq('id', id)

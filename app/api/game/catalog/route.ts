@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import {
   toRateMap, ROAST_CATEGORIES, TRIM_CATEGORIES, CHEESE_TYPES, looksLikeCheese,
   type GameRate,
@@ -26,8 +26,8 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
 
   const [{ data: rateRows, error: rateErr }, { data: flavorRows, error: flavErr }] = await Promise.all([
-    supabase.from('game_rates').select('*').order('sort'),
-    supabase.from('game_flavors').select('*').eq('active', true).order('sort'),
+    supabaseAdmin.from('game_rates').select('*').order('sort'),
+    supabaseAdmin.from('game_flavors').select('*').eq('active', true).order('sort'),
   ])
   if (rateErr) return NextResponse.json({ error: rateErr.message }, { status: 500 })
   if (flavErr) return NextResponse.json({ error: flavErr.message }, { status: 500 })
@@ -73,7 +73,7 @@ export async function GET(req: NextRequest) {
   // other half of the same gap, for whoever is doing catalogue hygiene.
   let unusedPlus: { plu: string; name: string }[] | undefined
   if (searchParams.get('scale') === '1') {
-    const { data: plus } = await supabase
+    const { data: plus } = await supabaseAdmin
       .from('plu_items').select('plu_number, item_name')
       .eq('active', true).ilike('item_name', 'WILD GAME%').order('item_name')
     const claimed = new Set(

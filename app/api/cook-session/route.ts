@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // GET /api/cook-session?status=active  OR  /api/cook-session?limit=20
 export async function GET(req: NextRequest) {
@@ -8,7 +8,7 @@ export async function GET(req: NextRequest) {
   const status = searchParams.get('status')
   const limit  = parseInt(searchParams.get('limit') ?? '20', 10)
 
-  let q = supabase
+  let q = supabaseAdmin
     .from('cook_session')
     .select('*')
     .order('started_at', { ascending: false })
@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
 // POST /api/cook-session  — start a new session
 export async function POST(req: NextRequest) {
   const body = await req.json()
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('cook_session')
     .insert([{
       session_name:  body.session_name,
@@ -53,7 +53,7 @@ export async function PATCH(req: NextRequest) {
   if (body.notes        !== undefined) updates.notes        = body.notes
   if (body.target_temp_f !== undefined) updates.target_temp_f = body.target_temp_f
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('cook_session')
     .update(updates)
     .eq('id', id)

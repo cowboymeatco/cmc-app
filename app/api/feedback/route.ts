@@ -1,10 +1,10 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { feedbackSpec } from '@/lib/feedbackTypes'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 export async function GET() {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('feedback')
     .select('*')
     .order('created_at', { ascending: false })
@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
   const commitSha = process.env.VERCEL_GIT_COMMIT_SHA ?? null
   const userAgent = req.headers.get('user-agent') ?? null
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('feedback')
     .insert([{
       type:           body.type,
@@ -68,7 +68,7 @@ export async function PATCH(req: NextRequest) {
   const body = await req.json()
   const { id, ...updates } = body
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('feedback')
     .update(updates)
     .eq('id', id)

@@ -1,7 +1,6 @@
 export const runtime = 'edge'
 export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { cutWrapCharge, killFeeCharge, isExcludedProducer } from '@/lib/billingRules'
 import { LABOR_WEEKS, mondayWeeksBack, mountainToday } from '@/lib/laborSync'
@@ -47,8 +46,8 @@ export async function GET() {
   const end = addDaysISO(first, WEEKS * 7)
 
   const [appts, recent, labor, settings, smokeRates] = await Promise.all([
-    supabase.from('harvest_appointments').select('id, harvest_date, species, head_count, source').gte('harvest_date', first).lt('harvest_date', end),
-    supabase.from('harvest_log').select('species, hot_carcass_weight_lbs').gte('harvest_date', addDaysISO(today, -180)).gt('hot_carcass_weight_lbs', 0),
+    supabaseAdmin.from('harvest_appointments').select('id, harvest_date, species, head_count, source').gte('harvest_date', first).lt('harvest_date', end),
+    supabaseAdmin.from('harvest_log').select('species, hot_carcass_weight_lbs').gte('harvest_date', addDaysISO(today, -180)).gt('hot_carcass_weight_lbs', 0),
     supabaseAdmin.from('labor_reports').select('labor_dollars').gte('week_start', mondayWeeksBack(today, LABOR_WEEKS)),
     supabaseAdmin.from('capacity_settings').select('schedule_weekly_target').eq('id', 1).maybeSingle(),
     loadSmokeRates(),
@@ -67,8 +66,8 @@ export async function GET() {
   const ids = rows.map(a => a.id)
   const [kills, cards] = ids.length
     ? await Promise.all([
-        supabase.from('harvest_log').select('appointment_id, hot_carcass_weight_lbs').in('appointment_id', ids),
-        supabase.from('cutting_instructions').select('appointment_id, data').in('appointment_id', ids),
+        supabaseAdmin.from('harvest_log').select('appointment_id, hot_carcass_weight_lbs').in('appointment_id', ids),
+        supabaseAdmin.from('cutting_instructions').select('appointment_id, data').in('appointment_id', ids),
       ])
     : [{ data: [] }, { data: [] }]
 

@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // GET /api/cut-schedule?date=YYYY-MM-DD
 // GET /api/cut-schedule?latest=1 — the most recently saved plan, whatever date
@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
   if (searchParams.get('latest')) {
     // One round trip: newest rows first, then keep only the newest plan's
     // date. A plan is at most a few dozen rows, so 500 always covers it.
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('cut_schedule_items')
       .select('*')
       .order('schedule_date', { ascending: false })
@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
 
   if (!date) return NextResponse.json({ error: 'date required' }, { status: 400 })
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('cut_schedule_items')
     .select('*')
     .eq('schedule_date', date)
@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Delete existing entries for this date then re-insert (cleanest upsert for ordered lists)
-  const { error: delError } = await supabase
+  const { error: delError } = await supabaseAdmin
     .from('cut_schedule_items')
     .delete()
     .eq('schedule_date', schedule_date)
@@ -89,7 +89,7 @@ export async function POST(req: NextRequest) {
     }
   })
 
-  const { error: insError } = await supabase
+  const { error: insError } = await supabaseAdmin
     .from('cut_schedule_items')
     .insert(rows)
 

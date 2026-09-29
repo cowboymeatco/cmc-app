@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { getCloverItems, type CloverItem } from '@/lib/clover'
 import { getCachedQboItems } from '@/lib/qboSync'
 
@@ -24,7 +24,7 @@ interface PluRow {
 
 export async function GET() {
   try {
-    const pluPromise = supabase
+    const pluPromise = supabaseAdmin
       .from('plu_items')
       .select('id, plu_number, item_name, price, retail_price, is_retail, clover_item_id, quickbooks_item_id')
       .eq('active', true)
@@ -112,7 +112,7 @@ export async function POST(req: NextRequest) {
     const { pluId } = await req.json()
     if (!pluId) return NextResponse.json({ error: 'pluId required' }, { status: 400 })
 
-    const { data: plu, error } = await supabase
+    const { data: plu, error } = await supabaseAdmin
       .from('plu_items')
       .select('id, item_name, clover_item_id, price, retail_price')
       .eq('id', pluId)
@@ -125,7 +125,7 @@ export async function POST(req: NextRequest) {
     if (!(clover.price > 0)) return NextResponse.json({ error: 'Clover has no usable price for this item' }, { status: 400 })
 
     const dollars = clover.price / 100
-    const { data, error: updErr } = await supabase
+    const { data, error: updErr } = await supabaseAdmin
       .from('plu_items')
       .update({ retail_price: dollars, price: dollars, updated_at: new Date().toISOString() })
       .eq('id', pluId)

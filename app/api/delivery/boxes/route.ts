@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { shortItemName } from '@/lib/itemName'
 
 export const dynamic = 'force-dynamic'
@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
   )]
   if (!serials.length) return NextResponse.json({})
 
-  const { data: boxes, error } = await supabase
+  const { data: boxes, error } = await supabaseAdmin
     .from('boxes')
     .select('id, serial_number, customer_name, pack_date, box_number, total_weight_lbs, picked_up_at, delivery_id')
     .in('serial_number', serials)
@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
 
   const ids = (boxes ?? []).map(b => b.id)
   const { data: scans } = ids.length
-    ? await supabase.from('box_scans').select('box_id, item_name, weight_lbs').in('box_id', ids)
+    ? await supabaseAdmin.from('box_scans').select('box_id, item_name, weight_lbs').in('box_id', ids)
     : { data: [] as { box_id: string; item_name: string | null; weight_lbs: number | null }[] }
 
   // Contents as the heaviest few names — "BEEF KIDNEY FAT", or "RIBEYE, SIRLOIN +3".

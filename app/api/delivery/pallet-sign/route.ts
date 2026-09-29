@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 export const dynamic = 'force-dynamic'
 
@@ -38,7 +38,7 @@ export async function GET(req: NextRequest) {
     if (o.count != null) continue
     const k = `${o.c}|${o.d}`
     if (orders.has(k)) continue
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('boxes')
       .select('box_number, total_weight_lbs, picked_up_at')
       .eq('customer_name', o.c)
