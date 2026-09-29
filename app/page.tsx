@@ -193,8 +193,8 @@ export default function Dashboard() {
     },
     {
       href: '/kanban',    icon: '🗂️', color: '#D4A017',
-      title: 'Kanban Ordering',
-      desc:  'Supplies · Vendors · Reorder cards',
+      title: 'Supplies',
+      desc:  'Ordering · Inventory · Locations',
       when:  'A bin runs empty — pull the card',
       count: kanban,
     },
