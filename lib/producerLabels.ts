@@ -57,5 +57,7 @@ export interface ScannerProducerSet {
   key: string
   label_format: string | null
   loaded_at: string | null
+  /** False when the label format prints no barcode — nothing off it scans. */
+  prints_barcode: boolean
   items: { plu_number: string; house_plu: string }[]
 }

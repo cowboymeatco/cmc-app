@@ -1037,7 +1037,7 @@ export default function ScannerPage() {
   const [producerSets, setProducerSets] = useState<ScannerProducerSet[]>([])
   const producerRef = useRef<{
     byPlu: Record<string, { house_plu: string; key: string; name: string }>
-    byKey: Record<string, { name: string; houseToPlu: Record<string, string> }>
+    byKey: Record<string, { name: string; houseToPlu: Record<string, string>; noBarcode: boolean }>
   }>({ byPlu: {}, byKey: {} })
   const sessionLabelKeysRef = useRef<string[]>([])
   useEffect(() => {
@@ -1051,7 +1051,7 @@ export default function ScannerPage() {
           byPlu[it.plu_number] = { house_plu: it.house_plu, key: st.key, name: st.name }
           houseToPlu[it.house_plu] = it.plu_number
         }
-        byKey[st.key] = { name: st.name, houseToPlu }
+        byKey[st.key] = { name: st.name, houseToPlu, noBarcode: st.prints_barcode === false }
       }
       producerRef.current = { byPlu, byKey }
       setProducerSets(sets)
@@ -1075,6 +1075,9 @@ export default function ScannerPage() {
     }
     for (const k of sessionKeys) {
       const set = byKey[k]
+      // A label that prints no barcode can't be the one scanned, so a house
+      // label is the only way in — nothing to flag.
+      if (set?.noBarcode) continue
       const should = set?.houseToPlu[scanned]
       if (should) return { plu: scanned, labelWarn: `HOUSE LABEL — ${set.name} packs on PLU ${should}: reprint it` }
     }
@@ -3590,7 +3593,14 @@ export default function ScannerPage() {
             const nums = set?.items.map(i => Number(i.plu_number)).filter(Number.isFinite) ?? []
             return (
               <span key={l} style={{ fontSize: '0.75rem', fontWeight: 600, letterSpacing: 0 }}>
-                {!set
+                {/* Blegen's and Hollenbeck's formats print no barcode, and this
+                    line used to send the crew to exactly those labels (AE,
+                    2026-09-29: "Blegens has no scan code on label"). Both whole-
+                    box labels count the same (Charlie: assorted cuts is treated
+                    like the meat box). */}
+                {set && !set.prints_barcode
+                  ? `⚠ ${set.name} labels print with NO barcode — nothing off them will scan. Weigh the finished box on the HOUSE label as MEAT BOX (PLU 1)${!expected?.species?.length || expected.species.some(sp => /beef/i.test(sp)) ? ' or BEEF ASSORTED CUTS (PLU 207)' : ''} and scan that.`
+                : !set
                   ? 'Switch the scale to this label — not the house label.'
                   : !set.loaded_at
                     ? `⚠ ${set.name}'s PLUs aren't marked as on the scales — load them (Producer Labels) before packing.`
