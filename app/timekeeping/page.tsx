@@ -418,8 +418,22 @@ function ClockTab({ shifts, setShifts, setPhotos, today, thisMonday, now }: {
     const [from, to] = range === 'day' ? [today, today]
       : range === 'week' ? [thisMonday, today]
       : [addDaysISO(thisMonday, -7), addDaysISO(thisMonday, -1)]
+    // Balance right now: everything through last week, plus this week so far.
+    const earnedThisWeek = shifts
+      .filter(s => s.empId === emp.id && s.date >= thisMonday && s.date <= today)
+      .reduce((t, s) => t + calcShift(s, nowHHMM).workedHours * accrualPerHour(yearsOfService(emp.hireDate, s.date)), 0)
+    const years = yearsOfService(emp.hireDate, today)
+    const accrual: Accrual = {
+      balance: ptoBalance(emp, thisMonday) + earnedThisWeek,
+      usedYtd: emp.ptoUsed,
+      years,
+      annual: annualPtoRate(years),
+      perHour: accrualPerHour(years),
+      nextBump: nextAnniversary(emp.hireDate, today),
+      nextAnnual: annualPtoRate(years + 1),
+    }
     const html = buildSummaryHTML(emp, shifts.filter(s => s.empId === emp.id && s.date >= from && s.date <= to),
-      from, to, range === 'day' ? 'Day' : 'Week', nowHHMM, ptoBalance(emp, thisMonday), roll)
+      from, to, range === 'day' ? 'Day' : 'Week', nowHHMM, accrual, roll)
     const win = window.open('', '_blank')
     if (win) { win.document.write(html); win.document.close() }
   }
@@ -497,11 +511,23 @@ function esc(s: string): string {
 // ── Printed summary (box label printer) ─────────────────────────────────────
 //
 // Same roll stock as the box labels: the 4in thermal at the packing bench or a
-// Brother on 62mm continuous. Black on white, big totals, one line per day.
+// Brother on 62mm continuous. Black on white. Totals on the left, PTO accrual
+// boxed on the right, then one block per day. The 62mm roll is too narrow for
+// two columns, so there the accrual box drops under the totals.
+
+interface Accrual {
+  balance: number     // PTO hours available right now
+  usedYtd: number
+  years: number       // completed years of service
+  annual: number      // PTO hours per 2080 worked, current rate
+  perHour: number
+  nextBump: string    // next work anniversary
+  nextAnnual: number  // rate after it
+}
 
 function buildSummaryHTML(
   emp: Employee, shifts: Shift[], from: string, to: string, kind: 'Day' | 'Week',
-  nowHHMM: string, balance: number, roll: LabelRoll,
+  nowHHMM: string, acc: Accrual, roll: LabelRoll,
 ): string {
   const rows = [...shifts].sort((a, b) => a.date.localeCompare(b.date) || a.clockIn.localeCompare(b.clockIn))
   let total = 0, pto = 0, breakMin = 0, upto = 0, lunchMin = 0
@@ -521,43 +547,65 @@ function buildSummaryHTML(
   }).join('')
   const { regular, overtime } = splitOvertime(total)
   const range = from === to
-    ? dateLabel(from, { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' })
+    ? dateLabel(from, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
     : `${dateLabel(from, { month: 'short', day: 'numeric' })} – ${dateLabel(to, { month: 'short', day: 'numeric', year: 'numeric' })}`
   const narrow = roll === '62mm'
+  const md = (iso: string) => dateLabel(iso, { month: 'numeric', day: 'numeric', year: '2-digit' })
 
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Time summary — ${esc(emp.name)}</title><style>
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Time clock summary — ${esc(emp.name)}</title><style>
   ${rollFrameCSS(roll)}
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: #000; background: #fff; font-size: ${narrow ? '8.5pt' : '10pt'}; }
-  .co { font-weight: 900; font-size: ${narrow ? '11pt' : '14pt'}; letter-spacing: 0.04em; text-align: center; }
-  .kind { text-align: center; font-size: ${narrow ? '8pt' : '9pt'}; letter-spacing: 0.15em; text-transform: uppercase; border-bottom: 2px solid #000; padding-bottom: 3px; margin-bottom: 4px; }
-  .name { font-weight: 900; font-size: ${narrow ? '12pt' : '15pt'}; margin-top: 2px; }
-  .range { margin-bottom: 4px; }
+  body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: #000; background: #fff; font-size: ${narrow ? '8.5pt' : '9.5pt'}; }
+  .co { font-weight: 900; font-size: ${narrow ? '11pt' : '13pt'}; letter-spacing: 0.04em; text-align: center; }
+  .kind { text-align: center; font-weight: 700; font-size: ${narrow ? '8pt' : '9pt'}; letter-spacing: 0.15em; text-transform: uppercase; border-bottom: 2px solid #000; padding-bottom: 3px; margin-bottom: 4px; }
+  .name { font-weight: 900; font-size: ${narrow ? '12pt' : '14pt'}; line-height: 1.1; }
+  .range { margin-bottom: 3px; }
   table { width: 100%; border-collapse: collapse; }
-  td { padding: 2px 0; vertical-align: top; }
-  .r { text-align: right; font-weight: 700; }
+  td { padding: 1.5px 0; vertical-align: top; }
+  .r { text-align: right; font-weight: 700; white-space: nowrap; }
+  .top { display: ${narrow ? 'block' : 'flex'}; gap: 0.08in; align-items: flex-start; }
+  .left { flex: 1 1 auto; min-width: 0; }
+  .acc { flex: 0 0 1.45in; border: 2px solid #000; padding: 3px 4px; ${narrow ? 'margin-top: 4px;' : ''} }
+  .acc h3 { margin: 0 0 2px; font-size: 7.5pt; letter-spacing: 0.12em; text-align: center; border-bottom: 1px solid #000; padding-bottom: 2px; }
+  .acc .bal { font-size: ${narrow ? '16pt' : '18pt'}; font-weight: 900; text-align: center; line-height: 1.1; }
+  .acc .bal-l { font-size: 7pt; text-align: center; margin-bottom: 2px; }
+  .acc td { font-size: 7.5pt; }
+  .big td { font-size: ${narrow ? '11pt' : '12pt'}; font-weight: 900; }
+  .days { margin-top: 5px; }
   tr.day td { border-top: 1px solid #000; padding-top: 3px; font-weight: 700; }
-  tr.sub td { font-size: ${narrow ? '7pt' : '8pt'}; padding-bottom: 3px; }
-  .totals { border-top: 2px solid #000; margin-top: 4px; padding-top: 4px; }
-  .totals td { font-size: ${narrow ? '9pt' : '11pt'}; }
-  .big td { font-size: ${narrow ? '12pt' : '15pt'}; font-weight: 900; }
-  .foot { border-top: 1px solid #000; margin-top: 5px; padding-top: 3px; font-size: 7pt; text-align: center; }
+  tr.sub td { font-size: ${narrow ? '7pt' : '7.5pt'}; padding-bottom: 2px; }
+  .foot { border-top: 1px solid #000; margin-top: 4px; padding-top: 3px; font-size: 7pt; text-align: center; }
   </style></head><body>
   <div class="co">COWBOY MEAT CO</div>
-  <div class="kind">${kind} time summary</div>
-  <div class="name">${esc(emp.name)}</div>
-  <div class="range">${esc(range)}</div>
-  ${rows.length ? `<table>${body}</table>` : '<div style="border-top:1px solid #000;padding:6px 0">No punches.</div>'}
-  <table class="totals">
-    <tr class="big"><td>Paid hours</td><td class="r">${fmtHours(total)}</td></tr>
-    ${kind === 'Week' ? `<tr><td>Regular</td><td class="r">${fmtHours(regular)}</td></tr><tr><td>Overtime 1.5×</td><td class="r">${fmtHours(overtime)}</td></tr>` : ''}
-    <tr><td>Paid break time</td><td class="r">${fmtHours(breakMin / 60)}</td></tr>
-    <tr><td>Unpaid lunch</td><td class="r">${fmtHours(lunchMin / 60)}</td></tr>
-    <tr><td>UPTO</td><td class="r">${fmtHours(upto / 60)}</td></tr>
-    <tr class="big"><td>PTO earned</td><td class="r">+${pto.toFixed(2)} h</td></tr>
-    <tr><td>PTO balance*</td><td class="r">${balance.toFixed(1)} h</td></tr>
-  </table>
-  <div class="foot">*Balance through last week. Printed ${esc(dateLabel(isoDate(), { month: 'numeric', day: 'numeric' }))} ${nowHHMM} MT</div>
+  <div class="kind">Time clock summary · ${kind}</div>
+  <div class="top">
+    <div class="left">
+      <div class="name">${esc(emp.name)}</div>
+      <div class="range">${esc(range)}</div>
+      <table>
+        <tr class="big"><td>Paid hours</td><td class="r">${fmtHours(total)}</td></tr>
+        ${kind === 'Week' ? `<tr><td>Regular</td><td class="r">${fmtHours(regular)}</td></tr><tr><td>Overtime 1.5×</td><td class="r">${fmtHours(overtime)}</td></tr>` : ''}
+        <tr><td>Paid breaks</td><td class="r">${fmtHours(breakMin / 60)}</td></tr>
+        <tr><td>Unpaid lunch</td><td class="r">${fmtHours(lunchMin / 60)}</td></tr>
+        <tr><td>UPTO</td><td class="r">${fmtHours(upto / 60)}</td></tr>
+      </table>
+    </div>
+    <div class="acc">
+      <h3>PTO ACCRUAL</h3>
+      <div class="bal">${acc.balance.toFixed(2)}</div>
+      <div class="bal-l">hours available</div>
+      <table>
+        <tr><td>Earned ${kind === 'Day' ? 'today' : 'this wk'}</td><td class="r">+${pto.toFixed(2)}</td></tr>
+        <tr><td>Used this yr</td><td class="r">${acc.usedYtd.toFixed(2)}</td></tr>
+        <tr><td>Rate / hr</td><td class="r">${acc.perHour.toFixed(4)}</td></tr>
+        <tr><td>Per 2080 hrs</td><td class="r">${acc.annual} h</td></tr>
+        <tr><td>Service</td><td class="r">${acc.years} yr</td></tr>
+        <tr><td>Goes up ${md(acc.nextBump)}</td><td class="r">${acc.nextAnnual} h</td></tr>
+      </table>
+    </div>
+  </div>
+  ${rows.length ? `<table class="days">${body}</table>` : '<div style="border-top:1px solid #000;margin-top:5px;padding:6px 0">No punches.</div>'}
+  <div class="foot">Printed ${esc(md(isoDate()))} ${nowHHMM} MT · Questions? See the office.</div>
   ${rollPrintScript(roll)}
   </body></html>`
 }
