@@ -4,9 +4,10 @@
 // React state, so a refresh resets everything. The rules themselves live in
 // lib/timekeeping.ts so a real build can reuse them as-is.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { isoDate, isoDateTime, addDaysISO, mondayOfISO, dateLabel } from '@/lib/dates'
+import { LabelRoll, parseRoll, rollFrameCSS, rollPrintScript } from '@/lib/label'
 import {
   BREAK_RULES, PTO_RULES, Shift, WeekHours,
   calcShift, splitOvertime, fmtHours, toMin,
@@ -24,14 +25,15 @@ interface Employee {
   id: string; name: string; role: string; hireDate: string; wage: number
   weeklyHours: number   // typical week, drives the made-up history
   ptoUsed: number       // PTO hours used this year
+  pin: string           // personal punch PIN — mockup only; a real build stores a hash
 }
 
 const EMPLOYEES: Employee[] = [
-  { id: 'e1', name: 'Sample Employee A', role: 'Cutter',          hireDate: '2025-03-10', wage: 19,   weeklyHours: 40,   ptoUsed: 16 },
-  { id: 'e2', name: 'Sample Employee B', role: 'Lead Cutter',     hireDate: '2019-06-03', wage: 24,   weeklyHours: 46.2, ptoUsed: 40 },
-  { id: 'e3', name: 'Sample Employee C', role: 'Wrap & Pack',     hireDate: '2023-11-15', wage: 17,   weeklyHours: 30.8, ptoUsed: 8 },
-  { id: 'e4', name: 'Sample Employee D', role: 'Harvest Floor',   hireDate: '2011-04-18', wage: 26,   weeklyHours: 40,   ptoUsed: 64 },
-  { id: 'e5', name: 'Sample Employee E', role: 'Cleaning (PT)',   hireDate: '2026-05-01', wage: 16.5, weeklyHours: 20,   ptoUsed: 0 },
+  { id: 'e1', name: 'Sample Employee A', role: 'Cutter',          hireDate: '2025-03-10', wage: 19,   weeklyHours: 40,   ptoUsed: 16, pin: '1111' },
+  { id: 'e2', name: 'Sample Employee B', role: 'Lead Cutter',     hireDate: '2019-06-03', wage: 24,   weeklyHours: 46.2, ptoUsed: 40, pin: '2222' },
+  { id: 'e3', name: 'Sample Employee C', role: 'Wrap & Pack',     hireDate: '2023-11-15', wage: 17,   weeklyHours: 30.8, ptoUsed: 8, pin: '3333' },
+  { id: 'e4', name: 'Sample Employee D', role: 'Harvest Floor',   hireDate: '2011-04-18', wage: 26,   weeklyHours: 40,   ptoUsed: 64, pin: '4444' },
+  { id: 'e5', name: 'Sample Employee E', role: 'Cleaning (PT)',   hireDate: '2026-05-01', wage: 16.5, weeklyHours: 20,   ptoUsed: 0, pin: '5555' },
 ]
 
 // Deterministic wobble so the history looks like real weeks without Math.random
@@ -56,12 +58,15 @@ function mockHistory(e: Employee, thisMonday: string): WeekHours[] {
 /** A week of punches per employee. A few are deliberately off-policy so the flags show. */
 function mockShifts(thisMonday: string, today: string): Shift[] {
   const shifts: Shift[] = []
-  const days = [0, 1, 2, 3, 4].map(d => addDaysISO(addDaysISO(thisMonday, -7), d)) // last week Mon–Fri
+  // Last week Mon–Fri, plus any weekdays of this week before today.
+  const days = [0, 1, 2, 3, 4].map(d => addDaysISO(thisMonday, d - 7))
+    .concat([0, 1, 2, 3, 4].map(d => addDaysISO(thisMonday, d)).filter(d => d < today))
   let n = 0
   const add = (empId: string, date: string, clockIn: string, clockOut: string | null, lunch: [string, string] | null, breaksTaken: number) =>
     shifts.push({ id: `s${n++}`, empId, date, clockIn, clockOut, lunchStart: lunch?.[0] ?? null, lunchEnd: lunch?.[1] ?? null, breaksTaken })
 
-  days.forEach((d, i) => {
+  days.forEach((d, j) => {
+    const i = j % 5
     add('e1', d, '07:00', '15:30', ['11:30', '12:00'], 2)
     add('e2', d, '06:00', i === 4 ? '13:00' : '16:00', ['11:00', '11:30'], i === 2 ? 1 : 2)
     if (i < 4) add('e3', d, '08:00', i === 1 ? '14:30' : '15:00', i === 1 ? null : ['12:00', '12:20'], 1)
@@ -83,6 +88,16 @@ export default function TimekeepingPage() {
   const thisMonday = mondayOfISO(today)
   const [tab, setTab] = useState<Tab>('clock')
   const [shifts, setShifts] = useState<Shift[]>(() => mockShifts(thisMonday, today))
+  // Punch photos from the kiosk's front camera, keyed `${shiftId}:${punch}`.
+  const [photos, setPhotos] = useState<Record<string, string>>({})
+
+  // ?kiosk=1 is what the iPad at the employee entrance opens: the punch clock
+  // and nothing else — no tabs, no one else's hours, no way back to the app.
+  const [kiosk, setKiosk] = useState(false)
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reading the URL after mount; reading it during render would mismatch the server HTML
+    setKiosk(new URLSearchParams(window.location.search).get('kiosk') === '1')
+  }, [])
 
   // Shop-clock HH:MM, ticking. Starts null so server and browser render alike.
   const [now, setNow] = useState<string | null>(null)
@@ -99,6 +114,17 @@ export default function TimekeepingPage() {
     { key: 'pto', label: '🌴 PTO' },
     { key: 'policy', label: '📖 Policy' },
   ]
+
+  if (kiosk) {
+    return (
+      <div style={{ minHeight: '100vh', background: C.darkBrown, padding: '1.5rem 1rem' }}>
+        <div style={{ textAlign: 'center', fontFamily: 'Georgia, serif', fontSize: '1.6rem', fontWeight: 700, color: C.cream, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: '1.2rem' }}>
+          Cowboy Meat Co · Time Clock
+        </div>
+        <ClockTab shifts={shifts} setShifts={setShifts} setPhotos={setPhotos} today={today} thisMonday={thisMonday} now={now} />
+      </div>
+    )
+  }
 
   return (
     <div style={{ minHeight: '100vh', background: C.darkBrown }}>
@@ -118,11 +144,12 @@ export default function TimekeepingPage() {
             border: `1px solid ${C.medBrown}`, borderRadius: 4, padding: '0.5rem 0.9rem', fontSize: '0.85rem', cursor: 'pointer', fontWeight: 600,
           }}>{t.label}</button>
         ))}
+        <a href="/timekeeping?kiosk=1" style={{ marginLeft: 'auto', alignSelf: 'center', color: C.tan, fontSize: '0.8rem' }}>Open iPad kiosk view ↗</a>
       </nav>
 
       <main style={{ padding: '1rem 1.25rem 3rem', maxWidth: 1100, margin: '0 auto' }}>
-        {tab === 'clock'     && <ClockTab shifts={shifts} setShifts={setShifts} today={today} now={now} />}
-        {tab === 'timesheet' && <TimesheetTab shifts={shifts} thisMonday={thisMonday} />}
+        {tab === 'clock'     && <ClockTab shifts={shifts} setShifts={setShifts} setPhotos={setPhotos} today={today} thisMonday={thisMonday} now={now} />}
+        {tab === 'timesheet' && <TimesheetTab shifts={shifts} photos={photos} thisMonday={thisMonday} today={today} now={now} />}
         {tab === 'pto'       && <PtoTab today={today} thisMonday={thisMonday} />}
         {tab === 'policy'    && <PolicyTab />}
       </main>
@@ -137,6 +164,8 @@ const h2: React.CSSProperties = { fontFamily: 'Georgia, serif', fontSize: '0.95r
 const th: React.CSSProperties = { textAlign: 'left', padding: '0.4rem 0.5rem', color: C.lightBrown, fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.08em', borderBottom: '1px solid rgba(166,120,90,0.3)', whiteSpace: 'nowrap' }
 const td: React.CSSProperties = { padding: '0.45rem 0.5rem', color: C.cream, fontSize: '0.85rem', borderBottom: '1px solid rgba(166,120,90,0.12)', verticalAlign: 'top' }
 const btn = (color: string): React.CSSProperties => ({ background: color, color: '#fff', border: 'none', borderRadius: 4, padding: '0.55rem 0.9rem', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer' })
+// Gloved-finger size for the iPad kiosk.
+const bigBtn = (color: string): React.CSSProperties => ({ ...btn(color), padding: '1rem 1.4rem', fontSize: '1.1rem', borderRadius: 8, minHeight: 56 })
 
 function Pill({ color, children }: { color: string; children: React.ReactNode }) {
   return <span style={{ display: 'inline-block', background: `${color}22`, color, border: `1px solid ${color}66`, borderRadius: 999, padding: '0.05rem 0.5rem', fontSize: '0.72rem', fontWeight: 700, marginRight: 4, whiteSpace: 'nowrap' }}>{children}</span>
@@ -163,21 +192,163 @@ function EntitlementPills({ owed, taken, lunchTaken }: { owed: { paidBreaks: num
 }
 
 // ── Time clock ──────────────────────────────────────────────────────────────
+//
+// A shared kiosk: nobody picks a name. You punch in with your own PIN, the
+// clock acts only on YOUR shift, and it signs you back out after a few idle
+// seconds so the next person can't punch on your session.
 
-function ClockTab({ shifts, setShifts, today, now }: {
-  shifts: Shift[]; setShifts: React.Dispatch<React.SetStateAction<Shift[]>>; today: string; now: string | null
+const IDLE_SIGN_OUT_MS = 20_000
+const MAX_PIN_TRIES = 3
+const LOCKOUT_MS = 30_000
+const ROLL_KEY = 'timeclockLabelRoll' // per device, like the scanner's printer pick
+
+/** PTO balance through last week (mock: 52 weeks of history minus hours used). */
+function ptoBalance(e: Employee, thisMonday: string): number {
+  return ptoEarned(e.hireDate, mockHistory(e, thisMonday)) - e.ptoUsed
+}
+
+function ClockTab({ shifts, setShifts, setPhotos, today, thisMonday, now }: {
+  shifts: Shift[]; setShifts: React.Dispatch<React.SetStateAction<Shift[]>>
+  setPhotos: React.Dispatch<React.SetStateAction<Record<string, string>>>
+  today: string; thisMonday: string; now: string | null
 }) {
-  const [empId, setEmpId] = useState(EMPLOYEES[0].id)
+  const [empId, setEmpId] = useState<string | null>(null)
+  const [pin, setPin] = useState('')
+  const [pinError, setPinError] = useState('')
+  const [tries, setTries] = useState(0)
+  const [locked, setLocked] = useState(false)
+  const [notice, setNotice] = useState('')
+  const [activity, setActivity] = useState(0)   // bumps on every tap, restarts the idle timer
+  const [roll, setRoll] = useState<LabelRoll>('4in')
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring this device's printer after mount; reading it during render would mismatch the server HTML
+    try { setRoll(parseRoll(localStorage.getItem(ROLL_KEY))) } catch { /* private browsing */ }
+  }, [])
+  const pickRoll = (r: LabelRoll) => {
+    setRoll(r)
+    try { localStorage.setItem(ROLL_KEY, r) } catch { /* private browsing */ }
+  }
+
+  const signOut = () => { setEmpId(null); setPin(''); setNotice('') }
+
+  // Front camera snaps a small photo at every punch. A PIN can be shared; a
+  // face on the timesheet can't. If the camera is off or denied the punch
+  // still goes through — it just shows "no photo" to the manager.
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const [camOk, setCamOk] = useState<boolean | null>(null)
+  useEffect(() => {
+    if (!empId) return
+    let stream: MediaStream | null = null
+    let cancelled = false
+    const media = navigator.mediaDevices
+      ? navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 320, height: 240 }, audio: false })
+      : Promise.reject(new Error('no camera API'))
+    media
+      .then(s => {
+        if (cancelled) { s.getTracks().forEach(t => t.stop()); return }
+        stream = s
+        if (videoRef.current) { videoRef.current.srcObject = s; videoRef.current.play().catch(() => {}) }
+        setCamOk(true)
+      })
+      .catch(() => setCamOk(false))
+    return () => { cancelled = true; stream?.getTracks().forEach(t => t.stop()) }
+  }, [empId])
+
+  const snap = (shiftId: string, punch: string) => {
+    const v = videoRef.current
+    if (!v || !v.videoWidth) return
+    const c = document.createElement('canvas')
+    c.width = 160; c.height = Math.round(160 * v.videoHeight / v.videoWidth)
+    c.getContext('2d')?.drawImage(v, 0, 0, c.width, c.height)
+    const url = c.toDataURL('image/jpeg', 0.6)
+    setPhotos(p => ({ ...p, [`${shiftId}:${punch}`]: url }))
+  }
+
+  // Walk away and it signs you out.
+  useEffect(() => {
+    if (!empId) return
+    const t = setTimeout(signOut, IDLE_SIGN_OUT_MS)
+    return () => clearTimeout(t)
+  }, [empId, activity])
+
+
+  const submitPin = (entered: string) => {
+    const match = EMPLOYEES.find(e => e.pin === entered)
+    setPin('')
+    if (match) { setEmpId(match.id); setTries(0); setPinError(''); setNotice(''); setActivity(a => a + 1); return }
+    const n = tries + 1
+    setTries(n)
+    if (n >= MAX_PIN_TRIES) {
+      setLocked(true); setTries(0)
+      setTimeout(() => { setLocked(false); setPinError('') }, LOCKOUT_MS)
+      setPinError(`Too many wrong PINs. Keypad locked for ${LOCKOUT_MS / 1000} seconds.`)
+    } else setPinError('PIN not recognized.')
+  }
+
+  const press = (k: string) => {
+    if (locked) return
+    if (k === 'clear') { setPin(''); return }
+    const next = (pin + k).slice(0, 4)
+    setPin(next)
+    if (next.length === 4) submitPin(next)
+  }
+
+  // ── Keypad (nobody signed in) ──
+  if (!empId) {
+    return (
+      <div style={{ ...card, maxWidth: 440, margin: '0 auto', textAlign: 'center', padding: '1.5rem' }}>
+        <h2 style={h2}>Punch Clock</h2>
+        <div style={{ color: C.tan, fontSize: '0.9rem', marginBottom: '0.8rem', fontVariantNumeric: 'tabular-nums' }}>{dateLabel(today)} · {now ?? '--:--'} MT</div>
+        <div style={{ color: C.cream, marginBottom: 6 }}>Enter your PIN</div>
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 10, marginBottom: '0.8rem' }}>
+          {[0, 1, 2, 3].map(i => (
+            <span key={i} style={{ width: 20, height: 20, borderRadius: '50%', border: `2px solid ${C.tan}`, background: i < pin.length ? C.tan : 'transparent' }} />
+          ))}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, maxWidth: 340, margin: '0 auto' }}>
+          {['1', '2', '3', '4', '5', '6', '7', '8', '9', 'clear', '0'].map(k => (
+            <button key={k} onClick={() => press(k)} disabled={locked} style={{
+              gridColumn: k === '0' ? 'span 2' : undefined, background: C.darkBrown, color: C.cream, border: `1px solid ${C.medBrown}`,
+              borderRadius: 10, padding: '1.2rem 0', fontSize: k === 'clear' ? '1rem' : '1.8rem', touchAction: 'manipulation', fontWeight: 700, cursor: locked ? 'not-allowed' : 'pointer', opacity: locked ? 0.4 : 1,
+            }}>{k === 'clear' ? 'Clear' : k}</button>
+          ))}
+        </div>
+        {pinError && <div style={{ color: C.red, fontSize: '0.85rem', marginTop: '0.7rem' }}>{pinError}</div>}
+        <div style={{ color: C.lightBrown, fontSize: '0.72rem', marginTop: '1rem' }}>
+          Mockup PINs: A 1111 · B 2222 · C 3333 · D 4444 · E 5555
+        </div>
+      </div>
+    )
+  }
+
+  // ── Signed in: only your own shift ──
+  const emp = EMPLOYEES.find(e => e.id === empId)!
   const open = shifts.find(s => s.empId === empId && s.date === today && !s.clockOut)
   const onLunch = !!open?.lunchStart && !open.lunchEnd
   const nowHHMM = now ?? '00:00'
+  const rate = accrualPerHour(yearsOfService(emp.hireDate, today))
 
-  const update = (patch: Partial<Shift>) => setShifts(ss => ss.map(s => s.id === open!.id ? { ...s, ...patch } : s))
-  const clockIn = () => setShifts(ss => [...ss, { id: `s${Date.now()}`, empId, date: today, clockIn: nowHHMM, clockOut: null, lunchStart: null, lunchEnd: null, breaksTaken: 0 }])
+  const todays = shifts.filter(s => s.empId === empId && s.date === today)
+  const todayHours = todays.reduce((t, s) => t + calcShift(s, s === open && onLunch ? s.lunchStart! : nowHHMM).workedHours, 0)
+
+  const touch = (msg: string) => { setNotice(msg); setActivity(a => a + 1) }
+  const update = (patch: Partial<Shift>, msg: string, punch?: string) => {
+    if (punch) snap(open!.id, punch)
+    setShifts(ss => ss.map(s => s.id === open!.id ? { ...s, ...patch } : s))
+    touch(msg)
+  }
+  const clockIn = () => {
+    const id = `s-${empId}-${today}-${nowHHMM}`
+    snap(id, 'in')
+    setShifts(ss => [...ss, { id, empId, date: today, clockIn: nowHHMM, clockOut: null, lunchStart: null, lunchEnd: null, breaksTaken: 0 }])
+    touch(`Clocked in at ${nowHHMM}.`)
+  }
+  const clockOut = () => update({ clockOut: nowHHMM },
+    `Clocked out at ${nowHHMM}. ${fmtHours(todayHours)} paid today — you earned ${(todayHours * rate).toFixed(2)} h of PTO.`, 'out')
 
   const calc = open ? calcShift(open, onLunch ? open.lunchStart! : nowHHMM) : null
 
-  // What's the next thing this person has coming, in worked-hours terms.
   let nextUp: string | null = null
   if (calc && !onLunch) {
     const w = calc.workedHours
@@ -193,59 +364,203 @@ function ClockTab({ shifts, setShifts, today, now }: {
     }
   }
 
+  const print = (range: 'day' | 'week' | 'lastweek') => {
+    touch('Printing…')
+    const [from, to] = range === 'day' ? [today, today]
+      : range === 'week' ? [thisMonday, today]
+      : [addDaysISO(thisMonday, -7), addDaysISO(thisMonday, -1)]
+    const html = buildSummaryHTML(emp, shifts.filter(s => s.empId === emp.id && s.date >= from && s.date <= to),
+      from, to, range === 'day' ? 'Day' : 'Week', nowHHMM, ptoBalance(emp, thisMonday), roll)
+    const win = window.open('', '_blank')
+    if (win) { win.document.write(html); win.document.close() }
+  }
+
+  return (
+    <div style={{ ...card, maxWidth: 720, margin: '0 auto', padding: '1.4rem' }} onClick={() => setActivity(a => a + 1)}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: '0.8rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <video ref={videoRef} muted playsInline autoPlay style={{ width: 72, height: 54, objectFit: 'cover', borderRadius: 6, background: '#000', display: camOk === false ? 'none' : 'block', transform: 'scaleX(-1)' }} />
+          <div>
+            <h2 style={{ ...h2, margin: 0, fontSize: '1.2rem' }}>Hi, {emp.name}</h2>
+            <div style={{ color: C.lightBrown, fontSize: '0.72rem' }}>{camOk === false ? 'Camera off — punches will have no photo' : '📷 Photo taken with each punch'}</div>
+          </div>
+        </div>
+        <span style={{ color: C.tan, fontSize: '0.85rem', fontVariantNumeric: 'tabular-nums' }}>{dateLabel(today)} · {now ?? '--:--'} MT</span>
+      </div>
+
+      {notice && <div style={{ background: 'rgba(76,175,80,0.12)', border: `1px solid ${C.green}66`, color: C.cream, borderRadius: 4, padding: '0.6rem 0.8rem', marginBottom: '0.8rem', fontSize: '0.9rem' }}>{notice}</div>}
+
+      <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '0.8rem' }}>
+        <Stat label="Status" value={!open ? 'Off the clock' : onLunch ? 'At lunch' : 'Working'} color={!open ? C.tan : onLunch ? C.amber : C.green} sub={open ? `In at ${open.clockIn}` : undefined} />
+        <Stat label="Paid today" value={fmtHours(todayHours)} />
+        <Stat label="PTO earned today" value={`${(todayHours * rate).toFixed(2)} h`} sub={`${rate.toFixed(4)} h per hour worked`} color={C.green} />
+      </div>
+
+      {open && calc && (
+        <div style={{ marginBottom: '0.8rem' }}>
+          <EntitlementPills owed={calc.owed} taken={open.breaksTaken} lunchTaken={!!open.lunchEnd} />
+          {nextUp && <div style={{ color: C.tan, fontSize: '0.82rem', marginTop: 6 }}>Next: {nextUp}</div>}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+        {!open && <button style={bigBtn(C.green)} onClick={clockIn} disabled={!now}>Clock In</button>}
+        {open && !onLunch && <button style={bigBtn(C.blue)} onClick={() => update({ breaksTaken: open.breaksTaken + 1 }, `15-min paid break logged at ${nowHHMM}.`)}>Log 15-min Break (paid)</button>}
+        {open && !open.lunchStart && <button style={bigBtn(C.amber)} onClick={() => update({ lunchStart: nowHHMM }, `Lunch started at ${nowHHMM}. Take at least 30 min, back ${fmtClock(toMin(nowHHMM) + 30)} or later.`, 'lunch-out')}>Start Lunch</button>}
+        {onLunch && <button style={bigBtn(C.amber)} onClick={() => update({ lunchEnd: nowHHMM }, `Back from lunch at ${nowHHMM}.`, 'lunch-in')}>End Lunch</button>}
+        {open && !onLunch && <button style={bigBtn(C.red)} onClick={clockOut}>Clock Out</button>}
+      </div>
+
+      <div style={{ borderTop: '1px solid rgba(166,120,90,0.3)', paddingTop: '0.8rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+        <span style={{ color: C.tan, fontSize: '0.85rem', marginRight: 4 }}>🖨 Print my summary:</span>
+        <button style={bigBtn(C.medBrown)} onClick={() => print('day')}>Today</button>
+        <button style={bigBtn(C.medBrown)} onClick={() => print('week')}>This week</button>
+        <button style={bigBtn(C.medBrown)} onClick={() => print('lastweek')}>Last week</button>
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: '1rem' }}>
+        <button style={{ ...bigBtn('transparent'), border: `1px solid ${C.medBrown}`, color: C.tan }} onClick={signOut}>Done — sign out</button>
+        <span style={{ color: C.lightBrown, fontSize: '0.72rem' }}>
+          Signs out on its own after {IDLE_SIGN_OUT_MS / 1000}s idle · Printer:{' '}
+          {(['4in', '62mm'] as LabelRoll[]).map(r => (
+            <button key={r} onClick={() => pickRoll(r)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 3px', fontSize: '0.72rem', color: roll === r ? C.cream : C.lightBrown, fontWeight: roll === r ? 700 : 400, textDecoration: roll === r ? 'underline' : 'none' }}>
+              {r === '4in' ? '4in thermal' : 'Brother 2.4in'}
+            </button>
+          ))}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+function fmtClock(min: number): string {
+  return `${String(Math.floor(min / 60) % 24).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`
+}
+
+function esc(s: string): string {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+// ── Printed summary (box label printer) ─────────────────────────────────────
+//
+// Same roll stock as the box labels: the 4in thermal at the packing bench or a
+// Brother on 62mm continuous. Black on white, big totals, one line per day.
+
+function buildSummaryHTML(
+  emp: Employee, shifts: Shift[], from: string, to: string, kind: 'Day' | 'Week',
+  nowHHMM: string, balance: number, roll: LabelRoll,
+): string {
+  const rows = [...shifts].sort((a, b) => a.date.localeCompare(b.date) || a.clockIn.localeCompare(b.clockIn))
+  let total = 0, pto = 0, breaks = 0
+  const body = rows.map(s => {
+    const onLunch = !!s.lunchStart && !s.lunchEnd && !s.clockOut
+    const c = calcShift(s, onLunch ? s.lunchStart! : nowHHMM)
+    const earned = c.workedHours * accrualPerHour(yearsOfService(emp.hireDate, s.date))
+    total += c.workedHours; pto += earned; breaks += s.breaksTaken
+    const lunch = c.lunchHours > 0 ? `${s.lunchStart}–${s.lunchEnd}` : s.lunchStart ? `${s.lunchStart}–${s.lunchEnd ?? '…'}` : 'none'
+    const breakLine = [
+      c.owed.paidBreaks > 0 ? `15s ${s.breaksTaken}/${c.owed.paidBreaks}` : '',
+      c.owed.lunch ? `lunch ${c.lunchHours > 0 ? '✓' : 'MISSED'}` : '',
+    ].filter(Boolean).join(' · ')
+    return `<tr class="day"><td>${esc(dateLabel(s.date, { weekday: 'short', month: 'numeric', day: 'numeric' }))}</td>
+      <td>${s.clockIn}–${s.clockOut ?? 'now'}</td><td class="r">${fmtHours(c.workedHours)}</td></tr>
+      <tr class="sub"><td colspan="3">Lunch ${lunch}${breakLine ? ` · ${breakLine}` : ''} · PTO +${earned.toFixed(2)}${s.clockOut ? '' : ' · ON CLOCK'}</td></tr>`
+  }).join('')
+  const { regular, overtime } = splitOvertime(total)
+  const range = from === to
+    ? dateLabel(from, { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' })
+    : `${dateLabel(from, { month: 'short', day: 'numeric' })} – ${dateLabel(to, { month: 'short', day: 'numeric', year: 'numeric' })}`
+  const narrow = roll === '62mm'
+
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Time summary — ${esc(emp.name)}</title><style>
+  ${rollFrameCSS(roll)}
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: #000; background: #fff; font-size: ${narrow ? '8.5pt' : '10pt'}; }
+  .co { font-weight: 900; font-size: ${narrow ? '11pt' : '14pt'}; letter-spacing: 0.04em; text-align: center; }
+  .kind { text-align: center; font-size: ${narrow ? '8pt' : '9pt'}; letter-spacing: 0.15em; text-transform: uppercase; border-bottom: 2px solid #000; padding-bottom: 3px; margin-bottom: 4px; }
+  .name { font-weight: 900; font-size: ${narrow ? '12pt' : '15pt'}; margin-top: 2px; }
+  .range { margin-bottom: 4px; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 2px 0; vertical-align: top; }
+  .r { text-align: right; font-weight: 700; }
+  tr.day td { border-top: 1px solid #000; padding-top: 3px; font-weight: 700; }
+  tr.sub td { font-size: ${narrow ? '7pt' : '8pt'}; padding-bottom: 3px; }
+  .totals { border-top: 2px solid #000; margin-top: 4px; padding-top: 4px; }
+  .totals td { font-size: ${narrow ? '9pt' : '11pt'}; }
+  .big td { font-size: ${narrow ? '12pt' : '15pt'}; font-weight: 900; }
+  .foot { border-top: 1px solid #000; margin-top: 5px; padding-top: 3px; font-size: 7pt; text-align: center; }
+  </style></head><body>
+  <div class="co">COWBOY MEAT CO</div>
+  <div class="kind">${kind} time summary</div>
+  <div class="name">${esc(emp.name)}</div>
+  <div class="range">${esc(range)}</div>
+  ${rows.length ? `<table>${body}</table>` : '<div style="border-top:1px solid #000;padding:6px 0">No punches.</div>'}
+  <table class="totals">
+    <tr class="big"><td>Paid hours</td><td class="r">${fmtHours(total)}</td></tr>
+    ${kind === 'Week' ? `<tr><td>Regular</td><td class="r">${fmtHours(regular)}</td></tr><tr><td>Overtime 1.5×</td><td class="r">${fmtHours(overtime)}</td></tr>` : ''}
+    <tr><td>Paid 15s taken</td><td class="r">${breaks}</td></tr>
+    <tr class="big"><td>PTO earned</td><td class="r">+${pto.toFixed(2)} h</td></tr>
+    <tr><td>PTO balance*</td><td class="r">${balance.toFixed(1)} h</td></tr>
+  </table>
+  <div class="foot">*Balance through last week. Printed ${esc(dateLabel(isoDate(), { month: 'numeric', day: 'numeric' }))} ${nowHHMM} MT</div>
+  ${rollPrintScript(roll)}
+  </body></html>`
+}
+
+// ── Timesheets ──────────────────────────────────────────────────────────────
+
+function PunchPhoto({ src, label }: { src?: string; label: string }) {
+  return (
+    <div style={{ textAlign: 'center', fontSize: '0.65rem', color: C.lightBrown }}>
+      {src
+        // A data: URL from the kiosk camera — nothing for next/image to optimize.
+        // eslint-disable-next-line @next/next/no-img-element
+        ? <img src={src} alt={`${label} photo`} style={{ width: 54, height: 40, objectFit: 'cover', borderRadius: 3, display: 'block', transform: 'scaleX(-1)' }} />
+        : <div style={{ width: 54, height: 40, borderRadius: 3, border: '1px dashed rgba(166,120,90,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>no photo</div>}
+      {label}
+    </div>
+  )
+}
+
+function TimesheetTab({ shifts, photos, thisMonday, today, now }: {
+  shifts: Shift[]; photos: Record<string, string>; thisMonday: string; today: string; now: string | null
+}) {
+  const weekStart = addDaysISO(thisMonday, -7)
+  const weekEnd = addDaysISO(weekStart, 6)
+  const [empId, setEmpId] = useState<string>('all')
+  const week = shifts.filter(s => s.date >= weekStart && s.date <= weekEnd && s.clockOut)
+  const shown = EMPLOYEES.filter(e => empId === 'all' || e.id === empId)
   const todays = shifts.filter(s => s.date === today)
 
   return (
     <>
       <div style={card}>
-        <h2 style={h2}>Punch Clock</h2>
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.8rem' }}>
-          <select value={empId} onChange={e => setEmpId(e.target.value)} style={{ background: C.darkBrown, color: C.cream, border: `1px solid ${C.medBrown}`, borderRadius: 4, padding: '0.5rem', fontSize: '0.9rem' }}>
-            {EMPLOYEES.map(e => <option key={e.id} value={e.id}>{e.name} — {e.role}</option>)}
-          </select>
-          <span style={{ color: C.tan, fontSize: '0.9rem', fontVariantNumeric: 'tabular-nums' }}>{dateLabel(today)} · {now ?? '--:--'} MT</span>
-        </div>
-
-        {!open && <button style={btn(C.green)} onClick={clockIn} disabled={!now}>Clock In</button>}
-
-        {open && calc && (
-          <>
-            <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '0.8rem' }}>
-              <Stat label="Status" value={onLunch ? 'At lunch' : 'Working'} color={onLunch ? C.amber : C.green} sub={`In at ${open.clockIn}`} />
-              <Stat label="Paid hours so far" value={fmtHours(calc.workedHours)} />
-              <Stat label="Breaks earned" value={`${calc.owed.paidBreaks} × 15 min`} sub={calc.owed.lunch ? '+ 30-min lunch' : 'no lunch yet'} />
-            </div>
-            <div style={{ marginBottom: '0.8rem' }}>
-              <EntitlementPills owed={calc.owed} taken={open.breaksTaken} lunchTaken={!!open.lunchEnd} />
-              {nextUp && <div style={{ color: C.tan, fontSize: '0.82rem', marginTop: 6 }}>Next: {nextUp}</div>}
-            </div>
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-              {!onLunch && <button style={btn(C.blue)} onClick={() => update({ breaksTaken: open.breaksTaken + 1 })}>Log 15-min Break (paid)</button>}
-              {!open.lunchStart && <button style={btn(C.amber)} onClick={() => update({ lunchStart: nowHHMM })}>Start Lunch</button>}
-              {onLunch && <button style={btn(C.amber)} onClick={() => update({ lunchEnd: nowHHMM })}>End Lunch</button>}
-              {!onLunch && <button style={btn(C.red)} onClick={() => update({ clockOut: nowHHMM })}>Clock Out</button>}
-            </div>
-          </>
-        )}
-      </div>
-
-      <div style={card}>
-        <h2 style={h2}>On the clock today</h2>
+        <h2 style={h2}>Today · {dateLabel(today)}</h2>
+        <p style={{ color: C.tan, fontSize: '0.78rem', margin: '0 0 0.5rem' }}>Photos come from the iPad&apos;s front camera at each punch, so you can see who actually punched.</p>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><th style={th}>Employee</th><th style={th}>In</th><th style={th}>Lunch</th><th style={th}>Out</th><th style={th}>Paid hrs</th><th style={th}>Breaks</th></tr></thead>
+            <thead><tr><th style={th}>Employee</th><th style={th}>In</th><th style={th}>Lunch</th><th style={th}>Out</th><th style={th}>Paid hrs</th><th style={th}>Breaks</th><th style={th}>Punch photos</th></tr></thead>
             <tbody>
-              {todays.length === 0 && <tr><td style={td} colSpan={6}>Nobody yet.</td></tr>}
+              {todays.length === 0 && <tr><td style={td} colSpan={7}>Nobody yet.</td></tr>}
               {todays.map(s => {
-                const c = calcShift(s, nowHHMM)
+                const onLunch = !!s.lunchStart && !s.lunchEnd && !s.clockOut
+                const c = calcShift(s, onLunch ? s.lunchStart! : now ?? s.clockIn)
                 return (
                   <tr key={s.id}>
                     <td style={td}>{EMPLOYEES.find(e => e.id === s.empId)?.name}</td>
                     <td style={td}>{s.clockIn}</td>
                     <td style={td}>{s.lunchStart ? `${s.lunchStart}–${s.lunchEnd ?? '…'}` : '—'}</td>
-                    <td style={td}>{s.clockOut ?? <Pill color={C.green}>on clock</Pill>}</td>
+                    <td style={td}>{s.clockOut ?? <Pill color={onLunch ? C.amber : C.green}>{onLunch ? 'at lunch' : 'on clock'}</Pill>}</td>
                     <td style={{ ...td, fontVariantNumeric: 'tabular-nums' }}>{fmtHours(c.workedHours)}</td>
                     <td style={td}><EntitlementPills owed={c.owed} taken={s.breaksTaken} lunchTaken={!!s.lunchEnd} /></td>
+                    <td style={td}>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <PunchPhoto src={photos[`${s.id}:in`]} label="in" />
+                        {s.lunchStart && <PunchPhoto src={photos[`${s.id}:lunch-out`]} label="lunch" />}
+                        {s.lunchEnd && <PunchPhoto src={photos[`${s.id}:lunch-in`]} label="back" />}
+                        {s.clockOut && <PunchPhoto src={photos[`${s.id}:out`]} label="out" />}
+                      </div>
+                    </td>
                   </tr>
                 )
               })}
@@ -253,21 +568,7 @@ function ClockTab({ shifts, setShifts, today, now }: {
           </table>
         </div>
       </div>
-    </>
-  )
-}
 
-// ── Timesheets ──────────────────────────────────────────────────────────────
-
-function TimesheetTab({ shifts, thisMonday }: { shifts: Shift[]; thisMonday: string }) {
-  const weekStart = addDaysISO(thisMonday, -7)
-  const weekEnd = addDaysISO(weekStart, 6)
-  const [empId, setEmpId] = useState<string>('all')
-  const week = shifts.filter(s => s.date >= weekStart && s.date <= weekEnd && s.clockOut)
-  const shown = EMPLOYEES.filter(e => empId === 'all' || e.id === empId)
-
-  return (
-    <>
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.8rem' }}>
         <span style={{ color: C.tan, fontSize: '0.9rem' }}>
           Pay week {dateLabel(weekStart, { month: 'short', day: 'numeric' })} – {dateLabel(weekEnd, { month: 'short', day: 'numeric', year: 'numeric' })}
@@ -298,7 +599,7 @@ function TimesheetTab({ shifts, thisMonday }: { shifts: Shift[]; thisMonday: str
             </div>
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead><tr><th style={th}>Day</th><th style={th}>In</th><th style={th}>Lunch</th><th style={th}>Out</th><th style={th}>Paid hrs</th><th style={th}>Breaks</th><th style={th}>Notes</th></tr></thead>
+                <thead><tr><th style={th}>Day</th><th style={th}>In</th><th style={th}>Lunch</th><th style={th}>Out</th><th style={th}>Paid hrs</th><th style={th}>Breaks</th><th style={th}>PTO</th><th style={th}>Notes</th></tr></thead>
                 <tbody>
                   {rows.map((s, i) => {
                     const c = calcs[i]
@@ -310,6 +611,7 @@ function TimesheetTab({ shifts, thisMonday }: { shifts: Shift[]; thisMonday: str
                         <td style={td}>{s.clockOut}</td>
                         <td style={{ ...td, fontVariantNumeric: 'tabular-nums' }}>{fmtHours(c.workedHours)}</td>
                         <td style={td}><EntitlementPills owed={c.owed} taken={s.breaksTaken} lunchTaken={c.lunchHours > 0} /></td>
+                        <td style={{ ...td, color: C.green, fontVariantNumeric: 'tabular-nums' }}>+{(c.workedHours * accrualPerHour(years)).toFixed(2)}</td>
                         <td style={{ ...td, color: C.amber, fontSize: '0.78rem', maxWidth: 280 }}>{c.flags.join(' ')}</td>
                       </tr>
                     )
@@ -437,7 +739,8 @@ function PolicyTab() {
       <div style={card}>
         <h2 style={h2}>PTO</h2>
         <p style={p}>Every paid hour worked, overtime included, earns PTO. Year 1 is {PTO_RULES.baseAnnual} h per {PTO_RULES.fullTimeHours} worked ({(PTO_RULES.baseAnnual / PTO_RULES.fullTimeHours).toFixed(4)} per hour). Each work anniversary adds {PTO_RULES.stepPerYear} h to that rate, so it&apos;s 80 at 5 years, 120 at 10 and 160 at 15.</p>
-        <p style={p}><b style={{ color: C.cream }}>Montana law:</b> earned vacation counts as wages. Use-it-or-lose-it isn&apos;t allowed, and any unused balance has to be paid out when someone leaves. A cap on how much a balance can build up <i>is</i> allowed. That&apos;s what keeps long-tenured balances from growing without limit.</p>
+        <p style={p}><b style={{ color: C.cream }}>Montana law:</b> earned vacation counts as wages. Use-it-or-lose-it isn&apos;t allowed, and any unused balance has to be paid out when someone leaves. A cap on how much a balance can build up <i>is</i> allowed, but we&apos;re not using caps for now.</p>
+        <p style={p}>Every employee sees the PTO they earned on the time clock, and on their printed summary (e.g. an 8-hour day in year 1 earns 0.15 h).</p>
       </div>
     </>
   )
