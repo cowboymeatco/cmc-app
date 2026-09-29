@@ -10,7 +10,7 @@ import { isoDate, isoDateTime, addDaysISO, mondayOfISO, dateLabel } from '@/lib/
 import { LabelRoll, parseRoll, rollFrameCSS, rollPrintScript } from '@/lib/label'
 import {
   BREAK_RULES, MAX_PAID_BREAK_MINUTES, PTO_RULES, Shift, ShiftCalc, WeekHours,
-  calcShift, splitOvertime, fmtHours, toMin,
+  calcShift, splitOvertime, fmtHours, toMin, shiftSegments, fmt12, Segment,
   yearsOfService, annualPtoRate, accrualPerHour, nextAnniversary, ptoEarned,
 } from '@/lib/timekeeping'
 
@@ -469,6 +469,24 @@ function ClockTab({ shifts, setShifts, setPhotos, today, thisMonday, now }: {
         </div>
       )}
 
+      {todays.length > 0 && (
+        <div style={{ background: C.darkBrown, borderRadius: 4, padding: '0.6rem 0.8rem', marginBottom: '0.8rem' }}>
+          <div style={{ fontSize: '0.68rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4 }}>Your day</div>
+          <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+            <tbody>
+              {todays.flatMap(s => shiftSegments(s, nowHHMM)).map((g, i) => (
+                <tr key={i} style={{ color: g.pay === 'Pd' ? C.cream : g.pay === 'UPTO' ? C.red : C.tan, fontSize: '0.95rem', fontVariantNumeric: 'tabular-nums' }}>
+                  <td style={{ padding: '2px 0', whiteSpace: 'nowrap' }}>{fmt12(g.start)} – {g.open ? 'now' : fmt12(g.end)}</td>
+                  <td style={{ padding: '2px 8px' }}>{KIND_LABEL[g.kind]}</td>
+                  <td style={{ padding: '2px 8px', fontWeight: 700 }}>{g.pay === 'Pd' ? 'Paid' : g.pay === 'Upd' ? 'Unpaid' : 'UPTO'}</td>
+                  <td style={{ padding: '2px 0', textAlign: 'right' }}>{fmtHours(g.minutes / 60)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
         {!open && <button style={bigBtn(C.green)} onClick={clockIn} disabled={!now}>Clock In</button>}
         {open && !onLunch && !onBreak && <button style={bigBtn(C.blue)} onClick={startBreak}>Start Break</button>}
@@ -525,25 +543,28 @@ interface Accrual {
   nextAnnual: number  // rate after it
 }
 
+const KIND_LABEL: Record<Segment['kind'], string> = { work: 'Work', break: 'Break', lunch: 'Lunch' }
+
 function buildSummaryHTML(
   emp: Employee, shifts: Shift[], from: string, to: string, kind: 'Day' | 'Week',
   nowHHMM: string, acc: Accrual, roll: LabelRoll,
 ): string {
   const rows = [...shifts].sort((a, b) => a.date.localeCompare(b.date) || a.clockIn.localeCompare(b.clockIn))
   let total = 0, pto = 0, breakMin = 0, upto = 0, lunchMin = 0
-  const body = rows.map(s => {
+  const days = rows.map(s => {
     const c = calcShift(s, nowHHMM)
     const earned = c.workedHours * accrualPerHour(yearsOfService(emp.hireDate, s.date))
     total += c.workedHours; pto += earned; breakMin += c.paidBreakMinutes; upto += c.uptoMinutes; lunchMin += c.lunchUnpaid ? c.lunchMinutes : 0
-    const allowance = c.owed.paidBreaks * BREAK_RULES.paidBreakMinutes
-    const lunch = !s.lunchStart ? (c.owed.lunch ? 'MISSED' : 'none')
-      : `${s.lunchStart}–${s.lunchEnd ?? '…'} (${c.lunchMinutes} min${c.lunchUnpaid ? ' unpaid' : ', paid — under 30'})`
-    const breaks = s.breaks.length
-      ? `${s.breaks.map(b => b.end ? `${toMin(b.end) - toMin(b.start)}` : '…').join('+')} min: ${c.paidBreakMinutes} paid${c.uptoMinutes ? `, ${c.uptoMinutes} UPTO` : ''}${c.breakMinutes < allowance ? ` (${allowance} allowed)` : ''}`
-      : allowance ? `none (${allowance} allowed)` : 'none'
-    return `<tr class="day"><td>${esc(dateLabel(s.date, { weekday: 'short', month: 'numeric', day: 'numeric' }))}</td>
-      <td>${s.clockIn}–${s.clockOut ?? 'now'}</td><td class="r">${fmtHours(c.workedHours)}</td></tr>
-      <tr class="sub"><td colspan="3">Lunch ${lunch}<br>Breaks ${breaks}<br>${c.uptoMinutes ? `UPTO ${c.uptoMinutes} min · ` : ''}PTO +${earned.toFixed(2)}${s.clockOut ? '' : ' · ON CLOCK'}</td></tr>`
+    const lines = shiftSegments(s, nowHHMM).map(g => `<tr class="seg${g.pay === 'Pd' ? '' : ' off'}">
+        <td class="t">${fmt12(g.start)}–${g.open ? 'now' : fmt12(g.end)}</td>
+        <td>${KIND_LABEL[g.kind]}</td>
+        <td class="pay"><span class="${g.pay === 'UPTO' ? 'upto' : ''}">${g.pay === 'Upd' ? 'Upd' : g.pay}</span></td>
+        <td class="r">${fmtHours(g.minutes / 60)}</td></tr>`).join('')
+    const missed = c.owed.lunch && !s.lunchStart && s.clockOut ? '<tr class="note"><td colspan="4">No lunch taken</td></tr>' : ''
+    return `<tr class="day"><td colspan="2">${esc(dateLabel(s.date, { weekday: 'short', month: 'numeric', day: 'numeric' }))}${s.clockOut ? '' : ' · ON CLOCK'}</td>
+        <td colspan="2" class="r">${fmtHours(c.workedHours)} pd</td></tr>
+      ${lines}${missed}
+      <tr class="note"><td colspan="4">PTO +${earned.toFixed(2)} h${c.uptoMinutes ? ` · UPTO ${c.uptoMinutes} min` : ''}</td></tr>`
   }).join('')
   const { regular, overtime } = splitOvertime(total)
   const range = from === to
@@ -555,57 +576,69 @@ function buildSummaryHTML(
   return `<!doctype html><html><head><meta charset="utf-8"><title>Time clock summary — ${esc(emp.name)}</title><style>
   ${rollFrameCSS(roll)}
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: #000; background: #fff; font-size: ${narrow ? '8.5pt' : '9.5pt'}; }
+  body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: #000; background: #fff; font-size: ${narrow ? '8pt' : '8.5pt'}; }
   .co { font-weight: 900; font-size: ${narrow ? '11pt' : '13pt'}; letter-spacing: 0.04em; text-align: center; }
-  .kind { text-align: center; font-weight: 700; font-size: ${narrow ? '8pt' : '9pt'}; letter-spacing: 0.15em; text-transform: uppercase; border-bottom: 2px solid #000; padding-bottom: 3px; margin-bottom: 4px; }
+  .kind { text-align: center; font-weight: 700; font-size: ${narrow ? '8pt' : '9pt'}; letter-spacing: 0.15em; text-transform: uppercase; border-bottom: 2px solid #000; padding-bottom: 3px; margin-bottom: 3px; }
   .name { font-weight: 900; font-size: ${narrow ? '12pt' : '14pt'}; line-height: 1.1; }
-  .range { margin-bottom: 3px; }
+  .range { margin-bottom: 4px; }
   table { width: 100%; border-collapse: collapse; }
-  td { padding: 1.5px 0; vertical-align: top; }
+  td { padding: 1px 0; vertical-align: top; }
   .r { text-align: right; font-weight: 700; white-space: nowrap; }
-  .top { display: ${narrow ? 'block' : 'flex'}; gap: 0.08in; align-items: flex-start; }
+  .cols { display: ${narrow ? 'flex' : 'flex'}; flex-direction: ${narrow ? 'column-reverse' : 'row'}; gap: 0.08in; align-items: ${narrow ? 'stretch' : 'flex-start'}; }
   .left { flex: 1 1 auto; min-width: 0; }
-  .acc { flex: 0 0 1.45in; border: 2px solid #000; padding: 3px 4px; ${narrow ? 'margin-top: 4px;' : ''} }
-  .acc h3 { margin: 0 0 2px; font-size: 7.5pt; letter-spacing: 0.12em; text-align: center; border-bottom: 1px solid #000; padding-bottom: 2px; }
-  .acc .bal { font-size: ${narrow ? '16pt' : '18pt'}; font-weight: 900; text-align: center; line-height: 1.1; }
-  .acc .bal-l { font-size: 7pt; text-align: center; margin-bottom: 2px; }
-  .acc td { font-size: 7.5pt; }
-  .big td { font-size: ${narrow ? '11pt' : '12pt'}; font-weight: 900; }
-  .days { margin-top: 5px; }
-  tr.day td { border-top: 1px solid #000; padding-top: 3px; font-weight: 700; }
-  tr.sub td { font-size: ${narrow ? '7pt' : '7.5pt'}; padding-bottom: 2px; }
+  .right { flex: 0 0 1.4in; }
+  tr.day td { border-top: 1.5px solid #000; padding-top: 3px; font-weight: 900; font-size: ${narrow ? '9pt' : '9.5pt'}; }
+  tr.seg td { font-size: ${narrow ? '7.5pt' : '8pt'}; padding: 0.5px 0; }
+  tr.seg td.t { white-space: nowrap; padding-right: 4px; }
+  tr.seg td.pay { font-weight: 700; padding: 0.5px 3px; }
+  tr.seg.off td { font-style: italic; }
+  .upto { background: #000; color: #fff; padding: 0 2px; }
+  tr.note td { font-size: 7pt; padding-bottom: 3px; }
+  .box { border: 2px solid #000; padding: 3px 4px; margin-bottom: 4px; }
+  .box h3 { margin: 0 0 2px; font-size: 7.5pt; letter-spacing: 0.12em; text-align: center; border-bottom: 1px solid #000; padding-bottom: 2px; }
+  .box td { font-size: 7.5pt; }
+  .box .bal { font-size: ${narrow ? '16pt' : '18pt'}; font-weight: 900; text-align: center; line-height: 1.1; }
+  .box .bal-l { font-size: 7pt; text-align: center; margin-bottom: 2px; }
+  .box tr.big td { font-size: 10pt; font-weight: 900; }
+  .key { font-size: 6.5pt; margin-top: 2px; line-height: 1.3; }
   .foot { border-top: 1px solid #000; margin-top: 4px; padding-top: 3px; font-size: 7pt; text-align: center; }
   </style></head><body>
   <div class="co">COWBOY MEAT CO</div>
   <div class="kind">Time clock summary · ${kind}</div>
-  <div class="top">
+  <div class="name">${esc(emp.name)}</div>
+  <div class="range">${esc(range)}</div>
+  <div class="cols">
     <div class="left">
-      <div class="name">${esc(emp.name)}</div>
-      <div class="range">${esc(range)}</div>
-      <table>
-        <tr class="big"><td>Paid hours</td><td class="r">${fmtHours(total)}</td></tr>
-        ${kind === 'Week' ? `<tr><td>Regular</td><td class="r">${fmtHours(regular)}</td></tr><tr><td>Overtime 1.5×</td><td class="r">${fmtHours(overtime)}</td></tr>` : ''}
-        <tr><td>Paid breaks</td><td class="r">${fmtHours(breakMin / 60)}</td></tr>
-        <tr><td>Unpaid lunch</td><td class="r">${fmtHours(lunchMin / 60)}</td></tr>
-        <tr><td>UPTO</td><td class="r">${fmtHours(upto / 60)}</td></tr>
-      </table>
+      ${rows.length ? `<table>${days}</table>` : '<div style="border-top:1px solid #000;padding:6px 0">No punches.</div>'}
+      <div class="key">Pd = paid · Upd = unpaid · UPTO = break time past the paid allowance (unpaid)</div>
     </div>
-    <div class="acc">
-      <h3>PTO ACCRUAL</h3>
-      <div class="bal">${acc.balance.toFixed(2)}</div>
-      <div class="bal-l">hours available</div>
-      <table>
-        <tr><td>Earned ${kind === 'Day' ? 'today' : 'this wk'}</td><td class="r">+${pto.toFixed(2)}</td></tr>
-        <tr><td>Used this yr</td><td class="r">${acc.usedYtd.toFixed(2)}</td></tr>
-        <tr><td>Rate / hr</td><td class="r">${acc.perHour.toFixed(4)}</td></tr>
-        <tr><td>Per 2080 hrs</td><td class="r">${acc.annual} h</td></tr>
-        <tr><td>Service</td><td class="r">${acc.years} yr</td></tr>
-        <tr><td>Goes up ${md(acc.nextBump)}</td><td class="r">${acc.nextAnnual} h</td></tr>
-      </table>
+    <div class="right">
+      <div class="box">
+        <h3>HOURS</h3>
+        <table>
+          <tr class="big"><td>Paid</td><td class="r">${fmtHours(total)}</td></tr>
+          ${kind === 'Week' ? `<tr><td>Regular</td><td class="r">${fmtHours(regular)}</td></tr><tr><td>Overtime</td><td class="r">${fmtHours(overtime)}</td></tr>` : ''}
+          <tr><td>Paid breaks</td><td class="r">${fmtHours(breakMin / 60)}</td></tr>
+          <tr><td>Unpaid lunch</td><td class="r">${fmtHours(lunchMin / 60)}</td></tr>
+          <tr><td>UPTO</td><td class="r">${fmtHours(upto / 60)}</td></tr>
+        </table>
+      </div>
+      <div class="box">
+        <h3>PTO ACCRUAL</h3>
+        <div class="bal">${acc.balance.toFixed(2)}</div>
+        <div class="bal-l">hours available</div>
+        <table>
+          <tr><td>Earned ${kind === 'Day' ? 'today' : 'this wk'}</td><td class="r">+${pto.toFixed(2)}</td></tr>
+          <tr><td>Used this yr</td><td class="r">${acc.usedYtd.toFixed(2)}</td></tr>
+          <tr><td>Rate / hr</td><td class="r">${acc.perHour.toFixed(4)}</td></tr>
+          <tr><td>Per 2080 hrs</td><td class="r">${acc.annual} h</td></tr>
+          <tr><td>Service</td><td class="r">${acc.years} yr</td></tr>
+          <tr><td>Goes up ${md(acc.nextBump)}</td><td class="r">${acc.nextAnnual} h</td></tr>
+        </table>
+      </div>
     </div>
   </div>
-  ${rows.length ? `<table class="days">${body}</table>` : '<div style="border-top:1px solid #000;margin-top:5px;padding:6px 0">No punches.</div>'}
-  <div class="foot">Printed ${esc(md(isoDate()))} ${nowHHMM} MT · Questions? See the office.</div>
+  <div class="foot">Printed ${esc(md(isoDate()))} ${fmt12(nowHHMM)} MT · Questions? See the office.</div>
   ${rollPrintScript(roll)}
   </body></html>`
 }

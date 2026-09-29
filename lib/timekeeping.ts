@@ -199,3 +199,64 @@ export interface WeekHours { weekStart: string; hours: number }
 export function ptoEarned(hireISO: string, weeks: WeekHours[]): number {
   return weeks.reduce((sum, w) => sum + w.hours * accrualPerHour(yearsOfService(hireISO, w.weekStart)), 0)
 }
+
+// ── Day breakdown ───────────────────────────────────────────────────────────
+
+export interface Segment {
+  start:   string                    // HH:MM
+  end:     string                    // HH:MM ("now" for a punch still open)
+  open:    boolean
+  kind:    'work' | 'break' | 'lunch'
+  pay:     'Pd' | 'Upd' | 'UPTO'
+  minutes: number
+}
+
+/**
+ * The shift as a line-by-line timeline — work, breaks and lunch in order,
+ * each marked paid, unpaid or UPTO — so the employee can see exactly where
+ * every minute went. Paid break minutes are spent in order: the first
+ * breaks of the day use up the allowance, and whatever runs past it is UPTO.
+ */
+export function shiftSegments(s: Shift, nowHHMM?: string): Segment[] {
+  const now = nowHHMM ?? s.clockIn
+  const c = calcShift(s, now)
+  const end = s.clockOut ?? now
+
+  const offs: { start: string; end: string; open: boolean; kind: 'break' | 'lunch' }[] = [
+    ...s.breaks.map(b => ({ start: b.start, end: b.end ?? (s.clockOut ? b.start : now), open: !b.end, kind: 'break' as const })),
+    ...(s.lunchStart ? [{ start: s.lunchStart, end: s.lunchEnd ?? (s.clockOut ? s.lunchStart : now), open: !s.lunchEnd, kind: 'lunch' as const }] : []),
+  ].sort((a, b) => toMin(a.start) - toMin(b.start))
+
+  const segs: Segment[] = []
+  const push = (start: string, stop: string, kind: Segment['kind'], pay: Segment['pay'], open = false) => {
+    const minutes = toMin(stop) - toMin(start)
+    if (minutes > 0 || open) segs.push({ start, end: stop, open, kind, pay, minutes: Math.max(0, minutes) })
+  }
+  const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+
+  let cursor = s.clockIn
+  let breakPaidLeft = c.paidBreakMinutes
+  for (const o of offs) {
+    push(cursor, o.start, 'work', 'Pd')
+    if (o.kind === 'lunch') push(o.start, o.end, 'lunch', c.lunchUnpaid ? 'Upd' : 'Pd', o.open)
+    else {
+      const dur = toMin(o.end) - toMin(o.start)
+      const paid = Math.min(dur, breakPaidLeft)
+      breakPaidLeft -= paid
+      const split = hhmm(toMin(o.start) + paid)
+      if (paid > 0) push(o.start, split, 'break', 'Pd', o.open && paid === dur)
+      if (dur - paid > 0 || (o.open && paid < dur)) push(split, o.end, 'break', 'UPTO', o.open)
+      if (dur === 0 && o.open) push(o.start, o.end, 'break', 'Pd', true)
+    }
+    cursor = o.end
+  }
+  // Out on lunch or break right now: that open punch is the last line.
+  if (!offs.some(o => o.open && !s.clockOut)) push(cursor, end, 'work', 'Pd', !s.clockOut)
+  return segs
+}
+
+/** "6:15a", "4:30p" — the way the crew reads a clock. */
+export function fmt12(hhmm: string): string {
+  const [h, m] = hhmm.split(':').map(Number)
+  return `${h % 12 === 0 ? 12 : h % 12}:${String(m).padStart(2, '0')}${h < 12 ? 'a' : 'p'}`
+}
