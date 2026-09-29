@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 export const dynamic = 'force-dynamic'
 
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'a box cannot be merged into itself' }, { status: 400 })
   }
 
-  const { data: rows, error } = await supabase.from('boxes').select(COLS).in('id', [sourceId, targetId])
+  const { data: rows, error } = await supabaseAdmin.from('boxes').select(COLS).in('id', [sourceId, targetId])
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   const source = (rows ?? []).find(b => b.id === sourceId)
@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Move the lines. box_scans hang off box_id, so this is the whole move.
-  const { data: moved, error: mErr } = await supabase
+  const { data: moved, error: mErr } = await supabaseAdmin
     .from('box_scans')
     .update({ box_id: targetId })
     .eq('box_id', sourceId)
@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
 
   // Re-weigh the target off its lines, never off the two cached headers — the
   // headers are snapshots and the lines are the truth (same rule as closing).
-  const { data: lines, error: lErr } = await supabase
+  const { data: lines, error: lErr } = await supabaseAdmin
     .from('box_scans')
     .select('weight_lbs, quantity')
     .eq('box_id', targetId)
@@ -75,7 +75,7 @@ export async function POST(req: NextRequest) {
   const total_weight_lbs = Math.round((lines ?? []).reduce((s, l) => s + (Number(l.weight_lbs) || 0), 0) * 100) / 100
   const total_cuts       = (lines ?? []).reduce((s, l) => s + (Number(l.quantity) || 1), 0)
 
-  const { data: updated, error: uErr } = await supabase
+  const { data: updated, error: uErr } = await supabaseAdmin
     .from('boxes')
     .update({ total_weight_lbs, total_cuts })
     .eq('id', targetId)
@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
 
   // The emptied box goes away — keeping it would leave an empty box on the
   // pallet count and a second label for meat that's in the other box now.
-  const { error: dErr } = await supabase.from('boxes').delete().eq('id', sourceId)
+  const { error: dErr } = await supabaseAdmin.from('boxes').delete().eq('id', sourceId)
   if (dErr) return NextResponse.json({ error: dErr.message }, { status: 500 })
 
   return NextResponse.json({

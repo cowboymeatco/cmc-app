@@ -1,12 +1,12 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 export const dynamic = 'force-dynamic'
 
 // GET /api/delivery
 export async function GET() {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('delivery_scans')
     .select('*')
     .order('delivered_at', { ascending: false })
@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
   const destination: string = body.destination === 'baker_storage' ? 'baker_storage' : 'customer'
   const sessionRefs = Array.isArray(body.session_refs) ? body.session_refs : []
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('delivery_scans')
     .insert([{
       delivered_at: body.delivered_at ?? new Date().toISOString(),
@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
   const missed: string[] = []
   for (const ref of sessionRefs as { customer_name?: string; session_date?: string }[]) {
     if (!ref?.customer_name || !ref?.session_date) continue
-    const { error: sErr } = await supabase
+    const { error: sErr } = await supabaseAdmin
       .from('processing_sessions')
       .update({ status: newStatus, updated_at: new Date().toISOString() })
       .eq('customer_name', ref.customer_name)
@@ -63,7 +63,7 @@ export async function PATCH(req: NextRequest) {
   const body = await req.json()
   const { id, ...updates } = body
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('delivery_scans')
     .update(updates)
     .eq('id', id)

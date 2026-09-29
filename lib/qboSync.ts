@@ -1,5 +1,5 @@
 import { qboFetch } from '@/lib/qbo'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // Live QuickBooks Item catalog: fetch, update, and mirror into the
 // qbo_items cache (which the linking + alignment views read).
@@ -64,7 +64,7 @@ export async function getCachedQboItems(): Promise<QboCacheRow[]> {
   const rows: QboCacheRow[] = []
   const page = 1000
   for (let from = 0; ; from += page) {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('qbo_items')
       .select('qbo_id, full_name, name, type, sales_price, taxable, active, synced_at')
       .not('qbo_id', 'is', null)
@@ -97,10 +97,10 @@ export async function refreshQboCache(): Promise<{ total: number; active: number
     synced_at: now,
   }))
 
-  const { error: delErr } = await supabase.from('qbo_items').delete().not('id', 'is', null)
+  const { error: delErr } = await supabaseAdmin.from('qbo_items').delete().not('id', 'is', null)
   if (delErr) throw new Error(`cache clear failed: ${delErr.message}`)
   for (let i = 0; i < rows.length; i += 500) {
-    const { error } = await supabase.from('qbo_items').insert(rows.slice(i, i + 500))
+    const { error } = await supabaseAdmin.from('qbo_items').insert(rows.slice(i, i + 500))
     if (error) throw new Error(`cache insert failed at ${i}: ${error.message}`)
   }
   return { total: rows.length, active: rows.filter(r => r.active).length }

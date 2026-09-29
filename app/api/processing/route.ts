@@ -1,6 +1,6 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // GET /api/processing?search=
 export async function GET(req: NextRequest) {
@@ -9,7 +9,7 @@ export async function GET(req: NextRequest) {
   const species = searchParams.get('species') ?? ''
   const active  = searchParams.get('active')  // 'true' | 'false' | null
 
-  let query = supabase
+  let query = supabaseAdmin
     .from('plu_items')
     .select('*')
     .order('plu_number', { ascending: true })
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
 
   const rows = items.map(item => ({ ...item, updated_at: new Date().toISOString() }))
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('plu_items')
     .upsert(rows, { onConflict: 'plu_number' })
     .select()
@@ -56,7 +56,7 @@ export async function PUT(req: NextRequest) {
     updated_at: new Date().toISOString(),
   }
 
-  const { data, error } = await supabase.from('plu_items').insert(row).select().single()
+  const { data, error } = await supabaseAdmin.from('plu_items').insert(row).select().single()
   if (error) {
     const msg = error.code === '23505' ? `PLU ${pluNumber} already exists` : error.message
     return NextResponse.json({ error: msg }, { status: 400 })
@@ -71,7 +71,7 @@ export async function PATCH(req: NextRequest) {
   // ALL CAPS standard (Jill): uppercase any name we write.
   if (typeof updates.item_name === 'string') updates.item_name = updates.item_name.toUpperCase()
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('plu_items')
     .update({ ...updates, updated_at: new Date().toISOString() })
     .eq('id', id)
@@ -88,7 +88,7 @@ export async function DELETE(req: NextRequest) {
   const id = searchParams.get('id')
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
 
-  const { error } = await supabase.from('plu_items').delete().eq('id', id)
+  const { error } = await supabaseAdmin.from('plu_items').delete().eq('id', id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ ok: true })
 }

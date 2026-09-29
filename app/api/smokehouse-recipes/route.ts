@@ -4,7 +4,6 @@ import { NextRequest, NextResponse } from 'next/server'
 // no policies — the anon key can't read it at all. See
 // scripts/2026-09-26_smokehouse_recipes.sql.
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
-import { supabase } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
 
@@ -20,9 +19,9 @@ const FIELDS = [
 // supplies a recipe's seasoning and cure are picked from.
 export async function GET() {
   const [flav, rec, prof, sup] = await Promise.all([
-    supabase.from('wizard_flavors').select('id, product, val, label, plu_number, sort_order').eq('active', true).order('sort_order'),
+    supabaseAdmin.from('wizard_flavors').select('id, product, val, label, plu_number, sort_order').eq('active', true).order('sort_order'),
     supabaseAdmin.from('smokehouse_recipes').select('*'),
-    supabase.from('cook_profile').select('id, profile_key, display_name, lbs_per_batch, units_per_batch, unit_label').eq('active', true),
+    supabaseAdmin.from('cook_profile').select('id, profile_key, display_name, lbs_per_batch, units_per_batch, unit_label').eq('active', true),
     supabaseAdmin.from('smokehouse_supplies').select('id, name, kind, supplier').eq('active', true).order('name'),
   ])
   const err = flav.error ?? rec.error ?? prof.error ?? sup.error

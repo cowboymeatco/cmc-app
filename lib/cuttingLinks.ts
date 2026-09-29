@@ -1,4 +1,4 @@
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // Detaching a cut card means clearing everything that points AT it: the
 // appointment customer slot that owns the link, and the carcass-assignment
@@ -24,7 +24,7 @@ export async function unlinkInstruction(
   // "{[object Object]}" instead of JSON — Postgres then rejects it with
   // "invalid input syntax for type json". Pre-serializing sidesteps that
   // (Charlie, 2026-08-18 — surfaced as a raw Postgres error in the UI).
-  const { data: appts, error: findErr } = await supabase
+  const { data: appts, error: findErr } = await supabaseAdmin
     .from('harvest_appointments')
     .select('id, customers')
     .contains('customers', JSON.stringify([{ linked_cutting_instruction_id: id }]))
@@ -47,7 +47,7 @@ export async function unlinkInstruction(
       if (hit) cleared++
       return hit ? { ...c, linked_cutting_instruction_id: '' } : c
     })
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from('harvest_appointments')
       .update({ customers })
       .eq('id', appt.id)
@@ -58,7 +58,7 @@ export async function unlinkInstruction(
   // strip the card off the producer's OTHER animals too — the bug this helper
   // exists to avoid on the appointment side. The assignment ROW stays: the
   // carcass is still that slot's animal, it just no longer carries this card.
-  let clear = supabase
+  let clear = supabaseAdmin
     .from('carcass_assignments')
     .update({ linked_cutting_instruction_id: null })
     .eq('linked_cutting_instruction_id', id)

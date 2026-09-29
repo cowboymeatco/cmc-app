@@ -1,4 +1,4 @@
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { isoDate } from '@/lib/dates'
 
 // A box serial is CMC + YYMMDD + 4 random base-36 chars — about 1.7M per day.
@@ -29,7 +29,7 @@ export async function createBox(row: NewBox, attempts = 5): Promise<CreateBoxRes
   const fixed = typeof serial_number === 'string' && serial_number ? serial_number : null
 
   for (let i = 0; i < attempts; i++) {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('boxes')
       .insert([{ ...rest, is_closed: false, is_final: rest.is_final ?? false, serial_number: fixed ?? newBoxSerial() }])
       .select()

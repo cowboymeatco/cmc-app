@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { generatePackingSlip, SlipBox, SlipDelivery, SlipLoose, SlipCarcass, SlipPallet } from '@/lib/packingSlip'
 import { shortItemName } from '@/lib/itemName'
 import { resolveCarcasses } from '@/lib/carcassDelivery'
@@ -41,7 +41,7 @@ type BoxRow = Omit<SlipBox, 'scans'>
 
 async function boxesWithScans(rows: BoxRow[]): Promise<SlipBox[]> {
   if (!rows.length) return []
-  const { data: scans } = await supabase
+  const { data: scans } = await supabaseAdmin
     .from('box_scans')
     .select('box_id, item_name, plu_number, weight_lbs, quantity')
     .in('box_id', rows.map(r => r.id))
@@ -78,7 +78,7 @@ async function looseItems(barcodes: string[]): Promise<SlipLoose[]> {
 
   const names: Record<string, string> = {}
   if (plus.size) {
-    const { data } = await supabase.from('plu_items').select('plu_number, item_name').in('plu_number', [...plus])
+    const { data } = await supabaseAdmin.from('plu_items').select('plu_number, item_name').in('plu_number', [...plus])
     for (const r of data ?? []) if (r.plu_number) names[String(r.plu_number)] = shortItemName(r.item_name)
   }
 
@@ -111,7 +111,7 @@ export async function GET(req: NextRequest) {
     // Several ids (comma-separated) print as one load — a pallet built after
     // the fact out of deliveries logged one customer at a time (2026-09-24).
     const ids = [...new Set(id.split(',').map(x => x.trim()).filter(Boolean))]
-    const { data: ds, error } = await supabase.from('delivery_scans').select('*').in('id', ids)
+    const { data: ds, error } = await supabaseAdmin.from('delivery_scans').select('*').in('id', ids)
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     if (!ds?.length) return NextResponse.json({ error: 'delivery not found' }, { status: 404 })
     const list = ids.map(x => ds.find(d => d.id === x)).filter(Boolean) as typeof ds
@@ -125,7 +125,7 @@ export async function GET(req: NextRequest) {
       destination:  list.every(d => d.destination === 'baker_storage') ? 'baker_storage' : 'customer',
     }
 
-    const { data: stamped } = await supabase.from('boxes').select(BOX_COLS).in('delivery_id', ids)
+    const { data: stamped } = await supabaseAdmin.from('boxes').select(BOX_COLS).in('delivery_id', ids)
     rows = (stamped ?? []) as BoxRow[]
 
     const lines = list.flatMap(d => (d.barcodes ?? []) as { barcode?: string; pallet?: number; stop?: string }[])
@@ -137,7 +137,7 @@ export async function GET(req: NextRequest) {
     const have = new Set(rows.map(r => (r.serial_number ?? '').toUpperCase()))
     const missing = serials.filter(s => !have.has(s))
     if (missing.length) {
-      const { data: extra } = await supabase.from('boxes').select(BOX_COLS).in('serial_number', missing)
+      const { data: extra } = await supabaseAdmin.from('boxes').select(BOX_COLS).in('serial_number', missing)
       rows = rows.concat((extra ?? []) as BoxRow[])
     }
     allCodes = lines.map(b => String(b.barcode ?? ''))
@@ -159,7 +159,7 @@ export async function GET(req: NextRequest) {
     if (!codes.length) return NextResponse.json({ error: 'id, serials or barcodes required' }, { status: 400 })
     const serials = codes.map(c => c.toUpperCase()).filter(c => SERIAL_RE.test(c))
     if (serials.length) {
-      const { data, error } = await supabase.from('boxes').select(BOX_COLS).in('serial_number', serials)
+      const { data, error } = await supabaseAdmin.from('boxes').select(BOX_COLS).in('serial_number', serials)
       if (error) return NextResponse.json({ error: error.message }, { status: 500 })
       rows = (data ?? []) as BoxRow[]
     }

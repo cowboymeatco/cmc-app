@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 export const dynamic = 'force-dynamic'
 
@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Highest box number already in the target — moved boxes continue after it
-  const { data: targetBoxes, error: tErr } = await supabase
+  const { data: targetBoxes, error: tErr } = await supabaseAdmin
     .from('boxes')
     .select('box_number')
     .eq('customer_name', target.customer_name)
@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
   let nextNum = (targetBoxes ?? []).reduce((m, b) => Math.max(m, Number(b.box_number) || 0), 0) + 1
 
   // Source boxes in box-number order so they keep their relative order
-  const { data: sourceBoxes, error: sErr } = await supabase
+  const { data: sourceBoxes, error: sErr } = await supabaseAdmin
     .from('boxes')
     .select('id, box_number')
     .eq('customer_name', source.customer_name)
@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
   if (sErr) return NextResponse.json({ error: sErr.message }, { status: 500 })
 
   for (const box of sourceBoxes ?? []) {
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from('boxes')
       .update({ customer_name: target.customer_name, pack_date: target.session_date, box_number: nextNum })
       .eq('id', box.id)
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Inputs are keyed the same way — move them so yield math stays with the session
-  const { error: iErr } = await supabase
+  const { error: iErr } = await supabaseAdmin
     .from('processing_inputs')
     .update({ customer_name: target.customer_name, session_date: target.session_date, pack_date: target.session_date })
     .eq('customer_name', source.customer_name)
@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
 
   // Cure tags carry the same key — leave them behind and In Cure keeps naming a
   // session that no longer exists.
-  const { error: cErr } = await supabase
+  const { error: cErr } = await supabaseAdmin
     .from('cure_tags')
     .update({ customer_name: target.customer_name, session_date: target.session_date })
     .eq('customer_name', source.customer_name)
@@ -70,13 +70,13 @@ export async function POST(req: NextRequest) {
 
   // Fold the source session record into the target before deleting it.
   // Either record may be missing (sessions can exist as boxes only).
-  const { data: srcSession } = await supabase
+  const { data: srcSession } = await supabaseAdmin
     .from('processing_sessions')
     .select('id, status, notes')
     .eq('customer_name', source.customer_name)
     .eq('session_date', source.session_date)
     .maybeSingle()
-  const { data: tgtSession } = await supabase
+  const { data: tgtSession } = await supabaseAdmin
     .from('processing_sessions')
     .select('id, notes')
     .eq('customer_name', target.customer_name)
@@ -85,13 +85,13 @@ export async function POST(req: NextRequest) {
 
   if (srcSession && tgtSession && srcSession.notes) {
     const merged = tgtSession.notes ? `${tgtSession.notes}\n${srcSession.notes}` : srcSession.notes
-    await supabase
+    await supabaseAdmin
       .from('processing_sessions')
       .update({ notes: merged, updated_at: new Date().toISOString() })
       .eq('id', tgtSession.id)
   } else if (srcSession && !tgtSession) {
     // Target has no record yet — carry the source's status/notes over to it
-    await supabase
+    await supabaseAdmin
       .from('processing_sessions')
       .upsert(
         [{ customer_name: target.customer_name, session_date: target.session_date, status: srcSession.status, notes: srcSession.notes, updated_at: new Date().toISOString() }],
@@ -100,7 +100,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (srcSession) {
-    const { error: dErr } = await supabase
+    const { error: dErr } = await supabaseAdmin
       .from('processing_sessions')
       .delete()
       .eq('id', srcSession.id)

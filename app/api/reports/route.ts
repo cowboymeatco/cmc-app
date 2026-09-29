@@ -1,6 +1,5 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
 // v_producer_customer_ties carries customer names and ids. A view reads its
 // base tables with the VIEW OWNER's rights, so RLS on `customers` does not
 // protect it — the anon grant has to come off the view itself, which means
@@ -43,14 +42,14 @@ export async function GET(req: NextRequest) {
     // anything is made. One object per cut sheet with its value-add items; the
     // page pivots them into a customer × product table.
     const [{ data: cis, error: ciErr }, { data: appts }, { data: cureTags }] = await Promise.all([
-      supabase.from('cutting_instructions').select('id, customer_name, species, data, status').neq('status', 'archived'),
-      supabase.from('harvest_appointments').select('id, harvest_date, customers'),
-      supabase.from('cure_tags').select('tag_number, product, customer_name, status, source_cut, linked_harvest_id, linked_cutting_instruction_id'),
+      supabaseAdmin.from('cutting_instructions').select('id, customer_name, species, data, status').neq('status', 'archived'),
+      supabaseAdmin.from('harvest_appointments').select('id, harvest_date, customers'),
+      supabaseAdmin.from('cure_tags').select('tag_number, product, customer_name, status, source_cut, linked_harvest_id, linked_cutting_instruction_id'),
     ])
     // What the floor's shorthand stands for — see lib/nameKey. Read separately
     // so a failure here degrades to plain word-matching instead of blanking the
     // whole report.
-    const { data: aliasRows } = await supabase
+    const { data: aliasRows } = await supabaseAdmin
       .from('customer_name_aliases').select('alias, expands_to')
     const aliases = aliasMap((aliasRows ?? []) as CustomerNameAlias[])
     const key = (raw: string | null | undefined) => nameKeyWith(raw, aliases)
@@ -95,10 +94,10 @@ export async function GET(req: NextRequest) {
     const apptIds = slots.appointmentIds
     const [{ data: logs }, { data: asgs }] = apptIds.length
       ? await Promise.all([
-          supabase.from('harvest_log')
+          supabaseAdmin.from('harvest_log')
             .select('id, appointment_id, carcass_tag, hot_carcass_weight_lbs, half_1_weight_lbs, half_2_weight_lbs')
             .in('appointment_id', apptIds),
-          supabase.from('carcass_assignments')
+          supabaseAdmin.from('carcass_assignments')
             .select('harvest_log_id, appointment_id, appointment_customer_id, linked_cutting_instruction_id')
             .in('appointment_id', apptIds),
         ])
@@ -111,7 +110,7 @@ export async function GET(req: NextRequest) {
       .map(a => String(a.harvest_log_id ?? ''))
       .filter(id => id && !known.has(id)))]
     const strays = strayIds.length
-      ? (await supabase.from('harvest_log')
+      ? (await supabaseAdmin.from('harvest_log')
           .select('id, appointment_id, carcass_tag, hot_carcass_weight_lbs, half_1_weight_lbs, half_2_weight_lbs')
           .in('id', strayIds)).data ?? []
       : []

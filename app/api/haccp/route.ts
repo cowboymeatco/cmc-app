@@ -1,6 +1,6 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // GET /api/haccp?date=YYYY-MM-DD
 // Returns all kill-day data needed for HACCP reports 2, 5, and 6b
@@ -11,17 +11,17 @@ export async function GET(req: NextRequest) {
 
   // Fetch appointments, harvest log, and all chill logs in parallel
   const [apptRes, harvestRes, chillRes] = await Promise.all([
-    supabase
+    supabaseAdmin
       .from('harvest_appointments')
       .select('*')
       .eq('harvest_date', date),
-    supabase
+    supabaseAdmin
       .from('harvest_log')
       .select('*')
       .eq('harvest_date', date)
       .is('legacy_source', null)   // imported history was never a HACCP record
       .order('carcass_tag', { ascending: true }),
-    supabase
+    supabaseAdmin
       .from('chill_log')
       .select('*')
       .order('checked_at', { ascending: true }),
@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
   const apptIds = appointments.map((a: Record<string, string>) => a.id)
   let animalLogs: Record<string, unknown>[] = []
   if (apptIds.length > 0) {
-    const { data } = await supabase
+    const { data } = await supabaseAdmin
       .from('animal_receiving_log')
       .select('*')
       .in('appointment_id', apptIds)

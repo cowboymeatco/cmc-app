@@ -1,13 +1,13 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // GET /api/processing/records?date=YYYY-MM-DD
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const date = searchParams.get('date')
 
-  let query = supabase
+  let query = supabaseAdmin
     .from('processing_records')
     .select('*')
     .order('processed_at', { ascending: false })
@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
 
   if (!records?.length) return NextResponse.json({ error: 'No records' }, { status: 400 })
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('processing_records')
     .insert(records)
     .select()
@@ -45,7 +45,7 @@ export async function DELETE(req: NextRequest) {
   const id = searchParams.get('id')
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
 
-  const { error } = await supabase.from('processing_records').delete().eq('id', id)
+  const { error } = await supabaseAdmin.from('processing_records').delete().eq('id', id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ ok: true })
 }

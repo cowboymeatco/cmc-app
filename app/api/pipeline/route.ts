@@ -1,6 +1,5 @@
 export const runtime = 'edge'
 import { NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { fetchAnimalProgress, STAGE_RANK, type AnimalStage } from '@/lib/animalProgress'
 import { getInvoicesSince, type DatedInvoice } from '@/lib/qboInvoices'
@@ -181,7 +180,7 @@ export async function GET() {
   // Six months back covers anything still in a cooler or freezer; older than
   // that with no pickup is a records gap, not an animal.
   const since = new Date(Date.now() - 180 * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Denver' })
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('harvest_appointments')
     .select('id, harvest_date, species, head_count, source, status, customers, no_invoice_reason, producer_qbo_customer_id')
     .in('status', ['AnimalIn', 'Processing', 'Complete'])
@@ -193,15 +192,15 @@ export async function GET() {
   const ids = appts.map(a => a.id)
   const linkedCardIds = appts.flatMap(a => (a.customers ?? []).map(c => (c.linked_cutting_instruction_id ?? '').trim())).filter(Boolean)
   const [progress, invoiceIdx, labor, smokeRates, settings, cardsByAppt, cardsById] = await Promise.all([
-    fetchAnimalProgress(supabase, appts.map(a => ({ id: a.id, harvest_date: a.harvest_date }))),
+    fetchAnimalProgress(supabaseAdmin, appts.map(a => ({ id: a.id, harvest_date: a.harvest_date }))),
     // A week before the oldest harvest in the window, so a deposit invoice
     // written ahead of the kill still counts.
     loadInvoiceIndex(new Date(Date.parse(since + 'T12:00:00') - 7 * 86400000).toLocaleDateString('en-CA')),
     loadLaborRate(),
     loadSmokeRates(),
     supabaseAdmin.from('capacity_settings').select('pipeline_office_minutes').eq('id', 1).maybeSingle(),
-    ids.length ? supabase.from('cutting_instructions').select('id, appointment_id, data').in('appointment_id', ids) : Promise.resolve({ data: [] }),
-    linkedCardIds.length ? supabase.from('cutting_instructions').select('id, appointment_id, data').in('id', linkedCardIds) : Promise.resolve({ data: [] }),
+    ids.length ? supabaseAdmin.from('cutting_instructions').select('id, appointment_id, data').in('appointment_id', ids) : Promise.resolve({ data: [] }),
+    linkedCardIds.length ? supabaseAdmin.from('cutting_instructions').select('id, appointment_id, data').in('id', linkedCardIds) : Promise.resolve({ data: [] }),
   ])
   const officeMinutes = Number(settings.data?.pipeline_office_minutes) || 15
 
@@ -227,7 +226,7 @@ export async function GET() {
   type Job = { linked_cutting_instruction_id: string | null; output_item_name: string | null; weight_in_lbs: number | null; smoke_in_at: string | null; smoke_out_at: string | null; weight_out_lbs: number | null }
   const cardIds = [...allCards.keys()]
   const { data: jobRows } = cardIds.length
-    ? await supabase.from('value_add_jobs')
+    ? await supabaseAdmin.from('value_add_jobs')
         .select('linked_cutting_instruction_id, output_item_name, weight_in_lbs, smoke_in_at, smoke_out_at, weight_out_lbs')
         .in('linked_cutting_instruction_id', cardIds)
         .neq('status', 'complete')
@@ -250,7 +249,7 @@ export async function GET() {
   const sessionNames = [...new Set([...progress.values()].flatMap(p => p.sessions.map(s => s.customer_name)))]
   const boxed = new Map<string, number>()
   if (sessionNames.length) {
-    const { data: stats } = await supabase
+    const { data: stats } = await supabaseAdmin
       .from('v_box_session_stats')
       .select('customer_name, session_date, total_weight')
       .in('customer_name', sessionNames)

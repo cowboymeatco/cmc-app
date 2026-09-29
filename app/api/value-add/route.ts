@@ -1,6 +1,6 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { isoDate } from '@/lib/dates'
 
 export const dynamic = 'force-dynamic'
@@ -11,7 +11,7 @@ export async function GET(req: NextRequest) {
   const status   = searchParams.get('status')
   const order_id = searchParams.get('order_id')
 
-  let query = supabase
+  let query = supabaseAdmin
     .from('value_add_jobs')
     .select('*')
     .order('requested_date', { ascending: false })
@@ -34,7 +34,7 @@ async function nextTagCode(requestedDate: string): Promise<string> {
   const day   = Math.floor((d.getTime() - start.getTime()) / 86_400_000)
   const prefix = `WIP${String(d.getFullYear()).slice(2)}${String(day).padStart(3, '0')}`
 
-  const { data } = await supabase
+  const { data } = await supabaseAdmin
     .from('value_add_jobs')
     .select('tag_code')
     .like('tag_code', `${prefix}%`)
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json()
   const requestedDate = body.requested_date ?? isoDate()
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('value_add_jobs')
     .insert([{
       job_type:                      body.job_type                      ?? 'other',
@@ -95,7 +95,7 @@ export async function PATCH(req: NextRequest) {
     updates.completed_date = isoDate()
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('value_add_jobs')
     .update({ ...updates, updated_at: new Date().toISOString() })
     .eq('id', id)
@@ -119,7 +119,7 @@ export async function PUT(req: NextRequest) {
 
   const now = new Date().toISOString()
   const results = await Promise.all(rows.map((r: Record<string, unknown>) =>
-    supabase
+    supabaseAdmin
       .from('value_add_jobs')
       .update({
         scheduled_start:   r.scheduled_start   ?? null,

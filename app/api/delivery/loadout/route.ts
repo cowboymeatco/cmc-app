@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { resolveCarcasses, markCarcassesDelivered } from '@/lib/carcassDelivery'
 
 export const dynamic = 'force-dynamic'
@@ -27,7 +27,7 @@ const BOX_COLS = 'id, serial_number, customer_name, pack_date, box_number, is_cl
 
 // Every box packed for one customer on one day — the session the scan belongs to.
 async function sessionBoxes(customer_name: string, pack_date: string) {
-  const { data } = await supabase
+  const { data } = await supabaseAdmin
     .from('boxes')
     .select(BOX_COLS)
     .eq('customer_name', customer_name)
@@ -39,7 +39,7 @@ async function sessionBoxes(customer_name: string, pack_date: string) {
 // The order as Load Out draws it — every box, with what's already gone.
 async function sessionPayload(customer_name: string, session_date: string) {
   const siblings = await sessionBoxes(customer_name, session_date)
-  const { data: session } = await supabase
+  const { data: session } = await supabaseAdmin
     .from('processing_sessions')
     .select('status')
     .eq('customer_name', customer_name)
@@ -72,7 +72,7 @@ export async function GET(req: NextRequest) {
   // "no box label yet" search. Read from a grouped view: the boxes themselves
   // are well past PostgREST's 1,000-row cap.
   if (searchParams.get('freezer')) {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('v_freezer_orders')
       .select('customer_name, session_date, box_count, total_weight')
       .order('session_date', { ascending: false })
@@ -94,7 +94,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'not_a_box_label', serial }, { status: 422 })
   }
 
-  const { data: box, error } = await supabase
+  const { data: box, error } = await supabaseAdmin
     .from('boxes')
     .select(BOX_COLS)
     .ilike('serial_number', serial)
@@ -151,7 +151,7 @@ export async function POST(req: NextRequest) {
   let boxes: BoxRow[] = []
   let unknown: string[] = []
   if (serials.length) {
-    const { data: boxRows, error: bErr } = await supabase
+    const { data: boxRows, error: bErr } = await supabaseAdmin
       .from('boxes')
       .select(BOX_COLS)
       .in('serial_number', serials)
@@ -176,7 +176,7 @@ export async function POST(req: NextRequest) {
     ])].join(' / ')
 
   // 1. Log the run first — if a stamp below fails the pickup is still on record.
-  const { data: delivery, error: dErr } = await supabase
+  const { data: delivery, error: dErr } = await supabaseAdmin
     .from('delivery_scans')
     .insert([{
       delivered_at: pickedUpAt,
@@ -209,7 +209,7 @@ export async function POST(req: NextRequest) {
   //    original pickup — rescanning one is a no-op, not a rewrite of history.
   const toStamp = boxes.filter(b => !b.picked_up_at).map(b => b.id)
   if (toStamp.length) {
-    await supabase
+    await supabaseAdmin
       .from('boxes')
       .update({ picked_up_at: pickedUpAt, picked_up_by: releasedBy, delivery_id: delivery.id })
       .in('id', toStamp)
@@ -224,7 +224,7 @@ export async function POST(req: NextRequest) {
     const all = await sessionBoxes(s.customer_name, s.pack_date)
     const remaining = all.filter(b => !b.picked_up_at && !toStamp.includes(b.id)).length
     if (remaining === 0) {
-      await supabase
+      await supabaseAdmin
         .from('processing_sessions')
         .update({ status: destination === 'baker_storage' ? 'baker_storage' : 'picked_up', updated_at: new Date().toISOString() })
         .eq('customer_name', s.customer_name)

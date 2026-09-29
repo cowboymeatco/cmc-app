@@ -13,9 +13,10 @@ import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'node:fs'
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+// Service role: qbo_items has RLS on with no policies, so the anon key can't write it.
+const key = process.env.SUPABASE_SERVICE_ROLE_KEY
 if (!url || !key) {
-  console.error('Missing NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY (use --env-file=.env.local)')
+  console.error('Missing NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY (use --env-file=.env.local)')
   process.exit(1)
 }
 const file = process.argv[2]

@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // Billable events ledger: list + skip/restore. Rows are created by
 // /api/billing/detect and consumed by the invoice sync (next phase).
@@ -8,7 +8,7 @@ import { supabase } from '@/lib/supabase'
 export async function GET(req: NextRequest) {
   try {
     const status = req.nextUrl.searchParams.get('status') ?? 'pending'
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('billable_events')
       .select('*')
       .eq('status', status)
@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
     if (!id || !['skip', 'restore'].includes(action)) {
       return NextResponse.json({ error: 'action (skip|restore) and id required' }, { status: 400 })
     }
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from('billable_events')
       .update({ status: action === 'skip' ? 'skipped' : 'pending' })
       .eq('id', id)

@@ -4,7 +4,7 @@
 // way — a box that prints one customer's intent while the screen checks off
 // another's is worse than either of them being wrong alone.
 
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { isSameParty, CICard } from '@/lib/wipIntent'
 
 // Names as the floor writes them vs. as the cut card holds them: the box says
@@ -52,7 +52,7 @@ export async function resolveCuttingInstruction(customerName: string, packDate: 
   // 0. The session was started off (or scanned against) its animal and knows
   //    its card outright (lib/sessionLinks.ts, 2026-09-13). Nothing below —
   //    least of all a name — gets a vote.
-  const sess = await supabase
+  const sess = await supabaseAdmin
     .from('processing_sessions')
     .select('linked_cutting_instruction_id')
     .eq('customer_name', customerName.trim())
@@ -60,13 +60,13 @@ export async function resolveCuttingInstruction(customerName: string, packDate: 
     .maybeSingle()
   const sessionCi = sess.data?.linked_cutting_instruction_id as string | null | undefined
   if (sessionCi) {
-    const ci = await supabase.from('cutting_instructions').select('data, customer_name, customer_id, species, scale_label').eq('id', sessionCi).maybeSingle()
+    const ci = await supabaseAdmin.from('cutting_instructions').select('data, customer_name, customer_id, species, scale_label').eq('id', sessionCi).maybeSingle()
     const hit = pick(ci.data, 'session')
     if (hit) return hit
   }
 
   // 1. Carcass scanned into this session → the assignment made at check-in.
-  const inputs = await supabase
+  const inputs = await supabaseAdmin
     .from('processing_inputs')
     .select('linked_harvest_id')
     .eq('customer_name', customerName)
@@ -75,14 +75,14 @@ export async function resolveCuttingInstruction(customerName: string, packDate: 
   const harvestIds = [...new Set((inputs.data ?? []).map(r => r.linked_harvest_id).filter(Boolean))]
 
   if (harvestIds.length) {
-    const ca = await supabase
+    const ca = await supabaseAdmin
       .from('carcass_assignments')
       .select('linked_cutting_instruction_id')
       .in('harvest_log_id', harvestIds)
       .not('linked_cutting_instruction_id', 'is', null)
     const ciIds = [...new Set((ca.data ?? []).map(r => r.linked_cutting_instruction_id).filter(Boolean))]
     if (ciIds.length) {
-      const ci = await supabase.from('cutting_instructions').select('data, customer_name, species, scale_label').in('id', ciIds)
+      const ci = await supabaseAdmin.from('cutting_instructions').select('data, customer_name, species, scale_label').in('id', ciIds)
       // One carcass can carry two orders — a hog split down the middle between
       // two customers, both cards assigned to tag 09. The carcass says whose
       // animal it is, not whose half is on THIS bench, so the session's own
@@ -98,10 +98,10 @@ export async function resolveCuttingInstruction(customerName: string, packDate: 
     // order (Jill, 2026-09-21). Only a name match gets to speak for a shared
     // appointment; with none, the honest answer is to fall through to the name
     // search below rather than print somebody else's intent.
-    const hl = await supabase.from('harvest_log').select('appointment_id').in('id', harvestIds)
+    const hl = await supabaseAdmin.from('harvest_log').select('appointment_id').in('id', harvestIds)
     const appts = [...new Set((hl.data ?? []).map(r => r.appointment_id).filter(Boolean))]
     if (appts.length) {
-      const ci = await supabase
+      const ci = await supabaseAdmin
         .from('cutting_instructions')
         .select('data, customer_name, species, scale_label')
         .in('appointment_id', appts)
@@ -117,7 +117,7 @@ export async function resolveCuttingInstruction(customerName: string, packDate: 
   // german brat order sat on the whole-hog card (Charlie, 2026-08-01).
   const target = normName(customerName)
   if (!target) return null
-  const all = await supabase.from('cutting_instructions').select('data, customer_name, customer_id, species, scale_label')
+  const all = await supabaseAdmin.from('cutting_instructions').select('data, customer_name, customer_id, species, scale_label')
   const matches = (all.data ?? []).filter(r => normName(r.customer_name ?? '') === target)
   if (!matches.length) return null
 

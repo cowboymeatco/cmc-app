@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { getCloverItems, type CloverItem } from '@/lib/clover'
 
 // Linking layer between plu_items (master) and the Clover catalog.
@@ -23,7 +23,7 @@ interface PluRow {
 export async function GET() {
   try {
     const [{ data: plus, error }, cloverItems] = await Promise.all([
-      supabase
+      supabaseAdmin
         .from('plu_items')
         .select('id, plu_number, item_name, retail_price, is_retail, clover_item_id, active')
         .eq('active', true)
@@ -83,14 +83,14 @@ export async function POST(req: NextRequest) {
       const items = await getCloverItems()
       const clover = items.find(i => i.id === cloverItemId)
       if (!clover) return NextResponse.json({ error: 'Clover item not found' }, { status: 404 })
-      const { data: existing } = await supabase
+      const { data: existing } = await supabaseAdmin
         .from('plu_items').select('retail_price').eq('id', pluId).single()
       if (existing?.retail_price == null && clover.price > 0) {
         updates.retail_price = clover.price / 100
       }
     }
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('plu_items').update(updates).eq('id', pluId).select().single()
     if (error) throw new Error(error.message)
     return NextResponse.json(data)
@@ -104,7 +104,7 @@ export async function DELETE(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const pluId = searchParams.get('pluId')
   if (!pluId) return NextResponse.json({ error: 'pluId required' }, { status: 400 })
-  const { error } = await supabase
+  const { error } = await supabaseAdmin
     .from('plu_items')
     .update({ clover_item_id: '', updated_at: new Date().toISOString() })
     .eq('id', pluId)

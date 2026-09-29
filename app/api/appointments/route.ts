@@ -1,6 +1,5 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
 // `customers` is under RLS and the anon key can no longer reach it. Booking an
 // appointment auto-creates and re-roles producer/customer records, which is a
 // staff action with no signed-in user behind it, so those specific queries —
@@ -24,7 +23,7 @@ export async function GET(req: NextRequest) {
   const idsParam = searchParams.get('ids')
   const status = searchParams.get('status')
 
-  let query = supabase
+  let query = supabaseAdmin
     .from('harvest_appointments')
     .select('*')
     .order('harvest_date', { ascending: true })
@@ -132,7 +131,7 @@ async function backfillLinkedNames(list: unknown): Promise<unknown> {
   if (needy.length === 0) return slots
 
   const ids = [...new Set(needy.map(c => c.linked_cutting_instruction_id as string))]
-  const { data } = await supabase
+  const { data } = await supabaseAdmin
     .from('cutting_instructions')
     .select('id, customer_name, data')
     .in('id', ids)
@@ -221,7 +220,7 @@ async function rememberQboLinks(appt: Record<string, unknown> | null) {
 // POST /api/appointments â€” create a new appointment
 export async function POST(req: NextRequest) {
   const body = await req.json()
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('harvest_appointments')
     .insert([{
       harvest_date:      body.harvest_date,
@@ -255,14 +254,14 @@ export async function POST(req: NextRequest) {
 // (Charlie, 2026-08-03). Best-effort — a failure here never blocks the move.
 async function recordRoll(id: string, fromDate: string, toDate: string) {
   try {
-    const { data: appt } = await supabase
+    const { data: appt } = await supabaseAdmin
       .from('harvest_appointments')
       .select('source, species, head_count, customers')
       .eq('id', id)
       .single()
     if (!appt) return
 
-    const { data: animals } = await supabase
+    const { data: animals } = await supabaseAdmin
       .from('animal_receiving_log')
       .select('animal_index, status, received_at')
       .eq('appointment_id', id)
@@ -285,7 +284,7 @@ async function recordRoll(id: string, fromDate: string, toDate: string) {
       .sort()[0] ?? null
 
     const slot0 = (appt.customers as { customer_name?: string }[] | null)?.[0]
-    await supabase.from('harvest_rolls').insert([{
+    await supabaseAdmin.from('harvest_rolls').insert([{
       appointment_id: id,
       from_date: fromDate,
       to_date:   toDate,
@@ -313,7 +312,7 @@ async function recordRoll(id: string, fromDate: string, toDate: string) {
 // uses before it warns.
 async function moveCarcasses(apptId: string, toDate: string) {
   try {
-    const { data: logs } = await supabase
+    const { data: logs } = await supabaseAdmin
       .from('harvest_log')
       .select('id, hot_carcass_weight_lbs, live_weight_lbs, part_b_complete, knock_time')
       .eq('appointment_id', apptId)
@@ -322,7 +321,7 @@ async function moveCarcasses(apptId: string, toDate: string) {
       l.hot_carcass_weight_lbs == null && l.live_weight_lbs == null && !l.part_b_complete && !l.knock_time)
     if (unharvested.length === 0) return
 
-    await supabase
+    await supabaseAdmin
       .from('harvest_log')
       .update({ harvest_date: toDate })
       .in('id', unharvested.map(l => l.id))
@@ -339,7 +338,7 @@ export async function PATCH(req: NextRequest) {
   // Capture the day being left before the update lands.
   let rollFrom: string | null = null
   if ('harvest_date' in updates && updates.harvest_date) {
-    const { data: before } = await supabase
+    const { data: before } = await supabaseAdmin
       .from('harvest_appointments')
       .select('harvest_date')
       .eq('id', id)
@@ -367,7 +366,7 @@ export async function PATCH(req: NextRequest) {
     updates.producer_id = await resolveProducerId(updates.source)
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('harvest_appointments')
     .update(updates)
     .eq('id', id)
@@ -389,7 +388,7 @@ export async function DELETE(req: NextRequest) {
   const id = searchParams.get('id')
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
 
-  const { error } = await supabase
+  const { error } = await supabaseAdmin
     .from('harvest_appointments')
     .delete()
     .eq('id', id)

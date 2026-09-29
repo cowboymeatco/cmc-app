@@ -1,6 +1,6 @@
 ﻿export const runtime = 'edge'
 import { NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { isoDate, addDaysISO, mondayOfISO, dateLabel } from '@/lib/dates'
 
 // GET /api/availability
@@ -35,14 +35,14 @@ export async function GET() {
   const todayStr = isoDate()
 
   const [settingsRes, apptRes, coolerRes] = await Promise.all([
-    supabase.from('capacity_settings').select('*').eq('id', 1).single(),
-    supabase
+    supabaseAdmin.from('capacity_settings').select('*').eq('id', 1).single(),
+    supabaseAdmin
       .from('harvest_appointments')
       .select('harvest_date,species,head_count,status')
       .not('status', 'in', '("Complete","NoShow","Declined")')
       .gte('harvest_date', todayStr)
       .order('harvest_date', { ascending: true }),
-    supabase.from('harvest_log').select('species').eq('status', 'chilling'),
+    supabaseAdmin.from('harvest_log').select('species').eq('status', 'chilling'),
   ])
 
   const raw = settingsRes.data ?? {}
