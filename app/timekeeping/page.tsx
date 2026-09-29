@@ -9,7 +9,7 @@ import Link from 'next/link'
 import { isoDate, isoDateTime, addDaysISO, mondayOfISO, dateLabel } from '@/lib/dates'
 import { LabelRoll, parseRoll, rollFrameCSS, rollPrintScript } from '@/lib/label'
 import {
-  BREAK_RULES, PTO_RULES, Shift, ShiftCalc, WeekHours,
+  BREAK_RULES, MAX_PAID_BREAK_MINUTES, PTO_RULES, Shift, ShiftCalc, WeekHours,
   calcShift, splitOvertime, fmtHours, toMin,
   yearsOfService, annualPtoRate, accrualPerHour, nextAnniversary, ptoEarned,
 } from '@/lib/timekeeping'
@@ -69,9 +69,9 @@ function mockShifts(thisMonday: string, today: string): Shift[] {
   days.forEach((d, j) => {
     const i = j % 5
     add('e1', d, '07:00', '15:30', ['11:30', '12:00'], [['09:30', '09:45'], ['14:00', '14:15']])
-    // Wednesday: 25 + 20 = 45 break minutes on a two-break day → 30 paid, 15 unpaid.
+    // Wednesday: one 37-min break on a 10-hour shift → 30 paid, 7 min UPTO.
     add('e2', d, '06:00', i === 4 ? '13:00' : '16:00', ['11:00', '11:30'],
-      i === 2 ? [['08:30', '08:55'], ['13:30', '13:50']] : i === 4 ? [['08:30', '08:45']] : [['08:30', '08:45'], ['13:30', '13:45']])
+      i === 2 ? [['09:00', '09:37']] : i === 4 ? [['08:30', '08:45']] : [['08:30', '08:45'], ['13:30', '13:45']])
     if (i < 4) add('e3', d, '08:00', i === 1 ? '14:30' : '15:00', i === 1 ? null : ['12:00', '12:20'], [['10:00', '10:15']])
     add('e4', d, '06:30', '15:00', ['11:30', '12:00'], [['09:00', '09:15'], ['13:30', '13:45']])
     if (i % 2 === 0) add('e5', d, '16:00', '20:15', null, i === 0 ? [] : [['18:00', '18:15']])
@@ -191,11 +191,11 @@ function BreakPills({ c }: { c: ShiftCalc }) {
   return (
     <>
       {(allowance > 0 || c.breakMinutes > 0) && (
-        <Pill color={c.unpaidBreakMinutes > 0 ? C.red : c.breakMinutes === allowance ? C.green : C.amber}>
+        <Pill color={c.uptoMinutes > 0 ? C.red : c.breakMinutes === allowance ? C.green : C.amber}>
           Breaks {c.breakMinutes}/{allowance} min
         </Pill>
       )}
-      {c.unpaidBreakMinutes > 0 && <Pill color={C.red}>{c.unpaidBreakMinutes} min unpaid</Pill>}
+      {c.uptoMinutes > 0 && <Pill color={C.red}>{c.uptoMinutes} min UPTO</Pill>}
       {c.owed.lunch && <Pill color={tookLunch ? C.green : C.amber}>Lunch {tookLunch ? '✓' : 'owed'}</Pill>}
     </>
   )
@@ -349,7 +349,9 @@ function ClockTab({ shifts, setShifts, setPhotos, today, thisMonday, now }: {
   const todays = shifts.filter(s => s.empId === empId && s.date === today)
   const todayCalcs = todays.map(s => calcShift(s, nowHHMM))
   const todayHours = todayCalcs.reduce((t, c) => t + c.workedHours, 0)
-  const todayUnpaid = todayCalcs.reduce((t, c) => t + c.unpaidMinutes, 0)
+  const todayUpto = todayCalcs.reduce((t, c) => t + c.uptoMinutes, 0)
+  const todayLunch = todayCalcs.reduce((t, c) => t + (c.lunchUnpaid ? c.lunchMinutes : 0), 0)
+  const todayBreakMin = todayCalcs.reduce((t, c) => t + c.breakMinutes, 0)
 
   const touch = (msg: string) => { setNotice(msg); setActivity(a => a + 1) }
   const update = (patch: Partial<Shift>, msg: string, punch?: string) => {
@@ -366,31 +368,31 @@ function ClockTab({ shifts, setShifts, setPhotos, today, thisMonday, now }: {
   const clockOut = () => {
     const c = calcShift({ ...open!, clockOut: nowHHMM })
     const parts = [
-      c.lunchUnpaid && c.lunchMinutes > 0 ? `lunch ${c.lunchMinutes} min` : '',
-      c.unpaidBreakMinutes > 0 ? `breaks over by ${c.unpaidBreakMinutes} min` : '',
+      `Paid today: ${fmtHours(todayHours)}.`,
+      c.lunchUnpaid && c.lunchMinutes > 0 ? `Lunch ${c.lunchMinutes} min (unpaid).` : '',
+      c.breakMinutes > 0 ? `Breaks ${c.breakMinutes} min: ${c.paidBreakMinutes} paid${c.uptoMinutes ? `, ${c.uptoMinutes} min UPTO` : ''}.` : '',
+      `You earned ${(todayHours * rate).toFixed(2)} h of PTO.`,
     ].filter(Boolean)
-    update({ clockOut: nowHHMM },
-      `Clocked out at ${nowHHMM}. Paid today: ${fmtHours(todayHours)}. Unpaid: ${fmtHours(todayUnpaid / 60)}${parts.length ? ` (${parts.join(', ')})` : ''}. You earned ${(todayHours * rate).toFixed(2)} h of PTO.`, 'out')
+    update({ clockOut: nowHHMM }, `Clocked out at ${nowHHMM}. ${parts.join(' ')}`, 'out')
   }
 
-  // Breaks: 15 paid minutes for each one taken, up to the two a full day
-  // earns. That's what the live counter shows; the final pay math at
-  // clock-out uses the breaks actually earned by hours worked.
+  // Break time is a daily total, settled at clock-out: 15 paid min per break
+  // earned (30 on an 8+ hour day), split however they like. The kiosk says
+  // so at every break — that notice is what lets UPTO go unpaid.
   const startBreak = () => {
     const i = open!.breaks.length
     update({ breaks: [...open!.breaks, { start: nowHHMM, end: null }] },
-      `Break started at ${nowHHMM}. Breaks are 15 min, paid. Back by ${fmtClock(toMin(nowHHMM) + 15)} — time past 15 min is unpaid.`, `break-out-${i}`)
+      `Break started at ${nowHHMM}. You've used ${todayBreakMin} break min today. Paid break time is 15 min per break earned — 30 min on an 8+ hour day — taken however you like. Anything over is UPTO (unpaid), figured when you clock out.`,
+      `break-out-${i}`)
   }
   const endBreak = () => {
     const i = open!.breaks.length - 1
     const mins = toMin(nowHHMM) - toMin(openBreak!.start)
+    const total = todayBreakMin
     const breaks = open!.breaks.map(b => b === openBreak ? { ...b, end: nowHHMM } : b)
-    const used = open!.breaks.slice(0, -1).reduce((t, b) => t + (toMin(b.end!) - toMin(b.start)), 0)
-    const allowance = Math.min(breaks.length, 2) * BREAK_RULES.paidBreakMinutes
-    const unpaid = Math.max(0, Math.min(mins, used + mins - allowance))
-    update({ breaks }, unpaid > 0
-      ? `Back from break at ${nowHHMM}: ${mins} min — ${mins - unpaid} paid, ${unpaid} unpaid.`
-      : `Back from break at ${nowHHMM}: ${mins} min, all paid.`, `break-in-${i}`)
+    update({ breaks },
+      `Back from break at ${nowHHMM}: ${mins} min. ${total} break min used today${total > MAX_PAID_BREAK_MINUTES ? ` — ${total - MAX_PAID_BREAK_MINUTES} min over 30 will be UPTO` : ''}.`,
+      `break-in-${i}`)
   }
 
   const calc = open ? calcShift(open, nowHHMM) : null
@@ -440,9 +442,9 @@ function ClockTab({ shifts, setShifts, setPhotos, today, thisMonday, now }: {
       <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '0.8rem' }}>
         <Stat label="Status" value={!open ? 'Off the clock' : onLunch ? 'At lunch' : onBreak ? 'On break' : 'Working'}
           color={!open ? C.tan : onLunch || onBreak ? C.amber : C.green}
-          sub={onBreak ? `${breakSoFar} min so far${breakSoFar > BREAK_RULES.paidBreakMinutes ? ' — past 15 is unpaid' : ''}` : open ? `In at ${open.clockIn}` : undefined} />
-        <Stat label="Paid today" value={fmtHours(todayHours)} />
-        <Stat label="Unpaid today" value={fmtHours(todayUnpaid / 60)} sub="lunch + break time past 15" color={todayUnpaid > 0 ? C.amber : C.cream} />
+          sub={onBreak ? `${breakSoFar} min so far` : open ? `In at ${open.clockIn}` : undefined} />
+        <Stat label="Paid today" value={fmtHours(todayHours)} sub={todayLunch ? `lunch ${todayLunch} min unpaid` : undefined} />
+        <Stat label="Breaks today" value={`${todayBreakMin} min`} sub={todayUpto > 0 ? `${todayUpto} min UPTO` : 'up to 30 paid (8+ hr day)'} color={todayUpto > 0 ? C.red : C.cream} />
         <Stat label="PTO earned today" value={`${(todayHours * rate).toFixed(2)} h`} sub={`${rate.toFixed(4)} h per hour worked`} color={C.green} />
       </div>
 
@@ -502,20 +504,20 @@ function buildSummaryHTML(
   nowHHMM: string, balance: number, roll: LabelRoll,
 ): string {
   const rows = [...shifts].sort((a, b) => a.date.localeCompare(b.date) || a.clockIn.localeCompare(b.clockIn))
-  let total = 0, pto = 0, breakMin = 0, unpaid = 0
+  let total = 0, pto = 0, breakMin = 0, upto = 0, lunchMin = 0
   const body = rows.map(s => {
     const c = calcShift(s, nowHHMM)
     const earned = c.workedHours * accrualPerHour(yearsOfService(emp.hireDate, s.date))
-    total += c.workedHours; pto += earned; breakMin += c.paidBreakMinutes; unpaid += c.unpaidMinutes
+    total += c.workedHours; pto += earned; breakMin += c.paidBreakMinutes; upto += c.uptoMinutes; lunchMin += c.lunchUnpaid ? c.lunchMinutes : 0
     const allowance = c.owed.paidBreaks * BREAK_RULES.paidBreakMinutes
     const lunch = !s.lunchStart ? (c.owed.lunch ? 'MISSED' : 'none')
       : `${s.lunchStart}–${s.lunchEnd ?? '…'} (${c.lunchMinutes} min${c.lunchUnpaid ? ' unpaid' : ', paid — under 30'})`
     const breaks = s.breaks.length
-      ? `${s.breaks.map(b => b.end ? `${toMin(b.end) - toMin(b.start)}` : '…').join('+')} min: ${c.paidBreakMinutes} paid${c.unpaidBreakMinutes ? `, ${c.unpaidBreakMinutes} UNPAID` : ''}${c.breakMinutes < allowance ? ` (${allowance} allowed)` : ''}`
+      ? `${s.breaks.map(b => b.end ? `${toMin(b.end) - toMin(b.start)}` : '…').join('+')} min: ${c.paidBreakMinutes} paid${c.uptoMinutes ? `, ${c.uptoMinutes} UPTO` : ''}${c.breakMinutes < allowance ? ` (${allowance} allowed)` : ''}`
       : allowance ? `none (${allowance} allowed)` : 'none'
     return `<tr class="day"><td>${esc(dateLabel(s.date, { weekday: 'short', month: 'numeric', day: 'numeric' }))}</td>
       <td>${s.clockIn}–${s.clockOut ?? 'now'}</td><td class="r">${fmtHours(c.workedHours)}</td></tr>
-      <tr class="sub"><td colspan="3">Lunch ${lunch}<br>Breaks ${breaks}<br>Unpaid ${fmtHours(c.unpaidMinutes / 60)} · PTO +${earned.toFixed(2)}${s.clockOut ? '' : ' · ON CLOCK'}</td></tr>`
+      <tr class="sub"><td colspan="3">Lunch ${lunch}<br>Breaks ${breaks}<br>${c.uptoMinutes ? `UPTO ${c.uptoMinutes} min · ` : ''}PTO +${earned.toFixed(2)}${s.clockOut ? '' : ' · ON CLOCK'}</td></tr>`
   }).join('')
   const { regular, overtime } = splitOvertime(total)
   const range = from === to
@@ -550,7 +552,8 @@ function buildSummaryHTML(
     <tr class="big"><td>Paid hours</td><td class="r">${fmtHours(total)}</td></tr>
     ${kind === 'Week' ? `<tr><td>Regular</td><td class="r">${fmtHours(regular)}</td></tr><tr><td>Overtime 1.5×</td><td class="r">${fmtHours(overtime)}</td></tr>` : ''}
     <tr><td>Paid break time</td><td class="r">${fmtHours(breakMin / 60)}</td></tr>
-    <tr><td>Unpaid time</td><td class="r">${fmtHours(unpaid / 60)}</td></tr>
+    <tr><td>Unpaid lunch</td><td class="r">${fmtHours(lunchMin / 60)}</td></tr>
+    <tr><td>UPTO</td><td class="r">${fmtHours(upto / 60)}</td></tr>
     <tr class="big"><td>PTO earned</td><td class="r">+${pto.toFixed(2)} h</td></tr>
     <tr><td>PTO balance*</td><td class="r">${balance.toFixed(1)} h</td></tr>
   </table>
@@ -591,7 +594,7 @@ function TimesheetTab({ shifts, photos, thisMonday, today, now }: {
         <p style={{ color: C.tan, fontSize: '0.78rem', margin: '0 0 0.5rem' }}>Photos come from the iPad&apos;s front camera at each punch, so you can see who actually punched.</p>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><th style={th}>Employee</th><th style={th}>In</th><th style={th}>Lunch</th><th style={th}>Breaks</th><th style={th}>Out</th><th style={th}>Paid</th><th style={th}>Unpaid</th><th style={th}>Break pay</th><th style={th}>Punch photos</th></tr></thead>
+            <thead><tr><th style={th}>Employee</th><th style={th}>In</th><th style={th}>Lunch</th><th style={th}>Breaks</th><th style={th}>Out</th><th style={th}>Paid</th><th style={th}>UPTO</th><th style={th}>Break pay</th><th style={th}>Punch photos</th></tr></thead>
             <tbody>
               {todays.length === 0 && <tr><td style={td} colSpan={9}>Nobody yet.</td></tr>}
               {todays.map(s => {
@@ -606,7 +609,7 @@ function TimesheetTab({ shifts, photos, thisMonday, today, now }: {
                     <td style={td}>{breakTimes(s)}</td>
                     <td style={td}>{s.clockOut ?? <Pill color={onLunch || onBreak ? C.amber : C.green}>{onLunch ? 'at lunch' : onBreak ? 'on break' : 'on clock'}</Pill>}</td>
                     <td style={{ ...td, fontVariantNumeric: 'tabular-nums' }}>{fmtHours(c.workedHours)}</td>
-                    <td style={{ ...td, fontVariantNumeric: 'tabular-nums' }}>{fmtHours(c.unpaidMinutes / 60)}</td>
+                    <td style={{ ...td, fontVariantNumeric: 'tabular-nums' }}>{c.uptoMinutes ? `${c.uptoMinutes} min` : '—'}</td>
                     <td style={td}><BreakPills c={c} /></td>
                     <td style={td}>
                       <div style={{ display: 'flex', gap: 6 }}>
@@ -646,7 +649,7 @@ function TimesheetTab({ shifts, photos, thisMonday, today, now }: {
         const { regular, overtime } = splitOvertime(total)
         const gross = regular * e.wage + overtime * e.wage * 1.5
         const paidBreakHrs = calcs.reduce((t, c) => t + c.paidBreakMinutes / 60, 0)
-        const unpaidHrs = calcs.reduce((t, c) => t + c.unpaidMinutes / 60, 0)
+        const uptoMin = calcs.reduce((t, c) => t + c.uptoMinutes, 0)
         const years = yearsOfService(e.hireDate, weekEnd)
         const ptoThisWeek = total * accrualPerHour(years)
         const flagCount = calcs.reduce((t, c) => t + c.flags.length, 0)
@@ -659,7 +662,7 @@ function TimesheetTab({ shifts, photos, thisMonday, today, now }: {
             </div>
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead><tr><th style={th}>Day</th><th style={th}>In</th><th style={th}>Lunch</th><th style={th}>Breaks</th><th style={th}>Out</th><th style={th}>Paid</th><th style={th}>Unpaid</th><th style={th}>Break pay</th><th style={th}>PTO</th><th style={th}>Notes</th></tr></thead>
+                <thead><tr><th style={th}>Day</th><th style={th}>In</th><th style={th}>Lunch</th><th style={th}>Breaks</th><th style={th}>Out</th><th style={th}>Paid</th><th style={th}>UPTO</th><th style={th}>Break pay</th><th style={th}>PTO</th><th style={th}>Notes</th></tr></thead>
                 <tbody>
                   {rows.map((s, i) => {
                     const c = calcs[i]
@@ -671,7 +674,7 @@ function TimesheetTab({ shifts, photos, thisMonday, today, now }: {
                         <td style={{ ...td, fontSize: '0.78rem' }}>{breakTimes(s)}</td>
                         <td style={td}>{s.clockOut}</td>
                         <td style={{ ...td, fontVariantNumeric: 'tabular-nums' }}>{fmtHours(c.workedHours)}</td>
-                        <td style={{ ...td, fontVariantNumeric: 'tabular-nums', color: c.unpaidBreakMinutes > 0 ? C.red : C.cream }}>{fmtHours(c.unpaidMinutes / 60)}</td>
+                        <td style={{ ...td, fontVariantNumeric: 'tabular-nums', color: c.uptoMinutes > 0 ? C.red : C.cream }}>{c.uptoMinutes ? `${c.uptoMinutes} min` : '—'}</td>
                         <td style={td}><BreakPills c={c} /></td>
                         <td style={{ ...td, color: C.green, fontVariantNumeric: 'tabular-nums' }}>+{(c.workedHours * accrualPerHour(years)).toFixed(2)}</td>
                         <td style={{ ...td, color: C.amber, fontSize: '0.78rem', maxWidth: 280 }}>{c.flags.join(' ')}</td>
@@ -683,7 +686,7 @@ function TimesheetTab({ shifts, photos, thisMonday, today, now }: {
             </div>
             <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginTop: '0.8rem' }}>
               <Stat label="Paid hours" value={fmtHours(total)} sub={`incl. ${fmtHours(paidBreakHrs)} paid breaks`} />
-              <Stat label="Unpaid" value={fmtHours(unpaidHrs)} sub="lunches + break overage" />
+              <Stat label="UPTO" value={`${uptoMin} min`} sub="break time over the paid allowance" color={uptoMin > 0 ? C.red : C.cream} />
               <Stat label="Regular" value={fmtHours(regular)} />
               <Stat label="Overtime 1.5×" value={fmtHours(overtime)} color={overtime > 0 ? C.amber : C.cream} />
               <Stat label="Est. gross" value={`$${gross.toFixed(2)}`} />
@@ -797,9 +800,9 @@ function PolicyTab() {
         </table>
         <p style={p}><b style={{ color: C.cream }}>Montana law:</b> Montana doesn&apos;t require meal or rest breaks for adult employees. It follows the federal rule, so this schedule is company policy, not a legal requirement. It&apos;s a good policy, and similar to Washington&apos;s and Oregon&apos;s.</p>
         <p style={p}><b style={{ color: C.cream }}>The rules that are law</b> (federal FLSA): a break of 5–20 minutes must be paid. A lunch can be unpaid only if it&apos;s at least 30 minutes and the employee is fully relieved of duty. A lunch that runs short or gets interrupted is paid time, and the timesheet treats it that way.</p>
-        <p style={p}><b style={{ color: C.cream }}>Every break is punched,</b> out and back in, same as lunch. Paid break time is added up over the day: someone who has earned two 15s gets up to 30 paid minutes, however they split them. Anything past that is unpaid. Two breaks that add up to 45 minutes pay 30, and 15 comes off the day.</p>
-        <p style={p}><b style={{ color: C.cream }}>To not pay the extra minutes</b>, federal rules say employees must be told ahead of time, clearly, that breaks are 15 minutes, that running over is against the rules and can lead to discipline, and that extra time is unpaid. Put it in the handbook and have people sign it. The kiosk also says it every time someone starts a break.</p>
-        <p style={p}>Each employee sees their unpaid time for the day on the clock when they punch out, and on their printed summary.</p>
+        <p style={p}><b style={{ color: C.cream }}>Every break is punched,</b> out and back in, same as lunch. Break time is a daily total, settled at the end of the day: 15 paid minutes per break earned, so 30 on an 8+ hour day. They can take two 15s or one 30. Anything over is <b style={{ color: C.cream }}>UPTO</b> (unpaid time off). A 10-hour shift with 37 minutes of breaks pays 30 and logs 7 minutes of UPTO. Lunch is separate. It&apos;s already unpaid, so it doesn&apos;t count as UPTO.</p>
+        <p style={p}><b style={{ color: C.cream }}>To not pay the extra minutes</b>, federal rules say employees must be told ahead of time, clearly, how much paid break time they get, that running over is against the rules and can lead to discipline, and that extra time is unpaid. Put it in the handbook and have people sign it. The kiosk also says it every time someone starts a break.</p>
+        <p style={p}>Each employee sees their break minutes and any UPTO on the clock when they punch out, and on their printed summary.</p>
       </div>
       <div style={card}>
         <h2 style={h2}>PTO</h2>

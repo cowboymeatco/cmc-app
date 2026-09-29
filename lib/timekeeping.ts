@@ -21,6 +21,9 @@ export const BREAK_RULES = {
   lunchMinutes:      30,
 }
 
+/** The most paid break time any day earns: two 15s. */
+export const MAX_PAID_BREAK_MINUTES = 2 * BREAK_RULES.paidBreakMinutes
+
 export interface Entitlement { paidBreaks: number; lunch: boolean }
 
 /** Breaks owed for a shift of `workedHours` (paid time; unpaid lunch excluded). */
@@ -62,17 +65,19 @@ export interface ShiftCalc {
   lunchUnpaid:        boolean // false when a short lunch had to be paid
   breakMinutes:       number  // all break time punched
   paidBreakMinutes:   number  // up to 15 per break earned
-  unpaidBreakMinutes: number  // break time past the paid allowance
-  unpaidMinutes:      number  // everything taken off the day: lunch + break overage
+  uptoMinutes:        number  // UPTO: break time past the day's paid allowance
+  unpaidMinutes:      number  // everything off the clock: unpaid lunch + UPTO
   workedHours:        number  // paid hours
   owed:               Entitlement
   flags:              string[]
 }
 
 /**
- * Breaks are punched. Paid break time is pooled across the day: someone who
- * has earned two 15s gets up to 30 paid break minutes, however they split
- * them. Anything past that is unpaid — a 45-minute total pays 30.
+ * Breaks are punched, and settled once, at the end of the day. Paid break
+ * time is a daily total: 15 min per break earned (30 on an 8+ hour day),
+ * taken however the employee likes — one 30 is fine. Anything past it is
+ * UPTO (unpaid time off): a 10-hour shift with 37 min of breaks pays 30 and
+ * logs 7 min UPTO. Lunch is separate and already unpaid, so it isn't UPTO.
  *
  * FLSA allows not paying an over-long break only if the employee was told,
  * clearly and in advance, how long breaks are and that extensions are unpaid
@@ -117,18 +122,14 @@ export function calcShift(s: Shift, nowHHMM?: string): ShiftCalc {
     paidBreak = Math.min(breakMin, owed.paidBreaks * BREAK_RULES.paidBreakMinutes)
   }
   owed = { ...owed, lunch: breakEntitlement((working + paidBreak) / 60).lunch }
-  // Mid-shift, a break taken before the 4-hour mark hasn't been "earned" yet
-  // but will be by the end of a normal day. Until clock-out, count each break
-  // taken (up to two) as earned so the live numbers don't show it as unpaid.
-  if (!s.clockOut) {
-    const provisional = Math.max(owed.paidBreaks, Math.min(s.breaks.length, 2))
-    paidBreak = Math.min(breakMin, provisional * BREAK_RULES.paidBreakMinutes)
-  }
+  // Breaks settle at clock-out. Until then, measure against the most a day
+  // can earn, so a 30 taken early isn't shown as UPTO before it's been earned.
+  if (!s.clockOut) paidBreak = Math.min(breakMin, MAX_PAID_BREAK_MINUTES)
 
-  const unpaidBreak = breakMin - paidBreak
+  const upto = breakMin - paidBreak
   const worked = (working + paidBreak) / 60
 
-  if (unpaidBreak > 0 && s.clockOut) flags.push(`Breaks ran ${unpaidBreak} min past the ${paidBreak} paid — unpaid.`)
+  if (upto > 0 && s.clockOut) flags.push(`Breaks ${breakMin} min — ${upto} min over the ${paidBreak} paid → UPTO.`)
   if (s.clockOut) {
     if (owed.lunch && !(lunchUnpaid && lunchMin > 0)) flags.push('Worked 6+ hours with no 30-min lunch.')
     const allowance = owed.paidBreaks * BREAK_RULES.paidBreakMinutes
@@ -141,8 +142,8 @@ export function calcShift(s: Shift, nowHHMM?: string): ShiftCalc {
     lunchUnpaid,
     breakMinutes: breakMin,
     paidBreakMinutes: paidBreak,
-    unpaidBreakMinutes: unpaidBreak,
-    unpaidMinutes: (lunchUnpaid ? lunchMin : 0) + unpaidBreak,
+    uptoMinutes: upto,
+    unpaidMinutes: (lunchUnpaid ? lunchMin : 0) + upto,
     workedHours: worked,
     owed,
     flags,
