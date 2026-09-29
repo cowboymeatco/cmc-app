@@ -1037,7 +1037,7 @@ export default function ScannerPage() {
   const [producerSets, setProducerSets] = useState<ScannerProducerSet[]>([])
   const producerRef = useRef<{
     byPlu: Record<string, { house_plu: string; key: string; name: string }>
-    byKey: Record<string, { name: string; houseToPlu: Record<string, string> }>
+    byKey: Record<string, { name: string; houseToPlu: Record<string, string>; noBarcode: boolean }>
   }>({ byPlu: {}, byKey: {} })
   const sessionLabelKeysRef = useRef<string[]>([])
   useEffect(() => {
@@ -1051,7 +1051,7 @@ export default function ScannerPage() {
           byPlu[it.plu_number] = { house_plu: it.house_plu, key: st.key, name: st.name }
           houseToPlu[it.house_plu] = it.plu_number
         }
-        byKey[st.key] = { name: st.name, houseToPlu }
+        byKey[st.key] = { name: st.name, houseToPlu, noBarcode: st.prints_barcode === false }
       }
       producerRef.current = { byPlu, byKey }
       setProducerSets(sets)
@@ -1075,6 +1075,9 @@ export default function ScannerPage() {
     }
     for (const k of sessionKeys) {
       const set = byKey[k]
+      // A label that prints no barcode can't be the one scanned, so a house
+      // label is the only way in — nothing to flag.
+      if (set?.noBarcode) continue
       const should = set?.houseToPlu[scanned]
       if (should) return { plu: scanned, labelWarn: `HOUSE LABEL — ${set.name} packs on PLU ${should}: reprint it` }
     }
@@ -1957,6 +1960,8 @@ export default function ScannerPage() {
   async function closeBox() {
     const box = activeBox
     if (!box || box.is_closed) return
+    // Closing an empty box printed a 0-cut label; there's nothing to label.
+    if (!scansRef.current.length) { await retireEmptyBox(box, 'Nothing is scanned into this box. '); return }
     setTakeOut(false)
     const snap = scansRef.current
     const res  = await fetch('/api/boxes', {
@@ -1996,6 +2001,9 @@ export default function ScannerPage() {
     const box = activeBox
     if (!box || box.is_closed) return
     const left = scansRef.current
+    // Nothing listed and nothing in it: there's nothing missing to write off,
+    // the box is just done with.
+    if (!left.length) { await retireEmptyBox(box); return }
     const lbs  = left.reduce((s, sc) => s + (Number(sc.weight_lbs) || 0), 0)
     const what = left.length
       ? `${left.length} package${left.length !== 1 ? 's' : ''} · ${lbs.toFixed(2)} lb`
@@ -2015,16 +2023,51 @@ export default function ScannerPage() {
       setFlash('bad'); setTimeout(() => setFlash(null), 4000)
       return
     }
+    await dropRetiredBox(box)
+    setLastKind('warn')
+    setLastItem(`Box ${box.box_number} written off — ${what} recorded as missing`)
+    setFlash('warn'); setTimeout(() => setFlash(null), 5000)
+  }
+
+  // Off the screen once the server has retired it, onto the next box.
+  async function dropRetiredBox(box: BoxRecord) {
     const remaining = boxesRef.current.filter(b => b.id !== box.id)
     setBoxes(remaining)
     setSessionScans(prev => prev.filter(sc => sc.box_id !== box.id))
     const next = remaining[remaining.length - 1] ?? null
     if (next) await switchBox(next)
     else { setActiveBox(null); setScans([]) }
-    setLastKind('warn')
-    setLastItem(`Box ${box.box_number} written off — ${what} recorded as missing`)
-    setFlash('warn'); setTimeout(() => setFlash(null), 5000)
     loadSessions()
+  }
+
+  // ── An empty box: retire it ──────────────────────────────────────────────────
+  // Charlie, 2026-09-28: "on the empty box just retire." A box with nothing in
+  // it kept counting as a box on the session, the freezer list and Load Out,
+  // and closing it printed a 0-cut label under its serial. It goes through the
+  // write-off route (reason 'other', no lines) so the serial it wore is still
+  // on record, and it offers itself when the last package comes out rather
+  // than waiting for someone to find a button.
+  async function retireEmptyBox(box: BoxRecord, why = '') {
+    if (!window.confirm(
+      `${why}Box ${box.box_number} is empty — retire it?\n\n` +
+      `It comes off this session, the freezer list and Load Out, and its label can't be printed again. ` +
+      `Cancel keeps it open to fill.`)) return false
+    setTakeOut(false)
+    const res = await fetch('/api/boxes/writeoff', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ box_id: box.id, reason: 'other', note: 'Empty box retired' }),
+    })
+    const data = await res.json().catch(() => ({} as { error?: string }))
+    if (!res.ok) {
+      setLastKind('bad'); setLastItem((data as { error?: string }).error ?? 'Could not retire that box')
+      setFlash('bad'); setTimeout(() => setFlash(null), 4000)
+      return false
+    }
+    await dropRetiredBox(box)
+    setLastKind('ok')
+    setLastItem(`Box ${box.box_number} was empty — retired`)
+    setFlash('ok'); setTimeout(() => setFlash(null), 3000)
+    return true
   }
 
   // ── Reopen a closed box ──────────────────────────────────────────────────────
@@ -2321,6 +2364,8 @@ export default function ScannerPage() {
     setFlash('ok'); setLastKind('ok')
     setLastItem(`➖ Took out ${hit.item_name} · ${Number(hit.weight_lbs).toFixed(2)} lb from Box ${box.box_number}`)
     setTimeout(() => setFlash(null), 2500)
+    // That was the last one out.
+    if (lines.length === 1) await retireEmptyBox(box, 'That was the last package. ')
   }
 
   // ── Unpack a produced box for repack ─────────────────────────────────────────
@@ -3548,7 +3593,14 @@ export default function ScannerPage() {
             const nums = set?.items.map(i => Number(i.plu_number)).filter(Number.isFinite) ?? []
             return (
               <span key={l} style={{ fontSize: '0.75rem', fontWeight: 600, letterSpacing: 0 }}>
-                {!set
+                {/* Blegen's and Hollenbeck's formats print no barcode, and this
+                    line used to send the crew to exactly those labels (AE,
+                    2026-09-29: "Blegens has no scan code on label"). Both whole-
+                    box labels count the same (Charlie: assorted cuts is treated
+                    like the meat box). */}
+                {set && !set.prints_barcode
+                  ? `⚠ ${set.name} labels print with NO barcode — nothing off them will scan. Weigh the finished box on the HOUSE label as MEAT BOX (PLU 1)${!expected?.species?.length || expected.species.some(sp => /beef/i.test(sp)) ? ' or BEEF ASSORTED CUTS (PLU 207)' : ''} and scan that.`
+                : !set
                   ? 'Switch the scale to this label — not the house label.'
                   : !set.loaded_at
                     ? `⚠ ${set.name}'s PLUs aren't marked as on the scales — load them (Producer Labels) before packing.`
