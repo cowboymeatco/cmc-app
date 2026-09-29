@@ -17,8 +17,13 @@ export async function GET(req: NextRequest) {
   }
 
   // harvest log
+  // One status, or several comma-separated — the cut schedule's "off the rail"
+  // list wants cut AND delivered in one call.
   const status  = searchParams.get('status')
   const date    = searchParams.get('date')
+  // harvest_date on or after this day. Without it a status like 'cut' is
+  // every carcass the plant ever cut.
+  const from    = searchParams.get('from')
   const apptId  = searchParams.get('appointment_id')
   // Several appointments at once, so a page showing many linked cards can work
   // out which ones still need a carcass assigned in one call instead of one per
@@ -32,8 +37,12 @@ export async function GET(req: NextRequest) {
     .select('*')
     .order('harvest_date', { ascending: true })
     .order('carcass_tag',  { ascending: true })
-  if (status) query = query.eq('status', status)
+  if (status) {
+    const list = status.split(',').map(s => s.trim()).filter(Boolean)
+    query = list.length > 1 ? query.in('status', list) : query.eq('status', list[0])
+  }
   if (date)   query = query.eq('harvest_date', date)
+  if (from)   query = query.gte('harvest_date', from)
   if (apptId) query = query.eq('appointment_id', apptId)
   if (apptIds !== null) {
     const ids = apptIds.split(',').map(s => s.trim()).filter(Boolean)

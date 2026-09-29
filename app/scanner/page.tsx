@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { isCureTagNumber, type ProcessingInput, type CureTag } from '@/lib/types'
 import { CURE_PICKER_PRODUCTS, sourceCutOptions } from '@/lib/cureLoad'
 import { isoDate } from '@/lib/dates'
+import { addBreadcrumb } from '@/lib/feedbackTelemetry'
 import { speciesIcon, speciesFromDescription } from '@/lib/cutSchedule'
 
 import CustomerPicker, { resolveCiScan, type CustomerName } from './CustomerPicker'
@@ -568,6 +569,8 @@ export default function ScannerPage() {
   const [flash,       setFlash]       = useState<'ok' | 'warn' | 'bad' | null>(null)
   const [lastItem,    setLastItem]    = useState('')
   const [lastKind,    setLastKind]    = useState<'ok' | 'warn' | 'bad'>('ok')   // icon/color for lastItem after the flash fades
+  // A label the browser refused to open in a new tab — see openPrintWindow.
+  const [labelUrl,    setLabelUrl]    = useState<string | null>(null)
   const [processing,  setProcessing]  = useState(false)
   const [labelFlags,  setLabelFlags]  = useState<LabelFlags>(DEFAULT_FLAGS)
   // Session box type — declared up front, sticky for every box in the session.
@@ -2120,7 +2123,20 @@ export default function ScannerPage() {
     if (flags.not_for_human) p.set('pet',    '1')
     if (format)              p.set('format', format)
     if (labelRoll !== '4in') p.set('roll', labelRoll)
-    window.open(`/api/boxes/label?${p}`, '_blank')
+    const url = `/api/boxes/label?${p}`
+    const win = window.open(url, '_blank')
+    // A pop-up blocker swallows this without a word: no tab, no dialog, no
+    // error — Charlie, 2026-09-29, "Not printing a label for me", three
+    // clicks on Print Label and nothing on the station. The blocker hands back
+    // null, so say so on screen and leave a plain link the browser will allow.
+    // The breadcrumb puts it in the feedback diagnostics next time.
+    addBreadcrumb('nav', `label → ${win ? 'opened' : 'BLOCKED'} ${url}`)
+    if (win) { setLabelUrl(null); return }
+    setLabelUrl(url)
+    setLastKind('bad')
+    setLastItem('This browser blocked the label window — nothing went to the printer. Allow pop-ups for this site, or open the label with the link below.')
+    setFlash('bad')
+    setTimeout(() => setFlash(null), 6000)
   }
 
   // Mirrors the label route's auto-recognition so the scanner can say up front
@@ -3726,6 +3742,16 @@ export default function ScannerPage() {
             <span style={{ fontSize: '1.05rem', fontWeight: 700, color: lastKind === 'bad' ? C.red : lastKind === 'warn' ? C.yellow : C.green }}>
               {lastKind === 'ok' ? '✓ ' : '⚠ '}{lastItem}
             </span>
+          )}
+          {labelUrl && (
+            <div style={{ marginTop: '0.3rem' }}>
+              {/* A link the user clicks is a navigation the blocker allows,
+                  where a window.open from a script is not. */}
+              <a href={labelUrl} target="_blank" rel="noopener" onClick={() => setLabelUrl(null)}
+                style={{ display: 'inline-block', padding: '0.4rem 1rem', borderRadius: 3, background: 'rgba(201,168,130,0.2)', border: `1px solid ${C.tan}`, color: C.cream, fontWeight: 700, fontSize: '0.9rem', textDecoration: 'none' }}>
+                🖨 Open the label in a new tab
+              </a>
+            </div>
           )}
         </div>
 
