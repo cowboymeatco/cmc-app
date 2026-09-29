@@ -51,7 +51,8 @@ export const ACCOUNTS = {
 } as const
 
 // Jill's payment methods for each tender (her CMC payments, September 2026).
-export const PAYMENT_METHODS: Record<TenderKind, string> = {
+// On account has none: those orders never get a payment here.
+export const PAYMENT_METHODS: Partial<Record<TenderKind, string>> = {
   card: 'Credit Card', cash: 'Cash', check: 'Check', gift_card: 'Clover Gift Card', other: 'Other Payment',
 }
 
@@ -342,7 +343,7 @@ export interface DayProposal {
   retailItems: QboItemRef[]      // for the mapping picker on the screen
 }
 
-const TENDER_REF: Record<TenderKind, string> = { card: 'CARD', cash: 'CASH', check: 'CHECK', gift_card: 'GIFT', other: 'OTHER' }
+const TENDER_REF: Record<TenderKind, string> = { card: 'CARD', cash: 'CASH', check: 'CHECK', gift_card: 'GIFT', on_account: 'ACCT', other: 'OTHER' }
 
 export async function proposeDay(s: DaySummary): Promise<DayProposal> {
   const [sellable, refs] = await Promise.all([loadSellableItems(), loadRefs()])

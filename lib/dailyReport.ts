@@ -137,6 +137,11 @@ export function renderReport(s: DaySummary, built: DayProposal | null, qboError:
     where.push(`Invoice payments (not sales): ${$(t.invoicePaymentsCents + t.handKeyedCents)}`)
   }
   if (t.nonSaleDiffCents) where.push(`Invoice payments taken ${t.nonSaleDiffCents < 0 ? 'short' : 'over'} at the counter: ${$(t.nonSaleDiffCents)}`)
+  const onAccount = s.onAccount ?? []
+  if (onAccount.length) {
+    where.push(`Charged on account (not taken in): ${$(t.onAccountCents)}${list(onAccount.map(o =>
+      `${o.title ? `${esc(o.title)} — ` : ''}${$(o.amountCents)} at ${o.paidAt}<br><span style="color:#666">${o.lines.map(l => `${esc(l.name)} ${$(l.amountCents)}`).join(' · ')}</span>`))}`)
+  }
   parts.push(list(where))
   parts.push(P(`<b>By tender:</b> ${s.byTender.map(x => `${x.label} ${$(x.collectedCents - x.refundsCents)}`).join(' · ') || '—'}`))
 
@@ -145,6 +150,7 @@ export function renderReport(s: DaySummary, built: DayProposal | null, qboError:
     const q: string[] = []
     if (p.invoice) q.push(`Invoice${posted && record?.qbo_invoice_doc ? ` ${esc(record.qbo_invoice_doc)}` : ''} to CMC: ${$(p.invoice.totalCents)}`)
     if (p.payments.length) q.push(`Payments: ${p.payments.map(x => `${x.label} ${$(x.amountCents)}`).join(' · ')}`)
+    if (onAccount.length) q.push(`Not posted — invoice the customer by hand: ${$(t.onAccountCents)} charged on account`)
     if (p.journal) q.push(`Journal entry: ${$(p.journal.lines.filter(l => l.posting === 'Debit').reduce((x, l) => x + l.amountCents, 0))} to Clover Gift Cards Payable${t.tipsCents ? ' / Clover Tips' : ''}`)
     parts.push(list(q.length ? q : ['Nothing to post']))
   } else {

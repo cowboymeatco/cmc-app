@@ -45,8 +45,11 @@ const SHOP_TZ = 'America/Denver'
 //   ZZA9… = gift card (an external payment; Jill offsets it to Clover Gift
 //     Cards Payable in a $0 deposit)
 //   TRZC… = seen once (Troy Sams, $1,201.60), deposited with the checks
+//   WZBC… = on account (Charlie, 2026-09-29: the $43.70 on 9/28). No money
+//     changes hands — the customer is billed later — so these orders are kept
+//     out of the day's takings and listed for a person to invoice.
 // Anything else is 'other' and flagged. cashTendered wins over the table.
-export type TenderKind = 'card' | 'cash' | 'check' | 'gift_card' | 'other'
+export type TenderKind = 'card' | 'cash' | 'check' | 'gift_card' | 'on_account' | 'other'
 
 export const CLOVER_TENDERS: Record<string, { kind: TenderKind; label: string }> = {
   QJ5JQ08ZHT3KG: { kind: 'card', label: 'Card' },
@@ -55,10 +58,11 @@ export const CLOVER_TENDERS: Record<string, { kind: TenderKind; label: string }>
   JJY92FKW32K2G: { kind: 'cash', label: 'Cash' },
   ZZA958ENMHJHP: { kind: 'gift_card', label: 'Gift card' },
   TRZCAJFFXHTSR: { kind: 'check', label: 'Check (2nd tender)' },
+  WZBCHC2FTT7CR: { kind: 'on_account', label: 'On account' },
 }
 
 export const TENDER_LABEL: Record<TenderKind, string> = {
-  card: 'Card', cash: 'Cash', check: 'Check', gift_card: 'Gift card', other: 'Other',
+  card: 'Card', cash: 'Cash', check: 'Check', gift_card: 'Gift card', on_account: 'On account', other: 'Other',
 }
 
 // ── Raw Clover shapes (only the fields used) ────────────────────────────────
@@ -263,6 +267,17 @@ export interface TenderTotal {
   retailCents: number     // what of this tender's money was retail sales
 }
 
+// An order charged to a customer's account. Nothing was taken in, so it is not
+// in the day's collected money, retail sales or the CMC invoice: the goods go
+// on that customer's own invoice, which a person makes.
+export interface OnAccountSale {
+  orderId: string
+  title: string | null    // the order's title in Clover, often the customer
+  paidAt: string          // Mountain Time, HH:MM
+  amountCents: number     // what was charged to the account
+  lines: { name: string; amountCents: number }[]
+}
+
 export interface DaySummary {
   date: string
   window: { startUtc: string; endUtc: string }
@@ -281,6 +296,7 @@ export interface DaySummary {
     handKeyedCents: number
     giftCardsSoldCents: number
     nonSaleDiffCents: number    // invoice/hand-keyed lines paid short (−) or over (+)
+    onAccountCents: number      // charged on account — not taken in, not in the above
     feesCents: null             // not available from Clover's API — see header
   }
   byTender: TenderTotal[]
@@ -290,6 +306,7 @@ export interface DaySummary {
   handKeyed: DayMoneyLine[]
   giftCardsSold: DayMoneyLine[]
   refundedLines: DayMoneyLine[]
+  onAccount: OnAccountSale[]
   // Order id → the invoice / hand-keyed / gift-card money it took, by tender
   // (what was actually paid — a ring-up paid short shows the short amount).
   orderNonSale: Record<string, Partial<Record<TenderKind, number>>>
@@ -332,6 +349,7 @@ export async function summarizeDay(raw: CloverDayRaw): Promise<DaySummary> {
   const handKeyed: DayMoneyLine[] = []
   const giftCardsSold: DayMoneyLine[] = []
   const refundedLines: DayMoneyLine[] = []
+  const onAccount: OnAccountSale[] = []
   const orderNonSale: Record<string, Partial<Record<TenderKind, number>>> = {}
   let collected = 0, tips = 0, tax = 0, refunds = 0, retailGross = 0, retailCharged = 0, paymentCount = 0, nonSaleDiff = 0
 
@@ -354,6 +372,23 @@ export async function summarizeDay(raw: CloverDayRaw): Promise<DaySummary> {
     if (outside.length) {
       warnings.push(`Order ${order.id} was also paid on another day (${fmt(outside.reduce((s, p) => s + p.amount, 0))}) — counted here, on its first payment's day`)
     }
+
+    // Charged on account: set aside whole, before any of it is counted as money in.
+    const kinds = new Set(ok.map(p => tenderOf(p).kind))
+    if (kinds.has('on_account') && kinds.size === 1) {
+      const amountCents = ok.reduce((s, p) => s + p.amount, 0)
+      const title = order.title?.trim() || null
+      onAccount.push({
+        orderId: order.id, title, amountCents,
+        paidAt: denverParts(Math.min(...ok.map(p => p.createdTime))).hm,
+        lines: lineItemsOf(order).filter(l => !l.refunded).map(l => ({ name: l.name ?? '(no name)', amountCents: lineCents(l) })),
+      })
+      tax += ok.reduce((s, p) => s + (p.taxAmount ?? 0), 0)
+      if (ok.some(p => p.tipAmount)) warnings.push(`Order ${order.id}: a tip on an on-account charge — needs a person`)
+      warnings.push(`Order ${order.id}${title ? ` (${title})` : ''}: ${fmt(amountCents)} charged on account — invoice the customer in QuickBooks`)
+      continue
+    }
+    if (kinds.has('on_account')) warnings.push(`Order ${order.id} was paid partly on account — needs a person`)
 
     // Money in, by tender. The order's largest tender carries its refunds; its
     // invoice / hand-keyed / gift-card money is taken from the largest tender
@@ -485,6 +520,7 @@ export async function summarizeDay(raw: CloverDayRaw): Promise<DaySummary> {
       handKeyedCents: handKeyed.reduce((s, l) => s + l.amountCents, 0),
       giftCardsSoldCents: giftCardsSold.reduce((s, l) => s + l.amountCents, 0),
       nonSaleDiffCents: nonSaleDiff,
+      onAccountCents: onAccount.reduce((s, o) => s + o.amountCents, 0),
       feesCents: null,
     },
     byTender: [...tenders.values()].sort((a, b) => b.collectedCents - a.collectedCents),
@@ -494,6 +530,7 @@ export async function summarizeDay(raw: CloverDayRaw): Promise<DaySummary> {
     handKeyed,
     giftCardsSold,
     refundedLines,
+    onAccount,
     orderNonSale,
     warnings,
   }
@@ -508,6 +545,7 @@ async function fingerprintOf(s: Omit<DaySummary, 'fingerprint'>): Promise<string
     t: s.totals,
     tender: s.byTender.map(t => [t.kind, t.collectedCents, t.tipsCents, t.refundsCents, t.retailCents]),
     items: s.retailItems.map(i => [i.cloverItemId, i.amountCents]).sort(),
+    onAccount: s.onAccount.map(o => [o.orderId, o.amountCents]).sort(),
     money: [...s.invoicePayments, ...s.handKeyed, ...s.giftCardsSold, ...s.refundedLines].map(l => [l.lineId, l.amountCents]).sort(),
   })
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(basis))
