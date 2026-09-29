@@ -2,7 +2,7 @@
 import { use, useEffect, useMemo, useState } from 'react'
 import QRCode from 'qrcode'
 import {
-  CARD_TYPE_LABEL, CATEGORIES, CATEGORY_COLOR, qtyText,
+  CARD_TYPE_LABEL, CATEGORIES, CATEGORY_COLOR, cardQtyText, cardValue, money, qtyText,
   type Item, type Vendor,
 } from '@/lib/kanban'
 import { C, Banner, BigButton, KanbanHeader, cardStyle, inputStyle } from '../ui'
@@ -19,7 +19,8 @@ import { C, Banner, BigButton, KanbanHeader, cardStyle, inputStyle } from '../ui
 // tray puts the card (Charlie, 2026-09-28 — no Avery sheets, and his printer
 // has no 3×5 paper size). See the print CSS below. Then
 // they get laminated and zip-tied to the bin. A 3×5 only holds what the crew
-// reads at the bin — name, where it's used, how much to order, who from — plus
+// reads at the bin — name, where it's used, how much to order and what it
+// costs, who from — plus
 // the QR and which card of the loop this is. The rest lives on
 // the item's page. The colour band is the category, so a card on the wrong
 // shelf stands out from across the room.
@@ -178,7 +179,14 @@ export default function PrintCardsPage({ searchParams }: { searchParams: Promise
                   <div className="name">{item.name}</div>
                   <table className="facts">
                     <tbody>
-                      <tr><th>ORDER QTY</th><td className="big">{qtyText(item.order_qty, ou)}</td></tr>
+                      <tr><th>ORDER QTY</th><td className="big">{cardQtyText(item.order_qty, ou)}</td></tr>
+                      {/* Price per order unit, and what the whole card costs when it's more than one. */}
+                      {item.price != null && (
+                        <tr><th>PRICE</th><td>
+                          {money(item.price)}{ou ? ` / ${ou}` : ''}
+                          {item.order_qty != null && item.order_qty !== 1 && <> · <b>{money(cardValue(item))}</b></>}
+                        </td></tr>
+                      )}
                       {/* A reorder-point card is useless without its trigger. */}
                       {item.card_type === 'reorder_point' && item.reorder_point != null && (
                         <tr><th>REORDER AT</th><td className="big">{qtyText(item.reorder_point, item.unit)}</td></tr>
@@ -249,6 +257,9 @@ export default function PrintCardsPage({ searchParams }: { searchParams: Promise
           /* globals.css hides the last cell of every table in print (the kill
              sheet's action column), which blanked every value on the card. */
           .kcard .facts td:last-child { display: table-cell !important; }
+          /* 2.5in is tight: a two-line name, reorder point and price must still
+             leave room for the vendor row. globals.css pads every printed cell. */
+          .kcard .facts th, .kcard .facts td { padding-top: 2px !important; padding-bottom: 2px !important; }
           .kcal::before { display: none; }
           .kcell { position: absolute; width: 0.5in; height: 0.5in; box-sizing: border-box; border: 0.5px solid #000;
                    font: bold 7pt Arial, sans-serif; color: #000; padding: 2px; }
