@@ -10,7 +10,7 @@ import CustomerPicker, { resolveCiScan, type CustomerName } from './CustomerPick
 import AnimalStart, { type AnimalPick } from './AnimalStart'
 import { isCarcassTag } from '@/lib/carcassTag'
 import { weightInName } from '@/lib/label'
-import { labelKey, type ScannerProducerSet } from '@/lib/producerLabels'
+import { WHOLE_BOX_FALLBACK_PLU, WHOLE_BOX_PLU, labelKey, type ScannerProducerSet } from '@/lib/producerLabels'
 const C = {
   dark:       '#1A0A04',
   darkBrown:  '#351E0E',
@@ -1060,11 +1060,21 @@ export default function ScannerPage() {
   useEffect(() => {
     sessionLabelKeysRef.current = (expected?.scaleLabels ?? []).map(labelKey)
   }, [expected])
+  // The producer this session packs for, when its card names one. Their label
+  // can't be scanned, so the card's cut list can never tick off — the panel
+  // asks for one whole-box label per box instead.
+  const boxOnlyProducer = useMemo(() => {
+    const keys = (expected?.scaleLabels ?? []).map(labelKey)
+    return producerSets.find(st => keys.includes(st.key))?.name
+      ?? expected?.scaleLabels?.find(l => l.trim()) ?? null
+  }, [expected, producerSets])
+  const boxOnlyRef = useRef(false)
+  useEffect(() => { boxOnlyRef.current = !!boxOnlyProducer }, [boxOnlyProducer])
 
   // The PLU a scanned package is recorded under, and what's wrong with its
   // label for this session, if anything. Refs only — doScan is a stable callback.
   function resolveProducerPlu(scanned: string): { plu: string; labelWarn: string | null } {
-    const { byPlu, byKey } = producerRef.current
+    const { byPlu } = producerRef.current
     const sessionKeys = sessionLabelKeysRef.current
     const theirs = byPlu[scanned]
     if (theirs) {
@@ -1073,16 +1083,16 @@ export default function ScannerPage() {
         labelWarn: sessionKeys.includes(theirs.key) ? null : `ON ${theirs.name.toUpperCase()}'S LABEL — not this session's`,
       }
     }
-    for (const k of sessionKeys) {
-      const set = byKey[k]
-      const should = set?.houseToPlu[scanned]
-      if (should) return { plu: scanned, labelWarn: `HOUSE LABEL — ${set.name} packs on PLU ${should}: reprint it` }
-    }
+    // A house label in a producer session used to be sent back for a reprint
+    // on the producer's PLU — but the producer's label has no barcode, so the
+    // house label is the only one that can be scanned at all. It goes in
+    // quietly; see WHOLE_BOX_PLU.
     return { plu: scanned, labelWarn: null }
   }
   function checkOffCard(scan: ScanLine, plu: string, itemName: string): boolean {
     const ex = offCardRef.current
-    if (!ex.hasCard) return false
+    // Whole-box labels in a producer session answer no line on the card.
+    if (!ex.hasCard || boxOnlyRef.current) return false
     const keys = ex.keysForPlu.get(plu) ?? []
     if (!keys.length || keys.some(k => ex.expectedKeys.has(k))) return false
     setOffCard({ scanId: scan.id, plu, name: itemName, keys })
@@ -4166,7 +4176,41 @@ export default function ScannerPage() {
           The customer's packaging sheet, live. A line only crosses itself off
           when a PLU that has been linked to it comes over the scale, so what
           is left standing is genuinely what is left to pack. */}
-      {expected && (
+      {/* ── Producer session: packed by the box ──
+          The producer's label prints no barcode, so the cut list below could
+          never tick off. One whole-box label per box goes over the gun
+          instead, and every pound of it counts toward the yield. */}
+      {expected && boxOnlyProducer && (() => {
+        const species = expected.species[0] ?? 'beef'
+        const plu     = WHOLE_BOX_PLU[species] ?? WHOLE_BOX_FALLBACK_PLU
+        const name    = pluMap[plu] ?? (plu === WHOLE_BOX_FALLBACK_PLU ? 'MEAT BOX' : `PLU ${plu}`)
+        const wholeBox = new Set([...Object.values(WHOLE_BOX_PLU), WHOLE_BOX_FALLBACK_PLU])
+        const packed  = sessionScans.filter(sc => wholeBox.has(sc.plu_number))
+        const lbs     = packed.reduce((t, sc) => t + (Number(sc.weight_lbs) || 0), 0)
+        return (
+          <div style={{
+            width: 400, flexShrink: 0, display: 'flex', flexDirection: 'column',
+            borderLeft: '1px solid rgba(166,120,90,0.25)', background: 'rgba(0,0,0,0.18)',
+            padding: '1rem 1rem 0.75rem', gap: '0.7rem', minHeight: 0,
+          }}>
+            <span style={{ color: C.tan, fontSize: '0.78rem', fontWeight: 700, letterSpacing: '0.12em' }}>
+              PACK BY THE BOX · {boxOnlyProducer.toUpperCase()}
+            </span>
+            <div style={{ color: C.cream, fontSize: '0.95rem', lineHeight: 1.45 }}>
+              {boxOnlyProducer}&apos;s labels print no barcode. Weigh each finished box as
+              {' '}<strong>{name}</strong> (PLU <strong style={{ fontFamily: 'monospace' }}>{plu}</strong>) and scan that label.
+            </div>
+            <div style={{ color: C.lightBrown, fontSize: '0.8rem', lineHeight: 1.45 }}>
+              Every pound goes toward the yield. Which cuts are in each box isn&apos;t tracked for this producer.
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', color: C.cream, fontFamily: 'monospace', fontSize: '0.9rem', fontWeight: 700, borderTop: '1px solid rgba(166,120,90,0.25)', paddingTop: '0.5rem' }}>
+              <span>{packed.length} box{packed.length === 1 ? '' : 'es'} scanned</span>
+              <span>{lbs.toFixed(2)} lbs</span>
+            </div>
+          </div>
+        )
+      })()}
+      {expected && !boxOnlyProducer && (
         <div style={{
           width: 400, flexShrink: 0, display: 'flex', flexDirection: 'column',
           borderLeft: '1px solid rgba(166,120,90,0.25)', background: 'rgba(0,0,0,0.18)',

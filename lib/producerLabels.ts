@@ -50,6 +50,21 @@ export function assignPluNumbers(blockStart: number, used: Set<number>, count: n
   return out
 }
 
+// A producer's label format carries no barcode — both formats on the scales
+// print a logo and text only (Blegen 422, Hollenbeck 418, read off the scale
+// 2026-09-26). Nothing packed on one can be scanned, so a producer session is
+// packed by the box: each finished box is weighed as one package on a house
+// whole-box PLU and that label is what goes over the gun. The producer gives
+// up knowing which cuts came out; the yield still gets every pound (Charlie,
+// 2026-09-29, after AE couldn't scan Blegen's in).
+export const WHOLE_BOX_PLU: Record<string, string> = {
+  beef: '207',   // BEEF ASSORTED CUTS
+  pork: '1000',  // PORK MEAT BOX
+  lamb: '2000',  // LAMB MEAT BOX
+  goat: '3000',  // GOAT MEAT BOX
+}
+export const WHOLE_BOX_FALLBACK_PLU = '1' // MEAT BOX
+
 // What the scanner needs from a set: which numbers are this producer's, and
 // which house PLU each one stands in for.
 export interface ScannerProducerSet {
