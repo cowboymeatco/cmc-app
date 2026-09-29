@@ -9,7 +9,7 @@ import Link from 'next/link'
 import { isoDate, isoDateTime, addDaysISO, mondayOfISO, dateLabel } from '@/lib/dates'
 import { LabelRoll, parseRoll, rollFrameCSS, rollPrintScript } from '@/lib/label'
 import {
-  BREAK_RULES, PTO_RULES, Shift, WeekHours,
+  BREAK_RULES, PTO_RULES, Shift, ShiftCalc, WeekHours,
   calcShift, splitOvertime, fmtHours, toMin,
   yearsOfService, annualPtoRate, accrualPerHour, nextAnniversary, ptoEarned,
 } from '@/lib/timekeeping'
@@ -62,20 +62,23 @@ function mockShifts(thisMonday: string, today: string): Shift[] {
   const days = [0, 1, 2, 3, 4].map(d => addDaysISO(thisMonday, d - 7))
     .concat([0, 1, 2, 3, 4].map(d => addDaysISO(thisMonday, d)).filter(d => d < today))
   let n = 0
-  const add = (empId: string, date: string, clockIn: string, clockOut: string | null, lunch: [string, string] | null, breaksTaken: number) =>
-    shifts.push({ id: `s${n++}`, empId, date, clockIn, clockOut, lunchStart: lunch?.[0] ?? null, lunchEnd: lunch?.[1] ?? null, breaksTaken })
+  const add = (empId: string, date: string, clockIn: string, clockOut: string | null, lunch: [string, string] | null, breaks: [string, string][]) =>
+    shifts.push({ id: `s${n++}`, empId, date, clockIn, clockOut, lunchStart: lunch?.[0] ?? null, lunchEnd: lunch?.[1] ?? null,
+      breaks: breaks.map(([start, end]) => ({ start, end })) })
 
   days.forEach((d, j) => {
     const i = j % 5
-    add('e1', d, '07:00', '15:30', ['11:30', '12:00'], 2)
-    add('e2', d, '06:00', i === 4 ? '13:00' : '16:00', ['11:00', '11:30'], i === 2 ? 1 : 2)
-    if (i < 4) add('e3', d, '08:00', i === 1 ? '14:30' : '15:00', i === 1 ? null : ['12:00', '12:20'], 1)
-    add('e4', d, '06:30', '15:00', ['11:30', '12:00'], 2)
-    if (i % 2 === 0) add('e5', d, '16:00', '20:15', null, i === 0 ? 0 : 1)
+    add('e1', d, '07:00', '15:30', ['11:30', '12:00'], [['09:30', '09:45'], ['14:00', '14:15']])
+    // Wednesday: 25 + 20 = 45 break minutes on a two-break day → 30 paid, 15 unpaid.
+    add('e2', d, '06:00', i === 4 ? '13:00' : '16:00', ['11:00', '11:30'],
+      i === 2 ? [['08:30', '08:55'], ['13:30', '13:50']] : i === 4 ? [['08:30', '08:45']] : [['08:30', '08:45'], ['13:30', '13:45']])
+    if (i < 4) add('e3', d, '08:00', i === 1 ? '14:30' : '15:00', i === 1 ? null : ['12:00', '12:20'], [['10:00', '10:15']])
+    add('e4', d, '06:30', '15:00', ['11:30', '12:00'], [['09:00', '09:15'], ['13:30', '13:45']])
+    if (i % 2 === 0) add('e5', d, '16:00', '20:15', null, i === 0 ? [] : [['18:00', '18:15']])
   })
   // Today, in progress, for the clock tab.
-  add('e1', today, '07:00', null, null, 0)
-  add('e2', today, '06:00', null, null, 0)
+  add('e1', today, '07:00', null, null, [])
+  add('e2', today, '06:00', null, null, [])
   return shifts
 }
 
@@ -181,14 +184,26 @@ function Stat({ label, value, sub, color = C.cream }: { label: string; value: st
   )
 }
 
-function EntitlementPills({ owed, taken, lunchTaken }: { owed: { paidBreaks: number; lunch: boolean }; taken: number; lunchTaken: boolean }) {
-  if (owed.paidBreaks === 0 && !owed.lunch) return <span style={{ color: C.lightBrown, fontSize: '0.8rem' }}>none yet</span>
+function BreakPills({ c }: { c: ShiftCalc }) {
+  const allowance = c.owed.paidBreaks * BREAK_RULES.paidBreakMinutes
+  if (allowance === 0 && !c.owed.lunch && c.breakMinutes === 0) return <span style={{ color: C.lightBrown, fontSize: '0.8rem' }}>none yet</span>
+  const tookLunch = c.lunchUnpaid && c.lunchMinutes > 0
   return (
     <>
-      {owed.paidBreaks > 0 && <Pill color={taken >= owed.paidBreaks ? C.green : C.amber}>Paid 15s: {taken}/{owed.paidBreaks}</Pill>}
-      {owed.lunch && <Pill color={lunchTaken ? C.green : C.amber}>Lunch {lunchTaken ? '✓' : 'owed'}</Pill>}
+      {(allowance > 0 || c.breakMinutes > 0) && (
+        <Pill color={c.unpaidBreakMinutes > 0 ? C.red : c.breakMinutes === allowance ? C.green : C.amber}>
+          Breaks {c.breakMinutes}/{allowance} min
+        </Pill>
+      )}
+      {c.unpaidBreakMinutes > 0 && <Pill color={C.red}>{c.unpaidBreakMinutes} min unpaid</Pill>}
+      {c.owed.lunch && <Pill color={tookLunch ? C.green : C.amber}>Lunch {tookLunch ? '✓' : 'owed'}</Pill>}
     </>
   )
+}
+
+/** "09:30–09:45, 14:00–14:15" */
+function breakTimes(s: Shift): string {
+  return s.breaks.length ? s.breaks.map(b => `${b.start}–${b.end ?? '…'}`).join(', ') : '—'
 }
 
 // ── Time clock ──────────────────────────────────────────────────────────────
@@ -326,11 +341,15 @@ function ClockTab({ shifts, setShifts, setPhotos, today, thisMonday, now }: {
   const emp = EMPLOYEES.find(e => e.id === empId)!
   const open = shifts.find(s => s.empId === empId && s.date === today && !s.clockOut)
   const onLunch = !!open?.lunchStart && !open.lunchEnd
+  const openBreak = open?.breaks.find(b => !b.end)
+  const onBreak = !!openBreak
   const nowHHMM = now ?? '00:00'
   const rate = accrualPerHour(yearsOfService(emp.hireDate, today))
 
   const todays = shifts.filter(s => s.empId === empId && s.date === today)
-  const todayHours = todays.reduce((t, s) => t + calcShift(s, s === open && onLunch ? s.lunchStart! : nowHHMM).workedHours, 0)
+  const todayCalcs = todays.map(s => calcShift(s, nowHHMM))
+  const todayHours = todayCalcs.reduce((t, c) => t + c.workedHours, 0)
+  const todayUnpaid = todayCalcs.reduce((t, c) => t + c.unpaidMinutes, 0)
 
   const touch = (msg: string) => { setNotice(msg); setActivity(a => a + 1) }
   const update = (patch: Partial<Shift>, msg: string, punch?: string) => {
@@ -341,16 +360,44 @@ function ClockTab({ shifts, setShifts, setPhotos, today, thisMonday, now }: {
   const clockIn = () => {
     const id = `s-${empId}-${today}-${nowHHMM}`
     snap(id, 'in')
-    setShifts(ss => [...ss, { id, empId, date: today, clockIn: nowHHMM, clockOut: null, lunchStart: null, lunchEnd: null, breaksTaken: 0 }])
+    setShifts(ss => [...ss, { id, empId, date: today, clockIn: nowHHMM, clockOut: null, lunchStart: null, lunchEnd: null, breaks: [] }])
     touch(`Clocked in at ${nowHHMM}.`)
   }
-  const clockOut = () => update({ clockOut: nowHHMM },
-    `Clocked out at ${nowHHMM}. ${fmtHours(todayHours)} paid today — you earned ${(todayHours * rate).toFixed(2)} h of PTO.`, 'out')
+  const clockOut = () => {
+    const c = calcShift({ ...open!, clockOut: nowHHMM })
+    const parts = [
+      c.lunchUnpaid && c.lunchMinutes > 0 ? `lunch ${c.lunchMinutes} min` : '',
+      c.unpaidBreakMinutes > 0 ? `breaks over by ${c.unpaidBreakMinutes} min` : '',
+    ].filter(Boolean)
+    update({ clockOut: nowHHMM },
+      `Clocked out at ${nowHHMM}. Paid today: ${fmtHours(todayHours)}. Unpaid: ${fmtHours(todayUnpaid / 60)}${parts.length ? ` (${parts.join(', ')})` : ''}. You earned ${(todayHours * rate).toFixed(2)} h of PTO.`, 'out')
+  }
 
-  const calc = open ? calcShift(open, onLunch ? open.lunchStart! : nowHHMM) : null
+  // Breaks: 15 paid minutes for each one taken, up to the two a full day
+  // earns. That's what the live counter shows; the final pay math at
+  // clock-out uses the breaks actually earned by hours worked.
+  const startBreak = () => {
+    const i = open!.breaks.length
+    update({ breaks: [...open!.breaks, { start: nowHHMM, end: null }] },
+      `Break started at ${nowHHMM}. Breaks are 15 min, paid. Back by ${fmtClock(toMin(nowHHMM) + 15)} — time past 15 min is unpaid.`, `break-out-${i}`)
+  }
+  const endBreak = () => {
+    const i = open!.breaks.length - 1
+    const mins = toMin(nowHHMM) - toMin(openBreak!.start)
+    const breaks = open!.breaks.map(b => b === openBreak ? { ...b, end: nowHHMM } : b)
+    const used = open!.breaks.slice(0, -1).reduce((t, b) => t + (toMin(b.end!) - toMin(b.start)), 0)
+    const allowance = Math.min(breaks.length, 2) * BREAK_RULES.paidBreakMinutes
+    const unpaid = Math.max(0, Math.min(mins, used + mins - allowance))
+    update({ breaks }, unpaid > 0
+      ? `Back from break at ${nowHHMM}: ${mins} min — ${mins - unpaid} paid, ${unpaid} unpaid.`
+      : `Back from break at ${nowHHMM}: ${mins} min, all paid.`, `break-in-${i}`)
+  }
+
+  const calc = open ? calcShift(open, nowHHMM) : null
+  const breakSoFar = openBreak ? toMin(nowHHMM) - toMin(openBreak.start) : 0
 
   let nextUp: string | null = null
-  if (calc && !onLunch) {
+  if (calc && !onLunch && !onBreak) {
     const w = calc.workedHours
     const milestones: [number, string][] = [
       [BREAK_RULES.firstPaidBreakAt, '15-min paid break'],
@@ -391,24 +438,28 @@ function ClockTab({ shifts, setShifts, setPhotos, today, thisMonday, now }: {
       {notice && <div style={{ background: 'rgba(76,175,80,0.12)', border: `1px solid ${C.green}66`, color: C.cream, borderRadius: 4, padding: '0.6rem 0.8rem', marginBottom: '0.8rem', fontSize: '0.9rem' }}>{notice}</div>}
 
       <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '0.8rem' }}>
-        <Stat label="Status" value={!open ? 'Off the clock' : onLunch ? 'At lunch' : 'Working'} color={!open ? C.tan : onLunch ? C.amber : C.green} sub={open ? `In at ${open.clockIn}` : undefined} />
+        <Stat label="Status" value={!open ? 'Off the clock' : onLunch ? 'At lunch' : onBreak ? 'On break' : 'Working'}
+          color={!open ? C.tan : onLunch || onBreak ? C.amber : C.green}
+          sub={onBreak ? `${breakSoFar} min so far${breakSoFar > BREAK_RULES.paidBreakMinutes ? ' — past 15 is unpaid' : ''}` : open ? `In at ${open.clockIn}` : undefined} />
         <Stat label="Paid today" value={fmtHours(todayHours)} />
+        <Stat label="Unpaid today" value={fmtHours(todayUnpaid / 60)} sub="lunch + break time past 15" color={todayUnpaid > 0 ? C.amber : C.cream} />
         <Stat label="PTO earned today" value={`${(todayHours * rate).toFixed(2)} h`} sub={`${rate.toFixed(4)} h per hour worked`} color={C.green} />
       </div>
 
       {open && calc && (
         <div style={{ marginBottom: '0.8rem' }}>
-          <EntitlementPills owed={calc.owed} taken={open.breaksTaken} lunchTaken={!!open.lunchEnd} />
+          <BreakPills c={calc} />
           {nextUp && <div style={{ color: C.tan, fontSize: '0.82rem', marginTop: 6 }}>Next: {nextUp}</div>}
         </div>
       )}
 
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
         {!open && <button style={bigBtn(C.green)} onClick={clockIn} disabled={!now}>Clock In</button>}
-        {open && !onLunch && <button style={bigBtn(C.blue)} onClick={() => update({ breaksTaken: open.breaksTaken + 1 }, `15-min paid break logged at ${nowHHMM}.`)}>Log 15-min Break (paid)</button>}
-        {open && !open.lunchStart && <button style={bigBtn(C.amber)} onClick={() => update({ lunchStart: nowHHMM }, `Lunch started at ${nowHHMM}. Take at least 30 min, back ${fmtClock(toMin(nowHHMM) + 30)} or later.`, 'lunch-out')}>Start Lunch</button>}
+        {open && !onLunch && !onBreak && <button style={bigBtn(C.blue)} onClick={startBreak}>Start Break</button>}
+        {onBreak && <button style={bigBtn(C.blue)} onClick={endBreak}>End Break</button>}
+        {open && !open.lunchStart && !onBreak && <button style={bigBtn(C.amber)} onClick={() => update({ lunchStart: nowHHMM }, `Lunch started at ${nowHHMM}. Take at least 30 min, back ${fmtClock(toMin(nowHHMM) + 30)} or later.`, 'lunch-out')}>Start Lunch</button>}
         {onLunch && <button style={bigBtn(C.amber)} onClick={() => update({ lunchEnd: nowHHMM }, `Back from lunch at ${nowHHMM}.`, 'lunch-in')}>End Lunch</button>}
-        {open && !onLunch && <button style={bigBtn(C.red)} onClick={clockOut}>Clock Out</button>}
+        {open && !onLunch && !onBreak && <button style={bigBtn(C.red)} onClick={clockOut}>Clock Out</button>}
       </div>
 
       <div style={{ borderTop: '1px solid rgba(166,120,90,0.3)', paddingTop: '0.8rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -451,20 +502,20 @@ function buildSummaryHTML(
   nowHHMM: string, balance: number, roll: LabelRoll,
 ): string {
   const rows = [...shifts].sort((a, b) => a.date.localeCompare(b.date) || a.clockIn.localeCompare(b.clockIn))
-  let total = 0, pto = 0, breaks = 0
+  let total = 0, pto = 0, breakMin = 0, unpaid = 0
   const body = rows.map(s => {
-    const onLunch = !!s.lunchStart && !s.lunchEnd && !s.clockOut
-    const c = calcShift(s, onLunch ? s.lunchStart! : nowHHMM)
+    const c = calcShift(s, nowHHMM)
     const earned = c.workedHours * accrualPerHour(yearsOfService(emp.hireDate, s.date))
-    total += c.workedHours; pto += earned; breaks += s.breaksTaken
-    const lunch = c.lunchHours > 0 ? `${s.lunchStart}–${s.lunchEnd}` : s.lunchStart ? `${s.lunchStart}–${s.lunchEnd ?? '…'}` : 'none'
-    const breakLine = [
-      c.owed.paidBreaks > 0 ? `15s ${s.breaksTaken}/${c.owed.paidBreaks}` : '',
-      c.owed.lunch ? `lunch ${c.lunchHours > 0 ? '✓' : 'MISSED'}` : '',
-    ].filter(Boolean).join(' · ')
+    total += c.workedHours; pto += earned; breakMin += c.paidBreakMinutes; unpaid += c.unpaidMinutes
+    const allowance = c.owed.paidBreaks * BREAK_RULES.paidBreakMinutes
+    const lunch = !s.lunchStart ? (c.owed.lunch ? 'MISSED' : 'none')
+      : `${s.lunchStart}–${s.lunchEnd ?? '…'} (${c.lunchMinutes} min${c.lunchUnpaid ? ' unpaid' : ', paid — under 30'})`
+    const breaks = s.breaks.length
+      ? `${s.breaks.map(b => b.end ? `${toMin(b.end) - toMin(b.start)}` : '…').join('+')} min: ${c.paidBreakMinutes} paid${c.unpaidBreakMinutes ? `, ${c.unpaidBreakMinutes} UNPAID` : ''}${c.breakMinutes < allowance ? ` (${allowance} allowed)` : ''}`
+      : allowance ? `none (${allowance} allowed)` : 'none'
     return `<tr class="day"><td>${esc(dateLabel(s.date, { weekday: 'short', month: 'numeric', day: 'numeric' }))}</td>
       <td>${s.clockIn}–${s.clockOut ?? 'now'}</td><td class="r">${fmtHours(c.workedHours)}</td></tr>
-      <tr class="sub"><td colspan="3">Lunch ${lunch}${breakLine ? ` · ${breakLine}` : ''} · PTO +${earned.toFixed(2)}${s.clockOut ? '' : ' · ON CLOCK'}</td></tr>`
+      <tr class="sub"><td colspan="3">Lunch ${lunch}<br>Breaks ${breaks}<br>Unpaid ${fmtHours(c.unpaidMinutes / 60)} · PTO +${earned.toFixed(2)}${s.clockOut ? '' : ' · ON CLOCK'}</td></tr>`
   }).join('')
   const { regular, overtime } = splitOvertime(total)
   const range = from === to
@@ -498,7 +549,8 @@ function buildSummaryHTML(
   <table class="totals">
     <tr class="big"><td>Paid hours</td><td class="r">${fmtHours(total)}</td></tr>
     ${kind === 'Week' ? `<tr><td>Regular</td><td class="r">${fmtHours(regular)}</td></tr><tr><td>Overtime 1.5×</td><td class="r">${fmtHours(overtime)}</td></tr>` : ''}
-    <tr><td>Paid 15s taken</td><td class="r">${breaks}</td></tr>
+    <tr><td>Paid break time</td><td class="r">${fmtHours(breakMin / 60)}</td></tr>
+    <tr><td>Unpaid time</td><td class="r">${fmtHours(unpaid / 60)}</td></tr>
     <tr class="big"><td>PTO earned</td><td class="r">+${pto.toFixed(2)} h</td></tr>
     <tr><td>PTO balance*</td><td class="r">${balance.toFixed(1)} h</td></tr>
   </table>
@@ -539,23 +591,30 @@ function TimesheetTab({ shifts, photos, thisMonday, today, now }: {
         <p style={{ color: C.tan, fontSize: '0.78rem', margin: '0 0 0.5rem' }}>Photos come from the iPad&apos;s front camera at each punch, so you can see who actually punched.</p>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><th style={th}>Employee</th><th style={th}>In</th><th style={th}>Lunch</th><th style={th}>Out</th><th style={th}>Paid hrs</th><th style={th}>Breaks</th><th style={th}>Punch photos</th></tr></thead>
+            <thead><tr><th style={th}>Employee</th><th style={th}>In</th><th style={th}>Lunch</th><th style={th}>Breaks</th><th style={th}>Out</th><th style={th}>Paid</th><th style={th}>Unpaid</th><th style={th}>Break pay</th><th style={th}>Punch photos</th></tr></thead>
             <tbody>
-              {todays.length === 0 && <tr><td style={td} colSpan={7}>Nobody yet.</td></tr>}
+              {todays.length === 0 && <tr><td style={td} colSpan={9}>Nobody yet.</td></tr>}
               {todays.map(s => {
                 const onLunch = !!s.lunchStart && !s.lunchEnd && !s.clockOut
-                const c = calcShift(s, onLunch ? s.lunchStart! : now ?? s.clockIn)
+                const onBreak = !s.clockOut && s.breaks.some(b => !b.end)
+                const c = calcShift(s, now ?? s.clockIn)
                 return (
                   <tr key={s.id}>
                     <td style={td}>{EMPLOYEES.find(e => e.id === s.empId)?.name}</td>
                     <td style={td}>{s.clockIn}</td>
                     <td style={td}>{s.lunchStart ? `${s.lunchStart}–${s.lunchEnd ?? '…'}` : '—'}</td>
-                    <td style={td}>{s.clockOut ?? <Pill color={onLunch ? C.amber : C.green}>{onLunch ? 'at lunch' : 'on clock'}</Pill>}</td>
+                    <td style={td}>{breakTimes(s)}</td>
+                    <td style={td}>{s.clockOut ?? <Pill color={onLunch || onBreak ? C.amber : C.green}>{onLunch ? 'at lunch' : onBreak ? 'on break' : 'on clock'}</Pill>}</td>
                     <td style={{ ...td, fontVariantNumeric: 'tabular-nums' }}>{fmtHours(c.workedHours)}</td>
-                    <td style={td}><EntitlementPills owed={c.owed} taken={s.breaksTaken} lunchTaken={!!s.lunchEnd} /></td>
+                    <td style={{ ...td, fontVariantNumeric: 'tabular-nums' }}>{fmtHours(c.unpaidMinutes / 60)}</td>
+                    <td style={td}><BreakPills c={c} /></td>
                     <td style={td}>
                       <div style={{ display: 'flex', gap: 6 }}>
                         <PunchPhoto src={photos[`${s.id}:in`]} label="in" />
+                        {s.breaks.flatMap((b, i) => [
+                          <PunchPhoto key={`bo${i}`} src={photos[`${s.id}:break-out-${i}`]} label="break" />,
+                          ...(b.end ? [<PunchPhoto key={`bi${i}`} src={photos[`${s.id}:break-in-${i}`]} label="back" />] : []),
+                        ])}
                         {s.lunchStart && <PunchPhoto src={photos[`${s.id}:lunch-out`]} label="lunch" />}
                         {s.lunchEnd && <PunchPhoto src={photos[`${s.id}:lunch-in`]} label="back" />}
                         {s.clockOut && <PunchPhoto src={photos[`${s.id}:out`]} label="out" />}
@@ -586,7 +645,8 @@ function TimesheetTab({ shifts, photos, thisMonday, today, now }: {
         const total = calcs.reduce((t, c) => t + c.workedHours, 0)
         const { regular, overtime } = splitOvertime(total)
         const gross = regular * e.wage + overtime * e.wage * 1.5
-        const paidBreakHrs = rows.reduce((t, s) => t + s.breaksTaken * BREAK_RULES.paidBreakMinutes / 60, 0)
+        const paidBreakHrs = calcs.reduce((t, c) => t + c.paidBreakMinutes / 60, 0)
+        const unpaidHrs = calcs.reduce((t, c) => t + c.unpaidMinutes / 60, 0)
         const years = yearsOfService(e.hireDate, weekEnd)
         const ptoThisWeek = total * accrualPerHour(years)
         const flagCount = calcs.reduce((t, c) => t + c.flags.length, 0)
@@ -599,7 +659,7 @@ function TimesheetTab({ shifts, photos, thisMonday, today, now }: {
             </div>
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead><tr><th style={th}>Day</th><th style={th}>In</th><th style={th}>Lunch</th><th style={th}>Out</th><th style={th}>Paid hrs</th><th style={th}>Breaks</th><th style={th}>PTO</th><th style={th}>Notes</th></tr></thead>
+                <thead><tr><th style={th}>Day</th><th style={th}>In</th><th style={th}>Lunch</th><th style={th}>Breaks</th><th style={th}>Out</th><th style={th}>Paid</th><th style={th}>Unpaid</th><th style={th}>Break pay</th><th style={th}>PTO</th><th style={th}>Notes</th></tr></thead>
                 <tbody>
                   {rows.map((s, i) => {
                     const c = calcs[i]
@@ -608,9 +668,11 @@ function TimesheetTab({ shifts, photos, thisMonday, today, now }: {
                         <td style={td}>{dateLabel(s.date, { weekday: 'short', month: 'numeric', day: 'numeric' })}</td>
                         <td style={td}>{s.clockIn}</td>
                         <td style={td}>{s.lunchStart ? `${s.lunchStart}–${s.lunchEnd}` : '—'}</td>
+                        <td style={{ ...td, fontSize: '0.78rem' }}>{breakTimes(s)}</td>
                         <td style={td}>{s.clockOut}</td>
                         <td style={{ ...td, fontVariantNumeric: 'tabular-nums' }}>{fmtHours(c.workedHours)}</td>
-                        <td style={td}><EntitlementPills owed={c.owed} taken={s.breaksTaken} lunchTaken={c.lunchHours > 0} /></td>
+                        <td style={{ ...td, fontVariantNumeric: 'tabular-nums', color: c.unpaidBreakMinutes > 0 ? C.red : C.cream }}>{fmtHours(c.unpaidMinutes / 60)}</td>
+                        <td style={td}><BreakPills c={c} /></td>
                         <td style={{ ...td, color: C.green, fontVariantNumeric: 'tabular-nums' }}>+{(c.workedHours * accrualPerHour(years)).toFixed(2)}</td>
                         <td style={{ ...td, color: C.amber, fontSize: '0.78rem', maxWidth: 280 }}>{c.flags.join(' ')}</td>
                       </tr>
@@ -621,6 +683,7 @@ function TimesheetTab({ shifts, photos, thisMonday, today, now }: {
             </div>
             <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginTop: '0.8rem' }}>
               <Stat label="Paid hours" value={fmtHours(total)} sub={`incl. ${fmtHours(paidBreakHrs)} paid breaks`} />
+              <Stat label="Unpaid" value={fmtHours(unpaidHrs)} sub="lunches + break overage" />
               <Stat label="Regular" value={fmtHours(regular)} />
               <Stat label="Overtime 1.5×" value={fmtHours(overtime)} color={overtime > 0 ? C.amber : C.cream} />
               <Stat label="Est. gross" value={`$${gross.toFixed(2)}`} />
@@ -734,7 +797,9 @@ function PolicyTab() {
         </table>
         <p style={p}><b style={{ color: C.cream }}>Montana law:</b> Montana doesn&apos;t require meal or rest breaks for adult employees. It follows the federal rule, so this schedule is company policy, not a legal requirement. It&apos;s a good policy, and similar to Washington&apos;s and Oregon&apos;s.</p>
         <p style={p}><b style={{ color: C.cream }}>The rules that are law</b> (federal FLSA): a break of 5–20 minutes must be paid. A lunch can be unpaid only if it&apos;s at least 30 minutes and the employee is fully relieved of duty. A lunch that runs short or gets interrupted is paid time, and the timesheet treats it that way.</p>
-        <p style={p}>Paid 15s don&apos;t need a punch because they&apos;re on the clock. Lunch is punched, because it comes off the paid hours.</p>
+        <p style={p}><b style={{ color: C.cream }}>Every break is punched,</b> out and back in, same as lunch. Paid break time is added up over the day: someone who has earned two 15s gets up to 30 paid minutes, however they split them. Anything past that is unpaid. Two breaks that add up to 45 minutes pay 30, and 15 comes off the day.</p>
+        <p style={p}><b style={{ color: C.cream }}>To not pay the extra minutes</b>, federal rules say employees must be told ahead of time, clearly, that breaks are 15 minutes, that running over is against the rules and can lead to discipline, and that extra time is unpaid. Put it in the handbook and have people sign it. The kiosk also says it every time someone starts a break.</p>
+        <p style={p}>Each employee sees their unpaid time for the day on the clock when they punch out, and on their printed summary.</p>
       </div>
       <div style={card}>
         <h2 style={h2}>PTO</h2>

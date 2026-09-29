@@ -32,6 +32,8 @@ export function breakEntitlement(workedHours: number): Entitlement {
   }
 }
 
+export interface BreakPunch { start: string; end: string | null } // HH:MM
+
 export interface Shift {
   id:          string
   empId:       string
@@ -40,7 +42,7 @@ export interface Shift {
   clockOut:    string | null // null while still on the clock
   lunchStart:  string | null
   lunchEnd:    string | null
-  breaksTaken: number        // paid 15s actually taken (no punch needed — they're paid)
+  breaks:      BreakPunch[]  // paid 15s, punched out and back in
 }
 
 export function toMin(hhmm: string): number {
@@ -55,40 +57,96 @@ export function fmtHours(h: number): string {
 }
 
 export interface ShiftCalc {
-  spanHours:   number
-  lunchHours:  number   // unpaid lunch actually deducted
-  workedHours: number   // paid hours
-  owed:        Entitlement
-  flags:       string[]
+  spanHours:          number  // clock-in to clock-out
+  lunchMinutes:       number  // lunch taken
+  lunchUnpaid:        boolean // false when a short lunch had to be paid
+  breakMinutes:       number  // all break time punched
+  paidBreakMinutes:   number  // up to 15 per break earned
+  unpaidBreakMinutes: number  // break time past the paid allowance
+  unpaidMinutes:      number  // everything taken off the day: lunch + break overage
+  workedHours:        number  // paid hours
+  owed:               Entitlement
+  flags:              string[]
 }
 
-/** `nowHHMM` stands in for the clock-out on a shift that's still open. */
+/**
+ * Breaks are punched. Paid break time is pooled across the day: someone who
+ * has earned two 15s gets up to 30 paid break minutes, however they split
+ * them. Anything past that is unpaid — a 45-minute total pays 30.
+ *
+ * FLSA allows not paying an over-long break only if the employee was told,
+ * clearly and in advance, how long breaks are and that extensions are unpaid
+ * and against the rules. That notice belongs in the handbook and the kiosk.
+ *
+ * `nowHHMM` stands in for any punch still open (clock-out, lunch, break).
+ */
 export function calcShift(s: Shift, nowHHMM?: string): ShiftCalc {
-  const out = s.clockOut ?? nowHHMM ?? s.clockIn
+  const now = nowHHMM ?? s.clockIn
+  const out = s.clockOut ?? now
   const spanMin = Math.max(0, toMin(out) - toMin(s.clockIn))
   const flags: string[] = []
 
   let lunchMin = 0
-  if (s.lunchStart && s.lunchEnd) {
-    const taken = Math.max(0, toMin(s.lunchEnd) - toMin(s.lunchStart))
-    if (taken >= BREAK_RULES.lunchMinutes) lunchMin = taken
-    else flags.push(`Lunch was only ${taken} min — under 30 min it can't be unpaid, so it's counted as paid time.`)
-  } else if (s.lunchStart && !s.lunchEnd && s.clockOut) {
-    flags.push('Lunch started but never ended.')
-  }
-
-  const worked = (spanMin - lunchMin) / 60
-  const owed = breakEntitlement(worked)
-
-  if (s.clockOut) {
-    if (owed.lunch && lunchMin === 0) flags.push('Worked 6+ hours with no 30-min lunch.')
-    if (s.breaksTaken < owed.paidBreaks) {
-      const missing = owed.paidBreaks - s.breaksTaken
-      flags.push(`${missing} paid 15-min break${missing > 1 ? 's' : ''} not taken.`)
+  let lunchUnpaid = false
+  if (s.lunchStart) {
+    const end = s.lunchEnd ?? (s.clockOut ? null : now)
+    if (end == null) flags.push('Lunch started but never ended.')
+    else {
+      lunchMin = Math.max(0, toMin(end) - toMin(s.lunchStart))
+      // A lunch still in progress is off the clock; the 30-min test applies once it ends.
+      lunchUnpaid = !s.lunchEnd || lunchMin >= BREAK_RULES.lunchMinutes
+      if (!lunchUnpaid) flags.push(`Lunch was only ${lunchMin} min — under 30 min it can't be unpaid, so it's counted as paid time.`)
     }
   }
 
-  return { spanHours: spanMin / 60, lunchHours: lunchMin / 60, workedHours: worked, owed, flags }
+  const breakMin = s.breaks.reduce((t, b) => {
+    const end = b.end ?? (s.clockOut ? b.start : now)
+    return t + Math.max(0, toMin(end) - toMin(b.start))
+  }, 0)
+  if (s.clockOut && s.breaks.some(b => !b.end)) flags.push('A break was started but never ended.')
+
+  // Working time, not counting any break or unpaid lunch.
+  const working = spanMin - breakMin - (lunchUnpaid ? lunchMin : 0)
+  // Earned breaks depend on paid hours, which depend on paid break time.
+  // Start from "all break time paid" and step down if that overstates it.
+  let owed = breakEntitlement((working + breakMin) / 60)
+  let paidBreak = Math.min(breakMin, owed.paidBreaks * BREAK_RULES.paidBreakMinutes)
+  const settled = breakEntitlement((working + paidBreak) / 60)
+  if (settled.paidBreaks < owed.paidBreaks) {
+    owed = settled
+    paidBreak = Math.min(breakMin, owed.paidBreaks * BREAK_RULES.paidBreakMinutes)
+  }
+  owed = { ...owed, lunch: breakEntitlement((working + paidBreak) / 60).lunch }
+  // Mid-shift, a break taken before the 4-hour mark hasn't been "earned" yet
+  // but will be by the end of a normal day. Until clock-out, count each break
+  // taken (up to two) as earned so the live numbers don't show it as unpaid.
+  if (!s.clockOut) {
+    const provisional = Math.max(owed.paidBreaks, Math.min(s.breaks.length, 2))
+    paidBreak = Math.min(breakMin, provisional * BREAK_RULES.paidBreakMinutes)
+  }
+
+  const unpaidBreak = breakMin - paidBreak
+  const worked = (working + paidBreak) / 60
+
+  if (unpaidBreak > 0 && s.clockOut) flags.push(`Breaks ran ${unpaidBreak} min past the ${paidBreak} paid — unpaid.`)
+  if (s.clockOut) {
+    if (owed.lunch && !(lunchUnpaid && lunchMin > 0)) flags.push('Worked 6+ hours with no 30-min lunch.')
+    const allowance = owed.paidBreaks * BREAK_RULES.paidBreakMinutes
+    if (breakMin < allowance) flags.push(`Took ${breakMin} of ${allowance} paid break minutes.`)
+  }
+
+  return {
+    spanHours: spanMin / 60,
+    lunchMinutes: lunchMin,
+    lunchUnpaid,
+    breakMinutes: breakMin,
+    paidBreakMinutes: paidBreak,
+    unpaidBreakMinutes: unpaidBreak,
+    unpaidMinutes: (lunchUnpaid ? lunchMin : 0) + unpaidBreak,
+    workedHours: worked,
+    owed,
+    flags,
+  }
 }
 
 /** Montana and federal: over 40 hours in the workweek is time-and-a-half. */
