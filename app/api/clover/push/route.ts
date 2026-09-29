@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { getCloverItems, updateCloverItem, type CloverItem } from '@/lib/clover'
 
 // App -> Clover push (app-as-master). POST body:
@@ -34,7 +34,7 @@ const codeForPlu = (plu: string) =>
 
 async function computeDiff(): Promise<{ changes: Change[]; skipped: string[] }> {
   const [{ data: plus, error }, cloverItems] = await Promise.all([
-    supabase
+    supabaseAdmin
       .from('plu_items')
       .select('id, plu_number, item_name, retail_price, clover_item_id, active')
       .eq('active', true),
@@ -150,7 +150,7 @@ export async function POST(req: NextRequest) {
       for (const ch of chs) {
         results.push({ ...ch, status, error: errMsg })
       }
-      const { error: logError } = await supabase.from('clover_push_log').insert(chs.map(ch => ({
+      const { error: logError } = await supabaseAdmin.from('clover_push_log').insert(chs.map(ch => ({
         plu_id: ch.pluId || null,
         plu_number: ch.pluNumber,
         item_name: ch.itemName,
@@ -180,7 +180,7 @@ export async function POST(req: NextRequest) {
 
 // GET /api/clover/push — recent push history
 export async function GET() {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('clover_push_log')
     .select('*')
     .order('created_at', { ascending: false })

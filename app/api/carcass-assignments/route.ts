@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { FRACTION } from '@/lib/cutSchedule'
 
 // GET /api/carcass-assignments?harvest_log_ids=a,b,c   (for the Cut Schedule)
@@ -10,7 +10,7 @@ export async function GET(req: NextRequest) {
   const apptId = searchParams.get('appointment_id')
   const logIds = searchParams.get('harvest_log_ids')
 
-  let query = supabase.from('carcass_assignments').select('*')
+  let query = supabaseAdmin.from('carcass_assignments').select('*')
   if (apptId) {
     query = query.eq('appointment_id', apptId)
   } else if (logIds) {
@@ -84,7 +84,7 @@ export async function POST(req: NextRequest) {
   // on one of these carcasses but written under a sibling appointment — otherwise
   // moving a buyer between two of a producer's animals leaves the old row behind
   // and the carcass reads as double-booked.
-  const { error: delError } = await supabase
+  const { error: delError } = await supabaseAdmin
     .from('carcass_assignments')
     .delete()
     .in('appointment_id', apptIds)
@@ -95,7 +95,7 @@ export async function POST(req: NextRequest) {
   // booking's share of a carcass it never meant to touch.
   const logIds = Array.from(new Set(harvest_log_ids ?? []))
   if (logIds.length > 0) {
-    const { error: delLogError } = await supabase
+    const { error: delLogError } = await supabaseAdmin
       .from('carcass_assignments')
       .delete()
       .in('harvest_log_id', logIds)
@@ -113,7 +113,7 @@ export async function POST(req: NextRequest) {
     linked_cutting_instruction_id: a.linked_cutting_instruction_id ?? null,
   }))
 
-  const { error: insError } = await supabase.from('carcass_assignments').insert(rows)
+  const { error: insError } = await supabaseAdmin.from('carcass_assignments').insert(rows)
   if (insError) return NextResponse.json({ error: insError.message }, { status: 500 })
   return NextResponse.json({ ok: true })
 }

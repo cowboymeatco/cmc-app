@@ -37,7 +37,7 @@ import {
   type CloverOrder,
 } from '@/lib/cloverOrders'
 import { getOpenInvoices, type OpenInvoice } from '@/lib/qboInvoices'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // Each create costs 2 Clover calls and each update 3, all sequential to stay
 // under Clover's rate limit. Cap the work per run so a first sync of a large
@@ -207,7 +207,7 @@ export async function runSync(triggeredBy: 'cron' | 'manual', ctx?: ReconcileCon
   }
 
   if (rows.length > 0) {
-    const { error } = await supabase.from('clover_ringup_sweep_log').insert(rows)
+    const { error } = await supabaseAdmin.from('clover_ringup_sweep_log').insert(rows)
     if (error) console.error(`register sync log write failed: ${error.message}`)
   }
 

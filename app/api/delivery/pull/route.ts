@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { parseCarcassTag } from '@/lib/carcassTag'
 import { resolveCarcasses } from '@/lib/carcassDelivery'
 
@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
   if (!id)          return NextResponse.json({ error: 'id required' }, { status: 400 })
   if (!pull.length) return NextResponse.json({ error: 'nothing to pull' }, { status: 400 })
 
-  const { data: d, error } = await supabase.from('delivery_scans').select('*').eq('id', id).maybeSingle()
+  const { data: d, error } = await supabaseAdmin.from('delivery_scans').select('*').eq('id', id).maybeSingle()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   if (!d)    return NextResponse.json({ error: 'delivery not found' }, { status: 404 })
 
@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
   const line = `Pulled off load ${when}${by ? ` by ${by}` : ''}: ${labels.length ? labels.join(', ') : `${removed} item${removed !== 1 ? 's' : ''}`}`
   const notes = [String(d.notes ?? '').trim(), line].filter(Boolean).join('\n')
 
-  const { data: updated, error: uErr } = await supabase
+  const { data: updated, error: uErr } = await supabaseAdmin
     .from('delivery_scans')
     .update({ barcodes: after, notes })
     .eq('id', id)
@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
   if (uErr) return NextResponse.json({ error: uErr.message }, { status: 500 })
 
   // Boxes Load Out stamped under THIS delivery go back in the freezer.
-  const { data: unstamped } = await supabase
+  const { data: unstamped } = await supabaseAdmin
     .from('boxes')
     .update({ picked_up_at: null, picked_up_by: null, delivery_id: null })
     .eq('delivery_id', id)
@@ -65,7 +65,7 @@ export async function POST(req: NextRequest) {
     const [carcass] = await resolveCarcasses([String(entry.barcode)])
     if (!carcass?.harvest_log_id) continue
     const back = (entry as { prev_status?: string }).prev_status || 'complete'
-    const { data: restored } = await supabase
+    const { data: restored } = await supabaseAdmin
       .from('harvest_log')
       .update({ status: back })
       .eq('id', carcass.harvest_log_id)

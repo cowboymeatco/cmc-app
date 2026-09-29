@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { getCachedQboItems, type QboCacheRow } from '@/lib/qboSync'
 
 // Linking layer between plu_items (master) and the cached QuickBooks catalog
@@ -23,7 +23,7 @@ interface PluRow {
 export async function GET() {
   try {
     const [{ data: plus, error: pluErr }, qboItems] = await Promise.all([
-      supabase
+      supabaseAdmin
         .from('plu_items')
         .select('id, plu_number, item_name, retail_price, quickbooks_item_id, active')
         .eq('active', true)
@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
     if (!pluId || !qboId) {
       return NextResponse.json({ error: 'pluId and qboId required' }, { status: 400 })
     }
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('plu_items')
       .update({ quickbooks_item_id: String(qboId), updated_at: new Date().toISOString() })
       .eq('id', pluId)
@@ -91,7 +91,7 @@ export async function DELETE(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const pluId = searchParams.get('pluId')
   if (!pluId) return NextResponse.json({ error: 'pluId required' }, { status: 400 })
-  const { error } = await supabase
+  const { error } = await supabaseAdmin
     .from('plu_items')
     .update({ quickbooks_item_id: '', updated_at: new Date().toISOString() })
     .eq('id', pluId)

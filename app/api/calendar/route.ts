@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { projectedCutDate, speciesIcon } from '@/lib/cutSchedule'
 
 export const dynamic = 'force-dynamic'
@@ -82,16 +82,16 @@ export async function GET(req: NextRequest) {
     // Receiving — animals scheduled to arrive, off the receiving calendar
     // (appointment.receive_date, default the day before harvest). Charlie:
     // "Receiving should come off of the receiving calendar."
-    supabase.from('harvest_appointments')
+    supabaseAdmin.from('harvest_appointments')
       .select('id, receive_date, source, species, head_count, status')
       .gte('receive_date', from).lte('receive_date', to),
-    supabase.from('box_receiving_log')
+    supabaseAdmin.from('box_receiving_log')
       .select('id, received_at, vendor, product, quantity, status')
       .gte('received_at', from).lte('received_at', to),
-    supabase.from('harvest_appointments')
+    supabaseAdmin.from('harvest_appointments')
       .select('id, harvest_date, source, species, head_count, status')
       .gte('harvest_date', from).lte('harvest_date', to),
-    supabase.from('processing_sessions')
+    supabaseAdmin.from('processing_sessions')
       .select('id, session_date, customer_name, status')
       .gte('session_date', from).lte('session_date', to),
     // Smokehouse — actual cook cycles (the real log), tagged with their recipe
@@ -99,19 +99,19 @@ export async function GET(req: NextRequest) {
     // Reach back a day before the window: a cook lit at 9pm the night before
     // `from` is still in the smokehouse for most of the first morning shown, and
     // keying the fetch to started_at alone hid it entirely.
-    supabase.from('smokehouse_cook')
+    supabaseAdmin.from('smokehouse_cook')
       .select('id, started_at, ended_at, batch, operator, profile_key')
       .gte('started_at', `${dayBefore(from)}T00:00:00`).lte('started_at', `${to}T23:59:59`),
-    supabase.from('retail_orders')
+    supabaseAdmin.from('retail_orders')
       .select('id, due_date, customer_name, fulfillment_type, status')
       .gte('due_date', from).lte('due_date', to),
     // Planned smokehouse cooks — the schedule built on /value-add. Shown as a
     // distinct "planned" layer alongside the actual cook cycles (Phase B).
-    supabase.from('value_add_jobs')
+    supabaseAdmin.from('value_add_jobs')
       .select('id, scheduled_start, requested_date, profile_key, batch_count, customer_name, status')
       .or(`and(requested_date.gte.${from},requested_date.lte.${to}),and(scheduled_start.gte.${from}T00:00:00,scheduled_start.lte.${to}T23:59:59)`),
     // Pickups — when a finished order is scheduled to be collected (and paid).
-    supabase.from('processing_sessions')
+    supabaseAdmin.from('processing_sessions')
       .select('id, customer_name, pickup_date, status')
       .gte('pickup_date', from).lte('pickup_date', to),
     // Planned cuts — the cut schedule built on /processing. Not date-filtered
@@ -119,7 +119,7 @@ export async function GET(req: NextRequest) {
     // split across days by its break rows, so which day a carcass falls on can
     // only be worked out by walking the list (see below). A plan is a few dozen
     // rows; 500 always covers the newest one.
-    supabase.from('cut_schedule_items')
+    supabaseAdmin.from('cut_schedule_items')
       .select('*')
       .order('schedule_date', { ascending: false })
       .order('manual_rank', { ascending: true })
@@ -127,26 +127,26 @@ export async function GET(req: NextRequest) {
     // Projected cuts, source 1 — carcasses already in the cooler that the crew
     // hasn't placed on a day yet. No date filter: the cooler is a small, bounded
     // set and the projected date (not harvest_date) is what has to land in-window.
-    supabase.from('harvest_log')
+    supabaseAdmin.from('harvest_log')
       .select('id, harvest_date, species, carcass_tag, producer, appointment_id, status')
       .eq('status', 'chilling'),
     // Projected cuts, source 2 — booked harvests that haven't happened yet, off
     // the harvest calendar itself (Charlie: schedule future cuts off the harvest
     // calendar). Only ones that could still project a cut day inside the window.
-    supabase.from('harvest_appointments')
+    supabaseAdmin.from('harvest_appointments')
       .select('id, harvest_date, species, head_count, source, status')
       .gt('harvest_date', todayISO)
       .lte('harvest_date', to),
     // Delivery — runs the plant has SCHEDULED. Charlie (2026-08-25): "Can I make
     // a delivery schedule so that it would show up on /calendar." The truck
     // leaving is an operational day like any other, so it gets its own lane.
-    supabase.from('delivery_runs')
+    supabaseAdmin.from('delivery_runs')
       .select('id, run_date, route, driver, depart_time, stops, status')
       .gte('run_date', from).lte('run_date', to),
   ])
 
   // Recipe names for tagged cooks (small table — one fetch, mapped by key).
-  const { data: cookProfiles } = await supabase.from('cook_profile').select('profile_key, display_name')
+  const { data: cookProfiles } = await supabaseAdmin.from('cook_profile').select('profile_key, display_name')
   const recipeByKey = new Map<string, string>()
   for (const p of cookProfiles ?? []) recipeByKey.set(String(p.profile_key), p.display_name as string)
 
@@ -357,7 +357,7 @@ export async function GET(req: NextRequest) {
       plan.filter(r => r.kind === 'carcass' && r.appointment_id).map(r => r.appointment_id as string)
     ))
     const { data: planLogs } = logIds.length
-      ? await supabase.from('harvest_log')
+      ? await supabaseAdmin.from('harvest_log')
           .select('id, producer, species, carcass_tag, appointment_id')
           .in('id', logIds)
       : { data: [] }
@@ -369,7 +369,7 @@ export async function GET(req: NextRequest) {
       (planLogs ?? []).map(l => l.appointment_id as string).filter(Boolean)
     ))
     const { data: planAppts } = planApptIds.length
-      ? await supabase.from('harvest_appointments').select('id, customers').in('id', planApptIds)
+      ? await supabaseAdmin.from('harvest_appointments').select('id, customers').in('id', planApptIds)
       : { data: [] }
     const custName = new Map<string, string>()
     for (const a of planAppts ?? []) {
@@ -383,7 +383,7 @@ export async function GET(req: NextRequest) {
     // The assignments know every portion — use them when there's more than
     // one, so the calendar says what the schedule says.
     const { data: planAssigns } = logIds.length
-      ? await supabase.from('carcass_assignments')
+      ? await supabaseAdmin.from('carcass_assignments')
           .select('harvest_log_id, customer_name')
           .in('harvest_log_id', logIds)
       : { data: [] }
@@ -496,7 +496,7 @@ export async function GET(req: NextRequest) {
   // Charlie ran a pulled pork and a hot dog cycle on 2026-08-10/11 and filed
   // this as a calendar bug; the calendar was right, the feed had been dead
   // since 08-07. Report the last import so the silence names itself.
-  const { data: lastCook } = await supabase
+  const { data: lastCook } = await supabaseAdmin
     .from('smokehouse_cook')
     .select('started_at, created_at')
     .order('created_at', { ascending: false })

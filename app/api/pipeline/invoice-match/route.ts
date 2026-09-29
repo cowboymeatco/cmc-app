@@ -1,7 +1,6 @@
 export const runtime = 'edge'
 export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { fetchAnimalProgress } from '@/lib/animalProgress'
 import { getInvoicesSince } from '@/lib/qboInvoices'
@@ -44,11 +43,11 @@ export async function GET(req: NextRequest) {
   const q = (req.nextUrl.searchParams.get('q') ?? '').trim().toLowerCase()
   if (!apptId) return NextResponse.json({ error: 'appointment required' }, { status: 400 })
 
-  const { data: appt } = await supabase
+  const { data: appt } = await supabaseAdmin
     .from('harvest_appointments').select('id, source, customers, harvest_date, species, head_count, no_invoice_reason').eq('id', apptId).maybeSingle()
   if (!appt) return NextResponse.json({ error: 'appointment not found' }, { status: 404 })
 
-  const progress = (await fetchAnimalProgress(supabase, [{ id: appt.id, harvest_date: appt.harvest_date }])).get(appt.id)
+  const progress = (await fetchAnimalProgress(supabaseAdmin, [{ id: appt.id, harvest_date: appt.harvest_date }])).get(appt.id)
   const customers = ((appt.customers ?? []) as { customer_name?: string }[]).map(c => (c.customer_name ?? '').trim()).filter(Boolean)
   const sessionNames = (progress?.sessions ?? []).map(s => s.customer_name)
   const names = [...new Set([String(appt.source ?? '').trim(), ...customers, ...sessionNames].filter(Boolean))]
@@ -131,11 +130,11 @@ export async function POST(req: NextRequest) {
   // Settled and gone: close its sessions out, or — when nothing was ever
   // packed into a session — mark the appointment handed off.
   if (body.picked_up) {
-    const { data: appt } = await supabase.from('harvest_appointments').select('id, harvest_date').eq('id', apptId).maybeSingle()
-    const progress = appt ? (await fetchAnimalProgress(supabase, [{ id: appt.id, harvest_date: appt.harvest_date }])).get(appt.id) : null
+    const { data: appt } = await supabaseAdmin.from('harvest_appointments').select('id, harvest_date').eq('id', apptId).maybeSingle()
+    const progress = appt ? (await fetchAnimalProgress(supabaseAdmin, [{ id: appt.id, harvest_date: appt.harvest_date }])).get(appt.id) : null
     const open = (progress?.sessions ?? []).filter(s => s.status !== 'picked_up')
     for (const s of open) {
-      await supabase.from('processing_sessions').update({ status: 'picked_up', updated_at: new Date().toISOString() })
+      await supabaseAdmin.from('processing_sessions').update({ status: 'picked_up', updated_at: new Date().toISOString() })
         .eq('customer_name', s.customer_name).eq('session_date', s.session_date)
     }
     if (!(progress?.sessions ?? []).length) {

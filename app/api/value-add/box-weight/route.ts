@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import {
   proposeWeightOut, proposeFromLinkedBoxes, BoxScanRow, packWindow, jobBaseDate,
   MatchWindowSettings, DEFAULT_WINDOW,
@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
 
   // No output_plu filter here. A job with no PLU can still have boxes pointed
   // at it by hand — that missing PLU is one of the reasons somebody would.
-  let jobQuery = supabase
+  let jobQuery = supabaseAdmin
     .from('value_add_jobs')
     .select('id, output_plu, customer_name, completed_date, requested_date, scheduled_start, weight_out_lbs, weight_out_source')
 
@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
   if (error)   return NextResponse.json({ error: error.message }, { status: 500 })
   if (!jobs?.length) return NextResponse.json({ proposals: [] })
 
-  const { data: settingsRow } = await supabase
+  const { data: settingsRow } = await supabaseAdmin
     .from('cook_settings')
     .select('match_window_days, match_window_back_days')
     .eq('id', 1)
@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
   // lightweight read.
   const plus = Array.from(new Set(jobs.map(j => j.output_plu).filter(Boolean))) as string[]
 
-  const { data: siblingRows, error: sibErr } = await supabase
+  const { data: siblingRows, error: sibErr } = await supabaseAdmin
     .from('value_add_jobs')
     .select('id, output_plu, completed_date, requested_date, scheduled_start')
     .in('output_plu', plus)
@@ -84,7 +84,7 @@ export async function GET(req: NextRequest) {
 
     const scanRows: { box_id: string; plu_number: string | null; item_name: string | null; weight_lbs: number | null; quantity: number | null }[] = []
     for (let offset = 0; ; offset += PAGE) {
-      const { data } = await supabase
+      const { data } = await supabaseAdmin
         .from('box_scans')
         .select('box_id, plu_number, item_name, weight_lbs, quantity')
         .in('plu_number', plus)
@@ -101,7 +101,7 @@ export async function GET(req: NextRequest) {
     const boxById = new Map<string, { id: string; box_label: string | null; customer_name: string | null; pack_date: string | null }>()
 
     for (let i = 0; i < boxIds.length; i += CHUNK) {
-      const { data } = await supabase
+      const { data } = await supabaseAdmin
         .from('boxes')
         .select('id, box_label, customer_name, pack_date')
         .in('id', boxIds.slice(i, i + CHUNK))
@@ -134,7 +134,7 @@ export async function GET(req: NextRequest) {
   // boxes knows more than a date range does. Their scans are fetched without
   // any PLU or date filter, since the usual reason for linking by hand is that
   // one of those filters is what went wrong.
-  const { data: linkRows } = await supabase
+  const { data: linkRows } = await supabaseAdmin
     .from('value_add_job_box')
     .select('job_id, box_id, plus')
     .in('job_id', jobs.map(j => j.id))
@@ -158,8 +158,8 @@ export async function GET(req: NextRequest) {
     for (let i = 0; i < allLinked.length; i += CHUNK2) {
       const slice = allLinked.slice(i, i + CHUNK2)
       const [{ data: bs }, { data: bx }] = await Promise.all([
-        supabase.from('box_scans').select('box_id, plu_number, item_name, weight_lbs, quantity').in('box_id', slice),
-        supabase.from('boxes').select('id, box_label, customer_name, pack_date').in('id', slice),
+        supabaseAdmin.from('box_scans').select('box_id, plu_number, item_name, weight_lbs, quantity').in('box_id', slice),
+        supabaseAdmin.from('boxes').select('id, box_label, customer_name, pack_date').in('id', slice),
       ])
       const meta = new Map((bx ?? []).map(b => [b.id as string, b]))
       for (const s of bs ?? []) {
@@ -206,7 +206,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'id and lbs required' }, { status: 400 })
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('value_add_jobs')
     .update({
       weight_out_lbs:    body.lbs,

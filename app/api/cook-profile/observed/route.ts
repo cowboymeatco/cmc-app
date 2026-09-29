@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { CookProfile, matchProfile } from '@/lib/cookPredict'
 import { observeLoad, observeYield, ObservedJob } from '@/lib/loadLearning'
 
@@ -11,7 +11,7 @@ import { observeLoad, observeYield, ObservedJob } from '@/lib/loadLearning'
 // the normal PATCH on /api/cook-profile, so a learned number goes in the same
 // way a hand-tuned one does and is marked 'manual' just the same.
 export async function GET() {
-  const { data: profileRows, error } = await supabase
+  const { data: profileRows, error } = await supabaseAdmin
     .from('cook_profile')
     .select('*')
     .eq('active', true)
@@ -23,7 +23,7 @@ export async function GET() {
   // Completed jobs are the real evidence: pre-cook pounds, same basis the
   // scheduler divides on. A job with no profile is matched the same way the
   // board matches it, so jobs recorded before profiles existed still count.
-  const { data: jobRows } = await supabase
+  const { data: jobRows } = await supabaseAdmin
     .from('value_add_jobs')
     .select('output_item_name, description, job_type, output_plu, profile_key, weight_in_lbs, weight_out_lbs, batch_count, completed_date, status')
     .eq('status', 'complete')

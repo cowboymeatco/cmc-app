@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // GET /api/producers?search=text — ranch / producer name suggestions.
 //
@@ -19,8 +19,8 @@ export async function GET(req: NextRequest) {
   // .ilike() parameterises the value, unlike the hand-built .or() filter
   // string in /api/customers — a comma or paren here is just a character.
   const [apptRes, logRes] = await Promise.all([
-    supabase.from('harvest_appointments').select('source').ilike('source', `%${search}%`).limit(300),
-    supabase.from('harvest_log').select('producer').is('legacy_source', null).ilike('producer', `%${search}%`).limit(300),
+    supabaseAdmin.from('harvest_appointments').select('source').ilike('source', `%${search}%`).limit(300),
+    supabaseAdmin.from('harvest_log').select('producer').is('legacy_source', null).ilike('producer', `%${search}%`).limit(300),
   ])
   if (apptRes.error) return NextResponse.json({ error: apptRes.error.message }, { status: 500 })
 

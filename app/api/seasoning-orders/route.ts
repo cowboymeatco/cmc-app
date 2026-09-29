@@ -2,7 +2,6 @@ export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 // Recipes and supplies are under RLS with no policies — service role only.
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
-import { supabase } from '@/lib/supabase'
 import { buildSeasoningPlan, type FlavorRow, type RecipeRow, type SupplyRow, type BlendLineRow } from '@/lib/seasoningOrders'
 import type { ApptRow, SheetRow } from '@/lib/smokehouseBook'
 import { isoDate, addDaysISO } from '@/lib/dates'
@@ -21,10 +20,10 @@ export async function GET(req: NextRequest) {
   const to    = addDaysISO(today, days)
 
   const [appts, sheets, flavors, recipes, supplies, lines] = await Promise.all([
-    supabase.from('harvest_appointments').select('id, harvest_date, species, head_count, status')
+    supabaseAdmin.from('harvest_appointments').select('id, harvest_date, species, head_count, status')
       .gte('harvest_date', from).lte('harvest_date', to),
-    supabase.from('cutting_instructions').select('id, species, data, appointment_id').neq('status', 'archived'),
-    supabase.from('wizard_flavors').select('id, product, val, label').eq('active', true),
+    supabaseAdmin.from('cutting_instructions').select('id, species, data, appointment_id').neq('status', 'archived'),
+    supabaseAdmin.from('wizard_flavors').select('id, product, val, label').eq('active', true),
     supabaseAdmin.from('smokehouse_recipes').select('wizard_flavor_id, seasoning_id, seasoning_lb_per_100, cure_id, cure_oz_per_100'),
     supabaseAdmin.from('smokehouse_supplies').select('*'),
     supabaseAdmin.from('smokehouse_blend_lines').select('blend_id, ingredient_id, pct'),

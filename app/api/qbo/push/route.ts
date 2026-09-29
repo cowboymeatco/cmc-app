@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { getAllQboItems, updateQboItem, refreshQboCache, type QboApiItem } from '@/lib/qboSync'
 
 // App -> QuickBooks write-back, mirroring the Clover push flow:
@@ -88,7 +88,7 @@ export async function POST(req: NextRequest) {
     const { dryRun = true, keys = [], pushNames = false } = await req.json()
 
     const [{ data: plus, error }, qboItems] = await Promise.all([
-      supabase
+      supabaseAdmin
         .from('plu_items')
         .select('id, plu_number, item_name, retail_price, quickbooks_item_id')
         .eq('active', true)
@@ -141,7 +141,7 @@ export async function POST(req: NextRequest) {
 
     let logWarning: string | null = null
     if (logRows.length > 0) {
-      const { error: logErr } = await supabase.from('qbo_push_log').insert(logRows)
+      const { error: logErr } = await supabaseAdmin.from('qbo_push_log').insert(logRows)
       if (logErr) logWarning = `push log write failed: ${logErr.message}`
     }
 

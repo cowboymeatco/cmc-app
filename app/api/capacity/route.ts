@@ -1,6 +1,6 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { isoDate, daysBetweenISO } from '@/lib/dates'
 
 export interface CapacitySettings {
@@ -60,9 +60,9 @@ export async function GET() {
 
   // Fetch settings, chill log, and upcoming appointments in parallel
   const [settingsRes, coolerRes, upcomingRes] = await Promise.all([
-    supabase.from('capacity_settings').select('*').eq('id', 1).single(),
-    supabase.from('harvest_log').select('id,carcass_tag,species,producer,harvest_date').eq('status', 'chilling').order('harvest_date', { ascending: true }),
-    supabase.from('harvest_appointments').select('id,harvest_date,species,head_count,source').neq('status', 'Complete').gte('harvest_date', today).order('harvest_date', { ascending: true }),
+    supabaseAdmin.from('capacity_settings').select('*').eq('id', 1).single(),
+    supabaseAdmin.from('harvest_log').select('id,carcass_tag,species,producer,harvest_date').eq('status', 'chilling').order('harvest_date', { ascending: true }),
+    supabaseAdmin.from('harvest_appointments').select('id,harvest_date,species,head_count,source').neq('status', 'Complete').gte('harvest_date', today).order('harvest_date', { ascending: true }),
   ])
 
   const settings: CapacitySettings = settingsRes.data
@@ -111,7 +111,7 @@ export async function GET() {
 // POST /api/capacity â€” upsert settings
 export async function POST(req: NextRequest) {
   const body: Partial<CapacitySettings> = await req.json()
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('capacity_settings')
     .upsert([{ id: 1, ...body, updated_at: new Date().toISOString() }])
     .select()

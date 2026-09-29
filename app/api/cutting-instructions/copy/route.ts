@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 export const dynamic = 'force-dynamic'
 
@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'source_id and portion required' }, { status: 400 })
   }
 
-  const { data: src, error: readErr } = await supabase
+  const { data: src, error: readErr } = await supabaseAdmin
     .from('cutting_instructions')
     .select('*')
     .eq('id', sourceId)
@@ -68,7 +68,7 @@ export async function POST(req: NextRequest) {
   const existing = String(data.notes ?? '').trim()
   data.notes = existing ? `${existing}\n${note}` : note
 
-  const { data: copy, error: insErr } = await supabase
+  const { data: copy, error: insErr } = await supabaseAdmin
     .from('cutting_instructions')
     .insert([{
       customer_name: src.customer_name,

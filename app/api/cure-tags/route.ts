@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { extractValueAdd } from '@/lib/valueAdd'
 import { aliasMap, nameKeyWith, type CustomerNameAlias } from '@/lib/nameKey'
 import { buildSheetCarcassIndex, sheetSlots, type AssignmentRow, type CarcassRow } from '@/lib/sheetCarcasses'
@@ -20,13 +20,13 @@ export async function GET(req: NextRequest) {
 
   const tagNumber = searchParams.get('tag')
   if (tagNumber) {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('cure_tags').select('*').eq('tag_number', tagNumber).maybeSingle()
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     return NextResponse.json(data)
   }
 
-  let q = supabase.from('cure_tags').select('*').order('created_at', { ascending: false })
+  let q = supabaseAdmin.from('cure_tags').select('*').order('created_at', { ascending: false })
   if (status === 'curing' || status === 'done') q = q.eq('status', status)
   // ?customer= — one customer's tags, for the packout slip (case-insensitive)
   const customer = searchParams.get('customer')
@@ -39,11 +39,11 @@ export async function GET(req: NextRequest) {
   // Latest live cut sheet per customer name — same source the value-add report
   // reads, so the tag list and the matrix always agree on what was ordered.
   const [{ data: cis }, { data: appts }] = await Promise.all([
-    supabase.from('cutting_instructions')
+    supabaseAdmin.from('cutting_instructions')
       .select('id, customer_name, species, data, created_at')
       .neq('status', 'archived')
       .order('created_at', { ascending: true }),
-    supabase.from('harvest_appointments').select('id, harvest_date, customers'),
+    supabaseAdmin.from('harvest_appointments').select('id, harvest_date, customers'),
   ])
   //
   // Keyed on nameKey(), not the raw string. The floor types the tag and the
@@ -51,7 +51,7 @@ export async function GET(req: NextRequest) {
   // "MT Veterans Meat Locker Kristin" — and an exact match silently found
   // nothing, which is indistinguishable on screen from a sheet that asked for
   // nothing (Charlie, 2026-08-27). `sheetFound` tells those two apart.
-  const { data: aliasRows } = await supabase
+  const { data: aliasRows } = await supabaseAdmin
     .from('customer_name_aliases').select('alias, expands_to')
   const aliases = aliasMap((aliasRows ?? []) as CustomerNameAlias[])
   const key = (raw: string | null | undefined) => nameKeyWith(raw, aliases)
@@ -79,10 +79,10 @@ export async function GET(req: NextRequest) {
   const apptIds = slots.appointmentIds
   const [{ data: logs }, { data: asgs }] = apptIds.length
     ? await Promise.all([
-        supabase.from('harvest_log')
+        supabaseAdmin.from('harvest_log')
           .select('id, appointment_id, species, carcass_tag, harvest_date, hot_carcass_weight_lbs, half_1_weight_lbs, half_2_weight_lbs')
           .in('appointment_id', apptIds),
-        supabase.from('carcass_assignments')
+        supabaseAdmin.from('carcass_assignments')
           .select('harvest_log_id, appointment_id, appointment_customer_id, linked_cutting_instruction_id')
           .in('appointment_id', apptIds),
       ])
@@ -161,7 +161,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'tag_number, product and customer_name required' }, { status: 400 })
   }
 
-  const { data: existing } = await supabase
+  const { data: existing } = await supabaseAdmin
     .from('cure_tags').select('*').eq('tag_number', tag_number).maybeSingle()
   if (existing) return NextResponse.json(existing, { status: 409 })
 
@@ -178,9 +178,9 @@ export async function POST(req: NextRequest) {
   const wanted = SHEET_PRODUCT[product]
   if (!force && wanted) {
     const [{ data: cis }, { data: aliasRows }] = await Promise.all([
-      supabase.from('cutting_instructions')
+      supabaseAdmin.from('cutting_instructions')
         .select('id, customer_name, species, data').neq('status', 'archived'),
-      supabase.from('customer_name_aliases').select('alias, expands_to'),
+      supabaseAdmin.from('customer_name_aliases').select('alias, expands_to'),
     ])
     const aliases = aliasMap((aliasRows ?? []) as CustomerNameAlias[])
     const key = (raw: string | null | undefined) => nameKeyWith(raw, aliases)
@@ -198,7 +198,7 @@ export async function POST(req: NextRequest) {
       // Pieces already sealed against this sheet: tags carrying its id, plus —
       // only when this customer has just the one sheet, where there is nothing
       // to misattribute — legacy tags matched by name key.
-      const { data: sameProduct } = await supabase
+      const { data: sameProduct } = await supabaseAdmin
         .from('cure_tags')
         .select('customer_name, linked_cutting_instruction_id')
         .eq('product', product)
@@ -222,7 +222,7 @@ export async function POST(req: NextRequest) {
   // than one stays null for a person to pick on Processing → In Cure.
   let linked_harvest_id: string | null = null
   if (ciId) {
-    const { data: asg } = await supabase
+    const { data: asg } = await supabaseAdmin
       .from('carcass_assignments')
       .select('harvest_log_id')
       .eq('linked_cutting_instruction_id', ciId)
@@ -231,7 +231,7 @@ export async function POST(req: NextRequest) {
   }
   // Or the session only ever had one carcass scanned into it — same arithmetic.
   if (!linked_harvest_id && session_date) {
-    const { data: carcasses } = await supabase
+    const { data: carcasses } = await supabaseAdmin
       .from('processing_inputs').select('linked_harvest_id')
       .eq('customer_name', customer_name.trim()).eq('session_date', session_date)
       .not('linked_harvest_id', 'is', null)
@@ -239,7 +239,7 @@ export async function POST(req: NextRequest) {
     if (heads.length === 1) linked_harvest_id = heads[0]
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('cure_tags')
     .insert([{
       tag_number,
@@ -290,7 +290,7 @@ export async function PATCH(req: NextRequest) {
   // null unpins — a wrong animal has to be as easy to take back as to set.
   if (linked_harvest_id !== undefined) updates.linked_harvest_id = linked_harvest_id || null
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('cure_tags').update(updates).eq('id', id).select().single()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json(data)
@@ -301,7 +301,7 @@ export async function DELETE(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const id = searchParams.get('id')
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
-  const { error } = await supabase.from('cure_tags').delete().eq('id', id)
+  const { error } = await supabaseAdmin.from('cure_tags').delete().eq('id', id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ ok: true })
 }

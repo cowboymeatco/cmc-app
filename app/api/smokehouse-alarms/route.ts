@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
   const channel = searchParams.get('channel')
   const cutoff = new Date(Date.now() - days * 86_400_000).toISOString()
 
-  let q = supabase
+  let q = supabaseAdmin
     .from('smokehouse_alarm_v')
     .select('id, raised_at, cleared_at, code, message, severity, channel, value_f, setpoint_f, cook_id, cook_file')
     .gte('raised_at', cutoff)
@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
   // a quiet zero on a page about alarms is worse than saying nothing.
   const [{ data, error }, { count: everImportedCount }] = await Promise.all([
     q,
-    supabase.from('smokehouse_alarm').select('id', { count: 'exact', head: true }),
+    supabaseAdmin.from('smokehouse_alarm').select('id', { count: 'exact', head: true }),
   ])
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 

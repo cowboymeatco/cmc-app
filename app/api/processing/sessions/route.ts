@@ -1,13 +1,13 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 export const dynamic = 'force-dynamic'
 
 // GET â€” merged list of sessions (processing_sessions records + derived from boxes)
 export async function GET() {
   // 1. Fetch session records
-  const { data: sessionRows } = await supabase
+  const { data: sessionRows } = await supabaseAdmin
     .from('processing_sessions')
     .select('*')
     .order('session_date', { ascending: false })
@@ -25,7 +25,7 @@ export async function GET() {
   //    scanner and on Load Out (Jill, 2026-09-09). A year back is as far as
   //    the list itself reaches.
   const since = new Date(Date.now() - 365 * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Denver' })
-  const { data: statRows } = await supabase
+  const { data: statRows } = await supabaseAdmin
     .from('v_box_session_stats')
     .select('customer_name, session_date, box_count, closed_count, total_weight, total_cuts')
     .gte('session_date', since)
@@ -45,7 +45,7 @@ export async function GET() {
 
   // 3. Carcass inputs per session — so the freezer list shows which animals
   // are in each customer's boxes (e.g. "Beef — Tag 06 (Holdbrook)")
-  const { data: carcassRows } = await supabase
+  const { data: carcassRows } = await supabaseAdmin
     .from('processing_inputs')
     .select('customer_name, session_date, description, weight_lbs')
     .eq('input_type', 'carcass')
@@ -112,7 +112,7 @@ export async function POST(req: NextRequest) {
   if (body.linked_appointment_id) row.linked_appointment_id = body.linked_appointment_id
   if (body.linked_cutting_instruction_id) row.linked_cutting_instruction_id = body.linked_cutting_instruction_id
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('processing_sessions')
     .upsert(
       [row],
@@ -130,7 +130,7 @@ export async function PATCH(req: NextRequest) {
   const body = await req.json()
   const { id, customer_name, session_date, ...updates } = body
 
-  let query = supabase
+  let query = supabaseAdmin
     .from('processing_sessions')
     .update({ ...updates, updated_at: new Date().toISOString() })
 
@@ -155,7 +155,7 @@ export async function DELETE(req: NextRequest) {
   const customer_name = searchParams.get('customer_name')
   const session_date  = searchParams.get('session_date')
 
-  let query = supabase.from('processing_sessions').delete()
+  let query = supabaseAdmin.from('processing_sessions').delete()
   if (id) {
     query = query.eq('id', id)
   } else if (customer_name && session_date) {

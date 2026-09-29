@@ -1,6 +1,6 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { isoDate } from '@/lib/dates'
 import { julianYYDDD } from '@/lib/label'
 import { cardsForAnimal, carcassesForCard, fillSessionLinks } from '@/lib/sessionLinks'
@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
   const harvestIds    = (searchParams.get('harvest_log_ids') ?? '')
     .split(',').map(v => v.trim()).filter(Boolean)
 
-  let query = supabase
+  let query = supabaseAdmin
     .from('processing_inputs')
     .select('*')
     .order('created_at', { ascending: true })
@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
 
   // If a CMC box identifier was scanned, look up the receiving record
   if (identifier && /^CMC-/.test(identifier) && !description) {
-    const { data: box } = await supabase
+    const { data: box } = await supabaseAdmin
       .from('box_receiving_log')
       .select('id, product, vendor, weight_lbs')
       .eq('box_identifier', identifier)
@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
   // Legacy format: CT-{harvest_log_id}
   if (identifier && /^CT-/.test(identifier) && !description) {
     const harvestId = identifier.replace(/^CT-/, '').replace(/-[LR]$/, '')
-    const { data: harvest } = await supabase
+    const { data: harvest } = await supabaseAdmin
       .from('harvest_log')
       .select('id, species, carcass_tag, hot_carcass_weight_lbs, producer, appointment_id')
       .eq('id', harvestId)
@@ -106,7 +106,7 @@ export async function POST(req: NextRequest) {
   // scan of the other side both behave exactly as they would have.
   const linkSide: string | null = /^[LR]$/i.test(body.side ?? '') ? String(body.side).toUpperCase() : null
   if (!identifier && body.harvest_log_id) {
-    const { data: harvest } = await supabase
+    const { data: harvest } = await supabaseAdmin
       .from('harvest_log')
       .select('id, species, carcass_tag, harvest_date, hot_carcass_weight_lbs, producer, appointment_id')
       .eq('id', body.harvest_log_id)
@@ -132,7 +132,7 @@ export async function POST(req: NextRequest) {
     // denominator twice and read as a plausible-but-wrong number, so it's
     // refused rather than deduped — the caller is a button, not a scan gun, and
     // a second press means the first one already worked.
-    const { data: dupe } = await supabase
+    const { data: dupe } = await supabaseAdmin
       .from('processing_inputs')
       .select('id, customer_name, pack_date')
       .eq('linked_harvest_id', harvest.id)
@@ -168,7 +168,7 @@ export async function POST(req: NextRequest) {
     side = julMatch[4] ?? null
   }
   if (harvestDate && tag) {
-    const { data: harvest } = await supabase
+    const { data: harvest } = await supabaseAdmin
       .from('harvest_log')
       .select('id, species, carcass_tag, hot_carcass_weight_lbs, producer, appointment_id')
       .eq('harvest_date', harvestDate)
@@ -192,7 +192,7 @@ export async function POST(req: NextRequest) {
   // quarters of one half are cut under two customers' sessions.
   const sessionName = typeof body.customer_name === 'string' ? body.customer_name.trim() : null
   if (identifier && sessionName) {
-    const { data: same } = await supabase
+    const { data: same } = await supabaseAdmin
       .from('processing_inputs')
       .select('id')
       .eq('customer_name', sessionName)
@@ -220,7 +220,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('processing_inputs')
     .insert([{
       session_date:          body.session_date          ?? isoDate(),
@@ -259,12 +259,12 @@ export async function POST(req: NextRequest) {
   // have been scanned (the other half may still be hanging until then).
   let cooler_pulled = false
   if (linked_harvest_id) {
-    const { data: siblings } = await supabase
+    const { data: siblings } = await supabaseAdmin
       .from('processing_inputs')
       .select('box_identifier')
       .eq('linked_harvest_id', linked_harvest_id)
     if (allSidesScanned(siblings ?? [])) {
-      const { data: pulled } = await supabase
+      const { data: pulled } = await supabaseAdmin
         .from('harvest_log')
         .update({ status: 'cut' })
         .eq('id', linked_harvest_id)
@@ -296,13 +296,13 @@ export async function DELETE(req: NextRequest) {
   const id = searchParams.get('id')
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
 
-  const { data: row } = await supabase
+  const { data: row } = await supabaseAdmin
     .from('processing_inputs')
     .select('id, linked_harvest_id')
     .eq('id', id)
     .maybeSingle()
 
-  const { error } = await supabase
+  const { error } = await supabaseAdmin
     .from('processing_inputs')
     .delete()
     .eq('id', id)
@@ -312,12 +312,12 @@ export async function DELETE(req: NextRequest) {
   // If this scan is what pulled a carcass off the cooler rail, undoing the
   // scan hangs it back up (only touches status 'cut', never 'complete').
   if (row?.linked_harvest_id) {
-    const { data: siblings } = await supabase
+    const { data: siblings } = await supabaseAdmin
       .from('processing_inputs')
       .select('box_identifier')
       .eq('linked_harvest_id', row.linked_harvest_id)
     if (!allSidesScanned(siblings ?? [])) {
-      await supabase
+      await supabaseAdmin
         .from('harvest_log')
         .update({ status: 'chilling' })
         .eq('id', row.linked_harvest_id)

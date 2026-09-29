@@ -2,7 +2,6 @@
 // customers and needs more than the edge time budget.
 export const maxDuration = 60
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
 // producer_qbo_links is under RLS; the anon key can no longer write it and
 // this route is staff-side QuickBooks linking. Server-side only.
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
@@ -36,7 +35,7 @@ const scopeOf = (v: string | null): Scope => (v === 'customers' ? 'customers' : 
 async function namesForScope(scope: Scope): Promise<{ name: string; harvestCount: number }[]> {
   const counts = new Map<string, number>()
   if (scope === 'producers') {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('harvest_log').select('producer').not('producer', 'is', null).neq('producer', '')
       .is('legacy_source', null)   // imported owner names are free-typed history, not linkable producers
     if (error) throw new Error(error.message)
@@ -44,7 +43,7 @@ async function namesForScope(scope: Scope): Promise<{ name: string; harvestCount
   } else {
     // One row per carcass per customer slot on its appointment. A split animal
     // legitimately counts for each buyer on it.
-    const { data, error } = await supabase.rpc('cut_customer_carcass_counts')
+    const { data, error } = await supabaseAdmin.rpc('cut_customer_carcass_counts')
     if (error) throw new Error(error.message)
     for (const r of (data ?? []) as { customer_name: string; carcasses: number }[]) {
       if (r.customer_name) counts.set(r.customer_name, r.carcasses)
@@ -71,7 +70,7 @@ export async function GET(req: NextRequest) {
   try {
     const search = req.nextUrl.searchParams.get('search')
     if (search != null) {
-      const { data, error } = await supabase
+      const { data, error } = await supabaseAdmin
         .from('qbo_customers')
         .select('qbo_id, display_name, company_name, phone, balance')
         .eq('active', true)
@@ -99,10 +98,10 @@ export async function GET(req: NextRequest) {
     const norms = [...new Set(producers.map(p => norm(p.name)))]
     const [{ data: matches, error: mErr }, { data: linkedQbo, error: lqErr }] = await Promise.all([
       norms.length
-        ? supabase.from('qbo_customers').select('qbo_id, display_name, norm_name, balance').eq('active', true).in('norm_name', norms)
+        ? supabaseAdmin.from('qbo_customers').select('qbo_id, display_name, norm_name, balance').eq('active', true).in('norm_name', norms)
         : Promise.resolve({ data: [], error: null }),
       linkedQboIds.length
-        ? supabase.from('qbo_customers').select('qbo_id, display_name, balance').in('qbo_id', linkedQboIds)
+        ? supabaseAdmin.from('qbo_customers').select('qbo_id, display_name, balance').in('qbo_id', linkedQboIds)
         : Promise.resolve({ data: [], error: null }),
     ])
     if (mErr) throw new Error(mErr.message)
@@ -138,7 +137,7 @@ export async function GET(req: NextRequest) {
     // returned with their score so a weak one looks weak: the top candidate for
     // "Wendy Racki" is a different Racki entirely.
     if (unmatched.length) {
-      const { data: cands, error: cErr } = await supabase.rpc('qbo_customer_candidates', {
+      const { data: cands, error: cErr } = await supabaseAdmin.rpc('qbo_customer_candidates', {
         names: unmatched.map(u => u.name),
       })
       if (cErr) throw new Error(cErr.message)
@@ -149,7 +148,7 @@ export async function GET(req: NextRequest) {
       for (const u of unmatched) (u as Record<string, unknown>).candidates = byName.get(u.name) ?? []
     }
 
-    const { data: syncRow } = await supabase.from('qbo_customers').select('synced_at').order('synced_at', { ascending: false }).limit(1)
+    const { data: syncRow } = await supabaseAdmin.from('qbo_customers').select('synced_at').order('synced_at', { ascending: false }).limit(1)
     return NextResponse.json({ scope, linked, suggestions, unmatched, syncedAt: syncRow?.[0]?.synced_at ?? null })
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 })
@@ -184,7 +183,7 @@ export async function POST(req: NextRequest) {
         synced_at: new Date().toISOString(),
       }))
       for (let i = 0; i < rows.length; i += 500) {
-        const { error } = await supabase.from('qbo_customers').upsert(rows.slice(i, i + 500), { onConflict: 'qbo_id' })
+        const { error } = await supabaseAdmin.from('qbo_customers').upsert(rows.slice(i, i + 500), { onConflict: 'qbo_id' })
         if (error) throw new Error(error.message)
       }
       return NextResponse.json({ ok: true, count: rows.length, active: rows.filter(r => r.active).length })
