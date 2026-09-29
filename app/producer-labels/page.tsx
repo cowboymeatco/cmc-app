@@ -26,6 +26,8 @@ interface SetCard {
 interface ProducerSet {
   id: string; name: string; label_format: string | null; plu_block_start: number
   loaded_at: string | null; notes: string | null
+  /** False when the format prints no barcode; the scanner then sends the floor to MEAT BOX. */
+  prints_barcode?: boolean | null
   items: SetItem[]; cards: SetCard[]
 }
 interface Unmatched { label: string; cards: number }
@@ -226,6 +228,13 @@ function SetPanel({ set: s, house, busy, run, scale }: {
             <span style={{ fontSize: '0.8rem', color: C.lightBrown, fontFamily: 'monospace' }}>
               PLUs {s.plu_block_start}–{s.plu_block_start + 999}
             </span>
+            {/* The scanner reads this: a format with no barcode can't be scanned,
+                so its banner sends the floor to MEAT BOX on the house label. */}
+            <button disabled={busy} style={btn('transparent', s.prints_barcode === false ? C.amber : C.lightBrown)}
+              title="Does this label format print a barcode on the package? If not, the scanner tells the crew to weigh finished boxes as MEAT BOX (PLU 1) on the house label."
+              onClick={() => run({ action: 'update_set', id: s.id, prints_barcode: s.prints_barcode === false })}>
+              {s.prints_barcode === false ? '⚠ No barcode on this label' : '▮▯ Prints a barcode'}
+            </button>
             <button disabled={busy} style={btn('transparent', C.tan)} onClick={() => setEditing(true)}>✏️ Edit</button>
           </>
         )}

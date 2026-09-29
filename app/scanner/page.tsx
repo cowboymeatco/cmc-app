@@ -10,7 +10,7 @@ import CustomerPicker, { resolveCiScan, type CustomerName } from './CustomerPick
 import AnimalStart, { type AnimalPick } from './AnimalStart'
 import { isCarcassTag } from '@/lib/carcassTag'
 import { weightInName } from '@/lib/label'
-import { WHOLE_BOX_FALLBACK_PLU, WHOLE_BOX_PLU, labelKey, type ScannerProducerSet } from '@/lib/producerLabels'
+import { WHOLE_BOX_PLUS, labelKey, type ScannerProducerSet } from '@/lib/producerLabels'
 const C = {
   dark:       '#1A0A04',
   darkBrown:  '#351E0E',
@@ -1037,7 +1037,7 @@ export default function ScannerPage() {
   const [producerSets, setProducerSets] = useState<ScannerProducerSet[]>([])
   const producerRef = useRef<{
     byPlu: Record<string, { house_plu: string; key: string; name: string }>
-    byKey: Record<string, { name: string; houseToPlu: Record<string, string> }>
+    byKey: Record<string, { name: string; houseToPlu: Record<string, string>; noBarcode: boolean }>
   }>({ byPlu: {}, byKey: {} })
   const sessionLabelKeysRef = useRef<string[]>([])
   useEffect(() => {
@@ -1051,7 +1051,7 @@ export default function ScannerPage() {
           byPlu[it.plu_number] = { house_plu: it.house_plu, key: st.key, name: st.name }
           houseToPlu[it.house_plu] = it.plu_number
         }
-        byKey[st.key] = { name: st.name, houseToPlu }
+        byKey[st.key] = { name: st.name, houseToPlu, noBarcode: st.prints_barcode === false }
       }
       producerRef.current = { byPlu, byKey }
       setProducerSets(sets)
@@ -1060,13 +1060,13 @@ export default function ScannerPage() {
   useEffect(() => {
     sessionLabelKeysRef.current = (expected?.scaleLabels ?? []).map(labelKey)
   }, [expected])
-  // The producer this session packs for, when its card names one. Their label
-  // can't be scanned, so the card's cut list can never tick off — the panel
+  // The producer this session packs for, when its card names one whose label
+  // prints no barcode (producer_labels.prints_barcode). Their label can't be
+  // scanned, so the card's cut list can never tick off — the panel
   // asks for one whole-box label per box instead.
   const boxOnlyProducer = useMemo(() => {
     const keys = (expected?.scaleLabels ?? []).map(labelKey)
-    return producerSets.find(st => keys.includes(st.key))?.name
-      ?? expected?.scaleLabels?.find(l => l.trim()) ?? null
+    return producerSets.find(st => keys.includes(st.key) && st.prints_barcode === false)?.name ?? null
   }, [expected, producerSets])
   const boxOnlyRef = useRef(false)
   useEffect(() => { boxOnlyRef.current = !!boxOnlyProducer }, [boxOnlyProducer])
@@ -1074,7 +1074,7 @@ export default function ScannerPage() {
   // The PLU a scanned package is recorded under, and what's wrong with its
   // label for this session, if anything. Refs only — doScan is a stable callback.
   function resolveProducerPlu(scanned: string): { plu: string; labelWarn: string | null } {
-    const { byPlu } = producerRef.current
+    const { byPlu, byKey } = producerRef.current
     const sessionKeys = sessionLabelKeysRef.current
     const theirs = byPlu[scanned]
     if (theirs) {
@@ -1083,10 +1083,14 @@ export default function ScannerPage() {
         labelWarn: sessionKeys.includes(theirs.key) ? null : `ON ${theirs.name.toUpperCase()}'S LABEL — not this session's`,
       }
     }
-    // A house label in a producer session used to be sent back for a reprint
-    // on the producer's PLU — but the producer's label has no barcode, so the
-    // house label is the only one that can be scanned at all. It goes in
-    // quietly; see WHOLE_BOX_PLU.
+    for (const k of sessionKeys) {
+      const set = byKey[k]
+      // A label that prints no barcode can't be the one scanned, so a house
+      // label is the only way in — nothing to flag.
+      if (set?.noBarcode) continue
+      const should = set?.houseToPlu[scanned]
+      if (should) return { plu: scanned, labelWarn: `HOUSE LABEL — ${set.name} packs on PLU ${should}: reprint it` }
+    }
     return { plu: scanned, labelWarn: null }
   }
   function checkOffCard(scan: ScanLine, plu: string, itemName: string): boolean {
@@ -1967,6 +1971,8 @@ export default function ScannerPage() {
   async function closeBox() {
     const box = activeBox
     if (!box || box.is_closed) return
+    // Closing an empty box printed a 0-cut label; there's nothing to label.
+    if (!scansRef.current.length) { await retireEmptyBox(box, 'Nothing is scanned into this box. '); return }
     setTakeOut(false)
     const snap = scansRef.current
     const res  = await fetch('/api/boxes', {
@@ -2006,6 +2012,9 @@ export default function ScannerPage() {
     const box = activeBox
     if (!box || box.is_closed) return
     const left = scansRef.current
+    // Nothing listed and nothing in it: there's nothing missing to write off,
+    // the box is just done with.
+    if (!left.length) { await retireEmptyBox(box); return }
     const lbs  = left.reduce((s, sc) => s + (Number(sc.weight_lbs) || 0), 0)
     const what = left.length
       ? `${left.length} package${left.length !== 1 ? 's' : ''} · ${lbs.toFixed(2)} lb`
@@ -2025,16 +2034,51 @@ export default function ScannerPage() {
       setFlash('bad'); setTimeout(() => setFlash(null), 4000)
       return
     }
+    await dropRetiredBox(box)
+    setLastKind('warn')
+    setLastItem(`Box ${box.box_number} written off — ${what} recorded as missing`)
+    setFlash('warn'); setTimeout(() => setFlash(null), 5000)
+  }
+
+  // Off the screen once the server has retired it, onto the next box.
+  async function dropRetiredBox(box: BoxRecord) {
     const remaining = boxesRef.current.filter(b => b.id !== box.id)
     setBoxes(remaining)
     setSessionScans(prev => prev.filter(sc => sc.box_id !== box.id))
     const next = remaining[remaining.length - 1] ?? null
     if (next) await switchBox(next)
     else { setActiveBox(null); setScans([]) }
-    setLastKind('warn')
-    setLastItem(`Box ${box.box_number} written off — ${what} recorded as missing`)
-    setFlash('warn'); setTimeout(() => setFlash(null), 5000)
     loadSessions()
+  }
+
+  // ── An empty box: retire it ──────────────────────────────────────────────────
+  // Charlie, 2026-09-28: "on the empty box just retire." A box with nothing in
+  // it kept counting as a box on the session, the freezer list and Load Out,
+  // and closing it printed a 0-cut label under its serial. It goes through the
+  // write-off route (reason 'other', no lines) so the serial it wore is still
+  // on record, and it offers itself when the last package comes out rather
+  // than waiting for someone to find a button.
+  async function retireEmptyBox(box: BoxRecord, why = '') {
+    if (!window.confirm(
+      `${why}Box ${box.box_number} is empty — retire it?\n\n` +
+      `It comes off this session, the freezer list and Load Out, and its label can't be printed again. ` +
+      `Cancel keeps it open to fill.`)) return false
+    setTakeOut(false)
+    const res = await fetch('/api/boxes/writeoff', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ box_id: box.id, reason: 'other', note: 'Empty box retired' }),
+    })
+    const data = await res.json().catch(() => ({} as { error?: string }))
+    if (!res.ok) {
+      setLastKind('bad'); setLastItem((data as { error?: string }).error ?? 'Could not retire that box')
+      setFlash('bad'); setTimeout(() => setFlash(null), 4000)
+      return false
+    }
+    await dropRetiredBox(box)
+    setLastKind('ok')
+    setLastItem(`Box ${box.box_number} was empty — retired`)
+    setFlash('ok'); setTimeout(() => setFlash(null), 3000)
+    return true
   }
 
   // ── Reopen a closed box ──────────────────────────────────────────────────────
@@ -2331,6 +2375,8 @@ export default function ScannerPage() {
     setFlash('ok'); setLastKind('ok')
     setLastItem(`➖ Took out ${hit.item_name} · ${Number(hit.weight_lbs).toFixed(2)} lb from Box ${box.box_number}`)
     setTimeout(() => setFlash(null), 2500)
+    // That was the last one out.
+    if (lines.length === 1) await retireEmptyBox(box, 'That was the last package. ')
   }
 
   // ── Unpack a produced box for repack ─────────────────────────────────────────
@@ -3558,7 +3604,14 @@ export default function ScannerPage() {
             const nums = set?.items.map(i => Number(i.plu_number)).filter(Number.isFinite) ?? []
             return (
               <span key={l} style={{ fontSize: '0.75rem', fontWeight: 600, letterSpacing: 0 }}>
-                {!set
+                {/* Blegen's and Hollenbeck's formats print no barcode, and this
+                    line used to send the crew to exactly those labels (AE,
+                    2026-09-29: "Blegens has no scan code on label"). Both whole-
+                    box labels count the same (Charlie: assorted cuts is treated
+                    like the meat box). */}
+                {set && !set.prints_barcode
+                  ? `⚠ ${set.name} labels print with NO barcode — nothing off them will scan. Weigh the finished box on the HOUSE label as MEAT BOX (PLU 1)${!expected?.species?.length || expected.species.some(sp => /beef/i.test(sp)) ? ' or BEEF ASSORTED CUTS (PLU 207)' : ''} and scan that.`
+                : !set
                   ? 'Switch the scale to this label — not the house label.'
                   : !set.loaded_at
                     ? `⚠ ${set.name}'s PLUs aren't marked as on the scales — load them (Producer Labels) before packing.`
@@ -4181,11 +4234,8 @@ export default function ScannerPage() {
           never tick off. One whole-box label per box goes over the gun
           instead, and every pound of it counts toward the yield. */}
       {expected && boxOnlyProducer && (() => {
-        const species = expected.species[0] ?? 'beef'
-        const plu     = WHOLE_BOX_PLU[species] ?? WHOLE_BOX_FALLBACK_PLU
-        const name    = pluMap[plu] ?? (plu === WHOLE_BOX_FALLBACK_PLU ? 'MEAT BOX' : `PLU ${plu}`)
-        const wholeBox = new Set([...Object.values(WHOLE_BOX_PLU), WHOLE_BOX_FALLBACK_PLU])
-        const packed  = sessionScans.filter(sc => wholeBox.has(sc.plu_number))
+        const beef    = !expected.species.length || expected.species.some(sp => /beef/i.test(sp))
+        const packed  = sessionScans.filter(sc => WHOLE_BOX_PLUS.has(sc.plu_number))
         const lbs     = packed.reduce((t, sc) => t + (Number(sc.weight_lbs) || 0), 0)
         return (
           <div style={{
@@ -4197,8 +4247,8 @@ export default function ScannerPage() {
               PACK BY THE BOX · {boxOnlyProducer.toUpperCase()}
             </span>
             <div style={{ color: C.cream, fontSize: '0.95rem', lineHeight: 1.45 }}>
-              {boxOnlyProducer}&apos;s labels print no barcode. Weigh each finished box as
-              {' '}<strong>{name}</strong> (PLU <strong style={{ fontFamily: 'monospace' }}>{plu}</strong>) and scan that label.
+              {boxOnlyProducer}&apos;s labels print no barcode. Weigh each finished box on the house label as
+              {' '}<strong>MEAT BOX</strong> (PLU 1){beef && <> or <strong>BEEF ASSORTED CUTS</strong> (PLU 207)</>} and scan that.
             </div>
             <div style={{ color: C.lightBrown, fontSize: '0.8rem', lineHeight: 1.45 }}>
               Every pound goes toward the yield. Which cuts are in each box isn&apos;t tracked for this producer.
