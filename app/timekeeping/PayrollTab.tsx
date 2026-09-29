@@ -1,5 +1,5 @@
 'use client'
-// Weekly payroll export for the /timekeeping mockup.
+// Weekly payroll export for /timekeeping.
 //
 // One row per employee for a QuickBooks pay week, in the pay types the
 // QuickBooks Payroll run already uses: Regular Pay, Overtime Pay, Paid time
@@ -12,8 +12,8 @@
 import { useState } from 'react'
 import { addDaysISO, dateLabel } from '@/lib/dates'
 import { Shift, calcShift, splitOvertime } from '@/lib/timekeeping'
-import { C, EMPLOYEES, card, h2, th, td, btn, Pill } from './shared'
-import { TimeOffRequest } from './ScheduleTab'
+import { TimeOffRequest, TkEmployee } from '@/lib/timeclock'
+import { C, card, h2, th, td, btn, Pill } from './shared'
 
 interface PayRow {
   empId:   string
@@ -29,8 +29,10 @@ interface PayRow {
 
 const h2dec = (h: number) => h.toFixed(2)
 
-function buildRows(shifts: Shift[], requests: TimeOffRequest[], from: string, to: string, nowHHMM: string): PayRow[] {
-  return EMPLOYEES.map(e => {
+function buildRows(employees: TkEmployee[], shifts: Shift[], requests: TimeOffRequest[], from: string, to: string, nowHHMM: string): PayRow[] {
+  // Everyone active, plus anyone deactivated who still has hours in this week.
+  const who = employees.filter(e => e.active || shifts.some(s => s.empId === e.id && s.date >= from && s.date <= to))
+  return who.map(e => {
     const mine = shifts.filter(s => s.empId === e.id && s.date >= from && s.date <= to)
     const issues: string[] = [], notes: string[] = []
     let worked = 0, upto = 0
@@ -65,15 +67,16 @@ function csvCell(v: string | number): string {
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 
-export function PayrollTab({ shifts, requests, thisMonday, today, now }: {
-  shifts: Shift[]; requests: TimeOffRequest[]; thisMonday: string; today: string; now: string | null
+export function PayrollTab({ employees, shifts, requests, thisMonday, today, now, earliest }: {
+  employees: TkEmployee[]; shifts: Shift[]; requests: TimeOffRequest[]; thisMonday: string; today: string; now: string | null
+  earliest: string  // oldest shift date loaded; weeks before it can't be shown
 }) {
   // Default to the last full pay week — the one being paid this Wednesday.
   const [weekStart, setWeekStart] = useState(addDaysISO(thisMonday, -7))
   const weekEnd = addDaysISO(weekStart, 6)
   const payDate = addDaysISO(weekEnd, 3)
   const inProgress = weekEnd >= today
-  const rows = buildRows(shifts, requests, weekStart, weekEnd, now ?? '00:00')
+  const rows = buildRows(employees, shifts, requests, weekStart, weekEnd, now ?? '00:00')
   const withHours = rows.filter(r => r.regular + r.overtime + r.pto + r.unpaid > 0)
   const blocked = rows.filter(r => r.issues.length)
   const totals = withHours.reduce((t, r) => ({
@@ -99,7 +102,8 @@ export function PayrollTab({ shifts, requests, thisMonday, today, now }: {
   }
 
   const printSheet = () => {
-    const body = withHours.map(r => `<tr><td class="n">${r.name}</td><td>${h2dec(r.regular)}</td><td>${h2dec(r.overtime)}</td><td>${h2dec(r.pto)}</td><td>${h2dec(r.unpaid)}</td><td class="chk"></td></tr>`).join('')
+    const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const body = withHours.map(r => `<tr><td class="n">${esc(r.name)}</td><td>${h2dec(r.regular)}</td><td>${h2dec(r.overtime)}</td><td>${h2dec(r.pto)}</td><td>${h2dec(r.unpaid)}</td><td class="chk"></td></tr>`).join('')
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>Payroll ${weekStart}</title><style>
       @page { size: letter portrait; margin: 0.6in; }
       body { font-family: Arial, sans-serif; color: #000; }
@@ -128,7 +132,7 @@ export function PayrollTab({ shifts, requests, thisMonday, today, now }: {
     <div style={card}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '0.4rem' }}>
         <h2 style={{ ...h2, margin: 0 }}>Payroll export</h2>
-        <button style={btn(C.medBrown)} onClick={() => setWeekStart(w => addDaysISO(w, -7))}>←</button>
+        <button style={btn(C.medBrown)} onClick={() => setWeekStart(w => addDaysISO(w, -7))} disabled={weekStart <= earliest}>←</button>
         <span style={{ color: C.cream, fontWeight: 700, textAlign: 'center' }}>
           {dateLabel(weekStart, { month: 'short', day: 'numeric' })} – {dateLabel(weekEnd, { month: 'short', day: 'numeric' })}
         </span>

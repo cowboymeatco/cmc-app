@@ -1,48 +1,11 @@
-// Shared pieces of the /timekeeping mockup: palette, made-up employees and the
-// small UI bits every tab uses. Not a page — page.tsx can only export the page.
+// Shared pieces of /timekeeping: palette, the small UI bits every tab uses,
+// and the fetch helper. Not a page — page.tsx can only export the page.
 
-import { addDaysISO } from '@/lib/dates'
-import { WeekHours, ptoEarned } from '@/lib/timekeeping'
+import { BREAK_RULES, Shift, ShiftCalc } from '@/lib/timekeeping'
 
 export const C = {
   dark: '#1A0A04', darkBrown: '#351E0E', medBrown: '#75471B', lightBrown: '#A6785A',
   tan: '#C9A882', cream: '#F2E8D9', green: '#4CAF50', amber: '#F59E0B', red: '#EF4444', blue: '#60A5FA',
-}
-
-// ── Mock data ───────────────────────────────────────────────────────────────
-
-export interface Employee {
-  id: string; name: string; role: string; hireDate: string; wage: number
-  weeklyHours: number   // typical week, drives the made-up history
-  ptoUsed: number       // PTO hours used this year
-  pin: string           // personal punch PIN — mockup only; a real build stores a hash
-}
-
-export const EMPLOYEES: Employee[] = [
-  { id: 'e1', name: 'Sample Employee A', role: 'Cutter',          hireDate: '2025-03-10', wage: 19,   weeklyHours: 40,   ptoUsed: 16, pin: '1111' },
-  { id: 'e2', name: 'Sample Employee B', role: 'Lead Cutter',     hireDate: '2019-06-03', wage: 24,   weeklyHours: 46.2, ptoUsed: 40, pin: '2222' },
-  { id: 'e3', name: 'Sample Employee C', role: 'Wrap & Pack',     hireDate: '2023-11-15', wage: 17,   weeklyHours: 30.8, ptoUsed: 8, pin: '3333' },
-  { id: 'e4', name: 'Sample Employee D', role: 'Harvest Floor',   hireDate: '2011-04-18', wage: 26,   weeklyHours: 40,   ptoUsed: 64, pin: '4444' },
-  { id: 'e5', name: 'Sample Employee E', role: 'Cleaning (PT)',   hireDate: '2026-05-01', wage: 16.5, weeklyHours: 20,   ptoUsed: 0, pin: '5555' },
-]
-
-// Deterministic wobble so the history looks like real weeks without Math.random
-// (which would also break hydration).
-function wobble(seed: number): number {
-  const x = Math.sin(seed * 9301 + 49297) * 233280
-  return (x - Math.floor(x)) - 0.5
-}
-
-/** 52 weeks of made-up hours ending last week, skipping weeks before hire. */
-export function mockHistory(e: Employee, thisMonday: string): WeekHours[] {
-  const weeks: WeekHours[] = []
-  for (let i = 52; i >= 1; i--) {
-    const weekStart = addDaysISO(thisMonday, -7 * i)
-    if (weekStart < e.hireDate) continue
-    const hours = Math.max(0, Math.round((e.weeklyHours + wobble(i * 7 + e.id.charCodeAt(1)) * 6) * 4) / 4)
-    weeks.push({ weekStart, hours })
-  }
-  return weeks
 }
 
 export const card: React.CSSProperties = { background: C.dark, border: '1px solid rgba(166,120,90,0.3)', borderRadius: 4, padding: '1rem 1.1rem', marginBottom: '1rem' }
@@ -67,7 +30,47 @@ export function Stat({ label, value, sub, color = C.cream }: { label: string; va
   )
 }
 
-/** PTO balance through last week (mock: 52 weeks of history minus hours used). */
-export function ptoBalance(e: Employee, thisMonday: string): number {
-  return ptoEarned(e.hireDate, mockHistory(e, thisMonday)) - e.ptoUsed
+export function BreakPills({ c }: { c: ShiftCalc }) {
+  const allowance = c.owed.paidBreaks * BREAK_RULES.paidBreakMinutes
+  if (allowance === 0 && !c.owed.lunch && c.breakMinutes === 0) return <span style={{ color: C.lightBrown, fontSize: '0.8rem' }}>none yet</span>
+  const tookLunch = c.lunchUnpaid && c.lunchMinutes > 0
+  return (
+    <>
+      {(allowance > 0 || c.breakMinutes > 0) && (
+        <Pill color={c.uptoMinutes > 0 ? C.red : c.breakMinutes === allowance ? C.green : C.amber}>
+          Breaks {c.breakMinutes}/{allowance} min
+        </Pill>
+      )}
+      {c.uptoMinutes > 0 && <Pill color={C.red}>{c.uptoMinutes} min UPTO</Pill>}
+      {c.owed.lunch && <Pill color={tookLunch ? C.green : C.amber}>Lunch {tookLunch ? '✓' : 'owed'}</Pill>}
+    </>
+  )
+}
+
+/** "09:30–09:45, 14:00–14:15" */
+export function breakTimes(s: Shift): string {
+  return s.breaks.length ? s.breaks.map(b => `${b.start}–${b.end ?? '…'}`).join(', ') : '—'
+}
+
+/**
+ * JSON fetch that throws the server's message on failure. `status` rides on
+ * the error so callers can tell "signed out" (401) from a real problem.
+ */
+export async function api<T = unknown>(path: string, init: RequestInit & { token?: string } = {}): Promise<T> {
+  const { token, headers, ...rest } = init
+  const res = await fetch(path, {
+    ...rest,
+    headers: {
+      ...(rest.body && !(rest.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}),
+      ...(token ? { 'x-timeclock-token': token } : {}),
+      ...headers,
+    },
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    const err = new Error(data.message || data.error || `Request failed (${res.status})`) as Error & { status?: number }
+    err.status = res.status
+    throw err
+  }
+  return data as T
 }

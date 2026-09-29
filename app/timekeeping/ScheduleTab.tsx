@@ -1,5 +1,5 @@
 'use client'
-// Schedule + time-off requests for the /timekeeping mockup.
+// Schedule + time-off requests for /timekeeping.
 //
 // Managers build the week on the Schedule tab and approve or deny requests.
 // Employees see their own schedule and ask for time off at the kiosk, signed
@@ -7,126 +7,30 @@
 // the balance; pending PTO is held so nobody can ask for the same hours twice.
 
 import { useState } from 'react'
-import { addDaysISO, dateLabel, dayOfWeekISO } from '@/lib/dates'
-import { BREAK_RULES, fmt12, fmtHours, toMin } from '@/lib/timekeeping'
-import { C, Employee, EMPLOYEES, card, h2, th, td, btn, bigBtn, Pill } from './shared'
-
-// ── Types & rules ───────────────────────────────────────────────────────────
-
-export interface SchedShift { start: string; end: string } // HH:MM
-/** `${empId}|${YYYY-MM-DD}` → that day's shift. No entry = off. */
-export type Schedule = Record<string, SchedShift>
-
-export interface TimeOffRequest {
-  id:        string
-  empId:     string
-  type:      'PTO' | 'Unpaid'
-  days:      { date: string; hours: number }[] // fixed when submitted
-  note:      string
-  status:    'pending' | 'approved' | 'denied'
-  submitted: string // YYYY-MM-DD
-}
-
-export const key = (empId: string, date: string) => `${empId}|${date}`
-
-/** Paid hours for a scheduled shift: the 30-min unpaid lunch comes off a 6+ hour day. */
-export function scheduledHours(sh: SchedShift): number {
-  const span = (toMin(sh.end) - toMin(sh.start)) / 60
-  return span - BREAK_RULES.lunchMinutes / 60 >= BREAK_RULES.lunchAt ? span - BREAK_RULES.lunchMinutes / 60 : span
-}
-
-export function requestHours(r: TimeOffRequest): number {
-  return r.days.reduce((t, d) => t + d.hours, 0)
-}
-
-/**
- * Approved PTO splits at today: days already past were taken (they come off
- * the balance), days ahead are booked. Pending requests are held either way,
- * so nobody can ask for the same hours twice.
- */
-export function ptoHolds(empId: string, requests: TimeOffRequest[], today: string) {
-  let taken = 0, booked = 0, pending = 0
-  for (const r of requests) {
-    if (r.empId !== empId || r.type !== 'PTO' || r.status === 'denied') continue
-    for (const d of r.days) {
-      if (r.status === 'pending') pending += d.hours
-      else if (d.date < today) taken += d.hours
-      else booked += d.hours
-    }
-  }
-  return { taken, booked, pending }
-}
-
-/** The request (if any, not denied) covering this person on this day. */
-export function offOn(empId: string, date: string, requests: TimeOffRequest[]) {
-  for (const r of requests) {
-    if (r.empId !== empId || r.status === 'denied') continue
-    const d = r.days.find(x => x.date === date)
-    if (d) return { r, hours: d.hours }
-  }
-  return null
-}
-
-function rangeLabel(r: TimeOffRequest): string {
-  const first = r.days[0]?.date, last = r.days[r.days.length - 1]?.date
-  if (!first) return '—'
-  const f = (iso: string) => dateLabel(iso, { weekday: 'short', month: 'numeric', day: 'numeric' })
-  return first === last ? f(first) : `${f(first)} – ${f(last)}`
-}
-
-// ── Mock data ───────────────────────────────────────────────────────────────
-
-// Each person's usual week: day of week (1 = Mon) → shift.
-const USUAL: Record<string, Record<number, SchedShift>> = {
-  e1: { 1: { start: '07:00', end: '15:30' }, 2: { start: '07:00', end: '15:30' }, 3: { start: '07:00', end: '15:30' }, 4: { start: '07:00', end: '15:30' }, 5: { start: '07:00', end: '15:30' } },
-  e2: { 1: { start: '06:00', end: '16:00' }, 2: { start: '06:00', end: '16:00' }, 3: { start: '06:00', end: '16:00' }, 4: { start: '06:00', end: '16:00' }, 5: { start: '06:00', end: '13:00' } },
-  e3: { 1: { start: '08:00', end: '15:00' }, 2: { start: '08:00', end: '15:00' }, 3: { start: '08:00', end: '15:00' }, 4: { start: '08:00', end: '15:00' } },
-  e4: { 1: { start: '06:30', end: '15:00' }, 2: { start: '06:30', end: '15:00' }, 3: { start: '06:30', end: '15:00' }, 4: { start: '06:30', end: '15:00' }, 5: { start: '06:30', end: '15:00' } },
-  e5: { 1: { start: '16:00', end: '20:15' }, 3: { start: '16:00', end: '20:15' }, 5: { start: '16:00', end: '20:15' } },
-}
-
-/** Last week through three weeks out, everyone on their usual shifts. */
-export function mockSchedule(thisMonday: string): Schedule {
-  const s: Schedule = {}
-  for (let d = -7; d < 28; d++) {
-    const date = addDaysISO(thisMonday, d)
-    const dow = dayOfWeekISO(date)
-    for (const e of EMPLOYEES) {
-      const sh = USUAL[e.id]?.[dow]
-      if (sh) s[key(e.id, date)] = sh
-    }
-  }
-  return s
-}
-
-export function mockRequests(thisMonday: string, today: string): TimeOffRequest[] {
-  const next = (d: number) => addDaysISO(thisMonday, 7 + d)
-  const last = (d: number) => addDaysISO(thisMonday, d - 7)
-  return [
-    // Already taken, last week — these land in the payroll export.
-    { id: 'r0', empId: 'e3', type: 'PTO', status: 'approved', submitted: addDaysISO(today, -20), note: 'Dentist',
-      days: [{ date: last(3), hours: 6.5 }] },
-    { id: 'r0b', empId: 'e5', type: 'Unpaid', status: 'approved', submitted: addDaysISO(today, -15), note: 'Car trouble',
-      days: [{ date: last(2), hours: 4.25 }] },
-    { id: 'r1', empId: 'e4', type: 'PTO', status: 'approved', submitted: addDaysISO(today, -9), note: 'Elk hunt',
-      days: [{ date: next(0), hours: 8 }, { date: next(1), hours: 8 }] },
-    { id: 'r2', empId: 'e1', type: 'PTO', status: 'pending', submitted: addDaysISO(today, -1), note: 'Kid’s doctor appointment — back by noon',
-      days: [{ date: next(3), hours: 4 }] },
-    { id: 'r3', empId: 'e2', type: 'PTO', status: 'pending', submitted: today, note: 'Family in town',
-      days: [{ date: next(0), hours: 9.5 }, { date: next(1), hours: 9.5 }] },
-    { id: 'r4', empId: 'e5', type: 'Unpaid', status: 'pending', submitted: today, note: 'School event',
-      days: [{ date: next(2), hours: 4.25 }] },
-  ]
-}
+import { addDaysISO, dateLabel } from '@/lib/dates'
+import { fmt12, fmtHours, toMin } from '@/lib/timekeeping'
+import {
+  SchedShift, Schedule, TimeOffRequest, TkEmployee,
+  offOn, rangeLabel, requestDaysFromSchedule, requestHours, schedKey as key, scheduledHours,
+} from '@/lib/timeclock'
+import { C, api, card, h2, th, td, btn, bigBtn, Pill } from './shared'
 
 // ── Manager: build the week, decide requests ────────────────────────────────
 
-export function ScheduleTab({ schedule, setSchedule, requests, setRequests, thisMonday, today, freePto }: {
-  schedule: Schedule; setSchedule: React.Dispatch<React.SetStateAction<Schedule>>
-  requests: TimeOffRequest[]; setRequests: React.Dispatch<React.SetStateAction<TimeOffRequest[]>>
+export function ScheduleTab({ employees, schedule, requests, thisMonday, today, freePto, reload }: {
+  employees: TkEmployee[]; schedule: Schedule; requests: TimeOffRequest[]
   thisMonday: string; today: string
-  freePto: (e: Employee) => number
+  freePto: (e: TkEmployee) => number
+  reload: () => Promise<void>
 }) {
+  const EMPLOYEES = employees.filter(e => e.active)
+  const [err, setErr] = useState('')
+  const [saving, setSaving] = useState(false)
+  /** Write through the server, then refresh everything from the database. */
+  const write = async (fn: () => Promise<unknown>) => {
+    setSaving(true); setErr('')
+    try { await fn(); await reload() } catch (e) { setErr((e as Error).message) } finally { setSaving(false) }
+  }
   const [weekStart, setWeekStart] = useState(thisMonday)
   const [sel, setSel] = useState<{ empId: string; date: string } | null>(null)
   const [draft, setDraft] = useState<SchedShift>({ start: '07:00', end: '15:30' })
@@ -134,36 +38,35 @@ export function ScheduleTab({ schedule, setSchedule, requests, setRequests, this
 
   const pick = (empId: string, date: string) => {
     setSel({ empId, date })
-    const cur = schedule[key(empId, date)] ?? USUAL[empId]?.[dayOfWeekISO(date)] ?? { start: '07:00', end: '15:30' }
+    // Default to what they work the same day last week, then a standard day.
+    const cur = schedule[key(empId, date)] ?? schedule[key(empId, addDaysISO(date, -7))] ?? { start: '07:00', end: '15:30' }
     setDraft(cur)
   }
   const save = () => {
     if (!sel || toMin(draft.end) <= toMin(draft.start)) return
-    setSchedule(s => ({ ...s, [key(sel.empId, sel.date)]: draft }))
+    const { empId, date } = sel
     setSel(null)
+    write(() => api('/api/timekeeping/schedule', { method: 'PUT', body: JSON.stringify({ employeeId: empId, date, start: draft.start, end: draft.end }) }))
   }
   const clear = () => {
     if (!sel) return
-    setSchedule(s => { const n = { ...s }; delete n[key(sel.empId, sel.date)]; return n })
+    const { empId, date } = sel
     setSel(null)
+    write(() => api(`/api/timekeeping/schedule?employeeId=${empId}&date=${date}`, { method: 'DELETE' }))
   }
-  const copyLastWeek = () => setSchedule(s => {
-    const n = { ...s }
-    for (const e of EMPLOYEES) for (const d of days) {
-      const prev = s[key(e.id, addDaysISO(d, -7))]
-      if (prev) n[key(e.id, d)] = prev
-      else delete n[key(e.id, d)]
-    }
-    return n
-  })
+  const copyLastWeek = () => {
+    if (!confirm(`Replace the week of ${dateLabel(weekStart, { month: 'short', day: 'numeric' })} with a copy of the week before?`)) return
+    write(() => api('/api/timekeeping/schedule', { method: 'POST', body: JSON.stringify({ copyFrom: addDaysISO(weekStart, -7), copyTo: weekStart }) }))
+  }
   const decide = (id: string, status: 'approved' | 'denied') =>
-    setRequests(rs => rs.map(r => r.id === id ? { ...r, status } : r))
+    write(() => api('/api/timekeeping/requests', { method: 'PATCH', body: JSON.stringify({ id, status }) }))
 
   const pending = requests.filter(r => r.status === 'pending')
   const decided = requests.filter(r => r.status !== 'pending')
 
   const printWeek = () => {
-    const rows = EMPLOYEES.map(e => `<tr><td class="n">${e.name}<div class="role">${e.role}</div></td>${days.map(d => {
+    const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const rows = EMPLOYEES.map(e => `<tr><td class="n">${esc(e.name)}<div class="role">${esc(e.role ?? '')}</div></td>${days.map(d => {
       const off = offOn(e.id, d, requests)
       const sh = schedule[key(e.id, d)]
       if (off && off.r.status === 'approved') return `<td class="off">${off.r.type === 'PTO' ? 'PTO' : 'OFF'}</td>`
@@ -202,6 +105,9 @@ export function ScheduleTab({ schedule, setSchedule, requests, setRequests, this
           <button style={btn(C.medBrown)} onClick={printWeek}>🖨 Print week</button>
         </div>
 
+        {err && <div style={{ color: C.red, fontSize: '0.85rem', marginBottom: '0.6rem' }}>{err}</div>}
+        {saving && <div style={{ color: C.tan, fontSize: '0.8rem', marginBottom: '0.4rem' }}>Saving…</div>}
+        {EMPLOYEES.length === 0 && <div style={{ color: C.tan, fontSize: '0.9rem', marginBottom: '0.6rem' }}>Add people on the Employees tab first.</div>}
         {sel && selEmp && (
           <div style={{ background: C.darkBrown, border: `1px solid ${C.medBrown}`, borderRadius: 4, padding: '0.7rem', marginBottom: '0.8rem', display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
             <b style={{ color: C.cream }}>{selEmp.name}</b>
@@ -294,7 +200,8 @@ export function ScheduleTab({ schedule, setSchedule, requests, setRequests, this
         <h2 style={h2}>Time-off requests {pending.length > 0 && <Pill color={C.amber}>{pending.length} waiting</Pill>}</h2>
         {pending.length === 0 && <div style={{ color: C.tan, fontSize: '0.85rem' }}>Nothing waiting.</div>}
         {pending.map(r => {
-          const e = EMPLOYEES.find(x => x.id === r.empId)!
+          const e = employees.find(x => x.id === r.empId)
+          if (!e) return null
           const hrs = requestHours(r)
           const free = freePto(e) + hrs // their own pending hold shouldn't count against them here
           // Who else is out, and how thin the crew gets, on each day asked for.
@@ -337,7 +244,7 @@ export function ScheduleTab({ schedule, setSchedule, requests, setRequests, this
             {decided.map(r => (
               <div key={r.id} style={{ color: C.tan, fontSize: '0.82rem', padding: '0.2rem 0', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <Pill color={r.status === 'approved' ? C.green : C.red}>{r.status}</Pill>
-                {EMPLOYEES.find(x => x.id === r.empId)?.name} · {rangeLabel(r)} · {r.type} {fmtHours(requestHours(r))}
+                {employees.find(x => x.id === r.empId)?.name} · {rangeLabel(r)} · {r.type} {fmtHours(requestHours(r))}
                 <button onClick={() => decide(r.id, r.status === 'approved' ? 'denied' : 'approved')} style={{ background: 'none', border: 'none', color: C.lightBrown, textDecoration: 'underline', cursor: 'pointer', fontSize: '0.75rem' }}>
                   change to {r.status === 'approved' ? 'denied' : 'approved'}
                 </button>
@@ -354,13 +261,12 @@ const timeInput: React.CSSProperties = { background: C.dark, color: C.cream, bor
 
 // ── Employee (kiosk): my schedule, ask for time off ─────────────────────────
 
-export function MySchedule({ emp, schedule, requests, setRequests, thisMonday, today, freePto, balance, onDone }: {
-  emp: Employee; schedule: Schedule
-  requests: TimeOffRequest[]; setRequests: React.Dispatch<React.SetStateAction<TimeOffRequest[]>>
+export function MySchedule({ emp, schedule, requests, thisMonday, today, freePto, balance, onSubmit }: {
+  emp: TkEmployee; schedule: Schedule; requests: TimeOffRequest[]
   thisMonday: string; today: string
   freePto: number   // PTO hours they can still ask for
   balance: number   // PTO hours on the books right now
-  onDone: (msg: string) => void
+  onSubmit: (req: { type: 'PTO' | 'Unpaid'; from: string; to: string; partial: number | null; note: string }) => Promise<void>
 }) {
   const [asking, setAsking] = useState(false)
   const [type, setType] = useState<'PTO' | 'Unpaid'>('PTO')
@@ -368,22 +274,17 @@ export function MySchedule({ emp, schedule, requests, setRequests, thisMonday, t
   const [to, setTo] = useState(addDaysISO(today, 1))
   const [partial, setPartial] = useState('')  // hours per day for a partial day; blank = full shift
   const [note, setNote] = useState('')
+  const [sending, setSending] = useState(false)
+  const [sendErr, setSendErr] = useState('')
 
   const weeks = [thisMonday, addDaysISO(thisMonday, 7)]
   const mine = requests.filter(r => r.empId === emp.id)
 
   // Days asked for: every scheduled day in the range. Hours = full shift, or the partial amount.
-  const asked: { date: string; hours: number }[] = []
-  let unscheduled = 0
-  if (from && to && to >= from) {
-    for (let d = from; d <= to && asked.length + unscheduled < 31; d = addDaysISO(d, 1)) {
-      const sh = schedule[key(emp.id, d)]
-      if (!sh) { unscheduled++; continue }
-      const full = scheduledHours(sh)
-      const p = Number(partial)
-      asked.push({ date: d, hours: partial && p > 0 ? Math.min(p, full) : full })
-    }
-  }
+  // Only a preview — the server works it out again from the schedule when it's sent.
+  const { days: asked, unscheduled } = from && to && to >= from
+    ? requestDaysFromSchedule(emp.id, schedule, from, to, partial ? Number(partial) : null, addDaysISO)
+    : { days: [], unscheduled: 0 }
   const total = asked.reduce((t, d) => t + d.hours, 0)
   const overlaps = asked.filter(d => offOn(emp.id, d.date, requests))
   const problem =
@@ -394,11 +295,17 @@ export function MySchedule({ emp, schedule, requests, setRequests, thisMonday, t
     : type === 'PTO' && total > freePto + 1e-9 ? `That’s ${total.toFixed(2)} h and you have ${freePto.toFixed(2)} h of PTO free. Ask for fewer hours, or send the rest as Unpaid.`
     : null
 
-  const submit = () => {
-    if (problem) return
-    setRequests(rs => [...rs, { id: `r-${emp.id}-${from}-${rs.length}`, empId: emp.id, type, days: asked, note: note.trim(), status: 'pending', submitted: today }])
-    setAsking(false); setNote(''); setPartial('')
-    onDone(`Request sent: ${type} ${fmtHours(total)} (${asked.length} day${asked.length > 1 ? 's' : ''}). Your manager will approve or deny it — check back here.`)
+  const submit = async () => {
+    if (problem || sending) return
+    setSending(true); setSendErr('')
+    try {
+      await onSubmit({ type, from, to, partial: partial ? Number(partial) : null, note: note.trim() })
+      setAsking(false); setNote(''); setPartial('')
+    } catch (e) {
+      setSendErr((e as Error).message)
+    } finally {
+      setSending(false)
+    }
   }
 
   const field: React.CSSProperties = { background: C.dark, color: C.cream, border: `1px solid ${C.medBrown}`, borderRadius: 6, padding: '0.6rem', fontSize: '1.05rem' }
@@ -460,9 +367,9 @@ export function MySchedule({ emp, schedule, requests, setRequests, thisMonday, t
               </div>
             </div>
           )}
-          {problem && <div style={{ color: C.red, fontSize: '0.9rem', marginBottom: '0.5rem' }}>{problem}</div>}
+          {(problem || sendErr) && <div style={{ color: C.red, fontSize: '0.9rem', marginBottom: '0.5rem' }}>{problem || sendErr}</div>}
           <div style={{ display: 'flex', gap: 8 }}>
-            <button style={{ ...bigBtn(C.green), opacity: problem ? 0.4 : 1 }} disabled={!!problem} onClick={submit}>Send request</button>
+            <button style={{ ...bigBtn(C.green), opacity: problem || sending ? 0.4 : 1 }} disabled={!!problem || sending} onClick={submit}>{sending ? 'Sending…' : 'Send request'}</button>
             <button style={{ ...bigBtn('transparent'), border: `1px solid ${C.medBrown}`, color: C.tan }} onClick={() => setAsking(false)}>Cancel</button>
           </div>
         </div>
