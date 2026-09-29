@@ -14,6 +14,7 @@ import {
   yearsOfService, annualPtoRate, accrualPerHour, nextAnniversary, ptoEarned,
 } from '@/lib/timekeeping'
 import { C, Employee, EMPLOYEES, mockHistory, ptoBalance, card, h2, th, td, bigBtn, Pill, Stat } from './shared'
+import { PayrollTab } from './PayrollTab'
 import { Schedule, TimeOffRequest, mockSchedule, mockRequests, ptoHolds, ScheduleTab, MySchedule } from './ScheduleTab'
 
 /** A week of punches per employee. A few are deliberately off-policy so the flags show. */
@@ -33,9 +34,10 @@ function mockShifts(thisMonday: string, today: string): Shift[] {
     // Wednesday: one 37-min break on a 10-hour shift → 30 paid, 7 min UPTO.
     add('e2', d, '06:00', i === 4 ? '13:00' : '16:00', ['11:00', '11:30'],
       i === 2 ? [['09:00', '09:37']] : i === 4 ? [['08:30', '08:45']] : [['08:30', '08:45'], ['13:30', '13:45']])
-    if (i < 4) add('e3', d, '08:00', i === 1 ? '14:30' : '15:00', i === 1 ? null : ['12:00', '12:20'], [['10:00', '10:15']])
+    // Last Thursday C was out on PTO, and last Wednesday E took an unpaid day (see mockRequests).
+    if (i < 4 && j !== 3) add('e3', d, '08:00', i === 1 ? '14:30' : '15:00', i === 1 ? null : ['12:00', '12:20'], [['10:00', '10:15']])
     add('e4', d, '06:30', '15:00', ['11:30', '12:00'], [['09:00', '09:15'], ['13:30', '13:45']])
-    if (i % 2 === 0) add('e5', d, '16:00', '20:15', null, i === 0 ? [] : [['18:00', '18:15']])
+    if (i % 2 === 0 && j !== 2) add('e5', d, '16:00', '20:15', null, i === 0 ? [] : [['18:00', '18:15']])
   })
   // Today, in progress, for the clock tab.
   add('e1', today, '07:00', null, null, [])
@@ -45,14 +47,17 @@ function mockShifts(thisMonday: string, today: string): Shift[] {
 
 // ── Page ────────────────────────────────────────────────────────────────────
 
-type Tab = 'clock' | 'timesheet' | 'schedule' | 'pto' | 'policy'
+type Tab = 'clock' | 'timesheet' | 'schedule' | 'payroll' | 'pto' | 'policy'
 
-/** PTO on the books right now: through last week, plus what this week's punches have earned so far. */
-function ptoNow(e: Employee, shifts: Shift[], thisMonday: string, today: string, nowHHMM: string): number {
+/**
+ * PTO on the books right now: through last week, plus what this week's
+ * punches have earned so far, minus PTO days taken through the app.
+ */
+function ptoNow(e: Employee, shifts: Shift[], requests: TimeOffRequest[], thisMonday: string, today: string, nowHHMM: string): number {
   const thisWeek = shifts
     .filter(s => s.empId === e.id && s.date >= thisMonday && s.date <= today)
     .reduce((t, s) => t + calcShift(s, nowHHMM).workedHours * accrualPerHour(yearsOfService(e.hireDate, s.date)), 0)
-  return ptoBalance(e, thisMonday) + thisWeek
+  return ptoBalance(e, thisMonday) + thisWeek - ptoHolds(e.id, requests, today).taken
 }
 
 export default function TimekeepingPage() {
@@ -84,13 +89,14 @@ export default function TimekeepingPage() {
 
   const waiting = requests.filter(r => r.status === 'pending').length
   const freePto = (e: Employee) => {
-    const h = ptoHolds(e.id, requests)
-    return ptoNow(e, shifts, thisMonday, today, now ?? '00:00') - h.booked - h.pending
+    const h = ptoHolds(e.id, requests, today)
+    return ptoNow(e, shifts, requests, thisMonday, today, now ?? '00:00') - h.booked - h.pending
   }
   const tabs: { key: Tab; label: string }[] = [
     { key: 'clock', label: '⏱ Time Clock' },
     { key: 'timesheet', label: '📋 Timesheets' },
     { key: 'schedule', label: `📅 Schedule${waiting ? ` (${waiting})` : ''}` },
+    { key: 'payroll', label: '💵 Payroll' },
     { key: 'pto', label: '🌴 PTO' },
     { key: 'policy', label: '📖 Policy' },
   ]
@@ -131,6 +137,7 @@ export default function TimekeepingPage() {
         {tab === 'clock'     && <ClockTab shifts={shifts} setShifts={setShifts} setPhotos={setPhotos} today={today} thisMonday={thisMonday} now={now} schedule={schedule} requests={requests} setRequests={setRequests} />}
         {tab === 'timesheet' && <TimesheetTab shifts={shifts} photos={photos} thisMonday={thisMonday} today={today} now={now} />}
         {tab === 'schedule'  && <ScheduleTab schedule={schedule} setSchedule={setSchedule} requests={requests} setRequests={setRequests} thisMonday={thisMonday} today={today} freePto={freePto} />}
+        {tab === 'payroll'   && <PayrollTab shifts={shifts} requests={requests} thisMonday={thisMonday} today={today} now={now} />}
         {tab === 'pto'       && <PtoTab today={today} thisMonday={thisMonday} requests={requests} />}
         {tab === 'policy'    && <PolicyTab />}
       </main>
@@ -366,8 +373,8 @@ function ClockTab({ shifts, setShifts, setPhotos, today, thisMonday, now, schedu
     }
   }
 
-  const ptoOnBooks = ptoNow(emp, shifts, thisMonday, today, nowHHMM)
-  const holds = ptoHolds(emp.id, requests)
+  const ptoOnBooks = ptoNow(emp, shifts, requests, thisMonday, today, nowHHMM)
+  const holds = ptoHolds(emp.id, requests, today)
   const freePto = ptoOnBooks - holds.booked - holds.pending
 
   const print = (range: 'day' | 'week' | 'lastweek') => {
@@ -380,7 +387,7 @@ function ClockTab({ shifts, setShifts, setPhotos, today, thisMonday, now, schedu
       balance: ptoOnBooks,
       booked: holds.booked,
       pending: holds.pending,
-      usedYtd: emp.ptoUsed,
+      usedYtd: emp.ptoUsed + holds.taken,
       years,
       annual: annualPtoRate(years),
       perHour: accrualPerHour(years),
@@ -762,8 +769,9 @@ function PtoTab({ today, thisMonday, requests }: { today: string; thisMonday: st
     const earned = ptoEarned(e.hireDate, history)
     const years = yearsOfService(e.hireDate, today)
     const nextAnniv = nextAnniversary(e.hireDate, today)
-    return { e, hours, earned, years, nextAnniv, balance: earned - e.ptoUsed }
-  }), [today, thisMonday])
+    const used = e.ptoUsed + ptoHolds(e.id, requests, today).taken
+    return { e, hours, earned, years, nextAnniv, used, balance: earned - used }
+  }), [today, thisMonday, requests])
 
   const [calcHours, setCalcHours] = useState(2080)
   const serviceYears = [0, 1, 2, 3, 4, 5, 10, 15, 20]
@@ -783,7 +791,7 @@ function PtoTab({ today, thisMonday, requests }: { today: string; thisMonday: st
               <th style={th}>Hrs worked</th><th style={th}>Earned</th><th style={th}>Used</th><th style={th}>Balance</th><th style={th}>Approved / asked</th><th style={th}>Next bump</th>
             </tr></thead>
             <tbody>
-              {rows.map(({ e, hours, earned, years, nextAnniv, balance }) => (
+              {rows.map(({ e, hours, earned, years, nextAnniv, used, balance }) => (
                 <tr key={e.id}>
                   <td style={td}>{e.name}<div style={{ color: C.lightBrown, fontSize: '0.72rem' }}>{e.role}</div></td>
                   <td style={td}>{dateLabel(e.hireDate, { month: 'short', day: 'numeric', year: 'numeric' })}</td>
@@ -791,9 +799,9 @@ function PtoTab({ today, thisMonday, requests }: { today: string; thisMonday: st
                   <td style={td}>{annualPtoRate(years)} h / 2080</td>
                   <td style={{ ...td, fontVariantNumeric: 'tabular-nums' }}>{hours.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
                   <td style={{ ...td, fontVariantNumeric: 'tabular-nums' }}>{earned.toFixed(1)}</td>
-                  <td style={{ ...td, fontVariantNumeric: 'tabular-nums' }}>{e.ptoUsed.toFixed(1)}</td>
+                  <td style={{ ...td, fontVariantNumeric: 'tabular-nums' }}>{used.toFixed(1)}</td>
                   <td style={{ ...td, fontWeight: 700, color: C.green, fontVariantNumeric: 'tabular-nums' }}>{balance.toFixed(1)} h</td>
-                  <td style={{ ...td, fontVariantNumeric: 'tabular-nums', color: C.tan }}>{(() => { const h = ptoHolds(e.id, requests); return h.booked || h.pending ? `${h.booked.toFixed(1)} / ${h.pending.toFixed(1)}` : '—' })()}</td>
+                  <td style={{ ...td, fontVariantNumeric: 'tabular-nums', color: C.tan }}>{(() => { const h = ptoHolds(e.id, requests, today); return h.booked || h.pending ? `${h.booked.toFixed(1)} / ${h.pending.toFixed(1)}` : '—' })()}</td>
                   <td style={td}>{dateLabel(nextAnniv, { month: 'short', day: 'numeric', year: 'numeric' })}<div style={{ color: C.lightBrown, fontSize: '0.72rem' }}>→ {annualPtoRate(years + 1)} h / 2080</div></td>
                 </tr>
               ))}

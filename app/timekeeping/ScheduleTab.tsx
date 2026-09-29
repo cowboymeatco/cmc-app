@@ -39,17 +39,26 @@ export function requestHours(r: TimeOffRequest): number {
   return r.days.reduce((t, d) => t + d.hours, 0)
 }
 
-/** PTO hours already spoken for: approved and booked, or waiting on a decision. */
-export function ptoHolds(empId: string, requests: TimeOffRequest[]) {
-  const mine = requests.filter(r => r.empId === empId && r.type === 'PTO')
-  return {
-    booked:  mine.filter(r => r.status === 'approved').reduce((t, r) => t + requestHours(r), 0),
-    pending: mine.filter(r => r.status === 'pending').reduce((t, r) => t + requestHours(r), 0),
+/**
+ * Approved PTO splits at today: days already past were taken (they come off
+ * the balance), days ahead are booked. Pending requests are held either way,
+ * so nobody can ask for the same hours twice.
+ */
+export function ptoHolds(empId: string, requests: TimeOffRequest[], today: string) {
+  let taken = 0, booked = 0, pending = 0
+  for (const r of requests) {
+    if (r.empId !== empId || r.type !== 'PTO' || r.status === 'denied') continue
+    for (const d of r.days) {
+      if (r.status === 'pending') pending += d.hours
+      else if (d.date < today) taken += d.hours
+      else booked += d.hours
+    }
   }
+  return { taken, booked, pending }
 }
 
 /** The request (if any, not denied) covering this person on this day. */
-function offOn(empId: string, date: string, requests: TimeOffRequest[]) {
+export function offOn(empId: string, date: string, requests: TimeOffRequest[]) {
   for (const r of requests) {
     if (r.empId !== empId || r.status === 'denied') continue
     const d = r.days.find(x => x.date === date)
@@ -92,7 +101,13 @@ export function mockSchedule(thisMonday: string): Schedule {
 
 export function mockRequests(thisMonday: string, today: string): TimeOffRequest[] {
   const next = (d: number) => addDaysISO(thisMonday, 7 + d)
+  const last = (d: number) => addDaysISO(thisMonday, d - 7)
   return [
+    // Already taken, last week — these land in the payroll export.
+    { id: 'r0', empId: 'e3', type: 'PTO', status: 'approved', submitted: addDaysISO(today, -20), note: 'Dentist',
+      days: [{ date: last(3), hours: 6.5 }] },
+    { id: 'r0b', empId: 'e5', type: 'Unpaid', status: 'approved', submitted: addDaysISO(today, -15), note: 'Car trouble',
+      days: [{ date: last(2), hours: 4.25 }] },
     { id: 'r1', empId: 'e4', type: 'PTO', status: 'approved', submitted: addDaysISO(today, -9), note: 'Elk hunt',
       days: [{ date: next(0), hours: 8 }, { date: next(1), hours: 8 }] },
     { id: 'r2', empId: 'e1', type: 'PTO', status: 'pending', submitted: addDaysISO(today, -1), note: 'Kid’s doctor appointment — back by noon',
