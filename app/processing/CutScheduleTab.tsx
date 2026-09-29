@@ -42,6 +42,14 @@ const C = {
   amber:      '#F59E0B',
 }
 
+// The "Off the rail lately" list: how far back in kill dates it reaches, and
+// how many rows it shows before asking for a tag or a name.
+const OFF_RAIL_DAYS  = 35
+const OFF_RAIL_SHOWN = 30
+
+/** A carcass marked cut or delivered whole, with the buyers off its booking. */
+interface OffRailRow { log: HarvestLog; buyers: string }
+
 // A kill day, drawn into the cutting plan where it falls.
 //
 // Not something you can drag, date or delete — it isn't part of the plan, it's
@@ -112,6 +120,11 @@ export default function CutScheduleTab() {
   const [dragging,    setDragging]    = useState<string | null>(null)
   const [dragOver,    setDragOver]    = useState<string | null>(null)
   const [cutting,     setCutting]     = useState<Set<string>>(new Set())
+  // Carcasses taken off the rail lately (marked cut or delivered whole), with
+  // a way back — see the "Off the rail lately" block at the bottom.
+  const [offRail,      setOffRail]      = useState<OffRailRow[]>([])
+  const [offRailQuery, setOffRailQuery] = useState('')
+  const [restoring,    setRestoring]    = useState<Set<string>>(new Set())
   const [breakError,  setBreakError]  = useState<{ key: string; msg: string } | null>(null)
 
   // Cached source data, so the assign modal can read carcasses/customers and we
@@ -181,10 +194,40 @@ export default function CutScheduleTab() {
   const weightsRef = useRef(weights)
   useEffect(() => { weightsRef.current = weights }, [weights])
 
+  // Everything marked cut or delivered whole off a recent kill, newest kill
+  // first, with the buyers off its booking so a name and a tag are enough to
+  // spot the one that shouldn't have been. The harvest log keeps no record of
+  // WHEN a status changed, so "lately" is by kill date: a carcass hangs a few
+  // weeks at most, and one taken off by mistake was on the rail until then.
+  const loadOffRail = useCallback(async () => {
+    try {
+      const from = addDaysISO(isoDate(), -OFF_RAIL_DAYS)
+      const logRes: unknown = await fetch(`/api/harvest?status=cut,delivered&from=${from}`).then(r => r.json())
+      const rows = Array.isArray(logRes) ? (logRes as HarvestLog[]) : []
+      const apptIds = [...new Set(rows.map(l => l.appointment_id).filter(Boolean))]
+      const apptRes: unknown = apptIds.length
+        ? await fetch(`/api/appointments?ids=${apptIds.join(',')}`).then(r => r.json()).catch(() => [])
+        : []
+      const byId = new Map((Array.isArray(apptRes) ? apptRes as HarvestAppointment[] : []).map(a => [a.id, a]))
+      rows.sort((a, b) =>
+        b.harvest_date.localeCompare(a.harvest_date) || (a.carcass_tag ?? '').localeCompare(b.carcass_tag ?? ''))
+      setOffRail(rows.map(log => {
+        const appt = byId.get(log.appointment_id)
+        // One name per buyer — a booking has a slot per animal, and a buyer
+        // taking four hogs is four slots under the same name.
+        const buyers = [...new Set((appt?.customers ?? []).map(c => c.customer_name).filter(Boolean))].join(', ')
+        return { log, buyers: buyers || appt?.source || '' }
+      }))
+    } catch { /* a convenience list — the schedule stands without it */ }
+  }, [])
+
   const loadAll = useCallback(async (changed = false) => {
     if (inFlight.current) { pending.current ||= changed; return }
     inFlight.current = true
     setLoading(true)
+    // Rides along with every load rather than having a mount effect of its
+    // own; a miss there is silent and never holds the schedule up.
+    loadOffRail()
     try {
       // Cleared before the request goes out, so anything asked for DURING it
       // sets the flag again and earns exactly one more pass — no matter how
@@ -210,7 +253,7 @@ export default function CutScheduleTab() {
       inFlight.current = false
       setLoading(false)
     }
-  }, [])
+  }, [loadOffRail])
 
   useEffect(() => { loadAll() }, [loadAll])
 
@@ -448,8 +491,37 @@ export default function CutScheduleTab() {
       setEntries(prev => prev
         .filter(e => !(e.type === 'carcass' && e.harvest_log_id === entry.harvest_log_id))
         .map((e, i) => ({ ...e, rank: i + 1 })))
+      loadOffRail()
     } finally {
       setCutting(prev => { const s = new Set(prev); s.delete(entry.key); return s })
+    }
+  }
+
+  // The way back. Charlie, 2026-09-29: "What should I do if there is a
+  // whoopsies." Status goes back to chilling, which is all Cut ✓ and 🚚 ever
+  // changed; the carcass reappears on the schedule with no cutting day, since
+  // its place in the saved plan went when it was taken off.
+  const handlePutBack = async (row: OffRailRow) => {
+    const { log } = row
+    const who = [log.carcass_tag ? `tag ${log.carcass_tag}` : null, row.buyers || null].filter(Boolean).join(' — ')
+    if (!window.confirm(
+      `Put this carcass${who ? ` (${who})` : ''} back on the rail?\n\n` +
+      `It goes back to chilling and shows on the cut schedule again, with no cutting day — drag it under one and save. ` +
+      (log.status === 'cut'
+        ? 'It stops counting as cut, so cut & wrap is no longer billed for it.'
+        : 'It stops reading as delivered.')
+    )) return
+    setRestoring(prev => new Set(prev).add(log.id))
+    try {
+      const res = await fetch('/api/harvest', {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ id: log.id, status: 'chilling' }),
+      })
+      if (!res.ok) { window.alert('Couldn’t put it back — try again.'); return }
+      await loadAll(true)
+    } finally {
+      setRestoring(prev => { const s = new Set(prev); s.delete(log.id); return s })
     }
   }
 
@@ -677,6 +749,24 @@ export default function CutScheduleTab() {
         </div>
 
         <div style={{ display: 'flex', gap: '0.6rem' }}>
+          {/* Charlie, 2026-09-29: "Can I get an easy print off that I can
+              hand to my guys?" A paper copy of the SAVED plan, one tick box
+              per carcass, print dialog up as soon as it loads. */}
+          <a
+            href="/cut-schedule/print?auto=1"
+            target="_blank"
+            rel="noopener"
+            title="Paper copy of the last saved plan to hand to the crew — save first, then print"
+            style={{
+              background: 'rgba(201,168,130,0.12)', color: C.tan,
+              border: '1px solid rgba(201,168,130,0.45)', borderRadius: 4,
+              padding: '0.5rem 1rem', fontWeight: 700, fontSize: '0.85rem',
+              textDecoration: 'none', whiteSpace: 'nowrap',
+              display: 'inline-flex', alignItems: 'center',
+            }}
+          >
+            🖨 Print
+          </a>
           <Link
             href="/cut-schedule"
             title="Read-only phone view of this schedule — send this link to the crew"
@@ -1403,7 +1493,7 @@ export default function CutScheduleTab() {
                   {/* Mark as Cut / delivered whole */}
                   <div style={{ display: 'flex', gap: 3 }}>
                   <button
-                    title="Mark as cut — removes from cooler list"
+                    title="Mark as cut — off the cooler list and on to packing. Wrong one? Put it back under ↩ Off the rail lately, at the bottom"
                     onClick={e => { e.stopPropagation(); handleMarkCut(entry) }}
                     disabled={cutting.has(entry.key)}
                     style={{
@@ -1420,7 +1510,7 @@ export default function CutScheduleTab() {
 
                   {/* Delivered whole — off the rail, not a cut */}
                   <button
-                    title="Delivered whole — off the cooler list, not counted as cut, no cut & wrap"
+                    title="Delivered whole — went out the door hanging. Off the cooler list, not counted as cut, no cut & wrap. Wrong one? Put it back under ↩ Off the rail lately, at the bottom"
                     onClick={e => { e.stopPropagation(); handleMarkCut(entry, 'delivered') }}
                     disabled={cutting.has(entry.key)}
                     style={{
@@ -1454,6 +1544,7 @@ export default function CutScheduleTab() {
             <span style={{ color: C.tan }}>🔪 Harvest day = booked on the harvest floor, nothing cut that day (from the harvest calendar — not editable here)</span>
             <span>→ = days hung by the day it&apos;s scheduled to be cut</span>
             <span>🔒 Lock = pin when recalculating</span>
+            <span><span style={{ color: C.green }}>Cut ✓</span> / 🚚 = off the list, cut or delivered whole · undo under ↩ Off the rail lately, below</span>
             <span style={{ color: C.red }}>⚠ Missing = named customer, cut sheet not in yet</span>
             <span style={{ color: C.amber }}>⚠ No buyer = nobody recorded as buying this animal — the booking needs a name, not a chase</span>
             <span>
@@ -1464,6 +1555,93 @@ export default function CutScheduleTab() {
           </div>
         </>
       )}
+
+      {/* ── Off the rail lately ──────────────────────────────────────────────
+          Charlie, 2026-09-29: "Where do shipped carcasses go from this
+          screen? What should I do if there is a whoopsies." Cut ✓ and 🚚
+          both dropped a carcass off this list with no way back, so a
+          mis-click meant asking someone to fix the status by hand. */}
+      {!loading && (() => {
+        const q = offRailQuery.trim().toLowerCase()
+        const hits = q
+          ? offRail.filter(r => [r.log.carcass_tag, r.buyers, r.log.producer, r.log.species].some(v => (v ?? '').toLowerCase().includes(q)))
+          : offRail
+        const shown = hits.slice(0, OFF_RAIL_SHOWN)
+        const cell: React.CSSProperties = { padding: '0.3rem 0.5rem', borderBottom: '1px solid rgba(166,120,90,0.15)', fontSize: '0.78rem', verticalAlign: 'middle' }
+        return (
+          <details style={{ marginTop: '1rem', background: 'rgba(0,0,0,0.2)', borderRadius: 4, padding: '0.6rem 1rem' }}>
+            <summary style={{ cursor: 'pointer', color: C.tan, fontSize: '0.8rem', fontWeight: 700, userSelect: 'none' }}>
+              ↩ Off the rail lately — {offRail.length} carcass{offRail.length === 1 ? '' : 'es'} marked cut or delivered whole
+            </summary>
+            <p style={{ fontSize: '0.74rem', color: C.lightBrown, margin: '0.5rem 0 0.6rem', lineHeight: 1.55, maxWidth: 820 }}>
+              <strong style={{ color: C.green }}>Cut ✓</strong> and <strong style={{ color: C.tan }}>🚚</strong> both take a carcass off this list.
+              A cut one is on its way to packing — it shows on the scanner as an animal to scan in, and cut &amp; wrap is billed.
+              One delivered whole (🚚) went out the door hanging: nothing more happens to it here, and the customer’s animal reads as picked up.
+              Took the wrong one off? <strong style={{ color: C.cream }}>Back on the rail</strong> puts it back to chilling — it comes back with no cutting day, so drag it under one and save.
+            </p>
+            <input
+              value={offRailQuery}
+              onChange={e => setOffRailQuery(e.target.value)}
+              placeholder="Find by tag, customer, producer or species"
+              style={{
+                width: '100%', maxWidth: 360, marginBottom: '0.5rem', padding: '0.35rem 0.6rem',
+                background: C.dark, border: '1px solid rgba(166,120,90,0.35)', borderRadius: 3,
+                color: C.cream, fontSize: '0.8rem',
+              }}
+            />
+            {offRail.length === 0 ? (
+              <div style={{ fontSize: '0.76rem', color: C.lightBrown }}>Nothing taken off a kill in the last {OFF_RAIL_DAYS} days.</div>
+            ) : shown.length === 0 ? (
+              <div style={{ fontSize: '0.76rem', color: C.lightBrown }}>Nothing matches “{offRailQuery.trim()}”.</div>
+            ) : (
+              <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+                <tbody>
+                  {shown.map(row => {
+                    const { log } = row
+                    const busy = restoring.has(log.id)
+                    return (
+                      <tr key={log.id}>
+                        <td style={{ ...cell, whiteSpace: 'nowrap', fontFamily: 'monospace', color: C.cream }}>
+                          {speciesIcon(log.species)} {log.carcass_tag || '—'}
+                        </td>
+                        <td style={{ ...cell, color: C.cream }}>{row.buyers || <span style={{ color: C.medBrown }}>no buyer named</span>}</td>
+                        <td style={{ ...cell, color: C.lightBrown }}>{log.producer || ''}</td>
+                        <td style={{ ...cell, color: C.lightBrown, whiteSpace: 'nowrap' }}>
+                          killed {dateLabel(log.harvest_date, { month: 'short', day: 'numeric' })}
+                          {log.hot_carcass_weight_lbs != null && <> · {log.hot_carcass_weight_lbs} lb</>}
+                        </td>
+                        <td style={{ ...cell, whiteSpace: 'nowrap' }}>
+                          {log.status === 'cut'
+                            ? <span style={{ color: C.green, fontWeight: 700 }}>Cut ✓</span>
+                            : <span style={{ color: C.tan, fontWeight: 700 }}>🚚 Delivered whole</span>}
+                        </td>
+                        <td style={{ ...cell, textAlign: 'right' }}>
+                          <button
+                            onClick={() => handlePutBack(row)}
+                            disabled={busy}
+                            style={{
+                              padding: '0.25rem 0.7rem', borderRadius: 3, fontSize: '0.74rem', fontWeight: 700,
+                              background: 'rgba(201,168,130,0.12)', border: '1px solid rgba(201,168,130,0.45)',
+                              color: C.tan, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1, whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {busy ? '…' : '↩ Back on the rail'}
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            )}
+            {hits.length > shown.length && (
+              <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.4rem' }}>
+                … and {hits.length - shown.length} more, newest kills first — narrow it down by tag or name.
+              </div>
+            )}
+          </details>
+        )
+      })()}
 
       {/* Repair a missed carcass scan from the schedule the animal is stuck on */}
       {linkModal && (() => {

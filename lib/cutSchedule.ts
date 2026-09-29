@@ -811,3 +811,93 @@ export function buildEntries(
 
   return combined.map((c, i) => ({ ...c.item, rank: i + 1 }))
 }
+
+// ── The plan as the crew reads it: cut into cutting days ─────────────────────
+// Shared by the phone view (app/cut-schedule) and the paper print-off
+// (app/cut-schedule/print), so the sheet in a cutter's pocket and the screen
+// on his phone can never disagree about which day a carcass is on.
+
+export interface CrewSection {
+  key:     string
+  /** Break date heading this day; null = the leading pile, "up first". */
+  date:    string | null
+  entries: ScheduleEntry[]
+  /** Kill days that fall between the previous cutting day and this one. Not
+   *  work — the reason there's no work on those dates (Charlie, 2026-08-24). */
+  harvest: HarvestDay[]
+  /** Head killed on this cutting day itself, when there's a harvest booked too. */
+  alsoKilling: number | null
+}
+
+/**
+ * Split the ordered plan into day sections: a break heads the day below it,
+ * carcasses before the first break are simply "up first".
+ *
+ * Carcasses with no dated day break above them have no cut day yet — that's
+ * the planner's pile to sort out, and the crew must not see it as work
+ * (Charlie, 2026-08-05). The one exception is a plan with no dated break
+ * anywhere: then nothing is scheduled, the list falls back to plain priority
+ * order, and hiding would leave the crew staring at an empty cooler.
+ *
+ * Days already behind us fold into the leading section — anything still
+ * hanging from a past day is overdue and cuts first.
+ *
+ * 'future' placeholders are planning intent for animals that aren't in the
+ * building yet — never work the crew can pick up — and are left out.
+ */
+export function buildCrewSections(list: ListItem[], harvestDays: HarvestDay[], today: string): CrewSection[] {
+  const rawSecs: CrewSection[] = []
+  let current: CrewSection = { key: 'first', date: null, entries: [], harvest: [], alsoKilling: null }
+  for (const item of list) {
+    if (item.type === 'break') {
+      rawSecs.push(current)
+      current = { key: item.key, date: item.break_date || null, entries: [], harvest: [], alsoKilling: null }
+    } else if (item.type === 'carcass') {
+      current.entries.push(item)
+    }
+  }
+  rawSecs.push(current)
+
+  const anyDated = rawSecs.some(s => s.date !== null)
+
+  const lead: CrewSection = { key: 'first', date: null, entries: [], harvest: [], alsoKilling: null }
+  const rest: CrewSection[] = []
+  for (const sec of rawSecs) {
+    if (anyDated && sec.date === null) continue
+    if (sec.key === 'first' || (sec.date && sec.date < today)) lead.entries.push(...sec.entries)
+    else rest.push(sec)
+  }
+  const secs = [lead, ...rest].filter(s => s.entries.length > 0)
+
+  // Hang each kill day above the next cutting day after it, so a jump from
+  // Wednesday to the following Tuesday says why instead of just looking like
+  // a week off. Only within the span the plan covers — a kill day past the
+  // last cutting day isn't explaining a gap the crew can see.
+  const dated   = secs.filter(s => s.date !== null)
+  const planEnd = dated.length ? dated[dated.length - 1].date! : ''
+  for (const hd of harvestDays) {
+    if (!planEnd || hd.date > planEnd || hd.date < today) continue
+    const host = dated.find(s => s.date! >= hd.date)
+    if (!host) continue
+    if (host.date === hd.date) host.alsoKilling = hd.head
+    else host.harvest.push(hd)
+  }
+  return secs
+}
+
+/** How many of a day's carcasses are USDA and how many are custom. Deduped by
+ *  carcass, since a split animal shows as one row per cut sheet. */
+export function killMix(entries: ScheduleEntry[]): { type: 'USDA' | 'Custom'; head: number }[] {
+  const seen = new Set<string>()
+  let usda = 0, custom = 0
+  for (const e of entries) {
+    if (seen.has(e.harvest_log_id)) continue
+    seen.add(e.harvest_log_id)
+    if (e.kill_type === 'USDA') usda++
+    else if (e.kill_type === 'Custom') custom++
+  }
+  return [
+    ...(usda   ? [{ type: 'USDA'   as const, head: usda }] : []),
+    ...(custom ? [{ type: 'Custom' as const, head: custom }] : []),
+  ]
+}
