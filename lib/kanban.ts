@@ -178,6 +178,17 @@ export function qtyText(n: number | null | undefined, unit: string | null | unde
   return unit ? `${v} ${unit}` : v
 }
 
+/**
+ * Order quantity as the printed card says it: "(1) 5 Gal Bucket". The count in
+ * brackets keeps it from running into a unit that starts with a number —
+ * "1 5 Gal Bucket" reads as fifteen (Charlie, 2026-09-29).
+ */
+export function cardQtyText(n: number | null | undefined, unit: string | null | undefined): string {
+  if (n == null) return '—'
+  const v = Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/, '')
+  return unit ? `(${v}) ${unit}` : `(${v})`
+}
+
 // ── Lead time and sizing ────────────────────────────────────────────────
 
 /**
