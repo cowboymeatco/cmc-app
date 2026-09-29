@@ -10,7 +10,7 @@ import CustomerPicker, { resolveCiScan, type CustomerName } from './CustomerPick
 import AnimalStart, { type AnimalPick } from './AnimalStart'
 import { isCarcassTag } from '@/lib/carcassTag'
 import { weightInName } from '@/lib/label'
-import { labelKey, type ScannerProducerSet } from '@/lib/producerLabels'
+import { WHOLE_BOX_PLUS, labelKey, type ScannerProducerSet } from '@/lib/producerLabels'
 const C = {
   dark:       '#1A0A04',
   darkBrown:  '#351E0E',
@@ -1060,6 +1060,16 @@ export default function ScannerPage() {
   useEffect(() => {
     sessionLabelKeysRef.current = (expected?.scaleLabels ?? []).map(labelKey)
   }, [expected])
+  // The producer this session packs for, when its card names one whose label
+  // prints no barcode (producer_labels.prints_barcode). Their label can't be
+  // scanned, so the card's cut list can never tick off — the panel
+  // asks for one whole-box label per box instead.
+  const boxOnlyProducer = useMemo(() => {
+    const keys = (expected?.scaleLabels ?? []).map(labelKey)
+    return producerSets.find(st => keys.includes(st.key) && st.prints_barcode === false)?.name ?? null
+  }, [expected, producerSets])
+  const boxOnlyRef = useRef(false)
+  useEffect(() => { boxOnlyRef.current = !!boxOnlyProducer }, [boxOnlyProducer])
 
   // The PLU a scanned package is recorded under, and what's wrong with its
   // label for this session, if anything. Refs only — doScan is a stable callback.
@@ -1085,7 +1095,8 @@ export default function ScannerPage() {
   }
   function checkOffCard(scan: ScanLine, plu: string, itemName: string): boolean {
     const ex = offCardRef.current
-    if (!ex.hasCard) return false
+    // Whole-box labels in a producer session answer no line on the card.
+    if (!ex.hasCard || boxOnlyRef.current) return false
     const keys = ex.keysForPlu.get(plu) ?? []
     if (!keys.length || keys.some(k => ex.expectedKeys.has(k))) return false
     setOffCard({ scanId: scan.id, plu, name: itemName, keys })
@@ -4218,7 +4229,38 @@ export default function ScannerPage() {
           The customer's packaging sheet, live. A line only crosses itself off
           when a PLU that has been linked to it comes over the scale, so what
           is left standing is genuinely what is left to pack. */}
-      {expected && (
+      {/* ── Producer session: packed by the box ──
+          The producer's label prints no barcode, so the cut list below could
+          never tick off. One whole-box label per box goes over the gun
+          instead, and every pound of it counts toward the yield. */}
+      {expected && boxOnlyProducer && (() => {
+        const beef    = !expected.species.length || expected.species.some(sp => /beef/i.test(sp))
+        const packed  = sessionScans.filter(sc => WHOLE_BOX_PLUS.has(sc.plu_number))
+        const lbs     = packed.reduce((t, sc) => t + (Number(sc.weight_lbs) || 0), 0)
+        return (
+          <div style={{
+            width: 400, flexShrink: 0, display: 'flex', flexDirection: 'column',
+            borderLeft: '1px solid rgba(166,120,90,0.25)', background: 'rgba(0,0,0,0.18)',
+            padding: '1rem 1rem 0.75rem', gap: '0.7rem', minHeight: 0,
+          }}>
+            <span style={{ color: C.tan, fontSize: '0.78rem', fontWeight: 700, letterSpacing: '0.12em' }}>
+              PACK BY THE BOX · {boxOnlyProducer.toUpperCase()}
+            </span>
+            <div style={{ color: C.cream, fontSize: '0.95rem', lineHeight: 1.45 }}>
+              {boxOnlyProducer}&apos;s labels print no barcode. Weigh each finished box on the house label as
+              {' '}<strong>MEAT BOX</strong> (PLU 1){beef && <> or <strong>BEEF ASSORTED CUTS</strong> (PLU 207)</>} and scan that.
+            </div>
+            <div style={{ color: C.lightBrown, fontSize: '0.8rem', lineHeight: 1.45 }}>
+              Every pound goes toward the yield. Which cuts are in each box isn&apos;t tracked for this producer.
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', color: C.cream, fontFamily: 'monospace', fontSize: '0.9rem', fontWeight: 700, borderTop: '1px solid rgba(166,120,90,0.25)', paddingTop: '0.5rem' }}>
+              <span>{packed.length} box{packed.length === 1 ? '' : 'es'} scanned</span>
+              <span>{lbs.toFixed(2)} lbs</span>
+            </div>
+          </div>
+        )
+      })()}
+      {expected && !boxOnlyProducer && (
         <div style={{
           width: 400, flexShrink: 0, display: 'flex', flexDirection: 'column',
           borderLeft: '1px solid rgba(166,120,90,0.25)', background: 'rgba(0,0,0,0.18)',
