@@ -763,7 +763,11 @@ export function buildPackList(d: any, species: string): PackRow[] {
     if (d.rumpRoast?.cut)   { d.rumpRoast.cut   === 'grind' ? pg('Rump Roast')    : pc('Rump Roast',    withT(d.rumpRoast.cut,   d.rumpRoast.thickness   ?? '')) }
     if (d.topRound?.round2 && !sameRound(d.topRound, d.topRound.round2)) { packRound('Top Round', d.topRound, ' (1)'); packRound('Top Round', d.topRound.round2, ' (2)') }
     else packRound('Top Round', d.topRound)
-    if (wanted(d.roundShank?.marrow)) pc('Round Shank / Marrow', fmt(d.roundShank.marrow))
+    // Named the same as the grind-marrow row above so both key to 'shank
+    // marrow bones' — the line BEEF MARROW BONES (161) is linked to. Keyed as
+    // 'round shank marrow', every marrow pack on a kept-marrow card popped the
+    // "not on this card" question (Gary Hatley's half, NN 2026-09-30).
+    if (wanted(d.roundShank?.marrow)) pc('Shank Marrow Bones', fmt(d.roundShank.marrow))
   }
 
   if (isPork && !d.grindWhole) {

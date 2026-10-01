@@ -76,11 +76,26 @@ export const entryMarker = (date: string) => `[clover-sales ${date}]`
 
 // ── Item mapping ───────────────────────────────────────────────────────────
 // Clover item → QuickBooks item, first match wins:
-//   'map'  — a person chose it on the screen (clover_qbo_item_map)
-//   'plu'  — the PLU record links both (plu_items)
-//   'name' — the names are the same once case and punctuation are ignored
+//   'map'    — a person chose it on the screen (clover_qbo_item_map)
+//   'family' — a product line Jill books as one item (FAMILIES below)
+//   'plu'    — the PLU record links both (plu_items)
+//   'name'   — the names are the same once case and punctuation are ignored
 // Anything else stops the day until someone picks the item.
-export type MapSource = 'map' | 'plu' | 'name'
+export type MapSource = 'map' | 'family' | 'plu' | 'name'
+
+// Product lines that are one line in the books however many flavors the
+// register sells. Now that the register scans the label, every brot flavor
+// rings up as its own Clover item (GERMAN BROTWURST, JALAPENO CHEDDAR
+// BROTWURST, …), where Jill rang them all up as BROTWURST/HOT DOGS and booked
+// them to the one BROTWURST item. QuickBooks has no item per flavor and
+// shouldn't grow one: the invoice gets a single BROTWURST line, as hers did
+// (Jill, 2026-09-30: "not grouping the brots into one category, it is showing
+// individual sales of each type"). Sits after a person's own pick and ahead of
+// PLU and name matching, so a flavor can't drift onto an item of its own.
+// Lamb and wild-game brots are different income lines, so they stay out.
+const FAMILIES: { re: RegExp; unless?: RegExp; qboName: string }[] = [
+  { re: /\b(BROTWURST|BRATWURST|BRATS?|BROTS?|HOT ?DOGS?)\b/i, unless: /\b(LAMB|GOAT|WILD GAME|VENISON|ELK|DEER)\b/i, qboName: 'BROTWURST' },
+]
 
 export interface QboItemRef { id: string; name: string; fullName: string; type: string }
 
@@ -145,7 +160,10 @@ export async function mapItems(
     const m = chosen.get(cloverItemId)
     const plu = [...(viaPlu.get(cloverItemId) ?? [])].filter(id => byId.has(id))
     const named = byName.get(norm(name)) ?? []
+    const fam = FAMILIES.find(f => f.re.test(name) && !f.unless?.test(name))
+    const family = fam ? byName.get(norm(fam.qboName)) ?? [] : []
     if (m && byId.has(m)) { out.qbo = ref(byId.get(m)!); out.source = 'map' }
+    else if (family.length === 1) { out.qbo = ref(family[0]); out.source = 'family' }
     // Two PLUs linking one Clover item to different QBO items is ambiguous.
     else if (plu.length === 1) { out.qbo = ref(byId.get(plu[0])!); out.source = 'plu' }
     else if (named.length === 1) { out.qbo = ref(named[0]); out.source = 'name' }

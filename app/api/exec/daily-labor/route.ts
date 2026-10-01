@@ -32,6 +32,10 @@ export interface DailyLaborDay {
   headOwn: number
   /** What those own animals' kill fees would have been at service rates. */
   ownKillValue: number
+  /** Our own animals broken on the cut floor, and their cut & wrap at service
+   *  rates — the 9/29 lambs. Not in gross either. */
+  headOwnCut: number
+  ownCutValue: number
   /** Booked head that never reached harvest_log. Counted in headHarvested
    *  but not in gross, so on a past day it means a missing log entry. */
   scheduledHarvest: number
@@ -77,6 +81,8 @@ export async function GET(req: NextRequest) {
           headCut: d.headCut,
           headOwn: d.headOwn,
           ownKillValue: d.ownKillValue,
+          headOwnCut: d.headOwnCut,
+          ownCutValue: d.ownCutValue,
           scheduledHarvest: d.scheduled.harvest,
           hours: crew.reduce((a, p) => a + p.hours, 0),
           laborDollars,

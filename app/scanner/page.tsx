@@ -1028,6 +1028,23 @@ export default function ScannerPage() {
   useEffect(() => {
     offCardRef.current = { keysForPlu, expectedKeys: new Set(expectedKeys), hasCard: !!expected }
   }, [keysForPlu, expectedKeys, expected])
+  // Asked once per cut, not once per package. Bullseye Ranch's card sends the
+  // top sirloin to grind; the bench cut sirloin steaks anyway, and every one of
+  // them over the scale re-asked the same question (AE and NN, 2026-09-30:
+  // "every time I scan it does are you sure"). Once a packer has kept a PLU
+  // in this session — by tapping keep, or by scanning the next label past the
+  // question — the rest of that cut goes in with a warning flash and no
+  // pop-up. Taking it out of the box answers nothing: the next one still asks.
+  // Forgotten when the session changes, since it was this card's question.
+  const keptOffCardRef = useRef<Set<string>>(new Set())
+  const offCardOpenRef = useRef<string | null>(null)
+  useEffect(() => { keptOffCardRef.current = new Set() }, [started, customer, date])
+  function closeOffCard(kept: boolean) {
+    const plu = offCardOpenRef.current
+    if (plu && kept) keptOffCardRef.current.add(plu)
+    offCardOpenRef.current = null
+    setOffCard(null)
+  }
 
   // ── Producer label sets ───────────────────────────────────────────────────
   // A producer who sells under their own label has their own PLUs — copies of
@@ -1096,14 +1113,19 @@ export default function ScannerPage() {
     }
     return { plu: scanned, labelWarn: null }
   }
-  function checkOffCard(scan: ScanLine, plu: string, itemName: string): boolean {
+  // The warning to flash for a scan the card never asked for, or null when the
+  // card orders it (or has nothing to say). Opens the pop-up the first time a
+  // PLU comes up in the session; after that it only names the fact.
+  function checkOffCard(scan: ScanLine, plu: string, itemName: string): string | null {
     const ex = offCardRef.current
     // Whole-box labels in a producer session answer no line on the card.
-    if (!ex.hasCard || boxOnlyRef.current) return false
+    if (!ex.hasCard || boxOnlyRef.current) return null
     const keys = ex.keysForPlu.get(plu) ?? []
-    if (!keys.length || keys.some(k => ex.expectedKeys.has(k))) return false
+    if (!keys.length || keys.some(k => ex.expectedKeys.has(k))) return null
+    if (keptOffCardRef.current.has(plu)) return 'NOT ON THIS CARD — kept, as before'
+    offCardOpenRef.current = plu
     setOffCard({ scanId: scan.id, plu, name: itemName, keys })
-    return true
+    return 'NOT ON THIS CARD'
   }
 
   // Linking is the one moment a person tells the system something it could not
@@ -1279,8 +1301,9 @@ export default function ScannerPage() {
 
     processingRef.current = true
     setProcessing(true)
-    setOffCard(null)
+    closeOffCard(true)
 
+    let offNote: string | null = null
     try {
       const res  = await fetch('/api/boxes/scans', {
         method:  'POST',
@@ -1306,9 +1329,9 @@ export default function ScannerPage() {
         setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb  —  DELETED PLU ${plu}: remove it from the scale`)
         setFlash('warn')
         setTimeout(() => setFlash(null), 4000)
-      } else if (checkOffCard(scan, plu, itemName)) {
+      } else if ((offNote = checkOffCard(scan, plu, itemName))) {
         setLastKind('warn')
-        setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb  —  NOT ON THIS CARD`)
+        setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb  —  ${offNote}`)
         setFlash('warn')
         setTimeout(() => setFlash(null), 4000)
       } else {
@@ -2483,8 +2506,9 @@ export default function ScannerPage() {
     setWeightEntry('')
     processingRef.current = true
     setProcessing(true)
-    setOffCard(null)
+    closeOffCard(true)
 
+    let offNote: string | null = null
     try {
       const res = await fetch('/api/boxes/scans', {
         method:  'POST',
@@ -2505,9 +2529,9 @@ export default function ScannerPage() {
         setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb  —  DELETED PLU ${plu}: remove it from the scale`)
         setFlash('warn')
         setTimeout(() => setFlash(null), 4000)
-      } else if (checkOffCard(scan, plu, itemName)) {
+      } else if ((offNote = checkOffCard(scan, plu, itemName))) {
         setLastKind('warn')
-        setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb  —  NOT ON THIS CARD`)
+        setLastItem(`${itemName}  ·  ${weightLbs.toFixed(2)} lb  —  ${offNote}`)
         setFlash('warn')
         setTimeout(() => setFlash(null), 4000)
       } else {
@@ -4691,16 +4715,17 @@ export default function ScannerPage() {
               This PLU packs <strong style={{ color: C.cream }}>{offCard.keys.join(', ')}</strong> and{' '}
               <strong style={{ color: C.cream }}>{customer}</strong>&apos;s cut card doesn&apos;t order it.
               Check the package against the card before it goes in the box.
+              Keep it and the rest of this cut goes in without asking again this session.
             </div>
             <div style={{ display: 'flex', gap: '0.6rem' }}>
               <button
-                onClick={() => { const id = offCard.scanId; setOffCard(null); removeScan(id); scanRef.current?.focus() }}
+                onClick={() => { const id = offCard.scanId; closeOffCard(false); removeScan(id); scanRef.current?.focus() }}
                 style={{ flex: 1, background: 'transparent', border: `1px solid #e05555`, color: '#e05555', borderRadius: 4, padding: '0.85rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer' }}
               >
                 Take it out of the box
               </button>
               <button
-                onClick={() => { setOffCard(null); scanRef.current?.focus() }}
+                onClick={() => { closeOffCard(true); scanRef.current?.focus() }}
                 style={{ flex: 1, background: C.tan, color: C.dark, border: 'none', borderRadius: 4, padding: '0.85rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer' }}
               >
                 It&apos;s right — keep it

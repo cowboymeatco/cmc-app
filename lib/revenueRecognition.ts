@@ -146,6 +146,13 @@ export interface RevenueDay {
    *  day reads like a slow one (9/24: 16 of 20 head were ours, harvest showed
    *  $1,023; Charlie, 2026-09-28). */
   ownKillValue: number
+  /** Our own animals broken on the cut floor this day. */
+  headOwnCut: number
+  /** What their cut & wrap would have billed at the service rates. Same
+   *  footing as ownKillValue: not revenue, but it is the day's work. 9/29:
+   *  twelve of our lambs were cut for Daniels Gourmet Meats and the day read
+   *  as if the cut floor had stood idle (Charlie, 2026-09-30). */
+  ownCutValue: number
 }
 
 export interface EnterpriseTotal {
@@ -339,6 +346,7 @@ export function buildRevenueRecognition(input: BuildInput): RevenueRecognition {
         earned: zeroByEnterprise(),
         scheduled: zeroByEnterprise(),
         total: 0, headHarvested: 0, headCut: 0, headOwn: 0, ownKillValue: 0,
+        headOwnCut: 0, ownCutValue: 0,
       }
       byDay.set(date, d)
     }
@@ -387,6 +395,25 @@ export function buildRevenueRecognition(input: BuildInput): RevenueRecognition {
           const w = h.hot_carcass_weight_lbs && h.hot_carcass_weight_lbs > 0 ? h.hot_carcass_weight_lbs : speciesAvgLbs[species] ?? null
           const kill = killFeeCharge(species, w, WHOLE, tag)
           if (kill) d.ownKillValue += kill.amount
+        }
+      }
+      // The knife work on our own animals is the cut floor's day just the
+      // same, so it lands on the cut day the way a customer's would — best
+      // evidence first (see below) — valued at the service rates and kept
+      // out of the revenue columns. Lamb and goat carry their whole flat fee
+      // here, since nothing was counted on the kill side for them.
+      if (h.status !== 'delivered') {
+        const ownScanned = packDayByLogId.get(h.id)
+        const ownCutDay = ownScanned ?? plannedCutDayByLogId.get(h.id) ?? projectedCutDate(h.harvest_date, species)
+        if (inWindow(ownCutDay)) {
+          const d = dayOf(ownCutDay)
+          d.headOwnCut += 1
+          const done = h.status === 'cut' || Boolean(ownScanned)
+          if (done && ownCutDay <= today) {
+            const w = h.hot_carcass_weight_lbs && h.hot_carcass_weight_lbs > 0 ? h.hot_carcass_weight_lbs : speciesAvgLbs[species] ?? null
+            const cut = cutWrapCharge(species, w, WHOLE, tag)
+            if (cut) d.ownCutValue += cut.amount
+          }
         }
       }
       continue
@@ -521,6 +548,7 @@ export function buildRevenueRecognition(input: BuildInput): RevenueRecognition {
     }
     row.total = r2(total)
     row.ownKillValue = r2(row.ownKillValue)
+    row.ownCutValue = r2(row.ownCutValue)
     days.push(row)
   }
 

@@ -179,6 +179,8 @@ interface DailyLaborDay {
   headCut: number
   headOwn: number
   ownKillValue: number
+  headOwnCut: number
+  ownCutValue: number
   scheduledHarvest: number
   hours: number
   laborDollars: number
@@ -1592,13 +1594,22 @@ export default function ExecPage() {
                       {rows.map(d => {
                         const net = d.gross - d.laborDollars
                         const pct = d.gross > 0 ? d.laborDollars / d.gross * 100 : null
+                        // Our own animals' work at service rates — the day as
+                        // the floor saw it, next to the day as the books do.
+                        const own = d.ownKillValue + d.ownCutValue
+                        const netWithOwn = net + own
                         const retail = d.grossBy.retail + d.grossBy.wholesale
                         const crew = d.people.map(p => `${p.name} ${p.hours.toFixed(1)} h${p.rate == null ? ' (no rate on file)' : ''}`).join('\n')
                         return (
                           <tr key={d.date} title={crew || 'no one clocked in'} style={{ borderTop: '1px solid rgba(166,120,90,0.12)' }}>
                             <td style={{ padding: '0.35rem 0.5rem', whiteSpace: 'nowrap' }}>{dayLabel(d.date)}{d.date === daily.today ? ' · today' : ''}</td>
-                            <td style={cell} title={d.headOwn ? `${d.headOwn} of our own animals killed — no kill fee` : undefined}>
-                              {d.headHarvested || d.headCut || d.headOwn ? `${d.headHarvested}${d.headOwn ? ` +${d.headOwn} own` : ''} / ${d.headCut}` : '—'}
+                            <td style={cell} title={[
+                              d.headOwn ? `${d.headOwn} of our own animals killed — no kill fee` : '',
+                              d.headOwnCut ? `${d.headOwnCut} of our own animals cut — no cut & wrap fee` : '',
+                            ].filter(Boolean).join('\n') || undefined}>
+                              {d.headHarvested || d.headCut || d.headOwn || d.headOwnCut
+                                ? `${d.headHarvested}${d.headOwn ? ` +${d.headOwn} own` : ''} / ${d.headCut}${d.headOwnCut ? ` +${d.headOwnCut} own` : ''}`
+                                : '—'}
                             </td>
                             <td style={cell} title={[
                               d.ownKillValue ? `+${usd(d.ownKillValue)} our own animals at kill rates (not revenue)` : '',
@@ -1608,13 +1619,24 @@ export default function ExecPage() {
                               {d.ownKillValue > 0 && <div style={{ fontSize: '0.7rem', color: C.lightBrown }}>+{usd(d.ownKillValue)} own</div>}
                               {d.scheduledHarvest > 0 && d.date < daily.today && <div style={{ fontSize: '0.7rem', color: COST_COLOR }}>⚠ booked, not logged</div>}
                             </td>
-                            <td style={cell}>{d.grossBy.processing ? usd(d.grossBy.processing) : '—'}</td>
+                            <td style={cell} title={d.ownCutValue ? `+${usd(d.ownCutValue)} our own animals at cut & wrap rates (not revenue)` : undefined}>
+                              {d.grossBy.processing ? usd(d.grossBy.processing) : '—'}
+                              {d.ownCutValue > 0 && <div style={{ fontSize: '0.7rem', color: C.lightBrown }}>+{usd(d.ownCutValue)} own</div>}
+                            </td>
                             <td style={cell}>{d.grossBy.valueAdd ? usd(d.grossBy.valueAdd) : '—'}</td>
                             <td style={cell}>{retail ? usd(retail) : '—'}</td>
                             <td style={{ ...cell, fontWeight: 600, color: C.cream }}>{usd(d.gross)}</td>
                             <td style={cell}>{d.hours ? `${d.hours.toFixed(1)}${d.unratedHours ? '*' : ''}` : '—'}</td>
                             <td style={cell}>{d.laborDollars ? usd(d.laborDollars) : '—'}</td>
-                            <td style={{ ...cell, fontWeight: 600, color: net >= 0 ? INCOME_COLOR : COST_COLOR }}>{net >= 0 ? usd(net) : `−${usd(-net)}`}</td>
+                            <td style={{ ...cell, fontWeight: 600, color: net >= 0 ? INCOME_COLOR : COST_COLOR }}
+                              title={own > 0 ? `${netWithOwn >= 0 ? usd(netWithOwn) : `−${usd(-netWithOwn)}`} counting our own animals at service rates` : undefined}>
+                              {net >= 0 ? usd(net) : `−${usd(-net)}`}
+                              {own > 0 && (
+                                <div style={{ fontSize: '0.7rem', fontWeight: 400, color: netWithOwn >= 0 ? INCOME_COLOR : C.lightBrown }}>
+                                  {netWithOwn >= 0 ? usd(netWithOwn) : `−${usd(-netWithOwn)}`} with own
+                                </div>
+                              )}
+                            </td>
                             <td style={{ ...cell, color: pct == null ? C.lightBrown : pct <= 33 ? INCOME_COLOR : COST_COLOR }}>{pct != null ? `${Math.round(pct)}%` : '—'}</td>
                           </tr>
                         )
@@ -1624,7 +1646,8 @@ export default function ExecPage() {
                 </div>
                 <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.5rem', lineHeight: 1.5 }}>
                   Gross is the revenue-recognition money for the day: kill fees on kill day, cut &amp; wrap on the day the carcass is broken,
-                  value add and retail as the books post them{daily.booksThrough ? ` (through ${daily.booksThrough})` : ''}. Own animals earn no service fee.
+                  value add and retail as the books post them{daily.booksThrough ? ` (through ${daily.booksThrough})` : ''}. Own animals earn no service fee:
+                  they show as &ldquo;+own&rdquo; head with their kill and cut valued at the service rates, and Net says what the day would read with them counted.
                   Wages are QuickBooks Time clocked hours × each person&apos;s straight-time rate — no payroll taxes, overtime premium or salaried staff.
                   Hover a day to see who clocked in.{' '}
                   <Link href="/exec/study" style={{ color: C.tan }}>Run a timing study →</Link>
