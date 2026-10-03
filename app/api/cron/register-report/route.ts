@@ -1,9 +1,10 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { buildDailyReport } from '@/lib/dailyReport'
+import { fillCardDays } from '@/lib/cloverCapital'
 import { sendMail } from '@/lib/mailer'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
-import { isoDate, isoDateTime } from '@/lib/dates'
+import { addDaysISO, isoDate, isoDateTime } from '@/lib/dates'
 
 // The 5:00 PM register close email — see lib/dailyReport.ts.
 //
@@ -15,6 +16,10 @@ import { isoDate, isoDateTime } from '@/lib/dates'
 // Each sent day is recorded in clover_daily_report_log so a retry or a manual
 // run can't email the same day twice (?resend=1 overrides, for testing).
 // ?date=YYYY-MM-DD sends a past day's report on demand.
+//
+// After the email is away it reads a few earlier card days Clover Capital's
+// pace needs (lib/cloverCapital) — after, so a slow Clover can't hold up the
+// report; the pace line fills in over the first week.
 //
 // Guarded by CRON_SECRET and fails CLOSED.
 
@@ -57,7 +62,12 @@ export async function GET(req: NextRequest) {
     const { error } = await supabaseAdmin.from('clover_daily_report_log').upsert({
       business_date: date, sent_at: new Date().toISOString(), recipients: RECIPIENTS, subject: report.subject,
     })
-    return NextResponse.json({ ok: true, sent: date, to: RECIPIENTS, subject: report.subject, logWarning: error?.message ?? null })
+    let cardDays: string = 'filled'
+    try {
+      const missing = await fillCardDays(addDaysISO(date, -27), date, 4)
+      if (missing.length) cardDays = `${missing.length} day(s) still to read: ${missing.join(', ')}`
+    } catch (e) { cardDays = `couldn't read earlier days: ${e instanceof Error ? e.message : String(e)}` }
+    return NextResponse.json({ ok: true, sent: date, to: RECIPIENTS, subject: report.subject, logWarning: error?.message ?? null, cardDays })
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 })
   }
