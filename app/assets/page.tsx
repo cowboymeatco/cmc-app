@@ -132,6 +132,16 @@ export default function AssetRegister() {
         </div>
       </Link>
 
+      <Link href="/assets/energy" style={{ textDecoration: 'none' }}>
+        <div style={{
+          marginTop: 10, minHeight: 48, borderRadius: 10, border: `1px solid ${C.medBrown}`,
+          color: C.tan, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          gap: 8, fontSize: 15, fontWeight: 600,
+        }}>
+          ⚡ Energy log — what each machine costs to run
+        </div>
+      </Link>
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', margin: '22px 0 10px' }}>
         <span style={{ color: C.cream, fontSize: 16, fontWeight: 700 }}>
           {data.assets.length} asset{data.assets.length === 1 ? '' : 's'}

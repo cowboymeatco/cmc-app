@@ -44,6 +44,8 @@ export interface Asset {
   replacement_cost: number | null
   qbo_account_id: string | null
   qbo_account_name: string | null
+  /** Nameplate rating, for the energy log's "running above plate" check. */
+  rated_watts: number | null
   photo_url: string | null
   notes: string | null
   active: boolean
