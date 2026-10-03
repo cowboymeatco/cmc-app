@@ -4,8 +4,10 @@
 //
 // It says what the register took in, where it went (retail vs invoice
 // payments vs gift cards), the QuickBooks entry for the day, the deposits to
-// expect, and anything a person needs to look at. Read-only: building it never
-// writes to Clover or QuickBooks.
+// expect, where the Clover Capital advance stands, and anything a person
+// needs to look at. Read-only against Clover and QuickBooks: building it
+// never writes to either. It does file the day's card batch in Supabase
+// (clover_card_days) so the advance can be carried forward — lib/cloverCapital.
 //
 // 5:00 PM is also when a day can first be approved (lib/qboDailySales
 // SHOP_CLOSE), so on a normal day the report says "ready to approve"; a day
@@ -14,9 +16,10 @@
 
 import { readCloverDay, type DaySummary } from '@/lib/cloverSales'
 import { proposeDay, postingFrom, type DayProposal, type DayRow } from '@/lib/qboDailySales'
-import { cardGrossCents, defaultHoldbackCents } from '@/lib/qboDeposits'
+import { cardGrossCents, defaultHoldbackCents, expectedBankDate } from '@/lib/qboDeposits'
+import { capitalStatus, recordCardDay, type CapitalStatus } from '@/lib/cloverCapital'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
-import { addDaysISO, dateLabel, dayOfWeekISO } from '@/lib/dates'
+import { addDaysISO, dateLabel } from '@/lib/dates'
 
 export interface DailyReport {
   date: string
@@ -26,21 +29,6 @@ export interface DailyReport {
 
 const $ = (c: number) => `${c < 0 ? '−' : ''}$${(Math.abs(c) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-
-/**
- * When a day's card batch usually reaches First State Bank, from every
- * Clover deposit Jill booked (Aug–Sep 2026): Mon–Wed sales two business days
- * later, Thu/Fri/Sat sales the following Monday. Holidays push it a day (Labor
- * Day did); this doesn't know about them, hence "about".
- */
-export function expectedBankDate(date: string): string {
-  const dow = dayOfWeekISO(date) // 0 Sun … 6 Sat
-  if (dow >= 1 && dow <= 3) return addDaysISO(date, 2)
-  if (dow === 4) return addDaysISO(date, 4)
-  if (dow === 5) return addDaysISO(date, 3)
-  if (dow === 6) return addDaysISO(date, 2)
-  return addDaysISO(date, 1)
-}
 
 interface OpenItem { date: string; what: string }
 
@@ -88,7 +76,39 @@ function table(rows: [string, string, boolean?][]): string {
 }
 const list = (items: string[]) => `<ul style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;margin:4px 0;padding-left:20px">${items.map(i => `<li style="margin:2px 0">${i}</li>`).join('')}</ul>`
 
-export function renderReport(s: DaySummary, built: DayProposal | null, qboError: string | null, record: DayRow | null, open: OpenItem[]): DailyReport {
+const short = (iso: string) => dateLabel(iso, { month: 'short', day: 'numeric' })
+const pct = (part: number, whole: number) => whole > 0 ? `${((part / whole) * 100).toFixed(1)}%` : '—'
+
+// Where the Clover Capital advance stands — see lib/cloverCapital for how
+// the dashboard figure is carried forward from the days' card batches.
+function capitalSection(c: CapitalStatus): string[] {
+  const a = c.advance
+  const out: string[] = [H('Clover Capital advance')]
+  const rows: [string, string, boolean?][] = [
+    [`Balance due, per Clover (through its ${short(a.last_payment_date)} payout)`, $(a.balance_cents)],
+    ['Paid so far', `${$(a.paid_cents)} of ${$(a.payback_cents)} (${pct(a.paid_cents, a.payback_cents)})`],
+  ]
+  if (c.pending.days) {
+    const span = c.pending.from === c.pending.to ? short(c.pending.from) : `${short(c.pending.from)} – ${short(c.pending.to)}`
+    rows.push([`Held back from card batches on the way (${span})`, $(-c.pending.holdbackCents)])
+    rows.push(['Balance once those land', $(c.estBalanceCents), true])
+  }
+  out.push(table(rows))
+  if (c.pending.missing.length) {
+    out.push(P(`Not counted yet: ${c.pending.missing.map(short).join(', ')} — the app hasn't read ${c.pending.missing.length === 1 ? 'that day' : 'those days'} from Clover; it will tomorrow.`, '#b26a00'))
+  }
+  if (c.estBalanceCents <= 0) {
+    out.push(P('That covers the advance — see Needs attention.', '#2e7d32'))
+  } else if (c.pace && c.payoffDate) {
+    out.push(P(`At the recent pace (${$(c.pace.perDayCents)} a day of holdback over the last ${c.pace.days} days) it pays off about <b>${dateLabel(c.payoffDate, { weekday: 'short', month: 'short', day: 'numeric' })}</b>, ${pct(a.payback_cents - c.estBalanceCents, a.payback_cents)} paid as of today.`))
+  } else {
+    out.push(P('A payoff date comes once a week of card days is on record.', '#777'))
+  }
+  out.push(P(`Advance ${esc(a.advance_number)}: ${$(a.advance_cents)}${a.funded_date ? ` funded ${dateLabel(a.funded_date, { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}, repaid at ${Math.round(a.holdback_rate * 100)}% of each card batch. Clover's figures as entered on the Billing page${a.updated_by ? ` (${esc(a.updated_by)})` : ''} — re-enter them there when the dashboard moves.`, '#777'))
+  return out
+}
+
+export function renderReport(s: DaySummary, built: DayProposal | null, qboError: string | null, record: DayRow | null, open: OpenItem[], capital: CapitalStatus | null = null, capitalError: string | null = null): DailyReport {
   const t = s.totals
   const day = dateLabel(s.date, { weekday: 'short', month: 'short', day: 'numeric' })
   const p = built?.proposal
@@ -102,6 +122,8 @@ export function renderReport(s: DaySummary, built: DayProposal | null, qboError:
   for (const w of s.warnings) attention.push(esc(w))
   if (record?.changed_after_post) attention.push('Clover changed after this day was posted — adjust in QuickBooks')
   if (record?.status === 'error') attention.push(`Posting stopped part-way: ${esc(record.error ?? '')}`)
+  if (capitalError) attention.push(`Clover Capital couldn't be worked out: ${esc(capitalError)}`)
+  if (capital && capital.estBalanceCents <= 0) attention.push('The Clover Capital advance looks paid off — check the Clover dashboard; the holdback on the next card deposit should drop')
 
   const status = posted ? 'posted ✓'
     : !on ? 'preview (posting off)'
@@ -165,6 +187,8 @@ export function renderReport(s: DaySummary, built: DayProposal | null, qboError:
   }
   parts.push(list(deps.length ? deps : ['No deposits for this day']))
 
+  if (capital) parts.push(...capitalSection(capital))
+
   parts.push(H('Needs attention'))
   parts.push(attention.length ? list(attention) : P('Nothing.', '#2e7d32'))
 
@@ -189,5 +213,12 @@ export async function buildDailyReport(date: string): Promise<DailyReport | null
     recordFor(date).catch(() => null),
     openItems(date).catch(e => [{ date, what: `Couldn't check earlier days: ${e instanceof Error ? e.message : String(e)}` }]),
   ])
-  return renderReport(s, built, qboError, record, open)
+  // The day's card batch goes on record first so the advance counts it.
+  let capital: CapitalStatus | null = null
+  let capitalError: string | null = null
+  try {
+    await recordCardDay(s)
+    capital = await capitalStatus(date)
+  } catch (e) { capitalError = e instanceof Error ? e.message : String(e) }
+  return renderReport(s, built, qboError, record, open, capital, capitalError)
 }
