@@ -17,7 +17,7 @@
 import { readCloverDay, type DaySummary } from '@/lib/cloverSales'
 import { proposeDay, postingFrom, type DayProposal, type DayRow } from '@/lib/qboDailySales'
 import { cardGrossCents, defaultHoldbackCents, expectedBankDate } from '@/lib/qboDeposits'
-import { capitalStatus, recordCardDay, type CapitalStatus } from '@/lib/cloverCapital'
+import { capitalStatus, closeAdvance, recordCardDay, type CapitalStatus } from '@/lib/cloverCapital'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { addDaysISO, dateLabel } from '@/lib/dates'
 
@@ -84,6 +84,11 @@ const pct = (part: number, whole: number) => whole > 0 ? `${((part / whole) * 10
 function capitalSection(c: CapitalStatus): string[] {
   const a = c.advance
   const out: string[] = [H('Clover Capital advance')]
+  // The day it pays off still shows the figures; from the next day on, just the note.
+  if (a.closed_date && a.closed_date !== c.pending.to) {
+    out.push(P(`<b>Paid off.</b> The card batches through ${short(a.closed_date)} covered the last of advance ${esc(a.advance_number)} (${$(a.advance_cents)}, ${$(a.payback_cents)} repaid). Nothing more comes off the card deposits. When Clover funds a new advance, enter it on the Billing page.`, '#2e7d32'))
+    return out
+  }
   const rows: [string, string, boolean?][] = [
     [`Balance due, per Clover (through its ${short(a.last_payment_date)} payout)`, $(a.balance_cents)],
     ['Paid so far', `${$(a.paid_cents)} of ${$(a.payback_cents)} (${pct(a.paid_cents, a.payback_cents)})`],
@@ -93,12 +98,15 @@ function capitalSection(c: CapitalStatus): string[] {
     rows.push([`Held back from card batches on the way (${span})`, $(-c.pending.holdbackCents)])
     rows.push(['Balance once those land', $(c.estBalanceCents), true])
   }
+  if (c.estBalanceCents > 0) {
+    rows.push([`Card sales still needed to clear it (at ${Math.round(a.holdback_rate * 100)}%)`, $(c.cardSalesNeededCents), true])
+  }
   out.push(table(rows))
   if (c.pending.missing.length) {
     out.push(P(`Not counted yet: ${c.pending.missing.map(short).join(', ')} — the app hasn't read ${c.pending.missing.length === 1 ? 'that day' : 'those days'} from Clover; it will tomorrow.`, '#b26a00'))
   }
-  if (c.estBalanceCents <= 0) {
-    out.push(P('That covers the advance — see Needs attention.', '#2e7d32'))
+  if (c.paidOff) {
+    out.push(P('<b>That covers it.</b> The batches on the way pay off the advance; nothing more comes off the card deposits after them — see Needs attention.', '#2e7d32'))
   } else if (c.pace && c.payoffDate) {
     out.push(P(`At the recent pace (${$(c.pace.perDayCents)} a day of holdback over the last ${c.pace.days} days) it pays off about <b>${dateLabel(c.payoffDate, { weekday: 'short', month: 'short', day: 'numeric' })}</b>, ${pct(a.payback_cents - c.estBalanceCents, a.payback_cents)} paid as of today.`))
   } else {
@@ -123,7 +131,7 @@ export function renderReport(s: DaySummary, built: DayProposal | null, qboError:
   if (record?.changed_after_post) attention.push('Clover changed after this day was posted — adjust in QuickBooks')
   if (record?.status === 'error') attention.push(`Posting stopped part-way: ${esc(record.error ?? '')}`)
   if (capitalError) attention.push(`Clover Capital couldn't be worked out: ${esc(capitalError)}`)
-  if (capital && capital.estBalanceCents <= 0) attention.push('The Clover Capital advance looks paid off — check the Clover dashboard; the holdback on the next card deposit should drop')
+  if (capital?.paidOff && capital.advance.closed_date === s.date) attention.push(`The Clover Capital advance is paid off — the card batches through ${short(s.date)} cover what was left, so the app marked it closed. Confirm on the Clover dashboard that the holdback stops with the ${dateLabel(expectedBankDate(s.date), { weekday: 'short', month: 'short', day: 'numeric' })} deposit.`)
 
   const status = posted ? 'posted ✓'
     : !on ? 'preview (posting off)'
@@ -182,12 +190,19 @@ export function renderReport(s: DaySummary, built: DayProposal | null, qboError:
   }
   const card = cardGrossCents(s)
   if (card) {
-    const hold = defaultHoldbackCents(card)
-    deps.push(`Card batch: ${$(card)} − ${$(hold)} loan (25%) = ${$(card - hold)} before fees. Expected at First State Bank about <b>${dateLabel(expectedBankDate(s.date), { weekday: 'short', month: 'short', day: 'numeric' })}</b>; the fee is known once it lands.`)
+    // The Clover Capital holdback: the usual share while the advance is open,
+    // only what's left of it on the batch that pays it off, nothing after.
+    // Without an advance on record the old 25% assumption stands.
+    const usual = defaultHoldbackCents(card)
+    const hold = capital ? capital.todayHoldbackCents : usual
+    const loan = !hold ? ''
+      : hold < usual ? ` − ${$(hold)} loan (the last of the Clover Capital advance)`
+      : ` − ${$(hold)} loan (${capital ? Math.round(capital.advance.holdback_rate * 100) : 25}%)`
+    deps.push(`Card batch: ${$(card)}${loan} = ${$(card - hold)} before fees${!hold && capital ? ' — no Clover Capital holdback now' : ''}. Expected at First State Bank about <b>${dateLabel(expectedBankDate(s.date), { weekday: 'short', month: 'short', day: 'numeric' })}</b>; the fee is known once it lands.`)
   }
   parts.push(list(deps.length ? deps : ['No deposits for this day']))
 
-  if (capital) parts.push(...capitalSection(capital))
+  if (capital?.show) parts.push(...capitalSection(capital))
 
   parts.push(H('Needs attention'))
   parts.push(attention.length ? list(attention) : P('Nothing.', '#2e7d32'))
@@ -219,6 +234,13 @@ export async function buildDailyReport(date: string): Promise<DailyReport | null
   try {
     await recordCardDay(s)
     capital = await capitalStatus(date)
+    // The batches on the way cover the balance: the advance is done. Close
+    // it so tomorrow's deposit line takes no holdback and the section winds
+    // down (lib/cloverCapital). A person can reopen it by re-entering the
+    // dashboard figures if Clover shows a balance after all.
+    if (capital?.paidOff && !capital.advance.closed_date) {
+      capital.advance = await closeAdvance(capital.advance, date, `the app — the card batches through ${date} covered it`)
+    }
   } catch (e) { capitalError = e instanceof Error ? e.message : String(e) }
   return renderReport(s, built, qboError, record, open, capital, capitalError)
 }

@@ -15,7 +15,12 @@
 //     sales days are already in "paid to date". Later days are "on the way":
 //     their holdback comes off the balance when they land;
 //   - the recent pace (holdback per calendar day over the days on record)
-//     gives an "about when" for the payoff.
+//     gives an "about when" for the payoff, and balance ÷ rate says how much
+//     card business still has to ring up to clear it;
+//   - once the batches on the way cover the balance, the advance is paid
+//     off: the day's deposit line stops taking the holdback (the last batch
+//     takes only what's left), the report marks the advance closed, says so
+//     for a week, then drops the section until a new advance is entered.
 //
 // A dashboard figure is whole dollars and the holdback is 25% to the cent, so
 // the estimate drifts by at most a few dollars a week; re-entering the
@@ -43,12 +48,28 @@ export interface Advance {
 
 export interface CardDay { business_date: string; card_gross_cents: number; holdback_cents: number }
 
-/** The open advance (no closed date), the one most recently entered. */
+/**
+ * The advance to report on: the open one (no closed date) most recently
+ * entered, else the most recently closed one — so the report can say "paid
+ * off" for a while, then drop the section (see capitalStatus `show`).
+ */
 export async function currentAdvance(): Promise<Advance | null> {
   const { data, error } = await supabaseAdmin.from('clover_capital_advance').select('*')
-    .is('closed_date', null).order('updated_at', { ascending: false }).limit(1).maybeSingle()
+    .order('closed_date', { ascending: true, nullsFirst: true }).order('updated_at', { ascending: false }).limit(1).maybeSingle()
   if (error) throw new Error(`Couldn't read the Clover Capital advance: ${error.message}`)
   if (!data) return null
+  return { ...data, holdback_rate: Number(data.holdback_rate) } as Advance
+}
+
+/**
+ * Mark the advance paid off as of `date`: the day whose card batch covered
+ * the last of it. From then on no holdback comes off the deposits.
+ */
+export async function closeAdvance(advance: Advance, date: string, by: string): Promise<Advance> {
+  const { data, error } = await supabaseAdmin.from('clover_capital_advance')
+    .update({ closed_date: date, updated_by: by, updated_at: new Date().toISOString() })
+    .eq('advance_number', advance.advance_number).select('*').single()
+  if (error) throw new Error(`Couldn't close the advance: ${error.message}`)
   return { ...data, holdback_rate: Number(data.holdback_rate) } as Advance
 }
 
@@ -143,16 +164,41 @@ export interface CapitalStatus {
   advance: Advance
   /** Sales days Clover hasn't paid out yet (through `today`), whose holdback is still to come off. */
   pending: { from: string; to: string; days: number; holdbackCents: number; missing: string[] }
-  /** Balance once the pending days land. */
+  /** What comes off today's card batch: the usual share, or only what's left of the advance. */
+  todayHoldbackCents: number
+  /** Balance once the pending days land (0 once they cover it). */
   estBalanceCents: number
+  /** Card sales still to ring up before the holdback clears it (balance ÷ rate). */
+  cardSalesNeededCents: number
   /** Holdback per calendar day over the days on record, when a week or more is. */
   pace: { perDayCents: number; days: number } | null
   /** About when the advance pays off at that pace. */
   payoffDate: string | null
+  /** The pending batches cover the balance: nothing more comes off after them. */
+  paidOff: boolean
+  /** Whether the report should still carry the section (an advance closed a while ago drops out). */
+  show: boolean
 }
 
 const PACE_DAYS = 28
 const PACE_MIN_DAYS = 7
+const SHOW_CLOSED_DAYS = 7
+
+/**
+ * How much of a day's holdback the advance still has room for, day by day
+ * in order: a batch that would overshoot takes only what's left, later
+ * days take nothing. Returns the amount applied per day.
+ */
+function applyHoldbacks(balanceCents: number, days: { date: string; holdbackCents: number }[]): Map<string, number> {
+  const out = new Map<string, number>()
+  let left = Math.max(0, balanceCents)
+  for (const d of days) {
+    const take = Math.min(d.holdbackCents, left)
+    out.set(d.date, take)
+    left -= take
+  }
+  return out
+}
 
 /**
  * The advance as of `today`. Reads up to `maxReads` pending days from Clover
@@ -172,8 +218,17 @@ export async function capitalStatus(today: string, maxReads = 4): Promise<Capita
   const windowFrom = addDaysISO(today, -(PACE_DAYS - 1))
   const stored = await storedDays(windowFrom < from ? windowFrom : from, today)
 
-  const holdbackCents = pendingDays.reduce((sum, d) => sum + (stored.get(d)?.holdback_cents ?? 0), 0)
-  const estBalanceCents = advance.balance_cents - holdbackCents
+  // A closed advance takes nothing more; an open one takes each pending
+  // day's share until the balance is gone.
+  const closed = !!advance.closed_date
+  const applied = applyHoldbacks(closed ? 0 : advance.balance_cents,
+    pendingDays.map(d => ({ date: d, holdbackCents: stored.get(d)?.holdback_cents ?? 0 })))
+  const holdbackCents = [...applied.values()].reduce((a, b) => a + b, 0)
+  const estBalanceCents = closed ? 0 : Math.max(0, advance.balance_cents - holdbackCents)
+  const todayHoldbackCents = applied.get(today) ?? 0
+  const cardSalesNeededCents = advance.holdback_rate > 0 ? Math.ceil(estBalanceCents / advance.holdback_rate) : 0
+  const paidOff = closed || (estBalanceCents <= 0 && missing.length === 0)
+  const show = !closed || daysBetweenISO(advance.closed_date!, today) <= SHOW_CLOSED_DAYS
 
   // Pace: the unbroken run of days on record ending today.
   let runFrom: string | null = null
@@ -194,6 +249,6 @@ export async function capitalStatus(today: string, maxReads = 4): Promise<Capita
   return {
     advance,
     pending: { from, to: today, days: pendingDays.length, holdbackCents, missing },
-    estBalanceCents, pace, payoffDate,
+    todayHoldbackCents, estBalanceCents, cardSalesNeededCents, pace, payoffDate, paidOff, show,
   }
 }

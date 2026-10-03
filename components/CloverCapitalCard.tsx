@@ -22,8 +22,10 @@ interface Advance {
 interface Status {
   pending: { from: string; to: string; days: number; holdbackCents: number; missing: string[] }
   estBalanceCents: number
+  cardSalesNeededCents: number
   pace: { perDayCents: number; days: number } | null
   payoffDate: string | null
+  paidOff: boolean
 }
 interface Form { advanceNumber: string; advanceDollars: string; fundedDate: string; lastPaymentDate: string; paidDollars: string; balanceDollars: string; closedDate: string }
 
@@ -89,8 +91,8 @@ export default function CloverCapitalCard() {
         <div>
           <div style={{ color: C.tan, fontWeight: 700, fontSize: '0.95rem' }}>
             Clover Capital{advance && status && (
-              <span style={{ color: status.estBalanceCents > 0 ? C.yellow : C.green, fontWeight: 400, marginLeft: '0.5rem' }}>
-                {status.estBalanceCents > 0 ? `${$(status.estBalanceCents)} to go` : 'paid off?'}
+              <span style={{ color: status.paidOff ? C.green : C.yellow, fontWeight: 400, marginLeft: '0.5rem' }}>
+                {advance.closed_date ? `paid off ${day(advance.closed_date)}` : status.paidOff ? 'paid off by the batches on the way' : `${$(status.estBalanceCents)} to go`}
               </span>
             )}
           </div>
@@ -112,6 +114,12 @@ export default function CloverCapitalCard() {
         <div style={{ color: C.lightBrown, fontSize: '0.83rem' }}>Loading…</div>
       ) : !editing && !advance ? (
         <div style={{ color: C.lightBrown, fontSize: '0.83rem' }}>No advance entered yet.</div>
+      ) : !editing && advance?.closed_date ? (
+        <div style={{ fontSize: '0.83rem', color: C.cream }}>
+          Advance {advance.advance_number} ({$(advance.advance_cents)}, {$(advance.payback_cents)} repaid) was paid off by the card batches through {day(advance.closed_date)}.
+          Nothing comes off the card deposits now. When Clover funds a new advance, enter it here.
+          {advance.updated_by ? <div style={{ color: C.lightBrown, fontSize: '0.75rem' }}>Closed by {advance.updated_by}.</div> : null}
+        </div>
       ) : !editing && advance ? (
         <div style={{ fontSize: '0.83rem', color: C.cream, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.5rem 1.5rem' }}>
           <div><span style={LABEL}>Balance due, per Clover</span>{$(advance.balance_cents)} <span style={{ color: C.lightBrown }}>through its {day(advance.last_payment_date)} payout</span></div>
@@ -121,8 +129,11 @@ export default function CloverCapitalCard() {
               {status.pending.missing.length > 0 && <div style={{ color: C.yellow }}>not read yet: {status.pending.missing.map(day).join(', ')}</div>}
             </div>
           )}
-          <div><span style={LABEL}>Pays off about</span>{status?.payoffDate ? day(status.payoffDate) : <span style={{ color: C.lightBrown }}>after a week of card days is on record</span>}
-            {status?.pace && <div style={{ color: C.lightBrown }}>{$(status.pace.perDayCents)}/day over {status.pace.days} days</div>}
+          {status && status.estBalanceCents > 0 && (
+            <div><span style={LABEL}>Card sales still needed</span>{$(status.cardSalesNeededCents)} <span style={{ color: C.lightBrown }}>at {Math.round(advance.holdback_rate * 100)}%</span></div>
+          )}
+          <div><span style={LABEL}>Pays off about</span>{status?.paidOff ? <span style={{ color: C.green }}>covered by the batches on the way</span> : status?.payoffDate ? day(status.payoffDate) : <span style={{ color: C.lightBrown }}>after a week of card days is on record</span>}
+            {status?.pace && !status.paidOff && <div style={{ color: C.lightBrown }}>{$(status.pace.perDayCents)}/day over {status.pace.days} days</div>}
           </div>
           <div style={{ gridColumn: '1 / -1', color: C.lightBrown, fontSize: '0.75rem' }}>
             Advance {advance.advance_number}: {$(advance.advance_cents)}{advance.funded_date ? ` funded ${day(advance.funded_date)}` : ''}, {Math.round(advance.holdback_rate * 100)}% of each card batch.
