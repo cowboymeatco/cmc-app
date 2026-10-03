@@ -30,6 +30,40 @@ interface RawInstruction {
   drop_off_id?: string | null
 }
 
+// A card somebody started on the online form and never submitted. The wizard
+// autosaves into cutting_instruction_drafts and deletes the row when the real
+// card inserts, so anything listed here is a card that didn't make it — Wanda
+// Gibson's half beef, taken over the phone 2026-09-28 at 4:11 PM, closed before
+// Submit, gone (see scripts/2026-10-02_cutting_instruction_drafts.sql).
+interface DraftSummary {
+  id:            string
+  created_at:    string
+  updated_at:    string
+  source:        string
+  species?:      string | null
+  step:          number
+  step_label?:   string | null
+  customer_name?: string | null
+  phone?:        string | null
+  appointment_id?: string | null
+}
+
+// The public form's origin. NEXT_PUBLIC_CUTTING_FORM_URL may carry a path
+// (it used to point at /order, which the form no longer serves); the wizard
+// lives at the root, and ?draft=<id> reopens an autosaved card there.
+function cuttingFormOrigin(): string {
+  const raw = process.env.NEXT_PUBLIC_CUTTING_FORM_URL ?? 'http://localhost:3003'
+  try { return new URL(raw).origin } catch { return raw }
+}
+
+// "Sep 28, 4:11 PM" on the shop clock — drafts are "when did they give up",
+// and UTC puts an evening draft on tomorrow's date.
+function shopStamp(iso: string): string {
+  return new Date(iso).toLocaleString('en-US', {
+    timeZone: 'America/Denver', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  })
+}
+
 // What the card would bill at if nobody touched it. Read off the QBO service
 // items the charge detector already bills from, so the reference on screen
 // can't drift away from the invoice. Lamb and goat are a flat fee per head,
@@ -1919,6 +1953,7 @@ const FAKE_CI: RawInstruction = {
 export default function CuttingInstructionsPage() {
   const [instructions, setInstructions] = useState<RawInstruction[]>([])
   const [appointments, setAppointments] = useState<HarvestAppointment[]>([])
+  const [drafts, setDrafts]             = useState<DraftSummary[]>([])
   const [loading, setLoading]           = useState(true)
   const [selected, setSelected]         = useState<RawInstruction | null>(null)
   const [filterStatus, setFilterStatus] = useState<string>('all')
@@ -1983,18 +2018,32 @@ export default function CuttingInstructionsPage() {
   const [openGroups, setOpenGroups]     = useState<Set<string>>(new Set())
   const [grouping, setGrouping]         = useState(false)
 
+  // The office took the card down another way (or it was a test). Gone for
+  // good — a draft is not a record of anything.
+  async function dismissDraft(d: DraftSummary) {
+    const who = d.customer_name || 'this unnamed draft'
+    if (!window.confirm(`Remove the unfinished card for ${who}? If the customer comes back to the form on their own device it will start blank.`)) return
+    const res = await fetch(`/api/cutting-instructions/drafts?id=${encodeURIComponent(d.id)}`, { method: 'DELETE' })
+    if (!res.ok) { alert('Could not remove that draft.'); return }
+    setDrafts(prev => prev.filter(x => x.id !== d.id))
+  }
+
   async function load() {
     setLoading(true)
-    const [ciRes, apptRes] = await Promise.all([
+    const [ciRes, apptRes, draftRes] = await Promise.all([
       fetch('/api/cutting-instructions'),
       fetch('/api/appointments'),
+      fetch('/api/cutting-instructions/drafts'),
     ])
     const ci   = await ciRes.json()
     const appt = await apptRes.json()
+    // Drafts are a side strip; if the table isn't there yet the page still works.
+    const dr   = await draftRes.json().catch(() => [])
     const cis    = Array.isArray(ci)   ? ci   : []
     const appts  = Array.isArray(appt) ? appt : []
     setInstructions(cis)
     setAppointments(appts)
+    setDrafts(Array.isArray(dr) ? dr : [])
     setLoading(false)
     // ?id=<card> opens that card — other pages (value add) link straight to the
     // card they reference instead of dropping you on a list of 250.
@@ -3014,7 +3063,7 @@ export default function CuttingInstructionsPage() {
           {linkedCount  > 0 && <span style={{ color: '#6dbf6d' }}>✅ {linkedCount} linked</span>}
           <span style={{ color: 'var(--tan)' }}>{activeCount} total</span>
           <a
-            href={process.env.NEXT_PUBLIC_CUTTING_FORM_URL ?? 'http://localhost:3003/order'}
+            href={cuttingFormOrigin()}
             target="_blank"
             rel="noopener noreferrer"
             style={{
@@ -3040,6 +3089,40 @@ export default function CuttingInstructionsPage() {
           </button>
         </div>
       </header>
+
+      {/* Unfinished cards — started online, never submitted. Thirty minutes of
+          quiet is what makes one "unfinished" rather than "being typed"; the
+          API applies that. Each one opens in the public form with its answers
+          restored so the office can finish it over the phone. */}
+      {drafts.length > 0 && (
+        <div style={{ background: 'rgba(240,192,64,0.10)', borderBottom: '1px solid rgba(240,192,64,0.35)', padding: '0.55rem 1.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.8rem' }}>
+          <span style={{ color: '#f0c040', fontWeight: 700, whiteSpace: 'nowrap' }}>
+            ✍️ {drafts.length} unfinished {drafts.length === 1 ? 'card' : 'cards'}
+          </span>
+          <span style={{ color: 'var(--tan)', opacity: 0.8 }}>started online, never submitted</span>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', flex: 1 }}>
+            {drafts.map(d => (
+              <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(240,192,64,0.3)', borderRadius: 6, padding: '0.3rem 0.6rem' }}>
+                <span style={{ color: 'var(--cream)', fontWeight: 600 }}>{d.customer_name || 'No name yet'}</span>
+                <span style={{ color: 'var(--tan)' }}>
+                  {[d.species, d.step_label ? `got to ${d.step_label}` : null, d.phone].filter(Boolean).join(' · ')}
+                </span>
+                <span style={{ color: 'var(--tan)', opacity: 0.7 }} title={`Started ${shopStamp(d.created_at)}${d.source === 'portal' ? ' in the producer portal' : ' on the public form'}`}>
+                  last touched {shopStamp(d.updated_at)}
+                </span>
+                <a href={`${cuttingFormOrigin()}/?draft=${encodeURIComponent(d.id)}`} target="_blank" rel="noopener noreferrer"
+                  style={{ background: 'var(--med-brown)', color: 'var(--cream)', borderRadius: 4, padding: '0.15rem 0.5rem', fontWeight: 600, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                  Open &amp; finish →
+                </a>
+                <button onClick={() => dismissDraft(d)} title="Remove this draft"
+                  style={{ background: 'transparent', color: 'var(--tan)', border: '1px solid rgba(166,120,90,0.4)', borderRadius: 4, padding: '0.1rem 0.45rem', cursor: 'pointer', fontSize: '0.75rem' }}>
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
 
