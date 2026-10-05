@@ -5,6 +5,7 @@ import type { HarvestAppointment } from '@/lib/types'
 import { makeCode39Barcode } from '@/lib/label'
 import { QBO_SERVICE_ITEMS } from '@/lib/billingRules'
 import { labelKey } from '@/lib/producerLabels'
+import { isLegacyFileCard, formatBytes as fmtBytes, type CutSheetFile } from '@/lib/cutSheetFiles'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -2762,6 +2763,9 @@ export default function CuttingInstructionsPage() {
 
   const sections = sectionsFor(selectedSpecies)
   const isV2 = selected?.data?.formVersion === 'v2'
+  // A scan or document migrated off SharePoint (lib/cutSheetFiles.ts): there is
+  // no form payload to print or copy, only the original file to open.
+  const isLegacy = isLegacyFileCard(selected?.data)
 
   const togglePicked = (id: string) =>
     setPicked(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next })
@@ -3062,6 +3066,10 @@ export default function CuttingInstructionsPage() {
           )}
           {linkedCount  > 0 && <span style={{ color: '#6dbf6d' }}>✅ {linkedCount} linked</span>}
           <span style={{ color: 'var(--tan)' }}>{activeCount} total</span>
+          <Link href="/cutting-instructions/migrate" title="Bring the old scanned cut sheets off SharePoint / OneDrive onto producer records"
+            style={{ color: 'var(--tan)', textDecoration: 'none', border: '1px solid rgba(166,120,90,0.4)', borderRadius: '6px', padding: '0.4rem 0.9rem', fontWeight: 600, fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+            📂 Migrate old sheets
+          </Link>
           <a
             href={cuttingFormOrigin()}
             target="_blank"
@@ -3292,7 +3300,7 @@ export default function CuttingInstructionsPage() {
                 {selected.status === 'pending' && (
                   <button onClick={() => markStatus([selected.id], 'imported')} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>✓ Mark Imported</button>
                 )}
-                <button
+                {!isLegacy && <button
                   onClick={() => {
                     // Default the copy to the same portion — the common case is
                     // a second share of the same size.
@@ -3302,7 +3310,7 @@ export default function CuttingInstructionsPage() {
                   style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}
                   title="Same cuts on another share this customer is taking — makes its own card so the portion prints right and a later edit doesn't change both">
                   ⧉ Copy for another share
-                </button>
+                </button>}
                 {isV2 && (
                   <a href={`https://cuttinginstructions.cowboymeats.com/edit/${selected.id}`} target="_blank" rel="noreferrer"
                     style={{ ...btnStyle('rgba(166,120,90,0.2)', 'var(--tan)'), textDecoration: 'none', display: 'inline-block' }}
@@ -3310,7 +3318,7 @@ export default function CuttingInstructionsPage() {
                     ✏️ Edit
                   </a>
                 )}
-                <button onClick={async () => { const appts = await freshAppointments(appointments); return isV2 ? printV2CutCard(selected, appts, await carcassInfosFor(selected, appts)) : printCutCard(selected) }} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>🖨 Print Cut Card</button>
+                {!isLegacy && <button onClick={async () => { const appts = await freshAppointments(appointments); return isV2 ? printV2CutCard(selected, appts, await carcassInfosFor(selected, appts)) : printCutCard(selected) }} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>🖨 Print Cut Card</button>}
                 {selected.status === 'archived' ? (
                   <button onClick={() => markStatus([selected.id], 'pending')} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>↩ Restore</button>
                 ) : (
@@ -3651,7 +3659,7 @@ export default function CuttingInstructionsPage() {
 
             {/* Cut card detail */}
             <div style={{ overflowY: 'auto', flex: 1, padding: '1.25rem' }}>
-              {isV2 ? renderV2Detail(selected) : (
+              {isLegacy ? <LegacyFileDetail card={selected} /> : isV2 ? renderV2Detail(selected) : (
                 <>
                   {sections.map(section => {
                     const visibleFields = section.fields.filter(([key]) => !isEmpty(selected.data?.[key]))
@@ -3921,6 +3929,60 @@ function printCutCard(ci: RawInstruction) {
 // `needsCarcass` demotes a linked card to amber: it is on a check-in but not on
 // an animal, so it would print with no tag, no hanging weight and no inspection
 // marking. Without this the list shows a green "Linked" and looks finished.
+// A migrated file card: the original scan / document, where it came from, and
+// whatever the file name said. Files come with five-minute signed links, so
+// they're fetched when the card is opened, not with the list.
+function LegacyFileDetail({ card }: { card: RawInstruction }) {
+  // Keyed by card id so switching cards shows "Loading…" without a reset
+  // inside the effect.
+  const [loaded, setLoaded] = useState<{ id: string; files: (CutSheetFile & { url: string | null })[] | null; err: string }>({ id: '', files: null, err: '' })
+  useEffect(() => {
+    let live = true
+    fetch(`/api/cut-sheet-files?card=${encodeURIComponent(card.id)}`)
+      .then(async r => { const j = await r.json(); if (!r.ok) throw new Error(j.error ?? 'could not load'); return j })
+      .then(j => { if (live) setLoaded({ id: card.id, files: j, err: '' }) })
+      .catch(e => { if (live) setLoaded({ id: card.id, files: null, err: e instanceof Error ? e.message : 'could not load' }) })
+    return () => { live = false }
+  }, [card.id])
+  const files = loaded.id === card.id ? loaded.files : null
+  const err = loaded.id === card.id ? loaded.err : ''
+  const d = card.data ?? {}
+  const importedAt = d.importedAt ? new Date(String(d.importedAt)).toLocaleString('en-US', { timeZone: 'America/Denver', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : null
+  const cell: React.CSSProperties = { background: 'rgba(0,0,0,0.25)', borderRadius: '3px', padding: '0.5rem 0.75rem' }
+  const lbl: React.CSSProperties = { fontSize: '0.67rem', color: 'var(--light-brown)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: '0.2rem' }
+  return (
+    <div>
+      <div style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 4, padding: '0.75rem 1rem', marginBottom: '1.25rem', color: 'var(--cream)', fontSize: '0.85rem' }}>
+        📂 A cut sheet from before the online form, migrated as a file. Open the original below — there is nothing here to print.
+      </div>
+      <div style={{ fontSize: '0.7rem', letterSpacing: '0.15em', textTransform: 'uppercase', color: 'var(--light-brown)', marginBottom: '0.5rem', paddingBottom: '0.4rem', borderBottom: '1px solid rgba(166,120,90,0.15)' }}>Original file{files && files.length !== 1 ? 's' : ''}</div>
+      {err && <div style={{ color: '#e08585', fontSize: '0.85rem' }}>{err}</div>}
+      {!err && files === null && <div style={{ color: 'var(--light-brown)', fontSize: '0.85rem' }}>Loading…</div>}
+      {files && files.length === 0 && <div style={{ color: 'var(--light-brown)', fontSize: '0.85rem', fontStyle: 'italic' }}>No file is attached to this card.</div>}
+      {files && files.map(f => (
+        <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', background: 'rgba(0,0,0,0.25)', borderRadius: 3, padding: '0.6rem 0.85rem', marginBottom: '0.4rem' }}>
+          <span style={{ fontSize: '1.2rem' }}>{/^image\//.test(f.mime_type ?? '') ? '🖼' : '📄'}</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ color: 'var(--cream)', fontSize: '0.88rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.filename}</div>
+            <div style={{ color: 'var(--light-brown)', fontSize: '0.74rem' }}>
+              {fmtBytes(f.size_bytes)}{f.source_path ? ` · ${f.source_path}` : ''}{f.source === 'upload' ? ' · uploaded from the office PC' : ' · from SharePoint'}
+            </div>
+          </div>
+          {f.url
+            ? <a href={f.url} target="_blank" rel="noreferrer" style={{ ...btnStyle('var(--med-brown)'), textDecoration: 'none' }}>📎 Open</a>
+            : <a href={`/api/cut-sheet-files/${f.id}?redirect=1`} target="_blank" rel="noreferrer" style={{ ...btnStyle('var(--med-brown)'), textDecoration: 'none' }}>📎 Open</a>}
+          {f.source_url && <a href={f.source_url} target="_blank" rel="noreferrer" style={{ ...btnStyle('rgba(166,120,90,0.2)', 'var(--tan)'), textDecoration: 'none' }} title="The original on SharePoint">SharePoint ↗</a>}
+        </div>
+      ))}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.5rem', marginTop: '1.25rem' }}>
+        {d.killDate && <div style={cell}><div style={lbl}>Date on the file</div><div style={{ fontSize: '0.88rem', color: 'var(--cream)' }}>{fmtShortDate(String(d.killDate))}</div></div>}
+        {d.notes && <div style={{ ...cell, gridColumn: '1 / -1' }}><div style={lbl}>Notes</div><div style={{ fontSize: '0.88rem', color: 'var(--cream)', whiteSpace: 'pre-wrap' }}>{String(d.notes)}</div></div>}
+        {importedAt && <div style={cell}><div style={lbl}>Migrated</div><div style={{ fontSize: '0.88rem', color: 'var(--cream)' }}>{importedAt}{d.importedBy ? ` · ${d.importedBy}` : ''}</div></div>}
+      </div>
+    </div>
+  )
+}
+
 function StatusBadge({ status, needsCarcass }: { status: string; needsCarcass?: boolean }) {
   const colors: Record<string, [string, string]> = {
     pending:  ['rgba(240,192,64,0.2)',  '#f0c040'],

@@ -19,8 +19,11 @@
 //   RestrictAccess), worth doing before this goes live.
 //
 // Kept to one function on purpose: when the company moves to Google
-// Workspace, only this file changes.
+// Workspace, only this file changes. The sign-in itself lives in lib/msGraph.ts
+// because the cut-sheet migration reads SharePoint with the same registration.
 // ──────────────────────────────────────────────────────────────────────────────
+
+import { graphToken } from '@/lib/msGraph'
 
 export interface MailMessage {
   to: string[]
@@ -30,22 +33,6 @@ export interface MailMessage {
 
 export function mailConfigured(): boolean {
   return ['MAIL_TENANT_ID', 'MAIL_CLIENT_ID', 'MAIL_CLIENT_SECRET', 'MAIL_SENDER'].every(k => !!process.env[k])
-}
-
-async function graphToken(): Promise<string> {
-  const tenant = process.env.MAIL_TENANT_ID!
-  const res = await fetch(`https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'client_credentials',
-      client_id: process.env.MAIL_CLIENT_ID!,
-      client_secret: process.env.MAIL_CLIENT_SECRET!,
-      scope: 'https://graph.microsoft.com/.default',
-    }),
-  })
-  if (!res.ok) throw new Error(`Mail sign-in failed (${res.status}): ${(await res.text()).slice(0, 300)}`)
-  return ((await res.json()) as { access_token: string }).access_token
 }
 
 export async function sendMail(m: MailMessage): Promise<void> {
