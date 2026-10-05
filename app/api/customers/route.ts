@@ -15,6 +15,19 @@ export async function GET(req: NextRequest) {
   const search = searchParams.get('search')?.trim()
   const id     = searchParams.get('id')
 
+  // ?brief=1 — every record, just enough to match a name against: the cut-sheet
+  // migration page (/cutting-instructions/migrate) suggests a producer for each
+  // old file by name, and a 200-row search can't do that.
+  if (searchParams.get('brief')) {
+    const { data, error } = await supabase
+      .from('customers')
+      .select('id, name, ranch_name, role')
+      .order('name', { ascending: true })
+      .range(0, 4999)
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json(data ?? [])
+  }
+
   // Single customer detail. appointments = ones where they're the producer
   // (live-animal side); cutting_instructions = their cut sheets (buyer side).
   if (id) {
@@ -31,10 +44,22 @@ export async function GET(req: NextRequest) {
         .order('harvest_date', { ascending: false }),
     ])
     if (custRes.error) return NextResponse.json({ error: custRes.error.message }, { status: 404 })
+
+    // Migrated scans hang off their cards as files (lib/cutSheetFiles.ts); the
+    // detail panel shows an Open link per file. Secondary: if this read fails
+    // the record still serves.
+    const sheets = (ciRes.data ?? []) as { id: string }[]
+    const files = sheets.length
+      ? (await supabase
+          .from('cutting_instruction_files')
+          .select('id, cutting_instruction_id, filename, mime_type, size_bytes, source, source_url, source_path')
+          .in('cutting_instruction_id', sheets.map(s => s.id))).data ?? []
+      : []
     return NextResponse.json({
       customer: custRes.data,
       cutting_instructions: ciRes.data ?? [],
       appointments: apptRes.data ?? [],
+      files,
     })
   }
 
