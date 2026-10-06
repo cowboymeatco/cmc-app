@@ -1028,6 +1028,14 @@ export default function ScannerPage() {
   useEffect(() => {
     offCardRef.current = { keysForPlu, expectedKeys: new Set(expectedKeys), hasCard: !!expected }
   }, [keysForPlu, expectedKeys, expected])
+  // "It's right — keep it" is an answer for the whole session, not one
+  // package: a packer who has checked the card and kept the first flank steak
+  // doesn't need to be asked about the next thirty (NN and AE, 2026-09-30,
+  // packing Bullseye Ranch — the card said grind, the bench cut steaks). Keyed
+  // on the resolved house PLU, forgotten when the session changes; "Take it
+  // out" records nothing, so a wrong PLU still asks every time.
+  const offCardOkRef = useRef<Set<string>>(new Set())
+  useEffect(() => { offCardOkRef.current = new Set() }, [customer, date])
 
   // ── Producer label sets ───────────────────────────────────────────────────
   // A producer who sells under their own label has their own PLUs — copies of
@@ -1102,6 +1110,7 @@ export default function ScannerPage() {
     if (!ex.hasCard || boxOnlyRef.current) return false
     const keys = ex.keysForPlu.get(plu) ?? []
     if (!keys.length || keys.some(k => ex.expectedKeys.has(k))) return false
+    if (offCardOkRef.current.has(plu)) return false
     setOffCard({ scanId: scan.id, plu, name: itemName, keys })
     return true
   }
@@ -4691,6 +4700,7 @@ export default function ScannerPage() {
               This PLU packs <strong style={{ color: C.cream }}>{offCard.keys.join(', ')}</strong> and{' '}
               <strong style={{ color: C.cream }}>{customer}</strong>&apos;s cut card doesn&apos;t order it.
               Check the package against the card before it goes in the box.
+              Keep it and this PLU won&apos;t ask again this session.
             </div>
             <div style={{ display: 'flex', gap: '0.6rem' }}>
               <button
@@ -4700,7 +4710,7 @@ export default function ScannerPage() {
                 Take it out of the box
               </button>
               <button
-                onClick={() => { setOffCard(null); scanRef.current?.focus() }}
+                onClick={() => { offCardOkRef.current.add(offCard.plu); setOffCard(null); scanRef.current?.focus() }}
                 style={{ flex: 1, background: C.tan, color: C.dark, border: 'none', borderRadius: 4, padding: '0.85rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer' }}
               >
                 It&apos;s right — keep it

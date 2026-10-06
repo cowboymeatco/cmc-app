@@ -179,6 +179,8 @@ interface DailyLaborDay {
   headCut: number
   headOwn: number
   ownKillValue: number
+  headOwnCut: number
+  ownCutValue: number
   scheduledHarvest: number
   hours: number
   laborDollars: number
@@ -1555,7 +1557,7 @@ export default function ExecPage() {
           {errors.daily ? <ErrorBox msg={errors.daily} /> : !daily ? (
             <div style={{ color: C.lightBrown, fontSize: '0.85rem' }}>Loading…</div>
           ) : (() => {
-            const rows = daily.days.filter(d => d.gross > 0 || d.hours > 0)
+            const rows = daily.days.filter(d => d.gross > 0 || d.hours > 0 || d.ownKillValue > 0 || d.ownCutValue > 0)
             const gross = rows.reduce((a, d) => a + d.gross, 0)
             const wages = rows.reduce((a, d) => a + d.laborDollars, 0)
             const hours = rows.reduce((a, d) => a + d.hours, 0)
@@ -1597,8 +1599,13 @@ export default function ExecPage() {
                         return (
                           <tr key={d.date} title={crew || 'no one clocked in'} style={{ borderTop: '1px solid rgba(166,120,90,0.12)' }}>
                             <td style={{ padding: '0.35rem 0.5rem', whiteSpace: 'nowrap' }}>{dayLabel(d.date)}{d.date === daily.today ? ' · today' : ''}</td>
-                            <td style={cell} title={d.headOwn ? `${d.headOwn} of our own animals killed — no kill fee` : undefined}>
-                              {d.headHarvested || d.headCut || d.headOwn ? `${d.headHarvested}${d.headOwn ? ` +${d.headOwn} own` : ''} / ${d.headCut}` : '—'}
+                            <td style={cell} title={[
+                              d.headOwn ? `${d.headOwn} of our own animals killed — no kill fee` : '',
+                              d.headOwnCut ? `${d.headOwnCut} of our own animals cut — no cut & wrap fee` : '',
+                            ].filter(Boolean).join('\n') || undefined}>
+                              {d.headHarvested || d.headCut || d.headOwn || d.headOwnCut
+                                ? `${d.headHarvested}${d.headOwn ? ` +${d.headOwn} own` : ''} / ${d.headCut}${d.headOwnCut ? ` +${d.headOwnCut} own` : ''}`
+                                : '—'}
                             </td>
                             <td style={cell} title={[
                               d.ownKillValue ? `+${usd(d.ownKillValue)} our own animals at kill rates (not revenue)` : '',
@@ -1608,7 +1615,10 @@ export default function ExecPage() {
                               {d.ownKillValue > 0 && <div style={{ fontSize: '0.7rem', color: C.lightBrown }}>+{usd(d.ownKillValue)} own</div>}
                               {d.scheduledHarvest > 0 && d.date < daily.today && <div style={{ fontSize: '0.7rem', color: COST_COLOR }}>⚠ booked, not logged</div>}
                             </td>
-                            <td style={cell}>{d.grossBy.processing ? usd(d.grossBy.processing) : '—'}</td>
+                            <td style={cell} title={d.ownCutValue ? `+${usd(d.ownCutValue)} our own animals at cut & wrap rates (not revenue)` : undefined}>
+                              {d.grossBy.processing ? usd(d.grossBy.processing) : '—'}
+                              {d.ownCutValue > 0 && <div style={{ fontSize: '0.7rem', color: C.lightBrown }}>+{usd(d.ownCutValue)} own</div>}
+                            </td>
                             <td style={cell}>{d.grossBy.valueAdd ? usd(d.grossBy.valueAdd) : '—'}</td>
                             <td style={cell}>{retail ? usd(retail) : '—'}</td>
                             <td style={{ ...cell, fontWeight: 600, color: C.cream }}>{usd(d.gross)}</td>
@@ -1624,7 +1634,8 @@ export default function ExecPage() {
                 </div>
                 <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.5rem', lineHeight: 1.5 }}>
                   Gross is the revenue-recognition money for the day: kill fees on kill day, cut &amp; wrap on the day the carcass is broken,
-                  value add and retail as the books post them{daily.booksThrough ? ` (through ${daily.booksThrough})` : ''}. Own animals earn no service fee.
+                  value add and retail as the books post them{daily.booksThrough ? ` (through ${daily.booksThrough})` : ''}. Own animals earn no service fee;
+                  the grey &ldquo;+ own&rdquo; lines are what that kill or cut would have billed a customer, so a day spent on our own stock still reads as a day&apos;s work.
                   Wages are QuickBooks Time clocked hours × each person&apos;s straight-time rate — no payroll taxes, overtime premium or salaried staff.
                   Hover a day to see who clocked in.{' '}
                   <Link href="/exec/study" style={{ color: C.tan }}>Run a timing study →</Link>

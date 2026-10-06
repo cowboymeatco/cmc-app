@@ -146,6 +146,13 @@ export interface RevenueDay {
    *  day reads like a slow one (9/24: 16 of 20 head were ours, harvest showed
    *  $1,023; Charlie, 2026-09-28). */
   ownKillValue: number
+  /** Our own carcasses broken that day, and what their cut & wrap would have
+   *  billed at service rates. Same idea as ownKillValue, on the cut floor:
+   *  9/29 the crew cut 12 of our own lambs for Daniels Gourmet Meats and the
+   *  day read as nothing (Charlie, 2026-09-30). For lamb and goat the whole
+   *  flat fee lands here, since nothing was recognized at the kill. */
+  headOwnCut: number
+  ownCutValue: number
 }
 
 export interface EnterpriseTotal {
@@ -338,7 +345,7 @@ export function buildRevenueRecognition(input: BuildInput): RevenueRecognition {
         date,
         earned: zeroByEnterprise(),
         scheduled: zeroByEnterprise(),
-        total: 0, headHarvested: 0, headCut: 0, headOwn: 0, ownKillValue: 0,
+        total: 0, headHarvested: 0, headCut: 0, headOwn: 0, ownKillValue: 0, headOwnCut: 0, ownCutValue: 0,
       }
       byDay.set(date, d)
     }
@@ -387,6 +394,21 @@ export function buildRevenueRecognition(input: BuildInput): RevenueRecognition {
           const w = h.hot_carcass_weight_lbs && h.hot_carcass_weight_lbs > 0 ? h.hot_carcass_weight_lbs : speciesAvgLbs[species] ?? null
           const kill = killFeeCharge(species, w, WHOLE, tag)
           if (kill) d.ownKillValue += kill.amount
+        }
+      }
+      // The cut is a day's work too. Dated the same way as a customer's
+      // carcass (scan, then plan, then hang projection) and counted once the
+      // knife work is done; a whole carcass out the door was never cut.
+      if (h.status !== 'delivered') {
+        const scanned = packDayByLogId.get(h.id)
+        const cutDay = scanned ?? plannedCutDayByLogId.get(h.id) ?? projectedCutDate(h.harvest_date, species)
+        const done = h.status === 'cut' || Boolean(scanned)
+        if (done && cutDay <= today && inWindow(cutDay)) {
+          const w = h.hot_carcass_weight_lbs && h.hot_carcass_weight_lbs > 0 ? h.hot_carcass_weight_lbs : speciesAvgLbs[species] ?? null
+          const cut = cutWrapCharge(species, w, WHOLE, tag)
+          const d = dayOf(cutDay)
+          d.headOwnCut += 1
+          if (cut) d.ownCutValue += cut.amount
         }
       }
       continue
@@ -521,6 +543,7 @@ export function buildRevenueRecognition(input: BuildInput): RevenueRecognition {
     }
     row.total = r2(total)
     row.ownKillValue = r2(row.ownKillValue)
+    row.ownCutValue = r2(row.ownCutValue)
     days.push(row)
   }
 

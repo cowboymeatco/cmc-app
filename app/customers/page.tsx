@@ -465,13 +465,18 @@ export default function CustomersPage() {
             )}
           </div>
 
-          {/* Detail panel */}
+          {/* Detail panel. Sticks to the top of the window so a customer
+              picked from the bottom of the list shows up beside the row
+              clicked, not 90 rows up (Charlie, 2026-10-04). Scrolls on its
+              own if the card list runs longer than the screen. */}
           {selected && (
-            <CustomerDetail
-              customer={selected}
-              onEdit={() => openEdit(selected)}
-              onClose={() => setSelected(null)}
-            />
+            <div style={{ position: 'sticky', top: '1rem', maxHeight: 'calc(100vh - 2rem)', overflowY: 'auto' }}>
+              <CustomerDetail
+                customer={selected}
+                onEdit={() => openEdit(selected)}
+                onClose={() => setSelected(null)}
+              />
+            </div>
           )}
         </div>
 
