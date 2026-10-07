@@ -380,8 +380,25 @@ export interface HarvestDay {
 export interface CarcassLink {
   customer_name: string | null
   pack_date:     string | null
+  /** The scanner session's business day (Mountain Time). Always set by the
+   *  scanner; pack_date can be blank. */
+  session_date:  string | null
   side:          'L' | 'R' | null
   manual:        boolean
+}
+
+/** The day an animal was actually cut, as best the records can say: its
+ *  earliest scan into a packing session. The harvest log never records when a
+ *  status changed, so the scan is the only event-shaped evidence there is —
+ *  the same rule the cooler performance report uses. Null when it was never
+ *  scanned in. */
+export function scannedCutDay(links: CarcassLink[] | undefined): string | null {
+  let best: string | null = null
+  for (const l of links ?? []) {
+    const d = l.session_date ?? l.pack_date
+    if (d && (!best || d < best)) best = d
+  }
+  return best
 }
 
 export interface ScheduleData {
@@ -515,11 +532,12 @@ export async function loadScheduleData(todayISO: string): Promise<ScheduleData> 
 
 /** Group carcass inputs by the animal they point at. The side comes off the
  *  identifier's -L/-R suffix, which is the only place it is recorded. */
-function buildCarcassLinks(rows: unknown[]): Map<string, CarcassLink[]> {
+export function buildCarcassLinks(rows: unknown[]): Map<string, CarcassLink[]> {
   const out = new Map<string, CarcassLink[]>()
   for (const r of rows as Array<{
     linked_harvest_id: string | null; customer_name: string | null
-    pack_date: string | null; box_identifier: string | null; notes: string | null
+    pack_date: string | null; session_date: string | null
+    box_identifier: string | null; notes: string | null
   }>) {
     if (!r?.linked_harvest_id) continue
     const m = (r.box_identifier ?? '').match(/-([LR])$/i)
@@ -527,6 +545,7 @@ function buildCarcassLinks(rows: unknown[]): Map<string, CarcassLink[]> {
     list.push({
       customer_name: r.customer_name,
       pack_date:     r.pack_date,
+      session_date:  r.session_date ?? null,
       side:          m ? (m[1].toUpperCase() as 'L' | 'R') : null,
       manual:        /not scanned/i.test(r.notes ?? ''),
     })
