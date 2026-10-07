@@ -9,7 +9,7 @@ import { isLegacyFileCard, formatBytes as fmtBytes, type CutSheetFile } from '@/
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-import { buildPackList, BONE_IN_FILET_THICKNESS, baggedTrimPackRows, loinFields, mergeSides, shoulderFields, EIGHTHS, FMT_OVERRIDES, STEAK_STANDARDS, bagSizeLabel, baggedTrimCutterRows, beefTrimCutterRows, beefTrimPackRows, beefTrimRows, bellyRows, bellyWord, brisketLabel, fracThick, hamCut, hamLine, hamRows, hamStyleWord, hockStyle, isWholeAnimal, lgTrimLabel, porkTrimCutterRows, porkTrimRows, rawWeighIn, ribeyeAdds, roastOr, roastText, sidePair, smokehouseRows, smokehouseTotalLbs, stdThick, trimIsBagged, trimSplitOf, v2fmt } from '@/lib/packList'
+import { applyAgeRule, hasBoneInShortLoin, buildPackList, BONE_IN_FILET_THICKNESS, baggedTrimPackRows, loinFields, mergeSides, shoulderFields, EIGHTHS, FMT_OVERRIDES, STEAK_STANDARDS, bagSizeLabel, baggedTrimCutterRows, beefTrimCutterRows, beefTrimPackRows, beefTrimRows, bellyRows, bellyWord, brisketLabel, fracThick, hamCut, hamLine, hamRows, hamStyleWord, hockStyle, isWholeAnimal, lgTrimLabel, porkTrimCutterRows, porkTrimRows, rawWeighIn, ribeyeAdds, roastOr, roastText, sidePair, smokehouseRows, smokehouseTotalLbs, stdThick, trimIsBagged, trimSplitOf, v2fmt } from '@/lib/packList'
 
 interface RawInstruction {
   id:         string
@@ -888,9 +888,16 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
   const carcasses   = carcassList.length ? carcassList : [EMPTY_CARCASS]
   // The copy button's "Copied from…" line means nothing on a sheet that is
   // every animal at once, and it prints on both pages, so it comes off here.
-  const d: Record<string, any> = herdN
+  const asWritten: Record<string, any> = herdN
     ? { ...(ci.data ?? {}), notes: stripCopyNote(ci.data?.notes) }
     : ci.data ?? {}
+  // An animal over 30 months can't give a T-bone (the column is SRM), so the
+  // card prints the boned-out pair instead — see applyAgeRule. The sheet's one
+  // carcass is the herd's agreement, so a mixed-age herd (over30 null) is left
+  // as written and flagged in the Short Loin section rather than converted.
+  const otm = applyAgeRule(asWritten, carcasses[0].over30)
+  const d = otm.data as Record<string, any>
+  const otmFlagOnly = ageMixed && hasBoneInShortLoin(asWritten)
   // Prefer the plant's own harvest date over whatever the customer typed on
   // the intake form — see harvestDateFor for why the two disagree.
   const herdDates = herd.map(h => harvestDateFor(h.ci, appointments).date ?? h.ci.data?.killDate ?? '—')
@@ -1035,7 +1042,11 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
     cutSections += sec('Short Loin', (sl.loin2
       ? mergeSides(shortLoinFields(sl, fmt, thick), shortLoinFields(sl.loin2, fmt, thick))
       : shortLoinFields(sl, fmt, thick)
-    ).map(([label, value]) => row(label, value)).join(''))
+    ).map(([label, value]) => row(label, value)).join('')
+      // The swap is said out loud right where it happened, so the cutter
+      // doesn't wonder why the customer's T-bone order reads as strips.
+      + (otm.converted   ? row('  Over 30 mo', 'T-Bone ordered — cut as NY Strip + Filet (no bone-in loin on OTM)', true) : '')
+      + (otmFlagOnly     ? row('  Over 30 mo', 'T-Bone ordered — on any OTM animal cut NY Strip + Filet instead; check the list', true) : ''))
     cutSections += sec('Sirloin', [
       row('Top Sirloin', withT(d.topSirloin?.cut ?? '', d.topSirloin?.thickness ?? '')),
       d.topSirloin?.addons?.length ? row('  Add-ons', adds(d.topSirloin.addons), true) : '',
@@ -1137,6 +1148,15 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
   // The packaging sheet is the same list the scanner checks off as packages
   // come over the scale, so it is built in one place for both.
   const filteredPrs = buildPackList(d, species)
+  // The packer sees strips and filets where the order said T-bone, so the
+  // reason rides under the Short Loin header as a note row (not a package).
+  if (otm.converted || otmFlagOnly) {
+    const at = filteredPrs.findIndex(pr => pr.sectionTitle === 'Short Loin')
+    if (at >= 0) filteredPrs.splice(at + 1, 0, {
+      cut: '  Over 30 mo', isAddon: true,
+      spec: otm.converted ? 'T-Bone cut as NY Strip + Filet' : 'OTM animals: NY Strip + Filet, not T-Bone',
+    })
+  }
 
   // ── Split packaging rows into balanced columns (at section boundaries) ────
   // Landscape fits three tables across; splits only ever land where a new
@@ -1324,7 +1344,7 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
              : ageMixed
                ? `<div style="margin-top:4px;display:inline-block;background:#1A0A04;color:#F2E8D9;font-size:14px;font-weight:bold;letter-spacing:0.06em;padding:2px 7px">SOME OVER 30 MONTHS — CHECK EACH ON THE LIST</div>`
              : carcass.over30 === true
-               ? `<div style="margin-top:4px;display:inline-block;background:#1A0A04;color:#F2E8D9;font-size:14px;font-weight:bold;letter-spacing:0.06em;padding:2px 7px">OVER 30 MONTHS — REMOVE VERTEBRAL COLUMN</div>`
+               ? `<div style="margin-top:4px;display:inline-block;background:#1A0A04;color:#F2E8D9;font-size:14px;font-weight:bold;letter-spacing:0.06em;padding:2px 7px">OVER 30 MONTHS — REMOVE VERTEBRAL COLUMN${otm.converted ? ' · NO T-BONE: NY STRIP + FILET' : ''}</div>`
                : carcass.over30 === false
                  ? `<div style="margin-top:4px;display:inline-block;border:1.5px solid #1A0A04;font-size:14px;font-weight:bold;letter-spacing:0.06em;padding:1px 6px">UNDER 30 MONTHS</div>`
                  : `<div style="font-size:16px;color:#555;margin-top:3px">Over / Under 30 mo: ${wline(110)}</div>`
