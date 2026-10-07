@@ -333,6 +333,8 @@ export const FMT_OVERRIDES: Record<string, string> = {
   // slugs read as plain "Packer" / "Flat" instead of "Packer Whole".
   'packer-whole': 'Packer',
   'flat-whole': 'Flat',
+  // The title-caser made this "Ny Strip".
+  'ny-strip': 'NY Strip',
 }
 
 export function v2fmt(val: string): string {
@@ -537,6 +539,41 @@ export function ribeyeAdds(r?: { addons?: string[]; seasoned?: boolean } | null)
 
 export const baggedTrimPackRows   = (t: any): Array<[string, string]> => [['Bagged Trim', bagSizeLabel(t)]]
 export const BONE_IN_FILET_THICKNESS = '2"'
+
+// Over 30 months the vertebral column is SRM and comes out of the carcass, so
+// a bone-in short loin can't be cut: no T-bone, no porterhouse. The same loin
+// still yields the two steaks a T-bone is made of, boned out — a NY strip at
+// the thickness the customer asked for and the house 2" filet — so the card
+// swaps them in on its own rather than leaving the cutter to improvise (AE,
+// 2026-10-06). Pure: returns a copy of the card data and whether anything
+// changed. Age unknown or under 30 leaves the card exactly as written.
+//
+// Short loin only. A bone-in ribeye is still fine on a +30mo animal (Charlie,
+// 2026-10-06) — the rib is nowhere near the column.
+export function applyAgeRule(d: any, over30: boolean | null | undefined): { data: any; converted: boolean } {
+  if (over30 !== true || !d?.shortLoin) return { data: d, converted: false }
+  const boneOut = (s: any) => {
+    if (s?.path !== 'bone-in') return null
+    const { tBoneThickness, ...rest } = s
+    return {
+      ...rest,
+      path:       'boneless',
+      tenderloin: { cut: 'filet', thickness: BONE_IN_FILET_THICKNESS },
+      stripLoin:  { cut: 'ny-strip', thickness: tBoneThickness ?? '' },
+    }
+  }
+  const one = boneOut(d.shortLoin)
+  const two = boneOut(d.shortLoin.loin2)
+  if (!one && !two) return { data: d, converted: false }
+  const shortLoin = { ...(one ?? d.shortLoin), ...(two ? { loin2: two } : {}) }
+  return { data: { ...d, shortLoin }, converted: true }
+}
+
+// Whether the age rule would change this card at all — a bone-in short loin on
+// either side. Lets a mixed-age sheet flag the swap without making it.
+export function hasBoneInShortLoin(d: any): boolean {
+  return d?.shortLoin?.path === 'bone-in' || d?.shortLoin?.loin2?.path === 'bone-in'
+}
 // One pork shoulder as (label, value) pairs. A whole hog's two shoulders can
 // be cut differently (one roast, one grind), so each renders through here and
 // the pair gets merged below.

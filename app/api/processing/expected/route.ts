@@ -2,7 +2,7 @@ export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { resolveCuttingInstruction } from '@/lib/cutCardLookup'
-import { buildPackList, expectedLines, packSpecies, ExpectedLine } from '@/lib/packList'
+import { applyAgeRule, buildPackList, expectedLines, packSpecies, ExpectedLine } from '@/lib/packList'
 import { extractValueAdd } from '@/lib/valueAdd'
 import { cureProductsOnSheet } from '@/lib/cureLoad'
 
@@ -17,6 +17,46 @@ export const dynamic = 'force-dynamic'
 
 type Line = ExpectedLine & { card: number }
 
+// Is the animal on this bench over 30 months? Same lookup the card resolver
+// uses — the carcasses scanned into the session — read for their age instead of
+// their card. Every linked animal +30mo → true; none → false; a mix → 'mixed'; no
+// linked animal at all (a name-only session) → null, and the sheet stays as
+// written, which is what the scanner has always done.
+async function sessionAge(customerName: string, packDate: string): Promise<boolean | 'mixed' | null> {
+  const inputs = await supabaseAdmin
+    .from('processing_inputs')
+    .select('linked_harvest_id')
+    .eq('customer_name', customerName)
+    .eq('pack_date', packDate)
+    .not('linked_harvest_id', 'is', null)
+  const ids = [...new Set((inputs.data ?? []).map(r => r.linked_harvest_id).filter(Boolean))]
+  if (!ids.length) return null
+  const hl = await supabaseAdmin.from('harvest_log').select('over_30_months').in('id', ids)
+  const ages = (hl.data ?? []).map(r => r.over_30_months === true)
+  if (!ages.length) return null
+  if (ages.every(a => a)) return true
+  if (ages.some(a => a)) return 'mixed'
+  return false
+}
+
+// A bench with +30mo and under-30 animals on it packs both: T-bones off the young
+// ones, strips and filets off the old. The converted card's lines that the
+// written card doesn't already carry slot in beside their section.
+function withBothAges(asWritten: ExpectedLine[], converted: ExpectedLine[]): ExpectedLine[] {
+  const have = new Set(asWritten.map(l => l.key))
+  const extra = converted.filter(l => !have.has(l.key))
+  if (!extra.length) return asWritten
+  const out: ExpectedLine[] = []
+  for (let i = 0; i < asWritten.length; i++) {
+    out.push(asWritten[i])
+    const last = asWritten[i + 1]?.section !== asWritten[i].section
+    if (last) out.push(...extra.filter(l => l.section === asWritten[i].section))
+  }
+  const placed = new Set(out.map(l => l.key))
+  out.push(...extra.filter(l => !placed.has(l.key)))
+  return out
+}
+
 // GET /api/processing/expected?customer_name=X&date=YYYY-MM-DD
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -26,7 +66,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'customer_name and date required' }, { status: 400 })
   }
 
-  const match = await resolveCuttingInstruction(customerName, date)
+  const [match, age] = await Promise.all([resolveCuttingInstruction(customerName, date), sessionAge(customerName, date)])
   if (!match) return NextResponse.json({ found: false, lines: [], links: [] })
 
   const lines: Line[] = []
@@ -34,13 +74,21 @@ export async function GET(req: NextRequest) {
   // What the sheet sends to cure, so a fresh seal's picker can lead with the
   // pieces this customer actually ordered (Jill, 2026-09-04).
   const sheetProducts = new Set<string>()
+  let otm = false
   match.cards.forEach((card, i) => {
     const rawSpecies = (card.data?.species as string) ?? card.species ?? 'Beef'
     const species = packSpecies(rawSpecies)
     speciesSeen.add(species)
-    for (const l of expectedLines(buildPackList(card.data, species), species)) {
-      lines.push({ ...l, card: i })
-    }
+    // Over 30 months there is no T-bone to pack — the sheet expects the NY
+    // strip and filet the loin was boned out into instead (AE, 2026-10-06).
+    // The existing strip-loin / filet PLU links already cover those lines.
+    const asWritten = expectedLines(buildPackList(card.data, species), species)
+    const rule      = applyAgeRule(card.data, age === true || age === 'mixed')
+    if (rule.converted) otm = true
+    const cardLines = !rule.converted ? asWritten
+      : age === true ? expectedLines(buildPackList(rule.data, species), species)
+      : withBothAges(asWritten, expectedLines(buildPackList(rule.data, species), species))
+    for (const l of cardLines) lines.push({ ...l, card: i })
     for (const it of extractValueAdd(rawSpecies, card.data)) sheetProducts.add(it.product)
   })
 
@@ -58,6 +106,9 @@ export async function GET(req: NextRequest) {
     cards:   match.cards.length,
     species: [...speciesSeen],
     lines,
+    // Said on the wire so the bench can see why its list has no T-bone line.
+    over30:  age,
+    otmSwap: otm,
     links:   links.data ?? [],
     cure:    cureProductsOnSheet(sheetProducts),
     // Producer labels the office set on the card(s) — the packager has to
