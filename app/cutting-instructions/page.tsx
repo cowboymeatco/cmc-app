@@ -1045,8 +1045,8 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
     ).map(([label, value]) => row(label, value)).join('')
       // The swap is said out loud right where it happened, so the cutter
       // doesn't wonder why the customer's T-bone order reads as strips.
-      + (otm.converted   ? row('  Over 30 mo', 'T-Bone ordered — cut as NY Strip + Filet (no bone-in loin on OTM)', true) : '')
-      + (otmFlagOnly     ? row('  Over 30 mo', 'T-Bone ordered — on any OTM animal cut NY Strip + Filet instead; check the list', true) : ''))
+      + (otm.converted   ? row('  +30mo', 'T-Bone ordered — cut as NY Strip + Filet (no bone-in loin on +30mo)', true) : '')
+      + (otmFlagOnly     ? row('  +30mo', 'T-Bone ordered — on any +30mo animal cut NY Strip + Filet instead; check the list', true) : ''))
     cutSections += sec('Sirloin', [
       row('Top Sirloin', withT(d.topSirloin?.cut ?? '', d.topSirloin?.thickness ?? '')),
       d.topSirloin?.addons?.length ? row('  Add-ons', adds(d.topSirloin.addons), true) : '',
@@ -1153,8 +1153,8 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
   if (otm.converted || otmFlagOnly) {
     const at = filteredPrs.findIndex(pr => pr.sectionTitle === 'Short Loin')
     if (at >= 0) filteredPrs.splice(at + 1, 0, {
-      cut: '  Over 30 mo', isAddon: true,
-      spec: otm.converted ? 'T-Bone cut as NY Strip + Filet' : 'OTM animals: NY Strip + Filet, not T-Bone',
+      cut: '  +30mo', isAddon: true,
+      spec: otm.converted ? 'T-Bone cut as NY Strip + Filet' : '+30mo animals: NY Strip + Filet, not T-Bone',
     })
   }
 

@@ -548,8 +548,8 @@ export const BONE_IN_FILET_THICKNESS = '2"'
 // 2026-10-06). Pure: returns a copy of the card data and whether anything
 // changed. Age unknown or under 30 leaves the card exactly as written.
 //
-// Short loin only. A bone-in ribeye on an OTM animal may be affected too, but
-// that's a call for Charlie — the rib is nowhere near the column.
+// Short loin only. A bone-in ribeye is still fine on a +30mo animal (Charlie,
+// 2026-10-06) — the rib is nowhere near the column.
 export function applyAgeRule(d: any, over30: boolean | null | undefined): { data: any; converted: boolean } {
   if (over30 !== true || !d?.shortLoin) return { data: d, converted: false }
   const boneOut = (s: any) => {

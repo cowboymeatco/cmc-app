@@ -19,7 +19,7 @@ type Line = ExpectedLine & { card: number }
 
 // Is the animal on this bench over 30 months? Same lookup the card resolver
 // uses — the carcasses scanned into the session — read for their age instead of
-// their card. Every linked animal OTM → true; none → false; a mix → 'mixed'; no
+// their card. Every linked animal +30mo → true; none → false; a mix → 'mixed'; no
 // linked animal at all (a name-only session) → null, and the sheet stays as
 // written, which is what the scanner has always done.
 async function sessionAge(customerName: string, packDate: string): Promise<boolean | 'mixed' | null> {
@@ -39,7 +39,7 @@ async function sessionAge(customerName: string, packDate: string): Promise<boole
   return false
 }
 
-// A bench with OTM and under-30 animals on it packs both: T-bones off the young
+// A bench with +30mo and under-30 animals on it packs both: T-bones off the young
 // ones, strips and filets off the old. The converted card's lines that the
 // written card doesn't already carry slot in beside their section.
 function withBothAges(asWritten: ExpectedLine[], converted: ExpectedLine[]): ExpectedLine[] {

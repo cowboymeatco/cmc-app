@@ -1747,7 +1747,7 @@ function WorksheetTab({ date }: { date: string }) {
             ? `<span class="cb otmbox">${r.over_30_months ? '☑' : '☐'} +30 MO</span>`
             : ''
         }</td>
-        <td class="id">${r.ear_tag ? esc(r.ear_tag) : '—'}${r.over_30_months ? ' <span class="otm">OTM</span>' : ''}</td>
+        <td class="id">${r.ear_tag ? esc(r.ear_tag) : '—'}${r.over_30_months ? ' <span class="otm">+30mo</span>' : ''}</td>
         <td>${esc(r.sex)}${r.horns ? ' <span class="otm">HORNED</span>' : ''}</td>
         <td>${esc(r.breed)}</td>
         <td class="ko">${r.harvested && r.killOrder != null ? `<span class="pre">${r.killOrder}</span>` : ''}</td>
@@ -1837,7 +1837,7 @@ function WorksheetTab({ date }: { date: string }) {
       <td class="owner">${esc(r.producer)}</td>
       <td class="kt"><span class="cb">${r.killType === 'Custom' ? '☑' : '☐'} Custom</span><span class="cb">${r.killType === 'USDA' ? '☑' : '☐'} USDA</span></td>
       <td>${esc(r.species)}</td>
-      <td class="id">${r.ear_tag ? esc(r.ear_tag) : '—'}${r.over_30_months ? ' <span class="otm">OTM</span>' : ''}</td>
+      <td class="id">${r.ear_tag ? esc(r.ear_tag) : '—'}${r.over_30_months ? ' <span class="otm">+30mo</span>' : ''}</td>
       <td>${esc(r.sex)}</td>
       <td>${esc(r.breed)}</td>
       <td class="wt">${r.half1 != null ? `<span class="pre">${r.half1}</span>` : ''}</td>
@@ -1924,7 +1924,7 @@ function WorksheetTab({ date }: { date: string }) {
           <div class="bcwrap"><svg id="${bcId}"></svg></div>
           <div class="lines">
             <div class="ln"><span class="k">Producer</span><span class="v">${esc(a.producer)}</span></div>
-            <div class="ln"><span class="k">${esc(a.species)}</span><span class="v">${esc(ident) || '—'}</span>${a.row.over_30_months ? '<span class="otm">OTM</span>' : ''}</div>
+            <div class="ln"><span class="k">${esc(a.species)}</span><span class="v">${esc(ident) || '—'}</span>${a.row.over_30_months ? '<span class="otm">+30mo</span>' : ''}</div>
             ${wtLines}
           </div>
         </div>`
@@ -2194,7 +2194,7 @@ function FragmentGroup({ gi, group, startId, skipped, onToggle }: {
             : <td style={{ padding: '0.5rem 0.75rem', color: 'rgba(166,120,90,0.45)', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>☐ Custom &nbsp;☐ USDA</td>}
           <td style={{ padding: '0.5rem 0.75rem', color: C.cream, fontWeight: 600 }}>
             {r.ear_tag || 'No Ear Tag'}
-            {r.over_30_months && <span style={{ color: C.red, fontSize: '0.65rem', fontWeight: 700, border: `1px solid ${C.red}`, borderRadius: 2, padding: '0 3px', marginLeft: 4 }}>OTM</span>}
+            {r.over_30_months && <span style={{ color: C.red, fontSize: '0.65rem', fontWeight: 700, border: `1px solid ${C.red}`, borderRadius: 2, padding: '0 3px', marginLeft: 4 }}>+30mo</span>}
           </td>
           <td style={{ padding: '0.5rem 0.75rem', color: C.cream }}>{r.sex || blank}</td>
           <td style={{ padding: '0.5rem 0.75rem', color: C.lightBrown }}>{r.breed || blank}</td>
