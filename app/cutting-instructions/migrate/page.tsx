@@ -118,7 +118,13 @@ export default function MigrateCutSheetsPage() {
       if (hit) { setPinned(hit); setTab('upload') }
     })
     fetch('/api/cut-sheet-files?drives=1')
-      .then(async r => { const j = await r.json(); if (!r.ok) throw new Error(j.error ?? 'could not reach Microsoft'); return j })
+      .then(async r => {
+        // A gateway error page is not JSON — say the status rather than
+        // "Unexpected token" so the box still reads as a plain answer.
+        const j = await r.json().catch(() => { throw new Error(`Microsoft lookup failed (HTTP ${r.status})`) })
+        if (!r.ok) throw new Error(j.error ?? 'could not reach Microsoft')
+        return j
+      })
       .then((j: { configured: boolean; drives: Drive[] }) => {
         setConfigured(j.configured)
         setDrives(j.drives ?? [])

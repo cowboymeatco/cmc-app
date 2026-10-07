@@ -308,6 +308,7 @@ export default function CrewCutSchedulePage() {
                           <span style={{ color: spColor, fontWeight: 700 }}>{speciesIcon(entry.species)} {entry.species}</span>
                           {entry.carcass_tag && <span style={{ fontFamily: 'monospace' }}> · tag {entry.carcass_tag}</span>}
                           {entry.producer && <> · {entry.producer}</>}
+                          {entry.carried_from && <> · <span style={{ color: C.amber, fontWeight: 700 }}>↪ from {dateLabel(entry.carried_from, { weekday: 'short', month: 'numeric', day: 'numeric' })}</span></>}
                         </div>
                         {/* A split animal is ONE carcass with a sheet per
                             portion. Each customer gets their own line with

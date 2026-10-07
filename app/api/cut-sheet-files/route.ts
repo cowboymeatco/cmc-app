@@ -40,6 +40,12 @@ interface Page<T> { value: T[]; '@odata.nextLink'?: string }
 
 function bad(msg: string, status = 400) { return NextResponse.json({ error: msg }, { status }) }
 
+// Microsoft failures answer 503, never 502: app.cowboymeats.com sits behind
+// Cloudflare, which replaces an origin 502 with its own "error code: 502"
+// text page, so the page saw a parse error instead of Graph's actual message
+// (the one that says which permission to grant). Charlie, 2026-10-06:
+// "Sharepoint isn't connected?" — it was configured; the reason was invisible.
+
 // A folder's path as the office knows it: "Shared Documents/USB Drive/…", not
 // "/drive/root:/USB Drive/…".
 function folderPath(parent?: DriveItem['parentReference']): string {
@@ -170,7 +176,7 @@ export async function GET(req: NextRequest) {
       imported,
     })
   } catch (e) {
-    return bad(e instanceof Error ? e.message : 'Microsoft Graph failed', 502)
+    return bad(e instanceof Error ? e.message : 'Microsoft Graph failed', 503)
   }
 }
 
@@ -290,7 +296,7 @@ export async function POST(req: NextRequest) {
     try {
       item = await graphGet<DriveItem>(`/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(itemId)}`)
     } catch (e) {
-      return bad(e instanceof Error ? e.message : 'Microsoft Graph failed', 502)
+      return bad(e instanceof Error ? e.message : 'Microsoft Graph failed', 503)
     }
     if (!item.file) return bad('That is a folder, not a file')
     if ((item.size ?? 0) > CUT_SHEET_MAX_BYTES) return bad(`That file is larger than ${CUT_SHEET_MAX_BYTES / 1024 / 1024} MB`)

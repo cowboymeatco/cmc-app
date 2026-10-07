@@ -58,6 +58,12 @@ export interface ScheduleEntry {
   rank:                      number
   locked:                    boolean
   entry_notes:               string
+  /** Set when the saved plan had this carcass under a day break that has
+   *  already gone by and it is still hanging. buildEntries moves it to the
+   *  head of today's day; this keeps the day it was meant for, so the planner
+   *  can say "still hanging from Sat 10/3" instead of pretending it was
+   *  always today's work. */
+  carried_from?:             string
   /** Every cut customer on this carcass, one per assigned portion. A whole
    *  animal to one buyer has one; a split has two or more. Empty when nobody
    *  has been assigned yet. `customer_name` and `portion` above are display
@@ -249,6 +255,53 @@ export function moveDayIntoDateOrder(list: ListItem[], key: string): ListItem[] 
   let at = rest.findIndex(e => e.type === 'break' && !!e.break_date && e.break_date > brk.break_date)
   if (at === -1) at = rest.length
   return [...rest.slice(0, at), ...block, ...rest.slice(at)]
+}
+
+/**
+ * Roll whatever is still hanging under a day that has already passed forward
+ * to the head of today's day.
+ *
+ * Charlie, 2026-10-06: "Why isn't Cathy Morris on today?" — her beef sat under
+ * the Saturday 10/3 break in a plan saved 10/2, Saturday went by with the
+ * carcass still on the rail, and on Tuesday the planner still showed her under
+ * a stale 10/3 heading while "today" looked empty. The crew view already folds
+ * past days into "up first"; the planner now agrees with it, and the row says
+ * which day it was carried over from.
+ *
+ * Past-dated breaks are dropped (an empty stale heading is just noise). What
+ * was under them goes under the first break dated today or later. When the
+ * plan has no such day, the spot the first stale break held becomes a break
+ * dated today, so the carried rows still head a real day rather than falling
+ * back into the unscheduled pile. 'future' placeholders under a past day ride
+ * along — a booking that is still ahead can't have been cut.
+ */
+export function carryForwardPastDays(list: ListItem[], today: string): ListItem[] {
+  if (!list.some(e => e.type === 'break' && !!e.break_date && e.break_date < today)) return list
+  const kept: ListItem[] = []
+  const carried: ListItem[] = []
+  let inPast = false
+  let day = ''
+  let firstStaleAt = -1
+  for (const e of list) {
+    if (e.type === 'break') {
+      day    = e.break_date
+      inPast = !!day && day < today
+      if (inPast) { if (firstStaleAt === -1) firstStaleAt = kept.length; continue }
+      kept.push(e)
+      continue
+    }
+    if (!inPast) { kept.push(e); continue }
+    carried.push(e.type === 'carcass' ? { ...e, carried_from: day } : e)
+  }
+  if (carried.length === 0) return kept.map((e, i) => ({ ...e, rank: i + 1 }))
+  let at = kept.findIndex(e => e.type === 'break' && !!e.break_date && e.break_date >= today)
+  if (at === -1) {
+    const brk: BreakItem = { type: 'break', key: 'break_carried_today', rank: 0, break_date: today }
+    kept.splice(firstStaleAt, 0, brk)
+    at = firstStaleAt
+  }
+  const out = [...kept.slice(0, at + 1), ...carried, ...kept.slice(at + 1)]
+  return out.map((e, i) => ({ ...e, rank: i + 1 }))
 }
 
 /** Days hung by the scheduled cut day. Never below what it has hung already —
@@ -457,8 +510,13 @@ export async function loadScheduleData(todayISO: string): Promise<ScheduleData> 
           : [],
       ])
       if (!Array.isArray(apptData)) throw new Error('unexpected /api/appointments response')
+      // A kill-only booking (Charlie, 2026-10-01: "Something we don't intend
+      // on processing") still puts a carcass on the rail, but it is nobody's
+      // cut job — it leaves whole. Off the schedule rather than sitting in
+      // the pile as a row with no sheet and no buyer to chase.
+      const killOnly = new Set((apptData as HarvestAppointment[]).filter(a => a.kill_only).map(a => a.id))
       return {
-        logs,
+        logs: logs.filter(l => !l.appointment_id || !killOnly.has(l.appointment_id)),
         assignments:  Array.isArray(assignData) ? assignData as CarcassAssignment[] : [],
         appointments: apptData as HarvestAppointment[],
         carcassLinks: buildCarcassLinks(Array.isArray(inputData) ? inputData : []),
@@ -494,7 +552,7 @@ export async function loadScheduleData(todayISO: string): Promise<ScheduleData> 
 
   // Everything still ahead of us, unwindowed — see FUTURE_WINDOW_DEFAULT_DAYS.
   const futureBookings: FutureBooking[] = (Array.isArray(futureApptData) ? futureApptData as HarvestAppointment[] : [])
-    .filter(a => a.harvest_date >= todayISO)
+    .filter(a => a.harvest_date >= todayISO && !a.kill_only)
     .map(a => ({
       id:           a.id,
       source:       a.source ?? '',
@@ -828,7 +886,7 @@ export function buildEntries(
     return b.score - a.score
   })
 
-  return combined.map((c, i) => ({ ...c.item, rank: i + 1 }))
+  return carryForwardPastDays(combined.map((c, i) => ({ ...c.item, rank: i + 1 })), isoDate())
 }
 
 // ── The plan as the crew reads it: cut into cutting days ─────────────────────
