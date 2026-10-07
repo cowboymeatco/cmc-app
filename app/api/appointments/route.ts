@@ -237,6 +237,7 @@ export async function POST(req: NextRequest) {
       producer_id:       body.producer_id ?? await resolveProducerId(body.source),
       producer_qbo_customer_id: body.producer_qbo_customer_id ?? null,
       producer_qbo_name:        body.producer_qbo_name ?? null,
+      kill_only:                !!body.kill_only,
     }])
     .select()
     .single()

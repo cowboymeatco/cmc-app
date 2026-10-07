@@ -1477,6 +1477,11 @@ export default function CutScheduleTab() {
                             {' · '}{entry.customer_count} cut customers
                           </span>
                         )}
+                        {entry.carried_from && (
+                          <span style={{ color: C.amber, fontWeight: 700 }} title="This carcass was scheduled for a day that has already passed and is still hanging, so it moved to the head of today's list">
+                            {' · '}↪ still hanging from {dateLabel(entry.carried_from, { weekday: 'short', month: 'numeric', day: 'numeric' })}
+                          </span>
+                        )}
                       </span>
                       {/* Per-appointment assignment progress badge */}
                       {entry.customer_count > 1 && entry.appt_total_carcasses > 0 && (() => {

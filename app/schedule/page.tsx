@@ -809,6 +809,7 @@ function CalendarView({
                     borderRadius: '2px', color: 'var(--cream)',
                     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                   }}>
+                    {a.kill_only && <span title="Kill only — not processed here" style={{ color: KILL_ONLY_CLR, fontWeight: 700 }}>🔪 </span>}
                     {abbrevProducer(a.source || a.customers?.[0]?.customer_name || '')}
                     {a.head_count > 1 ? ` ×${a.head_count}` : ''}
                   </div>
@@ -917,6 +918,7 @@ function CalendarView({
                       <div>
                         <span style={{ fontWeight: 700, color: speciesColor(a.species), fontSize: '0.88rem' }}>{a.species}</span>
                         <span style={{ color: 'var(--cream)', fontSize: '0.88rem' }}> · {a.head_count} head</span>
+                        {a.kill_only && <KillOnlyBadge />}
                       </div>
                       <div style={{ display: 'flex', gap: '0.35rem' }}>
                         <button onClick={() => onEdit(a)} style={smallBtn()}>✎</button>
@@ -987,7 +989,7 @@ function ListView({ filtered, onEdit, onDelete, onNew }: {
                 <td style={td()}>{new Date(a.harvest_date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</td>
                 <td style={td()}><span style={{ color: speciesColor(a.species), fontWeight: 700 }}>{SPECIES_EMOJI[a.species] ?? ''} {a.species}</span></td>
                 <td style={td()}>{a.head_count}</td>
-                <td style={td()}>{a.source || '—'}</td>
+                <td style={td()}>{a.source || '—'}{a.kill_only && <KillOnlyBadge />}</td>
                 <td style={td()}>{a.customers?.map(c=>`${c.customer_name}${c.portion!=='Whole'?` (${c.portion})`:''}`).join(', ') || '—'}</td>
                 <td style={td()}><span style={{ padding:'0.2rem 0.55rem', borderRadius:'3px', fontSize:'0.73rem', background:'rgba(0,0,0,0.3)', color:'var(--cream)' }}>{STATUS_LABELS[a.status]??a.status}</span></td>
                 <td style={td()}>{allReady ? <span style={{ color:'#6dbf6d' }}>✅ Ready</span> : someNeed ? <span style={{ color:'#f0c040' }}>⚠ Needed</span> : '—'}</td>
@@ -1060,6 +1062,15 @@ function Modal({ editing, saving, onChange, onSave, onClose }: {
             <select value={editing.status??'Booked'} onChange={e=>onChange({...editing,status:e.target.value as any})} style={{ ...inputStyle(), color: statusColor(editing.status??'Booked'), fontWeight: 600 }}>
               {STATUSES.map(s=><option key={s} value={s} style={{ color: statusColor(s), background: STATUS_OPT_BG, fontWeight: 600 }}>{STATUS_LABELS[s]}</option>)}
             </select>
+          </Field>
+          {/* Charlie, 2026-10-01: "Need a kill only indicator. Something we
+              don't intend on processing." The carcass leaves whole; it never
+              goes on the cut schedule. */}
+          <Field label="Kill Only">
+            <label style={{ display:'flex', alignItems:'center', gap:'0.5rem', cursor:'pointer', color: editing.kill_only ? KILL_ONLY_CLR : 'var(--cream)', fontSize:'0.88rem', minHeight: 36 }}>
+              <input type="checkbox" checked={!!editing.kill_only} onChange={e=>onChange({...editing,kill_only:e.target.checked})} style={{ width: 16, height: 16, accentColor: KILL_ONLY_CLR }} />
+              {editing.kill_only ? '🔪 Kill only — not processed here' : 'Slaughter only, no processing'}
+            </label>
           </Field>
         </div>
 
@@ -1302,6 +1313,21 @@ function SourceInput({
 }
 
 // ── Style helpers ─────────────────────────────────────────────────────────────
+
+const KILL_ONLY_CLR = '#F97316'
+
+/** Slaughter only — the carcass leaves whole, nothing to cut, nothing to
+ *  schedule. Loud on purpose: a booking read as a cut job by mistake is a
+ *  cut sheet somebody chases that was never coming. */
+function KillOnlyBadge() {
+  return (
+    <span title="Kill only — not processed here" style={{
+      marginLeft: '0.45rem', padding: '0.1rem 0.45rem', borderRadius: 3, fontSize: '0.66rem', fontWeight: 700,
+      letterSpacing: '0.08em', textTransform: 'uppercase', whiteSpace: 'nowrap', verticalAlign: 'middle',
+      background: `${KILL_ONLY_CLR}22`, border: `1px solid ${KILL_ONLY_CLR}88`, color: KILL_ONLY_CLR,
+    }}>🔪 Kill only</span>
+  )
+}
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
