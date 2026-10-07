@@ -10,9 +10,9 @@ import {
   type FutureItem, type HarvestDay, type CarcassLink,
   DEFAULT_WEIGHTS, WEIGHT_LABELS, buildEntries, loadScheduleData, uniqueCarcasses as uniqueOf,
   calcScore, speciesColor, speciesIcon, portionBadge, cutDateByKey, hangAtCut, hangColor, autoDateBreaks, moveDayIntoDateOrder,
-  carcassTotals, FUTURE_WINDOW_DEFAULT_DAYS, FUTURE_WINDOW_CHOICES,
+  carcassTotals, FUTURE_WINDOW_DEFAULT_DAYS, FUTURE_WINDOW_CHOICES, buildCarcassLinks, scannedCutDay,
 } from '@/lib/cutSchedule'
-import { isoDate, dateLabel, addDaysISO, mondayOfISO } from '@/lib/dates'
+import { isoDate, dateLabel, addDaysISO, mondayOfISO, daysBetweenISO } from '@/lib/dates'
 
 // How far out the bookings rail looks. Remembered per machine so the planner
 // doesn't reset to 30 days every morning.
@@ -47,8 +47,20 @@ const C = {
 const OFF_RAIL_DAYS  = 35
 const OFF_RAIL_SHOWN = 30
 
-/** A carcass marked cut or delivered whole, with the buyers off its booking. */
-interface OffRailRow { log: HarvestLog; buyers: string }
+// How far back the Past days view can look, in kill dates. The same fetch
+// feeds the undo list, which is why the shortest choice is the undo list's
+// own reach. Remembered per machine like the bookings window.
+const PAST_WINDOW_CHOICES: { label: string; days: number }[] = [
+  { label: '5wk',  days: OFF_RAIL_DAYS },
+  { label: '13wk', days: 91 },
+  { label: '26wk', days: 182 },
+]
+const PAST_WINDOW_STORAGE_KEY = 'cmc.cutSchedule.pastWindowDays'
+
+/** A carcass marked cut or delivered whole, with the buyers off its booking
+ *  and, if it was scanned into packing, the day that first happened and who
+ *  it was packed for. */
+interface OffRailRow { log: HarvestLog; buyers: string; cutDay: string | null; packedFor: string }
 
 // A kill day, drawn into the cutting plan where it falls.
 //
@@ -109,6 +121,166 @@ function queueName(entry: { customer_name: string; producer: string }): { text: 
   return producer ? { text: producer, unnamed: true } : { text: 'No buyer yet', unnamed: true }
 }
 
+// ── Past cut days ─────────────────────────────────────────────────────────────
+// Jill, 2026-10-05: "Somewhere I could go to see past cut days?" Nothing in the
+// database remembers which day a carcass was cut — Cut ✓ only flips its status,
+// and the plan it sat in is rewritten on every save. What IS recorded is the
+// packing session it was scanned into, so a day here is the day its first box
+// was scanned. One nobody scanned sits in its own bucket rather than guessing;
+// one delivered whole was never cut, so it gets a bucket of its own too.
+//
+// Read-only on purpose. Putting a carcass back goes through the undo list
+// below, which stays where the Cut ✓ tooltip says it is.
+function PastDaysView({ rows, windowDays, onWindow }: {
+  rows: OffRailRow[]; windowDays: number; onWindow: (days: number) => void
+}) {
+  const byDay = new Map<string, OffRailRow[]>()
+  const unknown:   OffRailRow[] = []
+  const delivered: OffRailRow[] = []
+  for (const r of rows) {
+    if (r.log.status === 'delivered') delivered.push(r)
+    else if (r.cutDay) byDay.set(r.cutDay, [...(byDay.get(r.cutDay) ?? []), r])
+    else unknown.push(r)
+  }
+  const days = [...byDay.entries()].sort((a, b) => b[0].localeCompare(a[0]))
+  const cutHead = rows.length - delivered.length
+
+  const sum = (list: OffRailRow[]) => list.reduce((s, r) => s + (r.log.hot_carcass_weight_lbs ?? 0), 0)
+  const breakdown = (list: OffRailRow[]) => {
+    const n = new Map<string, number>()
+    for (const r of list) n.set(r.log.species, (n.get(r.log.species) ?? 0) + 1)
+    return [...n.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([sp, c]) => `${speciesIcon(sp)} ${c}`)
+      .join('   ')
+  }
+
+  const cell: React.CSSProperties = {
+    padding: '0.3rem 0.5rem', borderBottom: '1px solid rgba(166,120,90,0.12)',
+    fontSize: '0.78rem', verticalAlign: 'middle',
+  }
+  const table = (list: OffRailRow[], cutDay: string | null) => (
+    <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+      <tbody>
+        {list.map(({ log, buyers, packedFor }) => (
+          <tr key={log.id}>
+            <td style={{ ...cell, whiteSpace: 'nowrap', fontFamily: 'monospace', color: C.cream, width: 1 }}>
+              {log.carcass_tag || '—'}
+            </td>
+            <td style={{ ...cell, color: C.cream }} title={buyers && buyers !== packedFor ? `Booked by: ${buyers}` : undefined}>
+              {packedFor || buyers || <span style={{ color: C.medBrown, fontStyle: 'italic' }}>no buyer named</span>}
+            </td>
+            <td style={{ ...cell, color: C.lightBrown }}>{log.producer || ''}</td>
+            <td style={{ ...cell, color: speciesColor(log.species), fontWeight: 700, whiteSpace: 'nowrap' }}>
+              {speciesIcon(log.species)} {log.species}
+            </td>
+            <td style={{ ...cell, color: C.lightBrown, whiteSpace: 'nowrap', textAlign: 'right' }}>
+              {log.hot_carcass_weight_lbs != null ? `${log.hot_carcass_weight_lbs} lb` : ''}
+            </td>
+            <td style={{ ...cell, color: C.lightBrown, whiteSpace: 'nowrap' }}>
+              killed {dateLabel(log.harvest_date, { month: 'short', day: 'numeric' })}
+              {cutDay && (() => {
+                const d = daysBetweenISO(log.harvest_date, cutDay)
+                return d >= 0 ? <> · <span style={{ color: hangColor(d), fontWeight: 700 }}>hung {d}d</span></> : null
+              })()}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+
+  const section = (key: string, title: React.ReactNode, list: OffRailRow[], cutDay: string | null, note?: string) => (
+    <div key={key} style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 6, overflow: 'hidden' }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap',
+        padding: '0.5rem 0.9rem', background: 'rgba(245,158,11,0.08)',
+        borderBottom: '1px solid rgba(166,120,90,0.2)',
+      }}>
+        <span style={{ color: C.cream, fontSize: '0.85rem', fontWeight: 700 }}>{title}</span>
+        <span style={{ flex: 1 }} />
+        <span style={{ color: C.tan, fontSize: '0.74rem', whiteSpace: 'nowrap' }}>
+          {list.length} head · {Math.round(sum(list)).toLocaleString()} lb
+        </span>
+        <span style={{ color: C.lightBrown, fontSize: '0.74rem', whiteSpace: 'nowrap' }}>{breakdown(list)}</span>
+      </div>
+      {note && (
+        <div style={{ padding: '0.4rem 0.9rem 0', fontSize: '0.72rem', color: C.lightBrown, lineHeight: 1.5 }}>{note}</div>
+      )}
+      <div style={{ padding: '0.25rem 0.4rem 0.4rem' }}>{table(list, cutDay)}</div>
+    </div>
+  )
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+        <span style={{ color: C.tan, fontSize: '0.8rem', fontWeight: 700 }}>
+          📅 Past cut days — {cutHead} cut, {delivered.length} delivered whole
+        </span>
+        <span style={{ flex: 1 }} />
+        <span style={{ color: C.lightBrown, fontSize: '0.7rem' }}>Kills in the last</span>
+        <div style={{ display: 'flex', gap: 2 }}>
+          {PAST_WINDOW_CHOICES.map(c => (
+            <button
+              key={c.days}
+              onClick={() => onWindow(c.days)}
+              title={`Carcasses killed in the last ${c.days} days`}
+              style={{
+                background: windowDays === c.days ? 'rgba(245,158,11,0.16)' : 'transparent',
+                border: `1px solid ${windowDays === c.days ? 'rgba(245,158,11,0.5)' : 'rgba(166,120,90,0.25)'}`,
+                color: windowDays === c.days ? C.amber : C.lightBrown,
+                borderRadius: 3, padding: '2px 7px', fontSize: '0.66rem', fontWeight: 700, cursor: 'pointer',
+              }}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <p style={{ fontSize: '0.74rem', color: C.lightBrown, margin: 0, lineHeight: 1.55, maxWidth: 820 }}>
+        A carcass lands on the day its first box was scanned into packing — that scan is the only record of the cut,
+        since marking it <strong style={{ color: C.green }}>Cut ✓</strong>{' '}doesn&apos;t keep a date.
+        One that was never scanned shows at the bottom with its cut day unknown. Read-only: to put one back on the rail,
+        use ↩ Off the rail lately, below.
+      </p>
+
+      {rows.length === 0 && (
+        <div style={{
+          background: C.dark, border: '1px solid rgba(166,120,90,0.2)',
+          borderRadius: 6, padding: '2.5rem', textAlign: 'center',
+        }}>
+          <div style={{ fontSize: '2rem', marginBottom: '0.75rem' }}>📅</div>
+          <p style={{ color: C.tan, fontSize: '1rem', margin: '0 0 0.5rem' }}>Nothing cut yet</p>
+          <p style={{ color: C.lightBrown, fontSize: '0.82rem', margin: 0 }}>
+            No carcass killed in the last {windowDays} days has been marked cut or delivered whole — try a wider window.
+          </p>
+        </div>
+      )}
+
+      {days.map(([day, list]) => section(
+        day,
+        <>{dateLabel(day, { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' })}</>,
+        list, day,
+      ))}
+
+      {unknown.length > 0 && section(
+        '__unknown__',
+        <span style={{ color: C.amber }}>⚠ Not scanned — cut date unknown</span>,
+        unknown, null,
+        'Marked Cut ✓ but never scanned into a packing session, so there is no record of the day. ' +
+        'Scan it in on the scanner and it moves up under that day.',
+      )}
+
+      {delivered.length > 0 && section(
+        '__delivered__',
+        <span style={{ color: C.tan }}>🚚 Delivered whole — not cut</span>,
+        delivered, null,
+        'Went out the door hanging; no cutting day to show.',
+      )}
+    </div>
+  )
+}
+
 export default function CutScheduleTab() {
   const [entries,     setEntries]     = useState<ListItem[]>([])
   const [weights,     setWeights]     = useState<PriorityWeights>(DEFAULT_WEIGHTS)
@@ -125,6 +297,13 @@ export default function CutScheduleTab() {
   const [offRail,      setOffRail]      = useState<OffRailRow[]>([])
   const [offRailQuery, setOffRailQuery] = useState('')
   const [restoring,    setRestoring]    = useState<Set<string>>(new Set())
+  // Jill, 2026-10-05: "Somewhere I could go to see past cut days?" Marking a
+  // carcass cut drops it off the plan and nothing keeps the day it went. The
+  // Past days view reads the same off-rail rows back by the day each one was
+  // scanned into packing, which is the closest thing to a record of the cut.
+  const [showPast,     setShowPast]     = useState(false)
+  const [pastWindow,   setPastWindow]   = useState<number>(OFF_RAIL_DAYS)
+  const pastWindowRef = useRef(OFF_RAIL_DAYS)
   const [breakError,  setBreakError]  = useState<{ key: string; msg: string } | null>(null)
 
   // Cached source data, so the assign modal can read carcasses/customers and we
@@ -154,6 +333,8 @@ export default function CutScheduleTab() {
   useEffect(() => {
     const saved = Number(window.localStorage.getItem(WINDOW_STORAGE_KEY))
     if (FUTURE_WINDOW_CHOICES.some(c => c.days === saved)) setFutureWindow(saved)
+    const past = Number(window.localStorage.getItem(PAST_WINDOW_STORAGE_KEY))
+    if (PAST_WINDOW_CHOICES.some(c => c.days === past)) { setPastWindow(past); pastWindowRef.current = past }
   }, [])
 
   const changeWindow = (days: number) => {
@@ -199,16 +380,30 @@ export default function CutScheduleTab() {
   // spot the one that shouldn't have been. The harvest log keeps no record of
   // WHEN a status changed, so "lately" is by kill date: a carcass hangs a few
   // weeks at most, and one taken off by mistake was on the rail until then.
+  //
+  // The reach is the Past days window (never less than the undo list's own
+  // OFF_RAIL_DAYS), read off a ref so a wider window doesn't re-create this
+  // callback and, through loadAll, the mount effect.
   const loadOffRail = useCallback(async () => {
     try {
-      const from = addDaysISO(isoDate(), -OFF_RAIL_DAYS)
+      const from = addDaysISO(isoDate(), -Math.max(OFF_RAIL_DAYS, pastWindowRef.current))
       const logRes: unknown = await fetch(`/api/harvest?status=cut,delivered&from=${from}`).then(r => r.json())
       const rows = Array.isArray(logRes) ? (logRes as HarvestLog[]) : []
       const apptIds = [...new Set(rows.map(l => l.appointment_id).filter(Boolean))]
-      const apptRes: unknown = apptIds.length
-        ? await fetch(`/api/appointments?ids=${apptIds.join(',')}`).then(r => r.json()).catch(() => [])
-        : []
-      const byId = new Map((Array.isArray(apptRes) ? apptRes as HarvestAppointment[] : []).map(a => [a.id, a]))
+      const logIds  = rows.map(l => l.id)
+      const [apptRes, inputRes]: [unknown, unknown] = await Promise.all([
+        apptIds.length
+          ? fetch(`/api/appointments?ids=${apptIds.join(',')}`).then(r => r.json()).catch(() => [])
+          : [],
+        // Which packing session each one was scanned into — the only record of
+        // the day it was actually cut. A miss here leaves every row under
+        // "cut date unknown" rather than taking the list down.
+        logIds.length
+          ? fetch(`/api/processing/inputs?harvest_log_ids=${logIds.join(',')}`).then(r => r.json()).catch(() => [])
+          : [],
+      ])
+      const byId  = new Map((Array.isArray(apptRes) ? apptRes as HarvestAppointment[] : []).map(a => [a.id, a]))
+      const links = buildCarcassLinks(Array.isArray(inputRes) ? inputRes : [])
       rows.sort((a, b) =>
         b.harvest_date.localeCompare(a.harvest_date) || (a.carcass_tag ?? '').localeCompare(b.carcass_tag ?? ''))
       setOffRail(rows.map(log => {
@@ -216,10 +411,21 @@ export default function CutScheduleTab() {
         // One name per buyer — a booking has a slot per animal, and a buyer
         // taking four hogs is four slots under the same name.
         const buyers = [...new Set((appt?.customers ?? []).map(c => c.customer_name).filter(Boolean))].join(', ')
-        return { log, buyers: buyers || appt?.source || '' }
+        const mine   = links.get(log.id)
+        // Who this particular animal was packed for, which is a sharper answer
+        // than the whole booking's buyer list on a seven-name beef order.
+        const packedFor = [...new Set((mine ?? []).map(l => (l.customer_name ?? '').trim()).filter(Boolean))].join(', ')
+        return { log, buyers: buyers || appt?.source || '', cutDay: scannedCutDay(mine), packedFor }
       }))
     } catch { /* a convenience list — the schedule stands without it */ }
   }, [])
+
+  const changePastWindow = (days: number) => {
+    setPastWindow(days)
+    pastWindowRef.current = days
+    try { window.localStorage.setItem(PAST_WINDOW_STORAGE_KEY, String(days)) } catch { /* private mode */ }
+    loadOffRail()
+  }
 
   const loadAll = useCallback(async (changed = false) => {
     if (inFlight.current) { pending.current ||= changed; return }
@@ -720,7 +926,7 @@ export default function CutScheduleTab() {
       {/* Toolbar */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-          {!loading && carcasses.length > 0 && [
+          {!loading && !showPast && carcasses.length > 0 && [
             { label: 'In Cooler',      value: uniqueCarcasses.length,                                 color: C.tan,   title: 'Carcasses chilling right now' },
             { label: 'Waiting on Sheet', value: carcasses.filter(e => e.sheet_state === 'waiting').length, color: C.red,   title: 'A named customer who hasn’t sent their cut sheet — somebody to chase' },
             ...(noBuyerCount > 0 ? [{
@@ -749,6 +955,22 @@ export default function CutScheduleTab() {
         </div>
 
         <div style={{ display: 'flex', gap: '0.6rem' }}>
+          {/* Jill, 2026-10-05: "Somewhere I could go to see past cut days?"
+              Flips the list to what was cut on which day, read-only. */}
+          <button
+            onClick={() => setShowPast(p => !p)}
+            title={showPast
+              ? 'Back to the live cutting plan'
+              : 'What was cut on which day — carcasses marked Cut ✓, by the day they were scanned into packing'}
+            style={{
+              background: showPast ? 'rgba(201,168,130,0.22)' : 'rgba(201,168,130,0.12)', color: C.tan,
+              border: `1px solid ${showPast ? C.tan : 'rgba(201,168,130,0.45)'}`, borderRadius: 4,
+              padding: '0.5rem 1rem', fontWeight: 700, fontSize: '0.85rem',
+              cursor: 'pointer', whiteSpace: 'nowrap',
+            }}
+          >
+            {showPast ? '📋 Back to schedule' : '📅 Past days'}
+          </button>
           {/* Charlie, 2026-09-29: "Can I get an easy print off that I can
               hand to my guys?" A paper copy of the SAVED plan, one tick box
               per carcass, print dialog up as soon as it loads. */}
@@ -780,6 +1002,7 @@ export default function CutScheduleTab() {
           >
             📱 Crew View ↗
           </Link>
+          {!showPast && <>
           <button
             onClick={handleAddBreak}
             disabled={loading || carcasses.length === 0}
@@ -808,6 +1031,7 @@ export default function CutScheduleTab() {
           >
             {saving ? 'Saving…' : 'Save Order'}
           </button>
+          </>}
         </div>
       </div>
 
@@ -823,7 +1047,7 @@ export default function CutScheduleTab() {
       )}
 
       {/* Priority Weights accordion */}
-      <div style={{
+      {!showPast && <div style={{
         background: C.dark, border: '1px solid rgba(166,120,90,0.25)',
         borderRadius: 6, marginBottom: '1.25rem', overflow: 'hidden',
       }}>
@@ -874,7 +1098,7 @@ export default function CutScheduleTab() {
             </button>
           </div>
         )}
-      </div>
+      </div>}
 
       {/* Loading */}
       {loading && (
@@ -883,8 +1107,13 @@ export default function CutScheduleTab() {
         </div>
       )}
 
+      {/* Past cut days — read-only, in place of the plan */}
+      {!loading && showPast && (
+        <PastDaysView rows={offRail} windowDays={pastWindow} onWindow={changePastWindow} />
+      )}
+
       {/* Empty state */}
-      {!loading && carcasses.length === 0 && (
+      {!loading && !showPast && carcasses.length === 0 && (
         <div style={{
           background: C.dark, border: '1px solid rgba(166,120,90,0.2)',
           borderRadius: 6, padding: '3rem', textAlign: 'center',
@@ -898,7 +1127,7 @@ export default function CutScheduleTab() {
       )}
 
       {/* Schedule list */}
-      {!loading && entries.length > 0 && (
+      {!loading && !showPast && entries.length > 0 && (
         <>
           {/* Column headers */}
           <div style={{
@@ -1590,7 +1819,7 @@ export default function CutScheduleTab() {
               }}
             />
             {offRail.length === 0 ? (
-              <div style={{ fontSize: '0.76rem', color: C.lightBrown }}>Nothing taken off a kill in the last {OFF_RAIL_DAYS} days.</div>
+              <div style={{ fontSize: '0.76rem', color: C.lightBrown }}>Nothing taken off a kill in the last {pastWindow} days.</div>
             ) : shown.length === 0 ? (
               <div style={{ fontSize: '0.76rem', color: C.lightBrown }}>Nothing matches “{offRailQuery.trim()}”.</div>
             ) : (
@@ -1692,7 +1921,7 @@ export default function CutScheduleTab() {
         whatever the last day break happened to be (Charlie, 2026-08-05). Drag
         one onto a row to slot it into that day; drag a scheduled row back here
         to take its day away again. */}
-    {!loading && (carcasses.length > 0 || futureBookings.length > 0) && (
+    {!loading && !showPast && (carcasses.length > 0 || futureBookings.length > 0) && (
       <aside
         onDragOver={e => { e.preventDefault(); setDragOver('__rail__') }}
         onDrop={handleDropToRail}
