@@ -46,6 +46,21 @@ function KillTypeBadge({ killType }: { killType: 'USDA' | 'Custom' | null }) {
   )
 }
 
+// Booked as kill only: harvested here, not cut here. The carcass leaves the
+// rail whole, so the cutter should not be looking for a sheet on it
+// (Charlie, 2026-10-01).
+function KillOnlyBadge() {
+  return (
+    <span style={{
+      fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+      padding: '1px 6px', borderRadius: 4, whiteSpace: 'nowrap',
+      color: C.red, border: `1px solid ${C.red}66`, background: `${C.red}1A`,
+    }}>
+      Kill only
+    </span>
+  )
+}
+
 // USDA green / custom amber, same as the badge on every row.
 const mixColor = (t: 'USDA' | 'Custom') => t === 'USDA' ? C.green : C.amber
 
@@ -303,6 +318,7 @@ export default function CrewCutSchedulePage() {
                             {pb.label}
                           </span>
                           <KillTypeBadge killType={entry.kill_type} />
+                          {entry.kill_only && <KillOnlyBadge />}
                         </div>
                         <div style={{ fontSize: '0.78rem', color: C.lightBrown, marginTop: 3 }}>
                           <span style={{ color: spColor, fontWeight: 700 }}>{speciesIcon(entry.species)} {entry.species}</span>
@@ -337,7 +353,9 @@ export default function CrewCutSchedulePage() {
                           <div style={{ fontSize: '0.78rem', marginTop: 3 }}>
                             {entry.has_instructions
                               ? <span style={{ color: C.green }}>✓ Cut sheet ready</span>
-                              : entry.sheet_state === 'no-buyer'
+                              : entry.sheet_state === 'kill-only'
+                                ? <span style={{ color: C.lightBrown }}>No cut sheet — kill only, goes out whole</span>
+                                : entry.sheet_state === 'no-buyer'
                                 ? <span style={{
                                     color: C.amber, fontWeight: 700,
                                     background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.4)',

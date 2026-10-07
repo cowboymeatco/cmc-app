@@ -263,9 +263,11 @@ export default function CutSchedulePrintPage({ searchParams }: { searchParams: P
                             <td>
                               {entry.has_instructions
                                 ? '✓'
-                                : entry.sheet_state === 'no-buyer'
-                                  ? <span className="warn">NO BUYER</span>
-                                  : <span className="warn">NO SHEET</span>}
+                                : entry.sheet_state === 'kill-only'
+                                  ? 'KILL ONLY'
+                                  : entry.sheet_state === 'no-buyer'
+                                    ? <span className="warn">NO BUYER</span>
+                                    : <span className="warn">NO SHEET</span>}
                             </td>
                             <td className="notes">{entry.entry_notes}</td>
                           </tr>

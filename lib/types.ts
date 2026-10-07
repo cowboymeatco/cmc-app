@@ -64,6 +64,9 @@ export interface HarvestAppointment {
   /** QuickBooks customer billed when the producer pays — picked on the booking. */
   producer_qbo_customer_id?: string | null
   producer_qbo_name?: string | null
+  /** Harvested here, not cut here — the carcass leaves the rail whole, so no
+   *  cut sheet is ever expected (Charlie, 2026-10-01). */
+  kill_only?: boolean
 }
 
 // ── Cutting Instructions ──────────────────────────────────────────────────────

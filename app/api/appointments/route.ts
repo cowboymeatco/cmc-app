@@ -232,6 +232,7 @@ export async function POST(req: NextRequest) {
       producer_contact:  body.producer_contact ?? '',
       notes:             body.notes ?? '',
       status:            body.status ?? 'Booked',
+      kill_only:         body.kill_only ?? false,
       linked_carcass_id: body.linked_carcass_id ?? '',
       customers:         await linkCustomers(body.customers),
       producer_id:       body.producer_id ?? await resolveProducerId(body.source),

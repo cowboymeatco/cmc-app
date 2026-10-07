@@ -1439,6 +1439,8 @@ export default function CutScheduleTab() {
                   <div style={{ textAlign: 'center' }}>
                     {entry.has_instructions
                       ? <span style={{ color: C.green, fontSize: '1rem' }} title="Cut sheet on file">✓</span>
+                      : entry.sheet_state === 'kill-only'
+                      ? <span style={{ color: C.lightBrown, fontSize: '0.76rem' }} title="Kill only — not being cut here, no sheet expected">—</span>
                       : (<>
                           {entry.sheet_state === 'no-buyer'
                             ? <span
@@ -1491,7 +1493,20 @@ export default function CutScheduleTab() {
                   </button>
 
                   {/* Mark as Cut / delivered whole */}
-                  <div style={{ display: 'flex', gap: 3 }}>
+                  <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+                  {/* Booked as kill only: this one leaves on the 🚚, not the saw. */}
+                  {entry.kill_only && (
+                    <span
+                      title="Kill only — harvested here, not cut & wrapped here. Leaves the rail whole (🚚)."
+                      style={{
+                        fontSize: '0.6rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+                        padding: '1px 5px', borderRadius: 3, whiteSpace: 'nowrap',
+                        color: C.red, border: '1px solid rgba(239,68,68,0.5)', background: 'rgba(239,68,68,0.12)',
+                      }}
+                    >
+                      Kill only
+                    </span>
+                  )}
                   <button
                     title="Mark as cut — off the cooler list and on to packing. Wrong one? Put it back under ↩ Off the rail lately, at the bottom"
                     onClick={e => { e.stopPropagation(); handleMarkCut(entry) }}

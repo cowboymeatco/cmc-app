@@ -30,7 +30,10 @@ export interface CutCustomer {
 // "⚠ Missing", which made a booking nobody had filled in look like a customer
 // sitting on their homework (Charlie, 2026-08-24: "why are there so many no
 // cut sheet found?").
-export type SheetState = 'have' | 'waiting' | 'no-buyer'
+// "Kill only" is a booking the plant harvests but never cuts — the carcass
+// leaves the rail whole — so there is no sheet to wait on and nobody to chase
+// (Charlie, 2026-10-01: "Need a kill only indicator").
+export type SheetState = 'have' | 'waiting' | 'no-buyer' | 'kill-only'
 
 export interface ScheduleEntry {
   type:                      'carcass'
@@ -63,8 +66,13 @@ export interface ScheduleEntry {
    *  has been assigned yet. `customer_name` and `portion` above are display
    *  summaries of this list. */
   cut_customers:             CutCustomer[]
-  /** have / waiting on the customer / no buyer named on the booking at all. */
+  /** have / waiting on the customer / no buyer named on the booking at all /
+   *  kill only (never going to be cut here). */
   sheet_state:               SheetState
+  /** Off the booking: harvested here, not processed here. It hangs in the
+   *  cooler like any other carcass until 🚚 takes it off the rail whole, but
+   *  it is not cutting work and must never read as waiting on a sheet. */
+  kill_only:                 boolean
   customer_count:            number   // # of cut customers on the appointment (>1 & unassigned = collapsed, see buildEntries)
   assigned:                  boolean  // true = this row is a real carcass→customer assignment (one cut job per portion)
   appt_assigned_carcasses:   number   // # of this appointment's carcasses fully assigned (portions sum to a whole)
@@ -476,8 +484,10 @@ export async function loadScheduleData(todayISO: string): Promise<ScheduleData> 
   const savedAll = Array.isArray(savedData) ? (savedData as SavedItem[]) : []
 
   // Everything still ahead of us, unwindowed — see FUTURE_WINDOW_DEFAULT_DAYS.
+  // A kill-only booking never becomes cutting work, so it gets no placeholders
+  // to drag onto a cut day. It still counts toward its kill day below.
   const futureBookings: FutureBooking[] = (Array.isArray(futureApptData) ? futureApptData as HarvestAppointment[] : [])
-    .filter(a => a.harvest_date >= todayISO)
+    .filter(a => a.harvest_date >= todayISO && !a.kill_only)
     .map(a => ({
       id:           a.id,
       source:       a.source ?? '',
@@ -595,6 +605,7 @@ export function buildEntries(
   for (const log of harvestLogs) {
     const appt      = log.appointment_id ? apptMap.get(log.appointment_id) : undefined
     const customers = appt?.customers ?? []
+    const killOnly  = !!appt?.kill_only
     const daysHanging = calcDaysHanging(log.harvest_date)
     const logAssigns  = assignByLog.get(log.id) ?? []
 
@@ -659,9 +670,12 @@ export function buildEntries(
         cutting_instruction_id:  cutCustomers.length === 1 ? cutCustomers[0].cutting_instruction_id : null,
         sheet_state:             cutCustomers.every(c => c.has_instructions)
                                    ? 'have'
-                                   : cutCustomers.some(c => !c.has_instructions && !namedBuyer(c.name))
-                                     ? 'no-buyer'
-                                     : 'waiting',
+                                   : killOnly
+                                     ? 'kill-only'
+                                     : cutCustomers.some(c => !c.has_instructions && !namedBuyer(c.name))
+                                       ? 'no-buyer'
+                                       : 'waiting',
+        kill_only:               killOnly,
         days_hanging:            daysHanging,
         locked:                  saved?.locked ?? false,
         entry_notes:             saved?.notes  ?? '',
@@ -715,9 +729,12 @@ export function buildEntries(
       // sheet to be waiting on — the booking needs a name before anything else.
       sheet_state:             hasInstructions
                                  ? 'have'
-                                 : (open.length === 0 || !open.some(c => namedBuyer(c.customer_name)))
-                                   ? 'no-buyer'
-                                   : 'waiting',
+                                 : killOnly
+                                   ? 'kill-only'
+                                   : (open.length === 0 || !open.some(c => namedBuyer(c.customer_name)))
+                                     ? 'no-buyer'
+                                     : 'waiting',
+      kill_only:               killOnly,
       days_hanging:            daysHanging,
       locked:                  saved?.locked ?? false,
       entry_notes:             saved?.notes  ?? '',

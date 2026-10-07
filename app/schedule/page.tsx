@@ -154,6 +154,7 @@ function matchesQuery(a: HarvestAppointment, words: string[]): boolean {
   const hay = [
     a.source, a.producer_contact, a.notes, a.species, a.status, STATUS_LABELS[a.status],
     a.harvest_date, a.receive_date,
+    a.kill_only ? 'kill only' : '',
     new Date(a.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
     ...(a.customers ?? []).flatMap(c => [c.customer_name, c.contact_value, c.portion]),
   ].filter(Boolean).join(' ').toLowerCase()
@@ -164,7 +165,21 @@ function blankCustomer() {
   return { id: crypto.randomUUID(), customer_name: '', portion: 'Whole', payment_responsibility: 'producer' as const, contact_preference: 'Email', contact_value: '', linked_cutting_instruction_id: '', reminder_last_sent_at: null, reminder_count: 0 }
 }
 function blankAppt(date?: string): Partial<HarvestAppointment> {
-  return { harvest_date: date ?? isoDate(), receive_date: '', species: 'Beef', head_count: 1, source: '', producer_contact: '', notes: '', status: 'Booked', linked_carcass_id: '', customers: [blankCustomer()] }
+  return { harvest_date: date ?? isoDate(), receive_date: '', species: 'Beef', head_count: 1, source: '', producer_contact: '', notes: '', status: 'Booked', kill_only: false, linked_carcass_id: '', customers: [blankCustomer()] }
+}
+
+// "Kill only — not processing here." The animal is harvested and leaves the
+// rail whole, so nobody is waiting on a cut sheet for it (Charlie, 2026-10-01).
+function KillOnlyChip({ size = '0.62rem' }: { size?: string }) {
+  return (
+    <span title="Kill only — harvested here, not cut & wrapped here" style={{
+      fontSize: size, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+      padding: '0 5px', borderRadius: 3, whiteSpace: 'nowrap', lineHeight: '15px',
+      color: '#fca5a5', border: '1px solid rgba(239,68,68,0.5)', background: 'rgba(239,68,68,0.15)',
+    }}>
+      Kill only
+    </span>
+  )
 }
 
 // The receiving default — day before harvest. Some producers bring in the day
@@ -241,7 +256,8 @@ export default function SchedulePage() {
     })
     .sort((a, b) => a.harvest_date.localeCompare(b.harvest_date))
 
-  const needInstruct = appointments.filter(a => a.status !== 'Complete' && a.status !== 'PendingRequest' && a.customers?.some(c => !c.linked_cutting_instruction_id)).length
+  // A kill-only booking is never waiting on instructions — nothing is being cut.
+  const needInstruct = appointments.filter(a => a.status !== 'Complete' && a.status !== 'PendingRequest' && !a.kill_only && a.customers?.some(c => !c.linked_cutting_instruction_id)).length
   const readyCount   = appointments.filter(a => a.status !== 'Complete' && a.status !== 'PendingRequest' && a.customers?.every(c => !!c.linked_cutting_instruction_id)).length
 
   async function save() {
@@ -809,6 +825,7 @@ function CalendarView({
                     borderRadius: '2px', color: 'var(--cream)',
                     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                   }}>
+                    {a.kill_only && <span style={{ marginRight: 3 }}><KillOnlyChip size="0.55rem" /></span>}
                     {abbrevProducer(a.source || a.customers?.[0]?.customer_name || '')}
                     {a.head_count > 1 ? ` ×${a.head_count}` : ''}
                   </div>
@@ -927,13 +944,14 @@ function CalendarView({
                     {a.customers?.map(c => (
                       <div key={c.id} style={{ fontSize: '0.75rem', color: 'var(--off-white)', display: 'flex', justifyContent: 'space-between' }}>
                         <span>{c.customer_name} <span style={{ color: 'var(--tan)' }}>({c.portion})</span>{c.payment_responsibility === 'customer' && <span title="This customer pays for processing" style={{ marginLeft: '0.35rem' }}>💳</span>}</span>
-                        <span>{c.linked_cutting_instruction_id ? <span style={{ color: '#6dbf6d' }}>✅</span> : <span style={{ color: '#f0c040' }}>⚠</span>}</span>
+                        <span>{c.linked_cutting_instruction_id ? <span style={{ color: '#6dbf6d' }}>✅</span> : a.kill_only ? null : <span style={{ color: '#f0c040' }}>⚠</span>}</span>
                       </div>
                     ))}
-                    <div style={{ marginTop: '0.4rem' }}>
+                    <div style={{ marginTop: '0.4rem', display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
                       <span style={{ fontSize: '0.68rem', padding: '0.12rem 0.45rem', borderRadius: '3px', background: 'rgba(0,0,0,0.3)', color: 'var(--cream)' }}>
                         {STATUS_LABELS[a.status] ?? a.status}
                       </span>
+                      {a.kill_only && <KillOnlyChip />}
                     </div>
                   </div>
                 ))}
@@ -989,8 +1007,11 @@ function ListView({ filtered, onEdit, onDelete, onNew }: {
                 <td style={td()}>{a.head_count}</td>
                 <td style={td()}>{a.source || '—'}</td>
                 <td style={td()}>{a.customers?.map(c=>`${c.customer_name}${c.portion!=='Whole'?` (${c.portion})`:''}`).join(', ') || '—'}</td>
-                <td style={td()}><span style={{ padding:'0.2rem 0.55rem', borderRadius:'3px', fontSize:'0.73rem', background:'rgba(0,0,0,0.3)', color:'var(--cream)' }}>{STATUS_LABELS[a.status]??a.status}</span></td>
-                <td style={td()}>{allReady ? <span style={{ color:'#6dbf6d' }}>✅ Ready</span> : someNeed ? <span style={{ color:'#f0c040' }}>⚠ Needed</span> : '—'}</td>
+                <td style={{ ...td(), whiteSpace:'nowrap' }}>
+                  <span style={{ padding:'0.2rem 0.55rem', borderRadius:'3px', fontSize:'0.73rem', background:'rgba(0,0,0,0.3)', color:'var(--cream)' }}>{STATUS_LABELS[a.status]??a.status}</span>
+                  {a.kill_only && <span style={{ marginLeft:'0.35rem' }}><KillOnlyChip /></span>}
+                </td>
+                <td style={td()}>{allReady ? <span style={{ color:'#6dbf6d' }}>✅ Ready</span> : a.kill_only ? <span style={{ color:'var(--tan)' }}>Not needed</span> : someNeed ? <span style={{ color:'#f0c040' }}>⚠ Needed</span> : '—'}</td>
                 <td style={td()}>{daysOut(a.harvest_date)}</td>
                 <td style={{ ...td(), whiteSpace:'nowrap' }}>
                   <button onClick={() => onEdit(a)} style={{ ...smallBtn(), marginRight:'0.4rem' }}>✎ Edit</button>
@@ -1060,6 +1081,12 @@ function Modal({ editing, saving, onChange, onSave, onClose }: {
             <select value={editing.status??'Booked'} onChange={e=>onChange({...editing,status:e.target.value as any})} style={{ ...inputStyle(), color: statusColor(editing.status??'Booked'), fontWeight: 600 }}>
               {STATUSES.map(s=><option key={s} value={s} style={{ color: statusColor(s), background: STATUS_OPT_BG, fontWeight: 600 }}>{STATUS_LABELS[s]}</option>)}
             </select>
+          </Field>
+          <Field label="Service">
+            <label style={{ display:'flex', alignItems:'center', gap:'0.5rem', cursor:'pointer', color: editing.kill_only ? '#fca5a5' : 'var(--cream)', fontSize:'0.85rem', padding:'0.45rem 0', fontWeight: editing.kill_only ? 700 : 400 }}>
+              <input type="checkbox" checked={!!editing.kill_only} onChange={e=>onChange({...editing,kill_only:e.target.checked})} style={{ width:16, height:16, accentColor:'#EF4444' }} />
+              Kill only — not processing here
+            </label>
           </Field>
         </div>
 
