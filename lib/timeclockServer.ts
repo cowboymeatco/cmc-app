@@ -14,8 +14,8 @@ import { schedKey } from '@/lib/timeclock'
 //     so two people can share a PIN. A correct PIN mints a short-lived session;
 //     every punch and request carries it, and acts only on that one employee.
 //     Times are stamped here, on the shop clock — the iPad never says what
-//     time it is. Someone not set up yet signs in once with the shared setup
-//     PIN and picks their own before they can punch.
+//     time it is. Someone with no PIN yet taps their name and picks one —
+//     no manager step (POST /api/timeclock/claim).
 //   • Managers. The /api/timekeeping/* routes sit behind requireExec, the
 //     same passphrase gate as /exec.
 
@@ -56,7 +56,6 @@ async function hmacHex(text: string): Promise<string> {
 export const hashPin = (employeeId: string, pin: string) => hmacHex(`${employeeId}:${pin}`)
 /** The first release hashed the bare PIN. Still accepted, and upgraded on use. */
 const legacyHashPin = (pin: string) => hmacHex(pin)
-const hashSetupPin = (pin: string) => hmacHex(`setup:${pin}`)
 
 export const validPin = (pin: unknown): pin is string => typeof pin === 'string' && /^\d{4}$/.test(pin)
 
@@ -76,21 +75,6 @@ export async function checkEmployeePin(employeeId: string, storedHash: string | 
     return true
   }
   return false
-}
-
-// The shared setup ("dummy") PIN: what someone not set up yet signs in with,
-// once, to pick their own. Set by a manager on the Employees tab.
-export async function setupPinIsSet(): Promise<boolean> {
-  const { data } = await supabaseAdmin.from('tk_config').select('key').eq('key', 'setup_pin_hash').maybeSingle()
-  return !!data
-}
-export async function checkSetupPin(pin: string): Promise<boolean> {
-  const { data } = await supabaseAdmin.from('tk_config').select('value').eq('key', 'setup_pin_hash').maybeSingle()
-  return !!data && data.value === await hashSetupPin(pin)
-}
-export async function saveSetupPin(pin: string): Promise<void> {
-  const { error } = await supabaseAdmin.from('tk_config').upsert({ key: 'setup_pin_hash', value: await hashSetupPin(pin) })
-  if (error) throw new Error(error.message)
 }
 
 export async function pinLocked(employeeId: string): Promise<boolean> {
@@ -134,12 +118,8 @@ export async function endKioskSession(token: string): Promise<void> {
 
 export type KioskAuth = { ok: true; employee: TkEmployee; token: string } | { ok: false; response: NextResponse }
 
-/**
- * The employee behind this request's kiosk token, or a 401. Someone who signed
- * in with the setup PIN can't do anything but pick their own PIN until they
- * have (`allowSetup` is for that one route).
- */
-export async function requireKiosk(req: NextRequest, allowSetup = false): Promise<KioskAuth> {
+/** The employee behind this request's kiosk token, or a 401. */
+export async function requireKiosk(req: NextRequest): Promise<KioskAuth> {
   const token = req.headers.get(KIOSK_HEADER)
   const deny = { ok: false as const, response: NextResponse.json({ error: 'signed_out', message: 'Enter your PIN again.' }, { status: 401 }) }
   if (!token || !/^[0-9a-f-]{36}$/i.test(token)) return deny
@@ -147,9 +127,8 @@ export async function requireKiosk(req: NextRequest, allowSetup = false): Promis
   if (!data || new Date(data.expires_at as string) < new Date()) return deny
   const emp = await getEmployee(data.employee_id as string)
   if (!emp || !emp.active) return deny
-  if (!emp.hasPin && !allowSetup) {
-    return { ok: false, response: NextResponse.json({ error: 'needs_pin', message: 'Pick your own PIN first.' }, { status: 403 }) }
-  }
+  // A reset PIN ends the person's sessions, but belt and braces: no PIN, no session.
+  if (!emp.hasPin) return deny
   await supabaseAdmin.from('tk_kiosk_sessions')
     .update({ expires_at: new Date(Date.now() + KIOSK_SESSION_MIN * 60_000).toISOString() }).eq('token', token)
   return { ok: true, employee: emp, token }

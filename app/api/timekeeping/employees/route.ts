@@ -6,9 +6,9 @@ import { clearPinFailures, hashPin, jsonError, validPin } from '@/lib/timeclockS
 
 // POST  /api/timekeeping/employees — add someone to the time clock.
 // PATCH /api/timekeeping/employees — edit, set or reset a PIN, or deactivate.
-// A PIN is optional: someone without one signs in at the kiosk with the shared
-// setup PIN and picks their own. "Reset PIN" (resetPin: true) puts them back
-// there — for a forgotten PIN.
+// A PIN is optional: someone without one picks their own the first time they
+// tap their name at the kiosk. "Reset PIN" (resetPin: true) puts them back
+// there — for a forgotten PIN, or a name claimed by the wrong person.
 // Nobody is ever deleted: their shifts are payroll records.
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/

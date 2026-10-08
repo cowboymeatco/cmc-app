@@ -2,15 +2,14 @@ export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import {
-  EMP_COLS, EmpRow, KIOSK_HEADER, LOCKOUT_MESSAGE, checkEmployeePin, checkSetupPin, clearPinFailures, endKioskSession,
-  jsonError, pinLocked, recordPinFailure, setupPinIsSet, startKioskSession, toEmployee, validPin,
+  EMP_COLS, EmpRow, KIOSK_HEADER, LOCKOUT_MESSAGE, checkEmployeePin, clearPinFailures, endKioskSession,
+  jsonError, pinLocked, recordPinFailure, startKioskSession, toEmployee, validPin,
 } from '@/lib/timeclockServer'
 
 // POST /api/timeclock/pin — { employeeId, pin }. The kiosk's second screen:
 // you've tapped your name on the roster, this checks your PIN against you
-// alone. Someone not set up yet uses the shared setup PIN; their session can
-// only pick their own PIN until they do. Five wrong PINs for one person in 15
-// minutes lock that person out.
+// alone. (Someone with no PIN yet picks one instead: /api/timeclock/claim.)
+// Five wrong PINs for one person in 15 minutes lock that person out.
 export async function POST(req: NextRequest) {
   try {
     const { employeeId, pin } = await req.json().catch(() => ({})) as { employeeId?: string; pin?: unknown }
@@ -22,11 +21,8 @@ export async function POST(req: NextRequest) {
     const row = data as EmpRow
     if (await pinLocked(row.id)) return NextResponse.json({ error: 'locked', message: LOCKOUT_MESSAGE }, { status: 423 })
 
-    let ok: boolean
-    if (row.pin_hash) ok = await checkEmployeePin(row.id, row.pin_hash, pin)
-    else if (!(await setupPinIsSet())) {
-      return NextResponse.json({ error: 'no_setup_pin', message: 'You aren\'t set up yet. Ask a manager to set up the time clock for you.' }, { status: 409 })
-    } else ok = await checkSetupPin(pin)
+    if (!row.pin_hash) return NextResponse.json({ error: 'no_pin', message: 'You don\'t have a PIN yet. Go back and tap your name to pick one.' }, { status: 409 })
+    const ok = await checkEmployeePin(row.id, row.pin_hash, pin)
 
     if (!ok) {
       await recordPinFailure(row.id)
@@ -34,14 +30,14 @@ export async function POST(req: NextRequest) {
       await new Promise(r => setTimeout(r, 400))
       const locked = await pinLocked(row.id)
       return NextResponse.json(
-        { error: locked ? 'locked' : 'bad_pin', message: locked ? LOCKOUT_MESSAGE : row.pin_hash ? 'PIN not recognized.' : 'That isn\'t the setup PIN. Ask a manager for it.' },
+        { error: locked ? 'locked' : 'bad_pin', message: locked ? LOCKOUT_MESSAGE : 'PIN not recognized.' },
         { status: locked ? 423 : 401 },
       )
     }
     await clearPinFailures(row.id)
     const { data: fresh } = await supabaseAdmin.from('tk_employees').select(EMP_COLS).eq('id', row.id).single()
     const employee = toEmployee((fresh ?? row) as EmpRow)
-    return NextResponse.json({ token: await startKioskSession(employee.id), employee, mustSetPin: !employee.hasPin })
+    return NextResponse.json({ token: await startKioskSession(employee.id), employee })
   } catch (e) {
     return jsonError(e)
   }
