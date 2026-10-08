@@ -1,6 +1,6 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // GET /api/harvest?type=log|chill
 export async function GET(req: NextRequest) {
@@ -8,7 +8,7 @@ export async function GET(req: NextRequest) {
   const type = searchParams.get('type') ?? 'log'
 
   if (type === 'chill') {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('chill_log')
       .select('*')
       .order('checked_at', { ascending: false })
@@ -17,8 +17,13 @@ export async function GET(req: NextRequest) {
   }
 
   // harvest log
+  // One status, or several comma-separated — the cut schedule's "off the rail"
+  // list wants cut AND delivered in one call.
   const status  = searchParams.get('status')
   const date    = searchParams.get('date')
+  // harvest_date on or after this day. Without it a status like 'cut' is
+  // every carcass the plant ever cut.
+  const from    = searchParams.get('from')
   const apptId  = searchParams.get('appointment_id')
   // Several appointments at once, so a page showing many linked cards can work
   // out which ones still need a carcass assigned in one call instead of one per
@@ -27,13 +32,17 @@ export async function GET(req: NextRequest) {
   // Specific carcasses by id — for a cut card whose customer was moved onto an
   // animal booked under a sibling appointment, so it isn't in that booking's list.
   const logIds  = searchParams.get('ids')
-  let query = supabase
+  let query = supabaseAdmin
     .from('harvest_log')
     .select('*')
     .order('harvest_date', { ascending: true })
     .order('carcass_tag',  { ascending: true })
-  if (status) query = query.eq('status', status)
+  if (status) {
+    const list = status.split(',').map(s => s.trim()).filter(Boolean)
+    query = list.length > 1 ? query.in('status', list) : query.eq('status', list[0])
+  }
   if (date)   query = query.eq('harvest_date', date)
+  if (from)   query = query.gte('harvest_date', from)
   if (apptId) query = query.eq('appointment_id', apptId)
   if (apptIds !== null) {
     const ids = apptIds.split(',').map(s => s.trim()).filter(Boolean)
@@ -57,7 +66,7 @@ export async function POST(req: NextRequest) {
   const { type, ...fields } = body
 
   if (type === 'chill') {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('chill_log')
       .insert([{
         harvest_log_id: fields.harvest_log_id,
@@ -114,7 +123,7 @@ export async function POST(req: NextRequest) {
     kill_type:                 c.kill_type ?? fields.kill_type ?? null,
   }))
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('harvest_log')
     .insert(rows)
     .select()
@@ -123,7 +132,7 @@ export async function POST(req: NextRequest) {
 
   // Update appointment to Processing
   if (fields.appointment_id) {
-    await supabase
+    await supabaseAdmin
       .from('harvest_appointments')
       .update({ status: 'Processing' })
       .eq('id', fields.appointment_id)
@@ -141,7 +150,7 @@ export async function PATCH(req: NextRequest) {
 
   // Bulk update all harvest_logs for an appointment (e.g. producer name overwrite from check-in)
   if (appointment_id && !id) {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('harvest_log')
       .update(updates)
       .eq('appointment_id', appointment_id)
@@ -159,7 +168,7 @@ export async function PATCH(req: NextRequest) {
     'half_1_weight_lbs' in updates || 'half_2_weight_lbs' in updates
   )
   if (touchesYield && id) {
-    const { data: cur } = await supabase
+    const { data: cur } = await supabaseAdmin
       .from('harvest_log')
       .select('live_weight_lbs, hot_carcass_weight_lbs, half_1_weight_lbs, half_2_weight_lbs')
       .eq('id', id)
@@ -173,7 +182,7 @@ export async function PATCH(req: NextRequest) {
     updates.yield_pct = lw && hcw ? Math.round((hcw / lw) * 1000) / 10 : null
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from(table)
     .update(updates)
     .eq('id', id)
@@ -192,7 +201,7 @@ export async function DELETE(req: NextRequest) {
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
 
   const table = type === 'chill' ? 'chill_log' : 'harvest_log'
-  const { error } = await supabase.from(table).delete().eq('id', id)
+  const { error } = await supabaseAdmin.from(table).delete().eq('id', id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ ok: true })
 }

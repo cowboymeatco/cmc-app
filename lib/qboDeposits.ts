@@ -32,7 +32,7 @@
 
 import { qboFetch } from '@/lib/qbo'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
-import { addDaysISO } from '@/lib/dates'
+import { addDaysISO, dayOfWeekISO } from '@/lib/dates'
 import type { DaySummary } from '@/lib/cloverSales'
 import { entryMarker, postingFrom, PostRefused } from '@/lib/qboDailySales'
 
@@ -48,6 +48,21 @@ export const DEPOSIT_ACCOUNTS = {
 /** 25% of the day's card gross, rounded half up — matches every holdback Jill booked. */
 export function defaultHoldbackCents(grossCents: number): number {
   return Math.round(grossCents * CLOVER_HOLDBACK_RATE)
+}
+
+/**
+ * When a day's card batch usually reaches First State Bank, from every
+ * Clover deposit Jill booked (Aug–Sep 2026): Mon–Wed sales two business days
+ * later, Thu/Fri/Sat sales the following Monday. Holidays push it a day (Labor
+ * Day did); this doesn't know about them, hence "about".
+ */
+export function expectedBankDate(date: string): string {
+  const dow = dayOfWeekISO(date) // 0 Sun … 6 Sat
+  if (dow >= 1 && dow <= 3) return addDaysISO(date, 2)
+  if (dow === 4) return addDaysISO(date, 4)
+  if (dow === 5) return addDaysISO(date, 3)
+  if (dow === 6) return addDaysISO(date, 2)
+  return addDaysISO(date, 1)
 }
 
 /** The day's card money: what Clover batches and pays out as one deposit. */

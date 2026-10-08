@@ -5,10 +5,11 @@ import type { HarvestAppointment } from '@/lib/types'
 import { makeCode39Barcode } from '@/lib/label'
 import { QBO_SERVICE_ITEMS } from '@/lib/billingRules'
 import { labelKey } from '@/lib/producerLabels'
+import { isLegacyFileCard, formatBytes as fmtBytes, type CutSheetFile } from '@/lib/cutSheetFiles'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-import { buildPackList, BONE_IN_FILET_THICKNESS, baggedTrimPackRows, loinFields, mergeSides, shoulderFields, EIGHTHS, FMT_OVERRIDES, STEAK_STANDARDS, bagSizeLabel, baggedTrimCutterRows, beefTrimCutterRows, beefTrimPackRows, beefTrimRows, bellyRows, bellyWord, brisketLabel, fracThick, hamCut, hamLine, hamRows, hamStyleWord, hockStyle, isWholeAnimal, lgTrimLabel, porkTrimCutterRows, porkTrimRows, rawWeighIn, ribeyeAdds, roastOr, roastText, sidePair, smokehouseRows, smokehouseTotalLbs, stdThick, trimIsBagged, trimSplitOf, v2fmt } from '@/lib/packList'
+import { applyAgeRule, hasBoneInShortLoin, buildPackList, BONE_IN_FILET_THICKNESS, baggedTrimPackRows, loinFields, mergeSides, shoulderFields, EIGHTHS, FMT_OVERRIDES, STEAK_STANDARDS, bagSizeLabel, baggedTrimCutterRows, beefTrimCutterRows, beefTrimPackRows, beefTrimRows, bellyRows, bellyWord, brisketLabel, fracThick, hamCut, hamLine, hamRows, hamStyleWord, hockStyle, isWholeAnimal, lgTrimLabel, porkTrimCutterRows, porkTrimRows, rawWeighIn, ribeyeAdds, roastOr, roastText, sidePair, smokehouseRows, smokehouseTotalLbs, stdThick, trimIsBagged, trimSplitOf, v2fmt } from '@/lib/packList'
 
 interface RawInstruction {
   id:         string
@@ -28,6 +29,40 @@ interface RawInstruction {
   // Office-set drop-off this card belongs to. Cards sharing it list as one row
   // and print together — see scripts/2026-09-28_cutting_instruction_drop_off.sql.
   drop_off_id?: string | null
+}
+
+// A card somebody started on the online form and never submitted. The wizard
+// autosaves into cutting_instruction_drafts and deletes the row when the real
+// card inserts, so anything listed here is a card that didn't make it — Wanda
+// Gibson's half beef, taken over the phone 2026-09-28 at 4:11 PM, closed before
+// Submit, gone (see scripts/2026-10-02_cutting_instruction_drafts.sql).
+interface DraftSummary {
+  id:            string
+  created_at:    string
+  updated_at:    string
+  source:        string
+  species?:      string | null
+  step:          number
+  step_label?:   string | null
+  customer_name?: string | null
+  phone?:        string | null
+  appointment_id?: string | null
+}
+
+// The public form's origin. NEXT_PUBLIC_CUTTING_FORM_URL may carry a path
+// (it used to point at /order, which the form no longer serves); the wizard
+// lives at the root, and ?draft=<id> reopens an autosaved card there.
+function cuttingFormOrigin(): string {
+  const raw = process.env.NEXT_PUBLIC_CUTTING_FORM_URL ?? 'http://localhost:3003'
+  try { return new URL(raw).origin } catch { return raw }
+}
+
+// "Sep 28, 4:11 PM" on the shop clock — drafts are "when did they give up",
+// and UTC puts an evening draft on tomorrow's date.
+function shopStamp(iso: string): string {
+  return new Date(iso).toLocaleString('en-US', {
+    timeZone: 'America/Denver', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  })
 }
 
 // What the card would bill at if nobody touched it. Read off the QBO service
@@ -853,9 +888,16 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
   const carcasses   = carcassList.length ? carcassList : [EMPTY_CARCASS]
   // The copy button's "Copied from…" line means nothing on a sheet that is
   // every animal at once, and it prints on both pages, so it comes off here.
-  const d: Record<string, any> = herdN
+  const asWritten: Record<string, any> = herdN
     ? { ...(ci.data ?? {}), notes: stripCopyNote(ci.data?.notes) }
     : ci.data ?? {}
+  // An animal over 30 months can't give a T-bone (the column is SRM), so the
+  // card prints the boned-out pair instead — see applyAgeRule. The sheet's one
+  // carcass is the herd's agreement, so a mixed-age herd (over30 null) is left
+  // as written and flagged in the Short Loin section rather than converted.
+  const otm = applyAgeRule(asWritten, carcasses[0].over30)
+  const d = otm.data as Record<string, any>
+  const otmFlagOnly = ageMixed && hasBoneInShortLoin(asWritten)
   // Prefer the plant's own harvest date over whatever the customer typed on
   // the intake form — see harvestDateFor for why the two disagree.
   const herdDates = herd.map(h => harvestDateFor(h.ci, appointments).date ?? h.ci.data?.killDate ?? '—')
@@ -1000,7 +1042,11 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
     cutSections += sec('Short Loin', (sl.loin2
       ? mergeSides(shortLoinFields(sl, fmt, thick), shortLoinFields(sl.loin2, fmt, thick))
       : shortLoinFields(sl, fmt, thick)
-    ).map(([label, value]) => row(label, value)).join(''))
+    ).map(([label, value]) => row(label, value)).join('')
+      // The swap is said out loud right where it happened, so the cutter
+      // doesn't wonder why the customer's T-bone order reads as strips.
+      + (otm.converted   ? row('  +30mo', 'T-Bone ordered — cut as NY Strip + Filet (no bone-in loin on +30mo)', true) : '')
+      + (otmFlagOnly     ? row('  +30mo', 'T-Bone ordered — on any +30mo animal cut NY Strip + Filet instead; check the list', true) : ''))
     cutSections += sec('Sirloin', [
       row('Top Sirloin', withT(d.topSirloin?.cut ?? '', d.topSirloin?.thickness ?? '')),
       d.topSirloin?.addons?.length ? row('  Add-ons', adds(d.topSirloin.addons), true) : '',
@@ -1102,6 +1148,15 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
   // The packaging sheet is the same list the scanner checks off as packages
   // come over the scale, so it is built in one place for both.
   const filteredPrs = buildPackList(d, species)
+  // The packer sees strips and filets where the order said T-bone, so the
+  // reason rides under the Short Loin header as a note row (not a package).
+  if (otm.converted || otmFlagOnly) {
+    const at = filteredPrs.findIndex(pr => pr.sectionTitle === 'Short Loin')
+    if (at >= 0) filteredPrs.splice(at + 1, 0, {
+      cut: '  +30mo', isAddon: true,
+      spec: otm.converted ? 'T-Bone cut as NY Strip + Filet' : '+30mo animals: NY Strip + Filet, not T-Bone',
+    })
+  }
 
   // ── Split packaging rows into balanced columns (at section boundaries) ────
   // Landscape fits three tables across; splits only ever land where a new
@@ -1289,7 +1344,7 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
              : ageMixed
                ? `<div style="margin-top:4px;display:inline-block;background:#1A0A04;color:#F2E8D9;font-size:14px;font-weight:bold;letter-spacing:0.06em;padding:2px 7px">SOME OVER 30 MONTHS — CHECK EACH ON THE LIST</div>`
              : carcass.over30 === true
-               ? `<div style="margin-top:4px;display:inline-block;background:#1A0A04;color:#F2E8D9;font-size:14px;font-weight:bold;letter-spacing:0.06em;padding:2px 7px">OVER 30 MONTHS — REMOVE VERTEBRAL COLUMN</div>`
+               ? `<div style="margin-top:4px;display:inline-block;background:#1A0A04;color:#F2E8D9;font-size:14px;font-weight:bold;letter-spacing:0.06em;padding:2px 7px">OVER 30 MONTHS — REMOVE VERTEBRAL COLUMN${otm.converted ? ' · NO T-BONE: NY STRIP + FILET' : ''}</div>`
                : carcass.over30 === false
                  ? `<div style="margin-top:4px;display:inline-block;border:1.5px solid #1A0A04;font-size:14px;font-weight:bold;letter-spacing:0.06em;padding:1px 6px">UNDER 30 MONTHS</div>`
                  : `<div style="font-size:16px;color:#555;margin-top:3px">Over / Under 30 mo: ${wline(110)}</div>`
@@ -1919,6 +1974,7 @@ const FAKE_CI: RawInstruction = {
 export default function CuttingInstructionsPage() {
   const [instructions, setInstructions] = useState<RawInstruction[]>([])
   const [appointments, setAppointments] = useState<HarvestAppointment[]>([])
+  const [drafts, setDrafts]             = useState<DraftSummary[]>([])
   const [loading, setLoading]           = useState(true)
   const [selected, setSelected]         = useState<RawInstruction | null>(null)
   const [filterStatus, setFilterStatus] = useState<string>('all')
@@ -1983,18 +2039,32 @@ export default function CuttingInstructionsPage() {
   const [openGroups, setOpenGroups]     = useState<Set<string>>(new Set())
   const [grouping, setGrouping]         = useState(false)
 
+  // The office took the card down another way (or it was a test). Gone for
+  // good — a draft is not a record of anything.
+  async function dismissDraft(d: DraftSummary) {
+    const who = d.customer_name || 'this unnamed draft'
+    if (!window.confirm(`Remove the unfinished card for ${who}? If the customer comes back to the form on their own device it will start blank.`)) return
+    const res = await fetch(`/api/cutting-instructions/drafts?id=${encodeURIComponent(d.id)}`, { method: 'DELETE' })
+    if (!res.ok) { alert('Could not remove that draft.'); return }
+    setDrafts(prev => prev.filter(x => x.id !== d.id))
+  }
+
   async function load() {
     setLoading(true)
-    const [ciRes, apptRes] = await Promise.all([
+    const [ciRes, apptRes, draftRes] = await Promise.all([
       fetch('/api/cutting-instructions'),
       fetch('/api/appointments'),
+      fetch('/api/cutting-instructions/drafts'),
     ])
     const ci   = await ciRes.json()
     const appt = await apptRes.json()
+    // Drafts are a side strip; if the table isn't there yet the page still works.
+    const dr   = await draftRes.json().catch(() => [])
     const cis    = Array.isArray(ci)   ? ci   : []
     const appts  = Array.isArray(appt) ? appt : []
     setInstructions(cis)
     setAppointments(appts)
+    setDrafts(Array.isArray(dr) ? dr : [])
     setLoading(false)
     // ?id=<card> opens that card — other pages (value add) link straight to the
     // card they reference instead of dropping you on a list of 250.
@@ -2713,6 +2783,9 @@ export default function CuttingInstructionsPage() {
 
   const sections = sectionsFor(selectedSpecies)
   const isV2 = selected?.data?.formVersion === 'v2'
+  // A scan or document migrated off SharePoint (lib/cutSheetFiles.ts): there is
+  // no form payload to print or copy, only the original file to open.
+  const isLegacy = isLegacyFileCard(selected?.data)
 
   const togglePicked = (id: string) =>
     setPicked(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next })
@@ -3013,8 +3086,12 @@ export default function CuttingInstructionsPage() {
           )}
           {linkedCount  > 0 && <span style={{ color: '#6dbf6d' }}>✅ {linkedCount} linked</span>}
           <span style={{ color: 'var(--tan)' }}>{activeCount} total</span>
+          <Link href="/cutting-instructions/migrate" title="Bring the old scanned cut sheets off SharePoint / OneDrive onto producer records"
+            style={{ color: 'var(--tan)', textDecoration: 'none', border: '1px solid rgba(166,120,90,0.4)', borderRadius: '6px', padding: '0.4rem 0.9rem', fontWeight: 600, fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+            📂 Migrate old sheets
+          </Link>
           <a
-            href={process.env.NEXT_PUBLIC_CUTTING_FORM_URL ?? 'http://localhost:3003/order'}
+            href={cuttingFormOrigin()}
             target="_blank"
             rel="noopener noreferrer"
             style={{
@@ -3040,6 +3117,40 @@ export default function CuttingInstructionsPage() {
           </button>
         </div>
       </header>
+
+      {/* Unfinished cards — started online, never submitted. Thirty minutes of
+          quiet is what makes one "unfinished" rather than "being typed"; the
+          API applies that. Each one opens in the public form with its answers
+          restored so the office can finish it over the phone. */}
+      {drafts.length > 0 && (
+        <div style={{ background: 'rgba(240,192,64,0.10)', borderBottom: '1px solid rgba(240,192,64,0.35)', padding: '0.55rem 1.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.8rem' }}>
+          <span style={{ color: '#f0c040', fontWeight: 700, whiteSpace: 'nowrap' }}>
+            ✍️ {drafts.length} unfinished {drafts.length === 1 ? 'card' : 'cards'}
+          </span>
+          <span style={{ color: 'var(--tan)', opacity: 0.8 }}>started online, never submitted</span>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', flex: 1 }}>
+            {drafts.map(d => (
+              <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(240,192,64,0.3)', borderRadius: 6, padding: '0.3rem 0.6rem' }}>
+                <span style={{ color: 'var(--cream)', fontWeight: 600 }}>{d.customer_name || 'No name yet'}</span>
+                <span style={{ color: 'var(--tan)' }}>
+                  {[d.species, d.step_label ? `got to ${d.step_label}` : null, d.phone].filter(Boolean).join(' · ')}
+                </span>
+                <span style={{ color: 'var(--tan)', opacity: 0.7 }} title={`Started ${shopStamp(d.created_at)}${d.source === 'portal' ? ' in the producer portal' : ' on the public form'}`}>
+                  last touched {shopStamp(d.updated_at)}
+                </span>
+                <a href={`${cuttingFormOrigin()}/?draft=${encodeURIComponent(d.id)}`} target="_blank" rel="noopener noreferrer"
+                  style={{ background: 'var(--med-brown)', color: 'var(--cream)', borderRadius: 4, padding: '0.15rem 0.5rem', fontWeight: 600, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                  Open &amp; finish →
+                </a>
+                <button onClick={() => dismissDraft(d)} title="Remove this draft"
+                  style={{ background: 'transparent', color: 'var(--tan)', border: '1px solid rgba(166,120,90,0.4)', borderRadius: 4, padding: '0.1rem 0.45rem', cursor: 'pointer', fontSize: '0.75rem' }}>
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
 
@@ -3209,7 +3320,7 @@ export default function CuttingInstructionsPage() {
                 {selected.status === 'pending' && (
                   <button onClick={() => markStatus([selected.id], 'imported')} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>✓ Mark Imported</button>
                 )}
-                <button
+                {!isLegacy && <button
                   onClick={() => {
                     // Default the copy to the same portion — the common case is
                     // a second share of the same size.
@@ -3219,7 +3330,7 @@ export default function CuttingInstructionsPage() {
                   style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}
                   title="Same cuts on another share this customer is taking — makes its own card so the portion prints right and a later edit doesn't change both">
                   ⧉ Copy for another share
-                </button>
+                </button>}
                 {isV2 && (
                   <a href={`https://cuttinginstructions.cowboymeats.com/edit/${selected.id}`} target="_blank" rel="noreferrer"
                     style={{ ...btnStyle('rgba(166,120,90,0.2)', 'var(--tan)'), textDecoration: 'none', display: 'inline-block' }}
@@ -3227,7 +3338,7 @@ export default function CuttingInstructionsPage() {
                     ✏️ Edit
                   </a>
                 )}
-                <button onClick={async () => { const appts = await freshAppointments(appointments); return isV2 ? printV2CutCard(selected, appts, await carcassInfosFor(selected, appts)) : printCutCard(selected) }} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>🖨 Print Cut Card</button>
+                {!isLegacy && <button onClick={async () => { const appts = await freshAppointments(appointments); return isV2 ? printV2CutCard(selected, appts, await carcassInfosFor(selected, appts)) : printCutCard(selected) }} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>🖨 Print Cut Card</button>}
                 {selected.status === 'archived' ? (
                   <button onClick={() => markStatus([selected.id], 'pending')} style={btnStyle('rgba(166,120,90,0.2)', 'var(--tan)')}>↩ Restore</button>
                 ) : (
@@ -3568,7 +3679,7 @@ export default function CuttingInstructionsPage() {
 
             {/* Cut card detail */}
             <div style={{ overflowY: 'auto', flex: 1, padding: '1.25rem' }}>
-              {isV2 ? renderV2Detail(selected) : (
+              {isLegacy ? <LegacyFileDetail card={selected} /> : isV2 ? renderV2Detail(selected) : (
                 <>
                   {sections.map(section => {
                     const visibleFields = section.fields.filter(([key]) => !isEmpty(selected.data?.[key]))
@@ -3838,6 +3949,60 @@ function printCutCard(ci: RawInstruction) {
 // `needsCarcass` demotes a linked card to amber: it is on a check-in but not on
 // an animal, so it would print with no tag, no hanging weight and no inspection
 // marking. Without this the list shows a green "Linked" and looks finished.
+// A migrated file card: the original scan / document, where it came from, and
+// whatever the file name said. Files come with five-minute signed links, so
+// they're fetched when the card is opened, not with the list.
+function LegacyFileDetail({ card }: { card: RawInstruction }) {
+  // Keyed by card id so switching cards shows "Loading…" without a reset
+  // inside the effect.
+  const [loaded, setLoaded] = useState<{ id: string; files: (CutSheetFile & { url: string | null })[] | null; err: string }>({ id: '', files: null, err: '' })
+  useEffect(() => {
+    let live = true
+    fetch(`/api/cut-sheet-files?card=${encodeURIComponent(card.id)}`)
+      .then(async r => { const j = await r.json(); if (!r.ok) throw new Error(j.error ?? 'could not load'); return j })
+      .then(j => { if (live) setLoaded({ id: card.id, files: j, err: '' }) })
+      .catch(e => { if (live) setLoaded({ id: card.id, files: null, err: e instanceof Error ? e.message : 'could not load' }) })
+    return () => { live = false }
+  }, [card.id])
+  const files = loaded.id === card.id ? loaded.files : null
+  const err = loaded.id === card.id ? loaded.err : ''
+  const d = card.data ?? {}
+  const importedAt = d.importedAt ? new Date(String(d.importedAt)).toLocaleString('en-US', { timeZone: 'America/Denver', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : null
+  const cell: React.CSSProperties = { background: 'rgba(0,0,0,0.25)', borderRadius: '3px', padding: '0.5rem 0.75rem' }
+  const lbl: React.CSSProperties = { fontSize: '0.67rem', color: 'var(--light-brown)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: '0.2rem' }
+  return (
+    <div>
+      <div style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 4, padding: '0.75rem 1rem', marginBottom: '1.25rem', color: 'var(--cream)', fontSize: '0.85rem' }}>
+        📂 A cut sheet from before the online form, migrated as a file. Open the original below — there is nothing here to print.
+      </div>
+      <div style={{ fontSize: '0.7rem', letterSpacing: '0.15em', textTransform: 'uppercase', color: 'var(--light-brown)', marginBottom: '0.5rem', paddingBottom: '0.4rem', borderBottom: '1px solid rgba(166,120,90,0.15)' }}>Original file{files && files.length !== 1 ? 's' : ''}</div>
+      {err && <div style={{ color: '#e08585', fontSize: '0.85rem' }}>{err}</div>}
+      {!err && files === null && <div style={{ color: 'var(--light-brown)', fontSize: '0.85rem' }}>Loading…</div>}
+      {files && files.length === 0 && <div style={{ color: 'var(--light-brown)', fontSize: '0.85rem', fontStyle: 'italic' }}>No file is attached to this card.</div>}
+      {files && files.map(f => (
+        <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', background: 'rgba(0,0,0,0.25)', borderRadius: 3, padding: '0.6rem 0.85rem', marginBottom: '0.4rem' }}>
+          <span style={{ fontSize: '1.2rem' }}>{/^image\//.test(f.mime_type ?? '') ? '🖼' : '📄'}</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ color: 'var(--cream)', fontSize: '0.88rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.filename}</div>
+            <div style={{ color: 'var(--light-brown)', fontSize: '0.74rem' }}>
+              {fmtBytes(f.size_bytes)}{f.source_path ? ` · ${f.source_path}` : ''}{f.source === 'upload' ? ' · uploaded from the office PC' : ' · from SharePoint'}
+            </div>
+          </div>
+          {f.url
+            ? <a href={f.url} target="_blank" rel="noreferrer" style={{ ...btnStyle('var(--med-brown)'), textDecoration: 'none' }}>📎 Open</a>
+            : <a href={`/api/cut-sheet-files/${f.id}?redirect=1`} target="_blank" rel="noreferrer" style={{ ...btnStyle('var(--med-brown)'), textDecoration: 'none' }}>📎 Open</a>}
+          {f.source_url && <a href={f.source_url} target="_blank" rel="noreferrer" style={{ ...btnStyle('rgba(166,120,90,0.2)', 'var(--tan)'), textDecoration: 'none' }} title="The original on SharePoint">SharePoint ↗</a>}
+        </div>
+      ))}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.5rem', marginTop: '1.25rem' }}>
+        {d.killDate && <div style={cell}><div style={lbl}>Date on the file</div><div style={{ fontSize: '0.88rem', color: 'var(--cream)' }}>{fmtShortDate(String(d.killDate))}</div></div>}
+        {d.notes && <div style={{ ...cell, gridColumn: '1 / -1' }}><div style={lbl}>Notes</div><div style={{ fontSize: '0.88rem', color: 'var(--cream)', whiteSpace: 'pre-wrap' }}>{String(d.notes)}</div></div>}
+        {importedAt && <div style={cell}><div style={lbl}>Migrated</div><div style={{ fontSize: '0.88rem', color: 'var(--cream)' }}>{importedAt}{d.importedBy ? ` · ${d.importedBy}` : ''}</div></div>}
+      </div>
+    </div>
+  )
+}
+
 function StatusBadge({ status, needsCarcass }: { status: string; needsCarcass?: boolean }) {
   const colors: Record<string, [string, string]> = {
     pending:  ['rgba(240,192,64,0.2)',  '#f0c040'],

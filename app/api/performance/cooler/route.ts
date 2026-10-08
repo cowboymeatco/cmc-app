@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { isoDate, addDaysISO, daysBetweenISO } from '@/lib/dates'
 
 export const dynamic = 'force-dynamic'
@@ -67,7 +67,7 @@ async function allCarcasses(): Promise<{ data: HarvestRow[]; error: { message: s
   const PAGE = 1000
   const rows: HarvestRow[] = []
   for (let offset = 0; ; offset += PAGE) {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('harvest_log')
       .select('id,harvest_date,status,species,hot_carcass_weight_lbs,half_1_weight_lbs,half_2_weight_lbs,legacy_source')
       .order('harvest_date', { ascending: true })
@@ -83,7 +83,7 @@ async function allCarcasses(): Promise<{ data: HarvestRow[]; error: { message: s
 export async function GET() {
   const [harvestRes, scheduleRes, planRes, scanRes, bookedRes] = await Promise.all([
     allCarcasses(),
-    supabase
+    supabaseAdmin
       .from('cut_schedule_items')
       .select('appointment_id,schedule_date')
       .not('appointment_id', 'is', null),
@@ -91,7 +91,7 @@ export async function GET() {
     // the day each carcass is actually laid out for. schedule_date above is only
     // the day a plan was SAVED; the cutting day lives on the day break above the
     // row (see plannedDay below).
-    supabase
+    supabaseAdmin
       .from('cut_schedule_items')
       .select('appointment_id,kind,manual_rank,break_date,schedule_date')
       .order('schedule_date', { ascending: false })
@@ -99,14 +99,14 @@ export async function GET() {
     // When a carcass was actually broken down. The processing scanner writes an
     // input row the day the carcass hits the table, so this is a record of the
     // event rather than a plan about it — the only true cut date the system has.
-    supabase
+    supabaseAdmin
       .from('processing_inputs')
       .select('linked_harvest_id,session_date')
       .not('linked_harvest_id', 'is', null),
     // Animals still to come. The draw-down used to run the cooler to empty and
     // stop, which is only true if nothing else is booked — and something almost
     // always is (Charlie, 2026-08-10).
-    supabase
+    supabaseAdmin
       .from('harvest_appointments')
       .select('harvest_date,species,head_count,status')
       .gte('harvest_date', isoDate())

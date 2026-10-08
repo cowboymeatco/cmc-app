@@ -64,6 +64,9 @@ export interface HarvestAppointment {
   /** QuickBooks customer billed when the producer pays — picked on the booking. */
   producer_qbo_customer_id?: string | null
   producer_qbo_name?: string | null
+  /** Slaughter only — the carcass leaves whole and is never cut here. Shown
+   *  as a badge on the schedule and kept off the cut schedule. */
+  kill_only?: boolean
 }
 
 // ── Cutting Instructions ──────────────────────────────────────────────────────

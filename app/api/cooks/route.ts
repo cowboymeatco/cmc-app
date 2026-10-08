@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { cookInJob } from '@/lib/cookMatch'
 
 export const dynamic = 'force-dynamic'
@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
   const days = Math.min(Math.max(parseInt(searchParams.get('days') ?? '45', 10) || 45, 1), 365)
   const cutoff = searchParams.get('since') || new Date(Date.now() - days * 86_400_000).toISOString()
 
-  const q = supabase
+  const q = supabaseAdmin
     .from('smokehouse_cook')
     .select('id, started_at, ended_at, batch, operator, profile_key')
     .gte('started_at', cutoff)
@@ -26,22 +26,22 @@ export async function GET(req: NextRequest) {
 
   const [{ data: cooks, error }, { data: profiles }, { data: rhFaults }, { data: smokedJobs }, { data: lastImport }] = await Promise.all([
     q,
-    supabase.from('cook_profile').select('profile_key, display_name').eq('active', true),
+    supabaseAdmin.from('cook_profile').select('profile_key, display_name').eq('active', true),
     // Humidity sensor health, derived from the readings themselves — this works
     // with no help from the controller's alarm log.
-    supabase
+    supabaseAdmin
       .from('smokehouse_rh_fault_v')
       .select('cook_id, stuck_value, stuck_samples, stuck_started_at, mean_abs_rh_err')
       .eq('suspect', true),
     // Jobs the crew marked in/out of the house — which of them rode in each cook.
-    supabase
+    supabaseAdmin
       .from('value_add_jobs')
       .select('id, description, output_item_name, customer_name, smoke_in_at, smoke_out_at')
       .not('smoke_in_at', 'is', null)
       .gte('smoke_in_at', new Date(new Date(cutoff).getTime() - 2 * 86_400_000).toISOString()),
     // The import fails silently (see ftp_server.py on the kiosk), so say when
     // the last file actually landed.
-    supabase.from('smokehouse_cook').select('created_at').order('created_at', { ascending: false }).limit(1),
+    supabaseAdmin.from('smokehouse_cook').select('created_at').order('created_at', { ascending: false }).limit(1),
   ])
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
@@ -88,7 +88,7 @@ export async function PATCH(req: NextRequest) {
   const { id, profile_key } = body
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('smokehouse_cook')
     .update({ profile_key: profile_key || null })
     .eq('id', id)

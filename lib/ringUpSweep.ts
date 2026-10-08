@@ -36,7 +36,7 @@ import {
   type CloverOrder,
 } from '@/lib/cloverOrders'
 import { getInvoiceByDocNumber, getOpenInvoices } from '@/lib/qboInvoices'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 export interface SweepDecision {
   orderId: string
@@ -254,7 +254,7 @@ export async function runSweep(triggeredBy: 'cron' | 'manual'): Promise<SweepRes
   // The audit trail is the whole reason an automatic delete is acceptable —
   // surface a logging failure rather than swallowing it.
   if (rows.length > 0) {
-    const { error } = await supabase.from('clover_ringup_sweep_log').insert(rows)
+    const { error } = await supabaseAdmin.from('clover_ringup_sweep_log').insert(rows)
     if (error) console.error(`ring-up sweep log write failed: ${error.message}`)
   }
 
@@ -290,7 +290,7 @@ export async function removeOrphan(orderId: string): Promise<SweepDecision> {
 
   await deleteOrder(o.id)
   const removed = { ...d, action: 'remove' as const, reason: `invoice ${d.docNumber} gone from QuickBooks — removed from /billing` }
-  const { error } = await supabase.from('clover_ringup_sweep_log').insert({
+  const { error } = await supabaseAdmin.from('clover_ringup_sweep_log').insert({
     ...logRow(removed, 'manual'), action: 'removed', status: 'ok',
   })
   if (error) console.error(`ring-up sweep log write failed: ${error.message}`)

@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { lineKey } from '@/lib/boxWeight'
 
 // Managing the boxes a person has pointed at a value-add job by hand, and
@@ -33,8 +33,8 @@ async function summarize(boxIds: string[], linkedIds: Set<string>, picks: Map<st
   for (let i = 0; i < boxIds.length; i += CHUNK) {
     const slice = boxIds.slice(i, i + CHUNK)
     const [b, s] = await Promise.all([
-      supabase.from('boxes').select('id, box_label, customer_name, pack_date').in('id', slice),
-      supabase.from('box_scans').select('box_id, plu_number, item_name, weight_lbs, quantity').in('box_id', slice),
+      supabaseAdmin.from('boxes').select('id, box_label, customer_name, pack_date').in('id', slice),
+      supabaseAdmin.from('box_scans').select('box_id, plu_number, item_name, weight_lbs, quantity').in('box_id', slice),
     ])
     boxes.push(...(b.data ?? []))
     scans.push(...(s.data ?? []))
@@ -94,7 +94,7 @@ export async function GET(req: NextRequest) {
   const q     = (searchParams.get('q') ?? '').trim()
   if (!jobId) return NextResponse.json({ error: 'job_id required' }, { status: 400 })
 
-  const { data: links, error } = await supabase
+  const { data: links, error } = await supabaseAdmin
     .from('value_add_job_box')
     .select('box_id, plus')
     .eq('job_id', jobId)
@@ -109,7 +109,7 @@ export async function GET(req: NextRequest) {
 
   // A date term filters on pack_date; anything else is a text search.
   const isDate = /^\d{4}-\d{2}-\d{2}$/.test(q)
-  let search = supabase.from('boxes').select('id').limit(40)
+  let search = supabaseAdmin.from('boxes').select('id').limit(40)
   search = isDate
     ? search.eq('pack_date', q)
     : search.or(`customer_name.ilike.%${q}%,box_label.ilike.%${q}%`)
@@ -133,7 +133,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'job_id and box_id required' }, { status: 400 })
   }
 
-  const { error } = await supabase
+  const { error } = await supabaseAdmin
     .from('value_add_job_box')
     .upsert(
       { job_id: body.job_id, box_id: body.box_id, linked_by: body.linked_by ?? null },
@@ -152,7 +152,7 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: 'job_id, box_id and plus required' }, { status: 400 })
   }
 
-  const { error } = await supabase
+  const { error } = await supabaseAdmin
     .from('value_add_job_box')
     .update({ plus: body.plus })
     .eq('job_id', body.job_id)
@@ -169,7 +169,7 @@ export async function DELETE(req: NextRequest) {
   const boxId = searchParams.get('box_id')
   if (!jobId || !boxId) return NextResponse.json({ error: 'job_id and box_id required' }, { status: 400 })
 
-  const { error } = await supabase
+  const { error } = await supabaseAdmin
     .from('value_add_job_box')
     .delete()
     .eq('job_id', jobId)

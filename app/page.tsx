@@ -193,8 +193,8 @@ export default function Dashboard() {
     },
     {
       href: '/kanban',    icon: '🗂️', color: '#D4A017',
-      title: 'Kanban Ordering',
-      desc:  'Supplies · Vendors · Reorder cards',
+      title: 'Supplies',
+      desc:  'Ordering · Inventory · Locations',
       when:  'A bin runs empty — pull the card',
       count: kanban,
     },
@@ -332,6 +332,23 @@ export default function Dashboard() {
               <div>
                 <span style={{ color: C.cream, fontWeight: 600, fontSize: '0.88rem' }}>Inventory Count</span>
                 <span style={{ color: C.lightBrown, fontSize: '0.78rem', marginLeft: '0.75rem' }}>Scan the case and freezer · Month-end true-up</span>
+              </div>
+              <span style={{ marginLeft: 'auto', color: C.lightBrown, fontSize: '0.8rem' }}>Open ›</span>
+            </div>
+          </Link>
+
+          <Link href="/assets/energy" style={{ textDecoration: 'none' }}>
+            <div style={{
+              background: 'var(--dark)', border: '1px solid rgba(166,120,90,0.18)',
+              borderLeft: '3px solid #FBBF24',
+              borderRadius: 4, padding: '0.75rem 1.25rem',
+              display: 'flex', alignItems: 'center', gap: '0.75rem',
+              cursor: 'pointer',
+            }}>
+              <span style={{ fontSize: '1.1rem' }}>⚡</span>
+              <div>
+                <span style={{ color: C.cream, fontWeight: 600, fontSize: '0.88rem' }}>Equipment Energy</span>
+                <span style={{ color: C.lightBrown, fontSize: '0.78rem', marginLeft: '0.75rem' }}>Meter readings · kWh &amp; $ per month by machine</span>
               </div>
               <span style={{ marginLeft: 'auto', color: C.lightBrown, fontSize: '0.8rem' }}>Open ›</span>
             </div>

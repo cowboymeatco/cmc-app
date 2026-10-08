@@ -2,7 +2,7 @@ export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { planSweep, runSweep, removeOrphan } from '@/lib/ringUpSweep'
 import { planSync, runSync, loadContext } from '@/lib/ringUpSync'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // Register reconcile, for the /billing UI.
 //   GET               -> what a run would do right now + recent history
@@ -24,7 +24,7 @@ export async function GET() {
     const [sweepDecisions, syncDecisions, history] = await Promise.all([
       planSweep({ orders: ctx.orders, openDocNumbers: ctx.openDocNumbers }),
       planSync(ctx),
-      supabase
+      supabaseAdmin
         .from('clover_ringup_sweep_log')
         .select('created_at, doc_number, title, amount_cents, action, reason, status, error, triggered_by')
         .order('created_at', { ascending: false })

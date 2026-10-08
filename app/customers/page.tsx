@@ -35,6 +35,13 @@ function btn(bg: string, color = C.dark): React.CSSProperties {
 
 const CONTACTS = ['Phone Call', 'Text Message', 'Email']
 
+// A migrated scan attached to a cut sheet — see lib/cutSheetFiles.ts.
+interface CardFile {
+  id: string; cutting_instruction_id: string; filename: string
+  mime_type: string | null; size_bytes: number | null; source: string
+  source_url: string | null; source_path: string | null
+}
+
 // A record's role decides which tab(s) it shows on. Missing/legacy = customer.
 type Tab = 'producer' | 'customer'
 function onTab(c: Customer, tab: Tab) {
@@ -122,18 +129,23 @@ function CustomerDetail({
 }) {
   const [cutInstrs, setCutInstrs] = useState<CuttingInstruction[]>([])
   const [animals,   setAnimals]   = useState<{ id: string; harvest_date: string; species: string; head_count: number; status: string; animal_description: string }[]>([])
+  const [files,     setFiles]     = useState<CardFile[]>([])
   const [loading, setLoading]     = useState(true)
 
   useEffect(() => {
     fetch(`/api/customers?id=${customer.id}`)
       .then(r => r.json())
-      .then(d => { setCutInstrs(d.cutting_instructions ?? []); setAnimals(d.appointments ?? []); setLoading(false) })
+      .then(d => { setCutInstrs(d.cutting_instructions ?? []); setAnimals(d.appointments ?? []); setFiles(d.files ?? []); setLoading(false) })
       .catch(() => setLoading(false))
   }, [customer.id])
 
   const role = customer.role === 'producer' || customer.role === 'both' ? customer.role : 'customer'
   const showAnimals = role === 'producer' || role === 'both'
-  const showCuts    = role === 'customer' || role === 'both'
+  // Producers get the section too once anything is on file: the old scanned
+  // cut sheets migrated off SharePoint hang on the producer record.
+  const showCuts    = role === 'customer' || role === 'both' || cutInstrs.length > 0
+  const filesByCard = new Map<string, CardFile[]>()
+  for (const f of files) filesByCard.set(f.cutting_instruction_id, [...(filesByCard.get(f.cutting_instruction_id) ?? []), f])
 
   return (
     <div style={{ background: C.darkBrown, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 6, padding: '1.5rem' }}>
@@ -229,6 +241,8 @@ function CustomerDetail({
           <p style={{ color: C.lightBrown, fontSize: '0.82rem', fontStyle: 'italic' }}>
             No cutting instructions on file yet.{' '}
             <Link href="/cutting-instructions" style={{ color: C.orange }}>Create one →</Link>
+            {' · '}
+            <Link href={`/cutting-instructions/migrate?producer=${customer.id}`} style={{ color: C.orange }}>Bring in an old sheet →</Link>
           </p>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
@@ -247,6 +261,13 @@ function CustomerDetail({
                     </span>
                   )}
                 </span>
+                {(filesByCard.get(ci.id) ?? []).map(f => (
+                  <a key={f.id} href={`/api/cut-sheet-files/${f.id}?redirect=1`} target="_blank" rel="noreferrer"
+                    title={`${f.filename}${f.source_path ? ` · ${f.source_path}` : ''}`}
+                    style={{ color: C.orange, fontSize: '0.78rem', textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                    📎 Open
+                  </a>
+                ))}
                 <span style={{ color: C.lightBrown, fontSize: '0.75rem' }}>
                   {new Date(ci.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                 </span>
@@ -341,6 +362,10 @@ export default function CustomersPage() {
           <span style={{ fontSize: '0.8rem', color: C.lightBrown }}>
             {loading ? '…' : `${customers.length} customer${customers.length !== 1 ? 's' : ''}`}
           </span>
+          <Link href="/cutting-instructions/migrate" title="Bring the old scanned cut sheets off SharePoint / OneDrive onto producer records"
+            style={{ ...btn('rgba(166,120,90,0.2)', C.tan), textDecoration: 'none' }}>
+            📂 Migrate old cut sheets
+          </Link>
           <button style={btn(C.orange)} onClick={openNew}>+ New Customer</button>
         </div>
       </header>
@@ -440,13 +465,18 @@ export default function CustomersPage() {
             )}
           </div>
 
-          {/* Detail panel */}
+          {/* Detail panel. Sticks to the top of the window so a customer
+              picked from the bottom of the list shows up beside the row
+              clicked, not 90 rows up (Charlie, 2026-10-04). Scrolls on its
+              own if the card list runs longer than the screen. */}
           {selected && (
-            <CustomerDetail
-              customer={selected}
-              onEdit={() => openEdit(selected)}
-              onClose={() => setSelected(null)}
-            />
+            <div style={{ position: 'sticky', top: '1rem', maxHeight: 'calc(100vh - 2rem)', overflowY: 'auto' }}>
+              <CustomerDetail
+                customer={selected}
+                onEdit={() => openEdit(selected)}
+                onClose={() => setSelected(null)}
+              />
+            </div>
           )}
         </div>
 

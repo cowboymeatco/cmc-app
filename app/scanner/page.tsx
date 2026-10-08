@@ -4,13 +4,14 @@ import Link from 'next/link'
 import { isCureTagNumber, type ProcessingInput, type CureTag } from '@/lib/types'
 import { CURE_PICKER_PRODUCTS, sourceCutOptions } from '@/lib/cureLoad'
 import { isoDate } from '@/lib/dates'
+import { addBreadcrumb } from '@/lib/feedbackTelemetry'
 import { speciesIcon, speciesFromDescription } from '@/lib/cutSchedule'
 
 import CustomerPicker, { resolveCiScan, type CustomerName } from './CustomerPicker'
 import AnimalStart, { type AnimalPick } from './AnimalStart'
 import { isCarcassTag } from '@/lib/carcassTag'
 import { weightInName } from '@/lib/label'
-import { labelKey, type ScannerProducerSet } from '@/lib/producerLabels'
+import { WHOLE_BOX_PLUS, labelKey, type ScannerProducerSet } from '@/lib/producerLabels'
 const C = {
   dark:       '#1A0A04',
   darkBrown:  '#351E0E',
@@ -568,6 +569,8 @@ export default function ScannerPage() {
   const [flash,       setFlash]       = useState<'ok' | 'warn' | 'bad' | null>(null)
   const [lastItem,    setLastItem]    = useState('')
   const [lastKind,    setLastKind]    = useState<'ok' | 'warn' | 'bad'>('ok')   // icon/color for lastItem after the flash fades
+  // A label the browser refused to open in a new tab — see openPrintWindow.
+  const [labelUrl,    setLabelUrl]    = useState<string | null>(null)
   const [processing,  setProcessing]  = useState(false)
   const [labelFlags,  setLabelFlags]  = useState<LabelFlags>(DEFAULT_FLAGS)
   // Session box type — declared up front, sticky for every box in the session.
@@ -1025,6 +1028,14 @@ export default function ScannerPage() {
   useEffect(() => {
     offCardRef.current = { keysForPlu, expectedKeys: new Set(expectedKeys), hasCard: !!expected }
   }, [keysForPlu, expectedKeys, expected])
+  // "It's right — keep it" is an answer for the whole session, not one
+  // package: a packer who has checked the card and kept the first flank steak
+  // doesn't need to be asked about the next thirty (NN and AE, 2026-09-30,
+  // packing Bullseye Ranch — the card said grind, the bench cut steaks). Keyed
+  // on the resolved house PLU, forgotten when the session changes; "Take it
+  // out" records nothing, so a wrong PLU still asks every time.
+  const offCardOkRef = useRef<Set<string>>(new Set())
+  useEffect(() => { offCardOkRef.current = new Set() }, [customer, date])
 
   // ── Producer label sets ───────────────────────────────────────────────────
   // A producer who sells under their own label has their own PLUs — copies of
@@ -1037,7 +1048,7 @@ export default function ScannerPage() {
   const [producerSets, setProducerSets] = useState<ScannerProducerSet[]>([])
   const producerRef = useRef<{
     byPlu: Record<string, { house_plu: string; key: string; name: string }>
-    byKey: Record<string, { name: string; houseToPlu: Record<string, string> }>
+    byKey: Record<string, { name: string; houseToPlu: Record<string, string>; noBarcode: boolean }>
   }>({ byPlu: {}, byKey: {} })
   const sessionLabelKeysRef = useRef<string[]>([])
   useEffect(() => {
@@ -1051,7 +1062,7 @@ export default function ScannerPage() {
           byPlu[it.plu_number] = { house_plu: it.house_plu, key: st.key, name: st.name }
           houseToPlu[it.house_plu] = it.plu_number
         }
-        byKey[st.key] = { name: st.name, houseToPlu }
+        byKey[st.key] = { name: st.name, houseToPlu, noBarcode: st.prints_barcode === false }
       }
       producerRef.current = { byPlu, byKey }
       setProducerSets(sets)
@@ -1060,6 +1071,16 @@ export default function ScannerPage() {
   useEffect(() => {
     sessionLabelKeysRef.current = (expected?.scaleLabels ?? []).map(labelKey)
   }, [expected])
+  // The producer this session packs for, when its card names one whose label
+  // prints no barcode (producer_labels.prints_barcode). Their label can't be
+  // scanned, so the card's cut list can never tick off — the panel
+  // asks for one whole-box label per box instead.
+  const boxOnlyProducer = useMemo(() => {
+    const keys = (expected?.scaleLabels ?? []).map(labelKey)
+    return producerSets.find(st => keys.includes(st.key) && st.prints_barcode === false)?.name ?? null
+  }, [expected, producerSets])
+  const boxOnlyRef = useRef(false)
+  useEffect(() => { boxOnlyRef.current = !!boxOnlyProducer }, [boxOnlyProducer])
 
   // The PLU a scanned package is recorded under, and what's wrong with its
   // label for this session, if anything. Refs only — doScan is a stable callback.
@@ -1075,6 +1096,9 @@ export default function ScannerPage() {
     }
     for (const k of sessionKeys) {
       const set = byKey[k]
+      // A label that prints no barcode can't be the one scanned, so a house
+      // label is the only way in — nothing to flag.
+      if (set?.noBarcode) continue
       const should = set?.houseToPlu[scanned]
       if (should) return { plu: scanned, labelWarn: `HOUSE LABEL — ${set.name} packs on PLU ${should}: reprint it` }
     }
@@ -1082,9 +1106,11 @@ export default function ScannerPage() {
   }
   function checkOffCard(scan: ScanLine, plu: string, itemName: string): boolean {
     const ex = offCardRef.current
-    if (!ex.hasCard) return false
+    // Whole-box labels in a producer session answer no line on the card.
+    if (!ex.hasCard || boxOnlyRef.current) return false
     const keys = ex.keysForPlu.get(plu) ?? []
     if (!keys.length || keys.some(k => ex.expectedKeys.has(k))) return false
+    if (offCardOkRef.current.has(plu)) return false
     setOffCard({ scanId: scan.id, plu, name: itemName, keys })
     return true
   }
@@ -1957,6 +1983,8 @@ export default function ScannerPage() {
   async function closeBox() {
     const box = activeBox
     if (!box || box.is_closed) return
+    // Closing an empty box printed a 0-cut label; there's nothing to label.
+    if (!scansRef.current.length) { await retireEmptyBox(box, 'Nothing is scanned into this box. '); return }
     setTakeOut(false)
     const snap = scansRef.current
     const res  = await fetch('/api/boxes', {
@@ -1996,6 +2024,9 @@ export default function ScannerPage() {
     const box = activeBox
     if (!box || box.is_closed) return
     const left = scansRef.current
+    // Nothing listed and nothing in it: there's nothing missing to write off,
+    // the box is just done with.
+    if (!left.length) { await retireEmptyBox(box); return }
     const lbs  = left.reduce((s, sc) => s + (Number(sc.weight_lbs) || 0), 0)
     const what = left.length
       ? `${left.length} package${left.length !== 1 ? 's' : ''} · ${lbs.toFixed(2)} lb`
@@ -2015,16 +2046,51 @@ export default function ScannerPage() {
       setFlash('bad'); setTimeout(() => setFlash(null), 4000)
       return
     }
+    await dropRetiredBox(box)
+    setLastKind('warn')
+    setLastItem(`Box ${box.box_number} written off — ${what} recorded as missing`)
+    setFlash('warn'); setTimeout(() => setFlash(null), 5000)
+  }
+
+  // Off the screen once the server has retired it, onto the next box.
+  async function dropRetiredBox(box: BoxRecord) {
     const remaining = boxesRef.current.filter(b => b.id !== box.id)
     setBoxes(remaining)
     setSessionScans(prev => prev.filter(sc => sc.box_id !== box.id))
     const next = remaining[remaining.length - 1] ?? null
     if (next) await switchBox(next)
     else { setActiveBox(null); setScans([]) }
-    setLastKind('warn')
-    setLastItem(`Box ${box.box_number} written off — ${what} recorded as missing`)
-    setFlash('warn'); setTimeout(() => setFlash(null), 5000)
     loadSessions()
+  }
+
+  // ── An empty box: retire it ──────────────────────────────────────────────────
+  // Charlie, 2026-09-28: "on the empty box just retire." A box with nothing in
+  // it kept counting as a box on the session, the freezer list and Load Out,
+  // and closing it printed a 0-cut label under its serial. It goes through the
+  // write-off route (reason 'other', no lines) so the serial it wore is still
+  // on record, and it offers itself when the last package comes out rather
+  // than waiting for someone to find a button.
+  async function retireEmptyBox(box: BoxRecord, why = '') {
+    if (!window.confirm(
+      `${why}Box ${box.box_number} is empty — retire it?\n\n` +
+      `It comes off this session, the freezer list and Load Out, and its label can't be printed again. ` +
+      `Cancel keeps it open to fill.`)) return false
+    setTakeOut(false)
+    const res = await fetch('/api/boxes/writeoff', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ box_id: box.id, reason: 'other', note: 'Empty box retired' }),
+    })
+    const data = await res.json().catch(() => ({} as { error?: string }))
+    if (!res.ok) {
+      setLastKind('bad'); setLastItem((data as { error?: string }).error ?? 'Could not retire that box')
+      setFlash('bad'); setTimeout(() => setFlash(null), 4000)
+      return false
+    }
+    await dropRetiredBox(box)
+    setLastKind('ok')
+    setLastItem(`Box ${box.box_number} was empty — retired`)
+    setFlash('ok'); setTimeout(() => setFlash(null), 3000)
+    return true
   }
 
   // ── Reopen a closed box ──────────────────────────────────────────────────────
@@ -2066,7 +2132,20 @@ export default function ScannerPage() {
     if (flags.not_for_human) p.set('pet',    '1')
     if (format)              p.set('format', format)
     if (labelRoll !== '4in') p.set('roll', labelRoll)
-    window.open(`/api/boxes/label?${p}`, '_blank')
+    const url = `/api/boxes/label?${p}`
+    const win = window.open(url, '_blank')
+    // A pop-up blocker swallows this without a word: no tab, no dialog, no
+    // error — Charlie, 2026-09-29, "Not printing a label for me", three
+    // clicks on Print Label and nothing on the station. The blocker hands back
+    // null, so say so on screen and leave a plain link the browser will allow.
+    // The breadcrumb puts it in the feedback diagnostics next time.
+    addBreadcrumb('nav', `label → ${win ? 'opened' : 'BLOCKED'} ${url}`)
+    if (win) { setLabelUrl(null); return }
+    setLabelUrl(url)
+    setLastKind('bad')
+    setLastItem('This browser blocked the label window — nothing went to the printer. Allow pop-ups for this site, or open the label with the link below.')
+    setFlash('bad')
+    setTimeout(() => setFlash(null), 6000)
   }
 
   // Mirrors the label route's auto-recognition so the scanner can say up front
@@ -2321,6 +2400,8 @@ export default function ScannerPage() {
     setFlash('ok'); setLastKind('ok')
     setLastItem(`➖ Took out ${hit.item_name} · ${Number(hit.weight_lbs).toFixed(2)} lb from Box ${box.box_number}`)
     setTimeout(() => setFlash(null), 2500)
+    // That was the last one out.
+    if (lines.length === 1) await retireEmptyBox(box, 'That was the last package. ')
   }
 
   // ── Unpack a produced box for repack ─────────────────────────────────────────
@@ -3548,7 +3629,14 @@ export default function ScannerPage() {
             const nums = set?.items.map(i => Number(i.plu_number)).filter(Number.isFinite) ?? []
             return (
               <span key={l} style={{ fontSize: '0.75rem', fontWeight: 600, letterSpacing: 0 }}>
-                {!set
+                {/* Blegen's and Hollenbeck's formats print no barcode, and this
+                    line used to send the crew to exactly those labels (AE,
+                    2026-09-29: "Blegens has no scan code on label"). Both whole-
+                    box labels count the same (Charlie: assorted cuts is treated
+                    like the meat box). */}
+                {set && !set.prints_barcode
+                  ? `⚠ ${set.name} labels print with NO barcode — nothing off them will scan. Weigh the finished box on the HOUSE label as MEAT BOX (PLU 1)${!expected?.species?.length || expected.species.some(sp => /beef/i.test(sp)) ? ' or BEEF ASSORTED CUTS (PLU 207)' : ''} and scan that.`
+                : !set
                   ? 'Switch the scale to this label — not the house label.'
                   : !set.loaded_at
                     ? `⚠ ${set.name}'s PLUs aren't marked as on the scales — load them (Producer Labels) before packing.`
@@ -3663,6 +3751,16 @@ export default function ScannerPage() {
             <span style={{ fontSize: '1.05rem', fontWeight: 700, color: lastKind === 'bad' ? C.red : lastKind === 'warn' ? C.yellow : C.green }}>
               {lastKind === 'ok' ? '✓ ' : '⚠ '}{lastItem}
             </span>
+          )}
+          {labelUrl && (
+            <div style={{ marginTop: '0.3rem' }}>
+              {/* A link the user clicks is a navigation the blocker allows,
+                  where a window.open from a script is not. */}
+              <a href={labelUrl} target="_blank" rel="noopener" onClick={() => setLabelUrl(null)}
+                style={{ display: 'inline-block', padding: '0.4rem 1rem', borderRadius: 3, background: 'rgba(201,168,130,0.2)', border: `1px solid ${C.tan}`, color: C.cream, fontWeight: 700, fontSize: '0.9rem', textDecoration: 'none' }}>
+                🖨 Open the label in a new tab
+              </a>
+            </div>
           )}
         </div>
 
@@ -4166,7 +4264,38 @@ export default function ScannerPage() {
           The customer's packaging sheet, live. A line only crosses itself off
           when a PLU that has been linked to it comes over the scale, so what
           is left standing is genuinely what is left to pack. */}
-      {expected && (
+      {/* ── Producer session: packed by the box ──
+          The producer's label prints no barcode, so the cut list below could
+          never tick off. One whole-box label per box goes over the gun
+          instead, and every pound of it counts toward the yield. */}
+      {expected && boxOnlyProducer && (() => {
+        const beef    = !expected.species.length || expected.species.some(sp => /beef/i.test(sp))
+        const packed  = sessionScans.filter(sc => WHOLE_BOX_PLUS.has(sc.plu_number))
+        const lbs     = packed.reduce((t, sc) => t + (Number(sc.weight_lbs) || 0), 0)
+        return (
+          <div style={{
+            width: 400, flexShrink: 0, display: 'flex', flexDirection: 'column',
+            borderLeft: '1px solid rgba(166,120,90,0.25)', background: 'rgba(0,0,0,0.18)',
+            padding: '1rem 1rem 0.75rem', gap: '0.7rem', minHeight: 0,
+          }}>
+            <span style={{ color: C.tan, fontSize: '0.78rem', fontWeight: 700, letterSpacing: '0.12em' }}>
+              PACK BY THE BOX · {boxOnlyProducer.toUpperCase()}
+            </span>
+            <div style={{ color: C.cream, fontSize: '0.95rem', lineHeight: 1.45 }}>
+              {boxOnlyProducer}&apos;s labels print no barcode. Weigh each finished box on the house label as
+              {' '}<strong>MEAT BOX</strong> (PLU 1){beef && <> or <strong>BEEF ASSORTED CUTS</strong> (PLU 207)</>} and scan that.
+            </div>
+            <div style={{ color: C.lightBrown, fontSize: '0.8rem', lineHeight: 1.45 }}>
+              Every pound goes toward the yield. Which cuts are in each box isn&apos;t tracked for this producer.
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', color: C.cream, fontFamily: 'monospace', fontSize: '0.9rem', fontWeight: 700, borderTop: '1px solid rgba(166,120,90,0.25)', paddingTop: '0.5rem' }}>
+              <span>{packed.length} box{packed.length === 1 ? '' : 'es'} scanned</span>
+              <span>{lbs.toFixed(2)} lbs</span>
+            </div>
+          </div>
+        )
+      })()}
+      {expected && !boxOnlyProducer && (
         <div style={{
           width: 400, flexShrink: 0, display: 'flex', flexDirection: 'column',
           borderLeft: '1px solid rgba(166,120,90,0.25)', background: 'rgba(0,0,0,0.18)',
@@ -4571,6 +4700,7 @@ export default function ScannerPage() {
               This PLU packs <strong style={{ color: C.cream }}>{offCard.keys.join(', ')}</strong> and{' '}
               <strong style={{ color: C.cream }}>{customer}</strong>&apos;s cut card doesn&apos;t order it.
               Check the package against the card before it goes in the box.
+              Keep it and this PLU won&apos;t ask again this session.
             </div>
             <div style={{ display: 'flex', gap: '0.6rem' }}>
               <button
@@ -4580,7 +4710,7 @@ export default function ScannerPage() {
                 Take it out of the box
               </button>
               <button
-                onClick={() => { setOffCard(null); scanRef.current?.focus() }}
+                onClick={() => { offCardOkRef.current.add(offCard.plu); setOffCard(null); scanRef.current?.focus() }}
                 style={{ flex: 1, background: C.tan, color: C.dark, border: 'none', borderRadius: 4, padding: '0.85rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer' }}
               >
                 It&apos;s right — keep it

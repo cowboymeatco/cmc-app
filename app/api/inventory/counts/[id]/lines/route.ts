@@ -1,7 +1,7 @@
 export const runtime = 'edge'
 export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { decodeHobartLabel, BOX_SERIAL_RE } from '@/lib/hobartBarcode'
 import { isOwnSession, OWN_SESSION } from '@/lib/ownership'
 import { matchingBoxedLine, type CountLine } from '@/lib/inventoryCount'
@@ -23,7 +23,7 @@ interface Ctx { params: Promise<{ id: string }> }
 
 export async function GET(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('inventory_count_lines')
     .select('*')
     .eq('count_id', id)
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // A closed count is a finished record. Scanning into one would change a
   // number Jill may already have booked, so it is refused rather than reopened
   // silently.
-  const { data: count, error: cErr } = await supabase
+  const { data: count, error: cErr } = await supabaseAdmin
     .from('inventory_counts')
     .select('id, status')
     .eq('id', id)
@@ -74,7 +74,7 @@ async function countPackage(countId: string, body: Record<string, unknown>, coun
   // Name is snapshotted so retiring the PLU later never rewrites this count.
   // A PLU the app has never heard of still counts — the meat is on the shelf
   // either way — it just carries no name, and the page says so.
-  const { data: item } = await supabase
+  const { data: item } = await supabaseAdmin
     .from('plu_items')
     .select('item_name')
     .eq('plu_number', plu_number)
@@ -82,7 +82,7 @@ async function countPackage(countId: string, body: Record<string, unknown>, coun
 
   const quantity = Math.max(1, Math.round(Number(body.quantity ?? 1)) || 1)
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('inventory_count_lines')
     .insert({
       count_id: countId,
@@ -98,7 +98,7 @@ async function countPackage(countId: string, body: Record<string, unknown>, coun
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   // Probably pulled out of a box that was already counted by its label.
-  const { data: boxed } = await supabase
+  const { data: boxed } = await supabaseAdmin
     .from('inventory_count_lines')
     .select('*')
     .eq('count_id', countId)
@@ -119,7 +119,7 @@ async function countBox(countId: string, serial: string, confirmed: boolean, cou
     return NextResponse.json({ error: `Not a box label: ${serial}` }, { status: 400 })
   }
 
-  const { data: box, error: bErr } = await supabase
+  const { data: box, error: bErr } = await supabaseAdmin
     .from('boxes')
     .select('id, serial_number, customer_name, pack_date, is_closed, picked_up_at')
     .ilike('serial_number', serial)
@@ -148,7 +148,7 @@ async function countBox(countId: string, serial: string, confirmed: boolean, cou
   // the session it was packed in; a box whose session cannot be found falls
   // back to its own name, and failing both it is not counted — ownership is
   // never guessed.
-  const { data: sessions } = await supabase
+  const { data: sessions } = await supabaseAdmin
     .from('processing_sessions')
     .select('customer_name, cmc')
     .eq('customer_name', box.customer_name)
@@ -163,7 +163,7 @@ async function countBox(countId: string, serial: string, confirmed: boolean, cou
     }, { status: 409 })
   }
 
-  const { data: already } = await supabase
+  const { data: already } = await supabaseAdmin
     .from('inventory_count_lines')
     .select('id')
     .eq('count_id', countId)
@@ -174,7 +174,7 @@ async function countBox(countId: string, serial: string, confirmed: boolean, cou
     return NextResponse.json({ code: 'already_counted', error: `Box ${serial} is already in this count.` }, { status: 409 })
   }
 
-  const { data: contents, error: sErr } = await supabase
+  const { data: contents, error: sErr } = await supabaseAdmin
     .from('box_scans')
     .select('plu_number, item_name, weight_lbs, quantity, barcode')
     .eq('box_id', box.id)
@@ -212,7 +212,7 @@ async function countBox(countId: string, serial: string, confirmed: boolean, cou
     box_id: box.id,
     box_serial: box.serial_number,
   }))
-  const { data, error } = await supabase.from('inventory_count_lines').insert(rows).select('*')
+  const { data, error } = await supabaseAdmin.from('inventory_count_lines').insert(rows).select('*')
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ box: summary, lines: data })
 }
@@ -225,7 +225,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
 
   // Void, never delete: the count has to stay reconstructable at any instant,
   // and a row that vanishes takes its timestamp with it.
-  let q = supabase
+  let q = supabaseAdmin
     .from('inventory_count_lines')
     .update({
       voided_at: new Date().toISOString(),

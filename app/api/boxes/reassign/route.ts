@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 export const dynamic = 'force-dynamic'
 
@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'box_id and target {customer_name, session_date} required' }, { status: 400 })
   }
 
-  const { data: box, error: bErr } = await supabase
+  const { data: box, error: bErr } = await supabaseAdmin
     .from('boxes')
     .select('id, customer_name, pack_date')
     .eq('id', box_id)
@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Next box number in the target session
-  const { data: targetBoxes, error: tErr } = await supabase
+  const { data: targetBoxes, error: tErr } = await supabaseAdmin
     .from('boxes')
     .select('box_number')
     .eq('customer_name', target.customer_name)
@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
   if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 })
   const nextNum = (targetBoxes ?? []).reduce((m, b) => Math.max(m, Number(b.box_number) || 0), 0) + 1
 
-  const { data: updated, error: uErr } = await supabase
+  const { data: updated, error: uErr } = await supabaseAdmin
     .from('boxes')
     .update({ customer_name: target.customer_name, pack_date: target.session_date, box_number: nextNum })
     .eq('id', box_id)
@@ -48,14 +48,14 @@ export async function POST(req: NextRequest) {
 
   // Make sure the target shows up as a session — but never clobber an existing
   // record's status, so reassigning into a value_add session leaves it value_add.
-  const { data: tgtSession } = await supabase
+  const { data: tgtSession } = await supabaseAdmin
     .from('processing_sessions')
     .select('id')
     .eq('customer_name', target.customer_name)
     .eq('session_date', target.session_date)
     .maybeSingle()
   if (!tgtSession) {
-    await supabase
+    await supabaseAdmin
       .from('processing_sessions')
       .upsert(
         [{ customer_name: target.customer_name, session_date: target.session_date, status: 'scanning', notes: '', updated_at: new Date().toISOString() }],

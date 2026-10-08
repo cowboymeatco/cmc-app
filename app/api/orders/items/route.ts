@@ -1,6 +1,6 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 export const dynamic = 'force-dynamic'
 
@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic'
 export async function POST(req: NextRequest) {
   const body = await req.json()
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('retail_order_items')
     .insert([{
       order_id:    body.order_id,
@@ -31,7 +31,7 @@ export async function PATCH(req: NextRequest) {
   const body = await req.json()
   const { id, ...updates } = body
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('retail_order_items')
     .update(updates)
     .eq('id', id)
@@ -48,7 +48,7 @@ export async function DELETE(req: NextRequest) {
   const id = searchParams.get('id')
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
 
-  const { error } = await supabase
+  const { error } = await supabaseAdmin
     .from('retail_order_items')
     .delete()
     .eq('id', id)

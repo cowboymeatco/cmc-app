@@ -7,7 +7,7 @@
 // record and the packing slip, so a carcass reads like everything else on the
 // load: whose it is, what it is, what it weighs.
 
-import { supabase } from './supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { parseCarcassTag, ParsedCarcassTag } from './carcassTag'
 
 export interface DeliveredCarcass {
@@ -79,12 +79,12 @@ export async function resolveCarcasses(codes: string[]): Promise<DeliveredCarcas
 
   const rows: HarvestRow[] = []
   if (legacyIds.length) {
-    const { data } = await supabase.from('harvest_log').select(HARVEST_COLS).in('id', legacyIds)
+    const { data } = await supabaseAdmin.from('harvest_log').select(HARVEST_COLS).in('id', legacyIds)
     rows.push(...((data ?? []) as HarvestRow[]))
   }
   if (tags.length && dates.length) {
     // One query for every tag/date on the load; the exact pair is matched below.
-    const { data } = await supabase.from('harvest_log').select(HARVEST_COLS)
+    const { data } = await supabaseAdmin.from('harvest_log').select(HARVEST_COLS)
       .in('carcass_tag', tags).in('harvest_date', dates)
     rows.push(...((data ?? []) as HarvestRow[]))
   }
@@ -113,7 +113,7 @@ export async function resolveCarcasses(codes: string[]): Promise<DeliveredCarcas
   // Whose it is, when the office assigned the carcass to a cut customer.
   const ids = found.map(c => c.harvest_log_id).filter((v): v is string => !!v)
   if (ids.length) {
-    const { data: asg } = await supabase
+    const { data: asg } = await supabaseAdmin
       .from('carcass_assignments').select('harvest_log_id, customer_name').in('harvest_log_id', ids)
     const owners = new Map<string, string[]>()
     for (const a of asg ?? []) {
@@ -137,7 +137,7 @@ export async function resolveCarcasses(codes: string[]): Promise<DeliveredCarcas
 // keeps its 'cut' history rather than being overwritten.
 export async function markCarcassesDelivered(ids: string[]): Promise<number> {
   if (!ids.length) return 0
-  const { data } = await supabase
+  const { data } = await supabaseAdmin
     .from('harvest_log')
     .update({ status: 'delivered' })
     .in('id', ids)

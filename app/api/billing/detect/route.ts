@@ -1,6 +1,5 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
 // producer_qbo_links is under RLS; the anon key can no longer write it and
 // this route is staff-side QuickBooks linking. Server-side only.
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
@@ -68,7 +67,7 @@ export async function POST(req: NextRequest) {
     const since = typeof body.since === 'string' && body.since ? body.since : '2026-07-11'
 
     const [{ data: harvests, error: hErr }, { data: links, error: lErr }, { data: custLinks, error: cErr }] = await Promise.all([
-      supabase
+      supabaseAdmin
         .from('harvest_log')
         .select('id, appointment_id, harvest_date, species, carcass_tag, hot_carcass_weight_lbs, status, producer')
         .gte('harvest_date', since)
@@ -108,11 +107,11 @@ export async function POST(req: NextRequest) {
     const [appts, packs] = await Promise.all([
       selectIn<{ id: string; customers: AppointmentCustomer[] | null }>(
         apptIds,
-        batch => supabase.from('harvest_appointments').select('id, customers').in('id', batch),
+        batch => supabaseAdmin.from('harvest_appointments').select('id, customers').in('id', batch),
       ),
       selectIn<{ linked_harvest_id: string; pack_date: string }>(
         logIds,
-        batch => supabase.from('processing_inputs')
+        batch => supabaseAdmin.from('processing_inputs')
           .select('linked_harvest_id, pack_date')
           .in('linked_harvest_id', batch)
           .not('pack_date', 'is', null),
@@ -209,7 +208,7 @@ export async function POST(req: NextRequest) {
     const finalEvents = events.filter(e => !(e.rule_key === 'kill_fee' && supersededSet.has(e.source_id)))
     let superseded = 0
     if (supersededLambIds.length > 0) {
-      const { data: sup, error: supErr } = await supabase
+      const { data: sup, error: supErr } = await supabaseAdmin
         .from('billable_events')
         .update({ status: 'superseded' })
         .eq('rule_key', 'kill_fee')
@@ -223,7 +222,7 @@ export async function POST(req: NextRequest) {
     let created = 0
     for (let i = 0; i < finalEvents.length; i += 200) {
       const batch = finalEvents.slice(i, i + 200)
-      const { data, error } = await supabase
+      const { data, error } = await supabaseAdmin
         .from('billable_events')
         .upsert(batch, { onConflict: 'rule_key,source_table,source_id,customer_name', ignoreDuplicates: true })
         .select('id')

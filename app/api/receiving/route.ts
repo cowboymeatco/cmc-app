@@ -1,6 +1,6 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { isoDate } from '@/lib/dates'
 
 // GET /api/receiving?type=animal|box
@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
     // animals get them filtered out; the worksheet asks for them with
     // include_removed=1 because it needs the reserved slot.
     const includeRemoved = searchParams.get('include_removed') === '1'
-    let query = supabase
+    let query = supabaseAdmin
       .from('animal_receiving_log')
       .select('*')
       .order('animal_index', { ascending: true })
@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(data)
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('box_receiving_log')
     .select('*')
     .order('received_at', { ascending: false })
@@ -68,7 +68,7 @@ export async function POST(req: NextRequest) {
       photo_url:       a.photo_url      ?? '',
     }))
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('animal_receiving_log')
       .insert(rows)
       .select()
@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
     // Otherwise flip to AnimalIn so it appears in the harvest queue.
     if (fields.appointment_id) {
       const allNoShow = animals.every((a) => (a.status as string) === 'no_show')
-      await supabase
+      await supabaseAdmin
         .from('harvest_appointments')
         .update({ status: allNoShow ? 'NoShow' : 'AnimalIn' })
         .eq('id', fields.appointment_id)
@@ -91,14 +91,14 @@ export async function POST(req: NextRequest) {
   // Box product â€” auto-generate CMC-YYYYMMDD-NNN identifier
   const today    = isoDate().replace(/-/g, '')  // e.g. "20260503"
   const prefix   = `CMC-${today}-`
-  const { count } = await supabase
+  const { count } = await supabaseAdmin
     .from('box_receiving_log')
     .select('*', { count: 'exact', head: true })
     .like('box_identifier', `${prefix}%`)
   const seq          = String((count ?? 0) + 1).padStart(3, '0')
   const box_identifier = `${prefix}${seq}`
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('box_receiving_log')
     .insert([{
       received_at:    fields.received_at ?? isoDate(),
@@ -126,7 +126,7 @@ export async function PATCH(req: NextRequest) {
   const body = await req.json()
   const { type, id, ...updates } = body
   const table = type === 'animal' ? 'animal_receiving_log' : 'box_receiving_log'
-  const { data, error } = await supabase.from(table).update(updates).eq('id', id).select().single()
+  const { data, error } = await supabaseAdmin.from(table).update(updates).eq('id', id).select().single()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json(data)
 }
@@ -145,7 +145,7 @@ export async function DELETE(req: NextRequest) {
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
 
   if (type === 'animal') {
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from('animal_receiving_log')
       .update({ status: 'removed' })
       .eq('id', id)
@@ -153,7 +153,7 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ ok: true })
   }
 
-  const { error } = await supabase.from('box_receiving_log').delete().eq('id', id)
+  const { error } = await supabaseAdmin.from('box_receiving_log').delete().eq('id', id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ ok: true })
 }

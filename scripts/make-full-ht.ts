@@ -4,18 +4,20 @@
 // ($0.01 — wild-game service, wholesale cut-codes, boxes, NFS) are excluded so
 // the merge import only touches items with real prices.
 //
-//   node scripts/make-full-ht.ts
+//   node --env-file=.env.local scripts/make-full-ht.ts
 //   → writes C:\Users\charl\Downloads\PLU_full_export.ht
 // ──────────────────────────────────────────────────────────────────────────────
 import { writeFileSync } from 'node:fs'
 import { buildHtFile, type HobartPlu } from '../lib/hobart.ts'
 
 const SUPABASE_URL = 'https://eosafbzqitgqzhejilhf.supabase.co'
-const ANON =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVvc2FmYnpxaXRncXpoZWppbGhmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0NjgwNDksImV4cCI6MjA5MjA0NDA0OX0.v7MS81-tuhOzKITFstg08c7Tq2mtmlPeJrQXqFufzX8'
+// Service role key from the environment (node --env-file=.env.local ...). The
+// anon key no longer reads plu_items once RLS is on.
+const KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
+if (!KEY) throw new Error('Missing SUPABASE_SERVICE_ROLE_KEY (run with --env-file=.env.local)')
 
 const url = `${SUPABASE_URL}/rest/v1/plu_items?active=eq.true&price=gt.0.01&select=*&order=plu_number.asc`
-const res = await fetch(url, { headers: { apikey: ANON, Authorization: `Bearer ${ANON}` } })
+const res = await fetch(url, { headers: { apikey: KEY, Authorization: `Bearer ${KEY}` } })
 const rows = (await res.json()) as Record<string, unknown>[]
 
 const items: HobartPlu[] = rows.map((r) => ({

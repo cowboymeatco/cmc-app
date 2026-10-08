@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { generateLabel, parseRoll, LabelFlags, LabelAnimal, BoxRecord, BoxScan } from '@/lib/label'
 import { generateCMBLabel } from '@/lib/labelCMB'
 import { generateWIPLabel, wipDataFromBox, isWIPBoxLabel } from '@/lib/labelWIP'
@@ -31,7 +31,7 @@ async function cardSaysCMB(box: BoxRecord): Promise<boolean> {
 // Override per-print with ?format=wip or ?format=std.
 async function isWIPBox(box: BoxRecord): Promise<boolean> {
   if (isWIPBoxLabel(box.box_label)) return true
-  const { data } = await supabase
+  const { data } = await supabaseAdmin
     .from('processing_sessions')
     .select('status')
     .eq('customer_name', box.customer_name)
@@ -45,7 +45,7 @@ async function isWIPBox(box: BoxRecord): Promise<boolean> {
 // other session lookup. Null when never set — the label then falls back to the
 // scanned carcass kill type, else USDA-on.
 async function resolveSessionBoxType(box: BoxRecord): Promise<string | null> {
-  const { data } = await supabase
+  const { data } = await supabaseAdmin
     .from('processing_sessions')
     .select('box_type')
     .eq('customer_name', box.customer_name)
@@ -59,7 +59,7 @@ async function resolveSessionBoxType(box: BoxRecord): Promise<string | null> {
 // one carcass is linked, any Custom makes the whole box Custom (a custom-exempt
 // cut can't be sold), producers are joined, and the whole hanging weights sum.
 async function resolveAnimal(box: BoxRecord): Promise<LabelAnimal | undefined> {
-  const inputsRes = await supabase
+  const inputsRes = await supabaseAdmin
     .from('processing_inputs')
     .select('linked_harvest_id')
     .eq('customer_name', box.customer_name)
@@ -68,7 +68,7 @@ async function resolveAnimal(box: BoxRecord): Promise<LabelAnimal | undefined> {
   const ids = [...new Set((inputsRes.data ?? []).map(r => r.linked_harvest_id).filter(Boolean))]
   if (!ids.length) return undefined
 
-  const hlRes = await supabase
+  const hlRes = await supabaseAdmin
     .from('harvest_log')
     .select('producer, hot_carcass_weight_lbs, kill_type')
     .in('id', ids)
@@ -169,7 +169,7 @@ async function resolveWIPIntent(box: BoxRecord, items: { name: string; weight?: 
     const orders = allOrders
     if (orders.length) {
       // What the customer's other boxes have already committed to each order.
-      const siblings = await supabase
+      const siblings = await supabaseAdmin
         .from('boxes')
         .select('id, wip_intent_key, total_weight_lbs')
         .eq('customer_name', box.customer_name)
@@ -211,7 +211,7 @@ async function resolveWIPIntent(box: BoxRecord, items: { name: string; weight?: 
   // being filled, so its weight — and therefore what it can cover — is not
   // final; freezing it now would hand the next order a number that changes.
   if (box.is_closed) {
-    await supabase
+    await supabaseAdmin
       .from('boxes')
       .update({ wip_intent_key: assignment.key, wip_intent_label: assignment.label })
       .eq('id', box.id)
@@ -230,8 +230,8 @@ export async function GET(req: NextRequest) {
   if (!box_id) return NextResponse.json({ error: 'box_id required' }, { status: 400 })
 
   const [boxRes, scansRes] = await Promise.all([
-    supabase.from('boxes').select('*').eq('id', box_id).single(),
-    supabase.from('box_scans').select('*').eq('box_id', box_id),
+    supabaseAdmin.from('boxes').select('*').eq('id', box_id).single(),
+    supabaseAdmin.from('box_scans').select('*').eq('box_id', box_id),
   ])
 
   if (boxRes.error)   return NextResponse.json({ error: boxRes.error.message },   { status: 500 })

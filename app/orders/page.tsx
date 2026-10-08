@@ -174,6 +174,7 @@ function NewOrderTab({ onSaved, pluList }: { onSaved: () => void; pluList: PluIt
     delivery_datetime:'',
     delivery_address: '',
     shipping_address: '',
+    ship_date:        '',
     notes:            '',
   })
 
@@ -223,7 +224,12 @@ function NewOrderTab({ onSaved, pluList }: { onSaved: () => void; pluList: PluIt
       body: JSON.stringify({
         ...form,
         pickup_datetime:   form.pickup_datetime   || null,
-        delivery_datetime: form.delivery_datetime || null,
+        // A shipping order has no delivery time, so its ship date rides in the
+        // same column (nothing else reads it). Noon, so the day can't slip
+        // across midnight on the way to UTC.
+        delivery_datetime: form.fulfillment_type === 'shipping'
+          ? (form.ship_date ? `${form.ship_date}T12:00:00` : null)
+          : form.delivery_datetime || null,
         delivery_address:  form.delivery_address  || null,
         shipping_address:  form.shipping_address  || null,
         items: items.map(it => ({ ...it, qty_ordered: parseFloat(it.qty_ordered) || 0 })),
@@ -318,9 +324,15 @@ function NewOrderTab({ onSaved, pluList }: { onSaved: () => void; pluList: PluIt
           </div>
         )}
         {form.fulfillment_type === 'shipping' && (
-          <div>
-            <label style={LABEL}>Shipping Address *</label>
-            <textarea style={{ ...INPUT, height: 64, resize: 'vertical' }} value={form.shipping_address} onChange={f('shipping_address')} placeholder="Full shipping address" />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            <div>
+              <label style={LABEL}>Ship Date</label>
+              <input type="date" style={INPUT} value={form.ship_date} onChange={f('ship_date')} />
+            </div>
+            <div>
+              <label style={LABEL}>Shipping Address *</label>
+              <textarea style={{ ...INPUT, height: 64, resize: 'vertical' }} value={form.shipping_address} onChange={f('shipping_address')} placeholder="Full shipping address" />
+            </div>
           </div>
         )}
 
@@ -482,7 +494,7 @@ function printOrder(order: RetailOrder) {
   // with no address on it sends somebody back to a screen.
   const handoff =
     order.fulfillment_type === 'delivery' ? { label: 'Delivery', when: order.delivery_datetime, where: order.delivery_address }
-    : order.fulfillment_type === 'shipping' ? { label: 'Shipping', when: null, where: order.shipping_address }
+    : order.fulfillment_type === 'shipping' ? { label: 'Shipping', when: order.delivery_datetime, where: order.shipping_address }
     : { label: 'Pickup', when: order.pickup_datetime, where: null }
 
   const items = order.retail_order_items ?? []
@@ -505,7 +517,10 @@ function printOrder(order: RetailOrder) {
   const boxes = [
     { k: 'Due',         v: fmtDay(order.due_date) },
     { k: 'Condition',   v: order.fresh_or_frozen === 'fresh' ? 'FRESH' : 'FROZEN' },
-    { k: 'Fulfillment', v: handoff.when ? `${handoff.label} · ${fmtWhen(handoff.when)}` : handoff.label },
+    // A ship date is a day, not a time of day.
+    { k: 'Fulfillment', v: !handoff.when ? handoff.label
+        : order.fulfillment_type === 'shipping' ? `Ships ${fmtDay(handoff.when.slice(0, 10))}`
+        : `${handoff.label} · ${fmtWhen(handoff.when)}` },
   ].map(b => `<div class="box"><div class="bk">${esc(b.k)}</div><div class="bv">${esc(b.v)}</div></div>`).join('')
 
   const css = `
@@ -521,6 +536,7 @@ function printOrder(order: RetailOrder) {
     .bk { font-size: 7pt; text-transform: uppercase; letter-spacing: 0.1em; color: #555; }
     .bv { font-size: 11pt; font-weight: 800; margin-top: 1pt; }
     .where { font-size: 10pt; border: 0.75pt solid #000; padding: 5pt 8pt; margin-bottom: 9pt; }
+    .blank { display: inline-block; width: 5.5in; border-bottom: 0.75pt solid #000; height: 12pt; vertical-align: bottom; }
     .note-blk { font-size: 10pt; font-style: italic; border-left: 2.5pt solid #000; padding: 3pt 0 3pt 8pt; margin-bottom: 10pt; }
     table { width: 100%; border-collapse: collapse; font-size: 10pt; }
     th, td { border: 0.75pt solid #000; padding: 5pt 6pt; text-align: left; vertical-align: middle; }
@@ -546,7 +562,10 @@ function printOrder(order: RetailOrder) {
       ${order.customer_phone ? esc(order.customer_phone) + ' &nbsp;·&nbsp; ' : ''}Ordered ${fmtDay(order.order_date)}${order.taken_by ? ' &nbsp;·&nbsp; Taken by ' + esc(order.taken_by) : ''} &nbsp;·&nbsp; ${esc(STATUS_LABELS[order.status])}
     </div>
     <div class="boxes">${boxes}</div>
-    ${handoff.where ? `<div class="where"><strong>${esc(handoff.label)} to:</strong> ${esc(handoff.where)}</div>` : ''}
+    ${/* No address on a delivery or shipping order gets a line to write it on,
+         not silence — same bargain as the rest of the sheet. */''}
+    ${handoff.where ? `<div class="where"><strong>${esc(handoff.label)} to:</strong> ${esc(handoff.where)}</div>`
+      : order.fulfillment_type !== 'pickup' ? `<div class="where"><strong>${esc(handoff.label)} to:</strong> <span class="blank"></span></div>` : ''}
     ${order.notes ? `<div class="note-blk">${esc(order.notes)}</div>` : ''}
     <table>
       <thead><tr>
@@ -763,9 +782,11 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
         )}
         {order.delivery_datetime && (
           <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 4, padding: '0.5rem 0.85rem' }}>
-            <div style={{ fontSize: '0.65rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Delivery Time</div>
+            <div style={{ fontSize: '0.65rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em' }}>{order.fulfillment_type === 'shipping' ? 'Ship Date' : 'Delivery Time'}</div>
             <div style={{ fontSize: '0.85rem', color: C.cream, fontWeight: 600, marginTop: '0.15rem' }}>
-              {new Date(order.delivery_datetime).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+              {order.fulfillment_type === 'shipping'
+                ? new Date(order.delivery_datetime.slice(0, 10) + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+                : new Date(order.delivery_datetime).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
             </div>
           </div>
         )}
@@ -783,6 +804,7 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
         </div>
       ) : (order.delivery_address || order.shipping_address) && (
         <div style={{ fontSize: '0.82rem', color: C.tan, fontStyle: 'italic' }}>
+          <span style={{ fontStyle: 'normal', color: C.lightBrown }}>{order.fulfillment_type === 'shipping' ? 'Ship to: ' : order.fulfillment_type === 'delivery' ? 'Deliver to: ' : ''}</span>
           {order.delivery_address || order.shipping_address}
         </div>
       )}

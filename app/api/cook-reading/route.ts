@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // GET /api/cook-reading?session_id=UUID&limit=200
 export async function GET(req: NextRequest) {
@@ -8,7 +8,7 @@ export async function GET(req: NextRequest) {
   const session_id = searchParams.get('session_id')
   const limit      = parseInt(searchParams.get('limit') ?? '200', 10)
 
-  let q = supabase
+  let q = supabaseAdmin
     .from('cook_reading')
     .select('*')
     .order('read_at', { ascending: true })

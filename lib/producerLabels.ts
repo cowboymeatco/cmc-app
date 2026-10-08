@@ -50,6 +50,18 @@ export function assignPluNumbers(blockStart: number, used: Set<number>, count: n
   return out
 }
 
+// House whole-box PLUs: what a finished box is weighed as when the producer's
+// label prints no barcode (prints_barcode false), so the box can be scanned
+// at all. The producer gives up knowing which cuts came out; the yield still
+// gets every pound (Charlie, 2026-09-29, after AE couldn't scan Blegen's in).
+export const WHOLE_BOX_PLUS = new Set([
+  '1',     // MEAT BOX
+  '207',   // BEEF ASSORTED CUTS
+  '1000',  // PORK MEAT BOX
+  '2000',  // LAMB MEAT BOX
+  '3000',  // GOAT MEAT BOX
+])
+
 // What the scanner needs from a set: which numbers are this producer's, and
 // which house PLU each one stands in for.
 export interface ScannerProducerSet {
@@ -57,5 +69,7 @@ export interface ScannerProducerSet {
   key: string
   label_format: string | null
   loaded_at: string | null
+  /** False when the label format prints no barcode — nothing off it scans. */
+  prints_barcode: boolean
   items: { plu_number: string; house_plu: string }[]
 }

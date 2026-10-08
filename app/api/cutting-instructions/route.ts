@@ -1,6 +1,6 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { unlinkInstruction } from '@/lib/cuttingLinks'
 
 export const dynamic = 'force-dynamic'
@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
   const newSince = searchParams.get('new_since')
 
   if (newSince) {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('cutting_instructions')
       .select('id')
       .gt('created_at', newSince)
@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(data)
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('cutting_instructions')
     .select(idsOnly ? 'id, customer_id, appointment_id' : '*')
     .order('created_at', { ascending: false })
@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
 // POST /api/cutting-instructions â€” create new instruction internally
 export async function POST(req: NextRequest) {
   const body = await req.json()
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('cutting_instructions')
     .insert([{ status: 'pending', data: body }])
     .select()
@@ -139,7 +139,7 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: 'ids required' }, { status: 400 })
   }
 
-  const { error } = await supabase
+  const { error } = await supabaseAdmin
     .from('cutting_instructions')
     .update(updates)
     .in('id', ids)
@@ -162,7 +162,7 @@ export async function DELETE(req: NextRequest) {
   const { error: unlinkErr } = await unlinkInstruction(id)
   if (unlinkErr) return NextResponse.json({ error: unlinkErr }, { status: 500 })
 
-  const { error } = await supabase
+  const { error } = await supabaseAdmin
     .from('cutting_instructions')
     .delete()
     .eq('id', id)

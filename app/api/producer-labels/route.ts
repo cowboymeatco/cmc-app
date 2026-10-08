@@ -18,6 +18,7 @@ import {
 interface SetRow {
   id: string; name: string; label_format: string | null; plu_block_start: number
   loaded_at: string | null; notes: string | null; created_at: string
+  prints_barcode?: boolean | null
 }
 interface ItemRow { id: string; producer_label_id: string; house_plu: string; plu_number: string; item_name: string }
 
@@ -56,6 +57,7 @@ export async function GET(req: NextRequest) {
     if (new URL(req.url).searchParams.get('scanner')) {
       const out: ScannerProducerSet[] = sets.map(s => ({
         name: s.name, key: labelKey(s.name), label_format: s.label_format, loaded_at: s.loaded_at,
+        prints_barcode: s.prints_barcode !== false,
         items: (bySet.get(s.id) ?? []).map(i => ({ plu_number: i.plu_number, house_plu: i.house_plu })),
       }))
       return NextResponse.json({ sets: out })
@@ -173,6 +175,8 @@ export async function POST(req: NextRequest) {
         patch.label_format = fmt || null
       }
       if (body.notes !== undefined) patch.notes = String(body.notes ?? '').trim() || null
+      // Whether this label format prints a barcode (scripts/2026-09-29_producer_label_prints_barcode.sql).
+      if (body.prints_barcode !== undefined) patch.prints_barcode = !!body.prints_barcode
       // Someone confirming the set is on the scales (true), or has come off (false).
       if (body.loaded !== undefined) patch.loaded_at = body.loaded ? new Date().toISOString() : null
       if (!Object.keys(patch).length) return bad('nothing to update')

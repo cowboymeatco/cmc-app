@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { isoDate } from '@/lib/dates'
 
 export const dynamic = 'force-dynamic'
@@ -28,7 +28,7 @@ const SERIAL_RE = /^CMC\d{6}[A-Z0-9]{4}$/i
 // POST { serial, session:{customer_name, session_date} }  consume it
 
 async function findBox(serial: string) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('boxes')
     .select('id, customer_name, pack_date, box_number, is_closed, total_weight_lbs, total_cuts, serial_number, picked_up_at, delivery_id, box_label')
     .ilike('serial_number', serial)
@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
 
   // Weigh it from its own scan lines, not the cached header: the header is a
   // snapshot taken at close time and the lines are the truth.
-  const { data: lines, error: lErr } = await supabase
+  const { data: lines, error: lErr } = await supabaseAdmin
     .from('box_scans')
     .select('id, weight_lbs, item_name')
     .eq('box_id', box.id)
@@ -96,7 +96,7 @@ export async function POST(req: NextRequest) {
 
   // The input row is the audit trail: it keeps the old serial and weight after
   // the box row itself is gone.
-  const { data: input, error: iErr } = await supabase
+  const { data: input, error: iErr } = await supabaseAdmin
     .from('processing_inputs')
     .insert([{
       customer_name:  session.customer_name,
@@ -115,9 +115,9 @@ export async function POST(req: NextRequest) {
 
   // Now retire the old box. Its weight lives on as the input above, so deleting
   // it is what keeps the meat counted exactly once.
-  const { error: dsErr } = await supabase.from('box_scans').delete().eq('box_id', box.id)
+  const { error: dsErr } = await supabaseAdmin.from('box_scans').delete().eq('box_id', box.id)
   if (dsErr) return NextResponse.json({ error: dsErr.message }, { status: 500 })
-  const { error: dbErr } = await supabase.from('boxes').delete().eq('id', box.id)
+  const { error: dbErr } = await supabaseAdmin.from('boxes').delete().eq('id', box.id)
   if (dbErr) return NextResponse.json({ error: dbErr.message }, { status: 500 })
 
   return NextResponse.json({

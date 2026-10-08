@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 export const dynamic = 'force-dynamic'
 
@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
   for (let hop = 0; hop < 4 && frontier.length > 0; hop++) {
     const newIds = new Set<string>()
     for (const sess of frontier) {
-      const { data } = await supabase
+      const { data } = await supabaseAdmin
         .from('processing_inputs')
         .select('customer_name, session_date, box_identifier, weight_lbs')
         .eq('customer_name', sess.customer_name)
@@ -62,7 +62,7 @@ export async function GET(req: NextRequest) {
       }
     }
     if (newIds.size === 0) break
-    const { data: sharers } = await supabase
+    const { data: sharers } = await supabaseAdmin
       .from('processing_inputs')
       .select('customer_name, session_date, box_identifier, weight_lbs')
       .in('box_identifier', Array.from(newIds))
@@ -129,7 +129,7 @@ export async function GET(req: NextRequest) {
   let otherOutput = 0
   for (const key of partnerKeys) {
     const [cust, dt] = key.split('|')
-    const { data: boxes } = await supabase
+    const { data: boxes } = await supabaseAdmin
       .from('boxes')
       .select('id, is_closed, total_weight_lbs')
       .eq('customer_name', cust)
@@ -141,7 +141,7 @@ export async function GET(req: NextRequest) {
       else openIds.push(b.id)
     }
     if (openIds.length > 0) {
-      const { data: scans } = await supabase
+      const { data: scans } = await supabaseAdmin
         .from('box_scans')
         .select('weight_lbs')
         .in('box_id', openIds)

@@ -1,6 +1,6 @@
 ﻿export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { isoDate } from '@/lib/dates'
 import { createBox } from '@/lib/boxes'
 
@@ -10,7 +10,7 @@ export async function GET(req: NextRequest) {
   const customer = searchParams.get('customer_name')
   const recent   = searchParams.get('recent')   // 'sessions' â†’ distinct customer+date pairs
 
-  let query = supabase
+  let query = supabaseAdmin
     .from('boxes')
     .select('*')
     .order('created_at', { ascending: false })
@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
   // customer, a double-tap on + Box — used to send the same number twice, and
   // the session then showed two Box 3s (Charlie, Manning Roofing, 2026-09-08).
   // The browser's number still counts as a floor so a deliberate gap survives.
-  const { data: top } = await supabase
+  const { data: top } = await supabaseAdmin
     .from('boxes')
     .select('box_number')
     .eq('customer_name', customer_name)
@@ -65,7 +65,7 @@ export async function PATCH(req: NextRequest) {
   // real one. The box then read 3 lb lighter than its own label (Chris,
   // 2026-08-07). One source of truth ends that whole class of complaint.
   if (updates.is_closed === true) {
-    const { data: scans, error: scanErr } = await supabase
+    const { data: scans, error: scanErr } = await supabaseAdmin
       .from('box_scans')
       .select('weight_lbs, quantity')
       .eq('box_id', id)
@@ -77,7 +77,7 @@ export async function PATCH(req: NextRequest) {
     updates.total_cuts = rows.reduce((s, r) => s + (Number(r.quantity) || 1), 0)
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('boxes')
     .update(updates)
     .eq('id', id)
@@ -93,8 +93,8 @@ export async function DELETE(req: NextRequest) {
   const id = searchParams.get('id')
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
   // Also delete scans
-  await supabase.from('box_scans').delete().eq('box_id', id)
-  const { error } = await supabase.from('boxes').delete().eq('id', id)
+  await supabaseAdmin.from('box_scans').delete().eq('box_id', id)
+  const { error } = await supabaseAdmin.from('boxes').delete().eq('id', id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ ok: true })
 }

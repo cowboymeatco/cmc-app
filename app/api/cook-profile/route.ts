@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 // GET /api/cook-profile — every profile plus the shop-wide house settings.
 // The planner needs both in one round trip to lay out a schedule.
@@ -8,12 +8,12 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const includeInactive = searchParams.get('all') === '1'
 
-  let q = supabase.from('cook_profile').select('*').order('n_observations', { ascending: false })
+  let q = supabaseAdmin.from('cook_profile').select('*').order('n_observations', { ascending: false })
   if (!includeInactive) q = q.eq('active', true)
 
   const [{ data: profiles, error }, { data: settings }] = await Promise.all([
     q,
-    supabase.from('cook_settings').select('*').eq('id', 1).maybeSingle(),
+    supabaseAdmin.from('cook_settings').select('*').eq('id', 1).maybeSingle(),
   ])
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
@@ -51,7 +51,7 @@ export async function PATCH(req: NextRequest) {
     .some(f => rest[f] !== undefined)
   if (touchedNumbers) updates.source = 'manual'
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('cook_profile')
     .update(updates)
     .eq('id', id)
@@ -70,7 +70,7 @@ export async function PUT(req: NextRequest) {
     if (body[f] !== undefined) updates[f] = body[f]
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('cook_settings')
     .update(updates)
     .eq('id', 1)

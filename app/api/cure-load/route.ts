@@ -1,6 +1,6 @@
 export const runtime = 'edge'
 import { NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { summarizeCure } from '@/lib/cureLoad'
 import type { CureTag } from '@/lib/types'
 import type { CookProfile } from '@/lib/cookPredict'
@@ -12,8 +12,8 @@ export const dynamic = 'force-dynamic'
 // board is the seal scans and nothing else.
 export async function GET() {
   const [{ data: tags, error }, { data: profiles }] = await Promise.all([
-    supabase.from('cure_tags').select('*').eq('status', 'curing'),
-    supabase.from('cook_profile').select('*'),
+    supabaseAdmin.from('cure_tags').select('*').eq('status', 'curing'),
+    supabaseAdmin.from('cook_profile').select('*'),
   ])
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 

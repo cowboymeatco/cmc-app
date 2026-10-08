@@ -13,7 +13,7 @@
 // them back instead of re-deriving the animal from the name. The name stays,
 // but only as the label the floor wants on the box.
 
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { parseCarcassTag } from '@/lib/carcassTag'
 import { julianYYDDD } from '@/lib/label'
 
@@ -46,7 +46,7 @@ const CI_SCAN = /^CI-?([0-9A-F]{8})$/i
 const num = (v: unknown) => (v == null || v === '' ? null : Number(v))
 
 export async function getSessionLinks(customerName: string, sessionDate: string): Promise<SessionLinks> {
-  const { data } = await supabase
+  const { data } = await supabaseAdmin
     .from('processing_sessions')
     .select('linked_appointment_id, linked_cutting_instruction_id')
     .eq('customer_name', customerName.trim())
@@ -67,12 +67,12 @@ export async function getSessionLinks(customerName: string, sessionDate: string)
 export async function fillSessionLinks(customerName: string, sessionDate: string, links: Partial<SessionLinks>): Promise<void> {
   const name = customerName.trim()
   if (links.linked_appointment_id) {
-    await supabase.from('processing_sessions')
+    await supabaseAdmin.from('processing_sessions')
       .update({ linked_appointment_id: links.linked_appointment_id })
       .eq('customer_name', name).eq('session_date', sessionDate).is('linked_appointment_id', null)
   }
   if (links.linked_cutting_instruction_id) {
-    await supabase.from('processing_sessions')
+    await supabaseAdmin.from('processing_sessions')
       .update({ linked_cutting_instruction_id: links.linked_cutting_instruction_id })
       .eq('customer_name', name).eq('session_date', sessionDate).is('linked_cutting_instruction_id', null)
   }
@@ -83,13 +83,13 @@ export async function cardsForAnimal(appointmentId: string | null, harvestLogId:
   const ids = new Set<string>()
   const [asg, byAppt, appt] = await Promise.all([
     harvestLogId
-      ? supabase.from('carcass_assignments').select('linked_cutting_instruction_id').eq('harvest_log_id', harvestLogId)
+      ? supabaseAdmin.from('carcass_assignments').select('linked_cutting_instruction_id').eq('harvest_log_id', harvestLogId)
       : Promise.resolve({ data: [] as { linked_cutting_instruction_id: string | null }[] }),
     appointmentId
-      ? supabase.from('cutting_instructions').select('id').eq('appointment_id', appointmentId).neq('status', 'archived')
+      ? supabaseAdmin.from('cutting_instructions').select('id').eq('appointment_id', appointmentId).neq('status', 'archived')
       : Promise.resolve({ data: [] as { id: string }[] }),
     appointmentId
-      ? supabase.from('harvest_appointments').select('customers').eq('id', appointmentId).maybeSingle()
+      ? supabaseAdmin.from('harvest_appointments').select('customers').eq('id', appointmentId).maybeSingle()
       : Promise.resolve({ data: null }),
   ])
   for (const a of asg.data ?? []) if (a.linked_cutting_instruction_id) ids.add(String(a.linked_cutting_instruction_id))
@@ -98,7 +98,7 @@ export async function cardsForAnimal(appointmentId: string | null, harvestLogId:
   for (const c of customers) if (c.linked_cutting_instruction_id) ids.add(String(c.linked_cutting_instruction_id).trim())
   ids.delete('')
   if (!ids.size) return []
-  const { data } = await supabase.from('cutting_instructions').select('id, customer_name, species, created_at').in('id', [...ids]).order('created_at')
+  const { data } = await supabaseAdmin.from('cutting_instructions').select('id, customer_name, species, created_at').in('id', [...ids]).order('created_at')
   return (data ?? []).map(c => ({ id: String(c.id), customer_name: String(c.customer_name ?? '').trim(), species: (c.species as string) ?? null, created_at: (c.created_at as string) ?? null }))
 }
 
@@ -113,13 +113,13 @@ export async function resolveAnimal(raw: string): Promise<ResolvedAnimal> {
   const ci = code.match(CI_SCAN)
   if (ci) {
     const hex = ci[1].toLowerCase()
-    const { data: rows } = await supabase
+    const { data: rows } = await supabaseAdmin
       .from('cutting_instructions').select('id, appointment_id, customer_name, species, created_at').ilike('id', `${hex}%`).limit(2)
     if (!rows || rows.length !== 1) return empty('card', rows?.length ? 'That card code matches more than one sheet' : 'No cut card with that code')
     const card = rows[0]
     let appointmentId = (card.appointment_id as string) ?? null
     if (!appointmentId) {
-      const { data: appts } = await supabase.from('harvest_appointments').select('id')
+      const { data: appts } = await supabaseAdmin.from('harvest_appointments').select('id')
         .contains('customers', JSON.stringify([{ linked_cutting_instruction_id: String(card.id) }])).limit(2)
       if (appts?.length === 1) appointmentId = String(appts[0].id)
     }
@@ -135,8 +135,8 @@ export async function resolveAnimal(raw: string): Promise<ResolvedAnimal> {
   if (!tag) return empty('carcass', 'Not a carcass tag or cut card')
   const cols = 'id, species, carcass_tag, harvest_date, producer, appointment_id, status, hot_carcass_weight_lbs, half_1_weight_lbs, half_2_weight_lbs'
   const { data: h } = tag.legacyId
-    ? await supabase.from('harvest_log').select(cols).eq('id', tag.legacyId).maybeSingle()
-    : await supabase.from('harvest_log').select(cols).eq('harvest_date', tag.harvestDate!).eq('carcass_tag', tag.tag!).maybeSingle()
+    ? await supabaseAdmin.from('harvest_log').select(cols).eq('id', tag.legacyId).maybeSingle()
+    : await supabaseAdmin.from('harvest_log').select(cols).eq('harvest_date', tag.harvestDate!).eq('carcass_tag', tag.tag!).maybeSingle()
   if (!h) return { ...empty('carcass', `No kill record for ${code}`), carcass_code: code, tag: tag.tag, side: tag.side }
 
   const hcw = num(h.hot_carcass_weight_lbs) ?? (((num(h.half_1_weight_lbs) ?? 0) + (num(h.half_2_weight_lbs) ?? 0)) || null)
@@ -170,17 +170,17 @@ export interface CoolerAnimal {
 export async function coolerAnimals(today: string): Promise<CoolerAnimal[]> {
   const since = new Date(Date.parse(today + 'T12:00:00') - 75 * 86400000).toISOString().slice(0, 10)
   const [{ data: hanging }, { data: sched }] = await Promise.all([
-    supabase.from('harvest_log')
+    supabaseAdmin.from('harvest_log')
       .select('id, species, carcass_tag, harvest_date, producer, appointment_id, hot_carcass_weight_lbs, half_1_weight_lbs, half_2_weight_lbs')
       .in('status', ['chilling', 'complete']).gte('harvest_date', since).order('harvest_date', { ascending: true }),
-    supabase.from('cut_schedule_items').select('appointment_id').eq('schedule_date', today).eq('kind', 'carcass'),
+    supabaseAdmin.from('cut_schedule_items').select('appointment_id').eq('schedule_date', today).eq('kind', 'carcass'),
   ])
   const rows = hanging ?? []
   if (!rows.length) return []
   const todayIds = new Set((sched ?? []).map(s => String(s.appointment_id)))
   const apptIds = [...new Set(rows.map(r => r.appointment_id).filter(Boolean))] as string[]
   const { data: appts } = apptIds.length
-    ? await supabase.from('harvest_appointments').select('id, source, customers').in('id', apptIds)
+    ? await supabaseAdmin.from('harvest_appointments').select('id, source, customers').in('id', apptIds)
     : { data: [] }
   const byAppt = new Map((appts ?? []).map(a => [String(a.id), a]))
 
@@ -207,7 +207,7 @@ export async function coolerAnimals(today: string): Promise<CoolerAnimal[]> {
   // Card names for picks that only carry a card id.
   const needNames = [...new Set(out.flatMap(a => a.picks.filter(p => !p.customer_name && p.cutting_instruction_id).map(p => p.cutting_instruction_id!)))]
   if (needNames.length) {
-    const { data: cards } = await supabase.from('cutting_instructions').select('id, customer_name').in('id', needNames)
+    const { data: cards } = await supabaseAdmin.from('cutting_instructions').select('id, customer_name').in('id', needNames)
     const names = new Map((cards ?? []).map(c => [String(c.id), String(c.customer_name ?? '').trim()]))
     for (const a of out) for (const p of a.picks) if (!p.customer_name && p.cutting_instruction_id) p.customer_name = names.get(p.cutting_instruction_id) ?? ''
   }
@@ -232,10 +232,10 @@ export interface BookingAnimal {
  */
 export async function animalsOnBooking(appointmentId: string): Promise<{ animals: BookingAnimal[]; portions: Record<string, string> }> {
   const [{ data: rows }, { data: appt }] = await Promise.all([
-    supabase.from('harvest_log')
+    supabaseAdmin.from('harvest_log')
       .select('id, species, carcass_tag, harvest_date, producer, status, hot_carcass_weight_lbs, half_1_weight_lbs, half_2_weight_lbs')
       .eq('appointment_id', appointmentId).order('carcass_tag'),
-    supabase.from('harvest_appointments').select('customers').eq('id', appointmentId).maybeSingle(),
+    supabaseAdmin.from('harvest_appointments').select('customers').eq('id', appointmentId).maybeSingle(),
   ])
   const portions: Record<string, string> = {}
   for (const c of ((appt?.customers ?? []) as { linked_cutting_instruction_id?: string; portion?: string }[])) {
@@ -282,7 +282,7 @@ export interface CardCarcasses {
 }
 
 export async function carcassesForCard(cardId: string): Promise<CardCarcasses> {
-  const { data: appts } = await supabase.from('harvest_appointments').select('id, customers')
+  const { data: appts } = await supabaseAdmin.from('harvest_appointments').select('id, customers')
     .contains('customers', JSON.stringify([{ linked_cutting_instruction_id: cardId }]))
   const slots = (appts ?? []).flatMap(a =>
     (Array.isArray(a.customers) ? a.customers : [])
@@ -290,7 +290,7 @@ export async function carcassesForCard(cardId: string): Promise<CardCarcasses> {
       .map((c: { id: string }) => ({ appointment_id: String(a.id), slot_id: String(c.id) })))
   if (!slots.length) return { carcasses: [], unassigned_slots: 0 }
 
-  const { data: rows } = await supabase.from('carcass_assignments')
+  const { data: rows } = await supabaseAdmin.from('carcass_assignments')
     .select('harvest_log_id, appointment_id, appointment_customer_id, portion')
     .in('appointment_id', [...new Set(slots.map(s => s.appointment_id))])
     .in('appointment_customer_id', slots.map(s => s.slot_id))
@@ -299,7 +299,7 @@ export async function carcassesForCard(cardId: string): Promise<CardCarcasses> {
   const ids = [...new Set(asgs.map(r => String(r.harvest_log_id)))]
   if (!ids.length) return { carcasses: [], unassigned_slots }
 
-  const { data: logs } = await supabase.from('harvest_log')
+  const { data: logs } = await supabaseAdmin.from('harvest_log')
     .select('id, carcass_tag, harvest_date, hot_carcass_weight_lbs, half_1_weight_lbs, half_2_weight_lbs, status, appointment_id')
     .in('id', ids)
   const carcasses = (logs ?? []).map(l => {

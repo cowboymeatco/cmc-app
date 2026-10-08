@@ -81,7 +81,7 @@ export default function KanbanPage() {
   return (
     <div style={{ minHeight: '100vh', background: C.darkBrown, paddingBottom: 60 }}>
       <KanbanHeader
-        title="Kanban Ordering"
+        title="Supplies"
         right={
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <Link href="/kanban/print" style={{ color: C.tan, fontSize: 13, textDecoration: 'none', border: `1px solid ${C.medBrown}`, borderRadius: 8, padding: '9px 12px' }}>
