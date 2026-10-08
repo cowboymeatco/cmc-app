@@ -12,7 +12,8 @@ export interface TkEmployee {
   role:             string | null
   hireDate:         string   // YYYY-MM-DD
   active:           boolean
-  hasPin:           boolean
+  hasPin:           boolean  // false = not set up; signs in with the shared setup PIN and picks their own
+  pinSetAt:         string | null  // when they picked their own (null = set by a manager)
   qboEmployeeId:    string | null
   ptoOpeningHours:  number   // balance carried in at go-live
   ptoOpeningAsOf:   string   // accrual counts shifts from this date

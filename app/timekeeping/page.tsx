@@ -33,6 +33,7 @@ interface Data {
   requests: TimeOffRequest[]
   photos: Record<string, string>
   shiftsFrom: string
+  setupPinSet: boolean
 }
 
 export default function TimekeepingPage() {
@@ -140,7 +141,7 @@ function Manager() {
         {tab === 'schedule'  && <ScheduleTab employees={data.employees} schedule={data.schedule} requests={data.requests} thisMonday={thisMonday} today={today} freePto={freePto} reload={reload} />}
         {tab === 'payroll'   && <PayrollTab employees={data.employees} shifts={data.shifts} requests={data.requests} thisMonday={thisMonday} today={today} now={now} earliest={data.shiftsFrom} />}
         {tab === 'pto'       && <PtoTab employees={data.employees} shifts={data.shifts} requests={data.requests} today={today} now={now} />}
-        {tab === 'employees' && <EmployeesTab employees={data.employees} today={today} reload={reload} />}
+        {tab === 'employees' && <EmployeesTab employees={data.employees} today={today} setupPinSet={data.setupPinSet} reload={reload} />}
         {tab === 'policy'    && <PolicyTab />}
       </main>
     </div>

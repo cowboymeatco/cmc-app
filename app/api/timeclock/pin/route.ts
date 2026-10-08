@@ -2,34 +2,46 @@ export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import {
-  KIOSK_HEADER, endKioskSession, hashPin, jsonError, pinLocked, recordPinFailure, startKioskSession, toEmployee, validPin,
+  EMP_COLS, EmpRow, KIOSK_HEADER, LOCKOUT_MESSAGE, checkEmployeePin, checkSetupPin, clearPinFailures, endKioskSession,
+  jsonError, pinLocked, recordPinFailure, setupPinIsSet, startKioskSession, toEmployee, validPin,
 } from '@/lib/timeclockServer'
 
-// POST /api/timeclock/pin — the kiosk keypad. PIN in, short-lived session out.
-// There's no name picker: the PIN is who you are, so it can only ever act for
-// the person it belongs to. Three wrong PINs in 30 seconds lock the keypad.
+// POST /api/timeclock/pin — { employeeId, pin }. The kiosk's second screen:
+// you've tapped your name on the roster, this checks your PIN against you
+// alone. Someone not set up yet uses the shared setup PIN; their session can
+// only pick their own PIN until they do. Five wrong PINs for one person in 15
+// minutes lock that person out.
 export async function POST(req: NextRequest) {
   try {
-    if (await pinLocked()) {
-      return NextResponse.json({ error: 'locked', message: 'Too many wrong PINs. Wait 30 seconds and try again.' }, { status: 423 })
-    }
-    const { pin } = await req.json().catch(() => ({}))
+    const { employeeId, pin } = await req.json().catch(() => ({})) as { employeeId?: string; pin?: unknown }
+    if (!employeeId || !/^[0-9a-f-]{36}$/i.test(employeeId)) return NextResponse.json({ error: 'bad_request', message: 'Tap your name first.' }, { status: 400 })
     if (!validPin(pin)) return NextResponse.json({ error: 'bad_pin', message: 'PIN not recognized.' }, { status: 401 })
-    const { data } = await supabaseAdmin.from('tk_employees')
-      .select('id, name, role, hire_date, active, pin_hash, qbo_employee_id, pto_opening_hours, pto_opening_as_of')
-      .eq('pin_hash', await hashPin(pin)).eq('active', true).maybeSingle()
-    if (!data) {
-      await recordPinFailure()
+
+    const { data } = await supabaseAdmin.from('tk_employees').select(EMP_COLS).eq('id', employeeId).eq('active', true).maybeSingle()
+    if (!data) return NextResponse.json({ error: 'bad_request', message: 'Tap your name first.' }, { status: 400 })
+    const row = data as EmpRow
+    if (await pinLocked(row.id)) return NextResponse.json({ error: 'locked', message: LOCKOUT_MESSAGE }, { status: 423 })
+
+    let ok: boolean
+    if (row.pin_hash) ok = await checkEmployeePin(row.id, row.pin_hash, pin)
+    else if (!(await setupPinIsSet())) {
+      return NextResponse.json({ error: 'no_setup_pin', message: 'You aren\'t set up yet. Ask a manager to set up the time clock for you.' }, { status: 409 })
+    } else ok = await checkSetupPin(pin)
+
+    if (!ok) {
+      await recordPinFailure(row.id)
       // Flat delay keeps a guessing loop slow on top of the lockout.
       await new Promise(r => setTimeout(r, 400))
-      const locked = await pinLocked()
+      const locked = await pinLocked(row.id)
       return NextResponse.json(
-        { error: locked ? 'locked' : 'bad_pin', message: locked ? 'Too many wrong PINs. Keypad locked for 30 seconds.' : 'PIN not recognized.' },
+        { error: locked ? 'locked' : 'bad_pin', message: locked ? LOCKOUT_MESSAGE : row.pin_hash ? 'PIN not recognized.' : 'That isn\'t the setup PIN. Ask a manager for it.' },
         { status: locked ? 423 : 401 },
       )
     }
-    const employee = toEmployee(data)
-    return NextResponse.json({ token: await startKioskSession(employee.id), employee })
+    await clearPinFailures(row.id)
+    const { data: fresh } = await supabaseAdmin.from('tk_employees').select(EMP_COLS).eq('id', row.id).single()
+    const employee = toEmployee((fresh ?? row) as EmpRow)
+    return NextResponse.json({ token: await startKioskSession(employee.id), employee, mustSetPin: !employee.hasPin })
   } catch (e) {
     return jsonError(e)
   }
