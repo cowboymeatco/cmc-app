@@ -63,7 +63,7 @@ export function EmployeesTab({ employees, today, setupPinSet, reload }: {
   }
 
   const resetPin = async (e: TkEmployee) => {
-    if (!confirm(`Reset ${e.name}'s PIN? Their old PIN stops working. Next time they sign in at the iPad they use the setup PIN and pick a new one.`)) return
+    if (!confirm(`Reset ${e.name}'s PIN? Their old PIN stops working. Next time they sign in at the iPad they use the setup PIN and pick a new one. This also lifts a lockout from too many wrong PINs.`)) return
     try { await api('/api/timekeeping/employees', { method: 'PATCH', body: JSON.stringify({ id: e.id, resetPin: true }) }); await reload() }
     catch (x) { setErr((x as Error).message) }
   }
