@@ -81,6 +81,22 @@ const BTN = (bg: string, color = C.dark): React.CSSProperties => ({
   cursor: 'pointer', letterSpacing: '0.04em',
 })
 
+// ── The retail case's standing order ─────────────────────────────────────────
+// Charlie, 2026-10-06: "where I see I am out of New York Steak or anything in
+// retail and I can have a standing order in the back and when that meat comes
+// through either with boxed meat or a carcass we can fill it."
+//
+// It is an ordinary open order whose customer is the case itself, so nothing
+// downstream had to learn anything: the scanner already packs boxes against
+// any open order and the fill bars read off those scans. What's new is the
+// one-click "Out of stock" that puts a line on it without the New Order form,
+// and the order being recognised: pinned to the top, never overdue, and the
+// detail pane says what it is. There is one open restock order at a time;
+// marking it fulfilled closes that round and the next shortage starts a new
+// one.
+const RESTOCK_CUSTOMER = 'Retail Case'
+const isRestock = (o: { customer_name: string }) => o.customer_name.trim().toLowerCase() === RESTOCK_CUSTOMER.toLowerCase()
+
 const STATUS_COLORS: Record<OrderStatus, string> = {
   pending:    C.yellow,
   in_progress: C.blue,
@@ -721,8 +737,15 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div>
           <h2 style={{ fontFamily: 'Georgia, serif', color: C.cream, fontSize: '1.2rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 0.3rem' }}>
-            {order.customer_name}
+            {isRestock(order) ? '🥩 ' : ''}{order.customer_name}
           </h2>
+          {isRestock(order) && (
+            <div style={{ fontSize: '0.8rem', color: C.tan, lineHeight: 1.5, maxWidth: 520, marginBottom: '0.3rem' }}>
+              The case&apos;s standing restock order. Whatever is short goes on here from the <strong>Out of stock</strong> button;
+              it fills when boxed meat or the next carcass is packed against it on the scanner.
+              Mark it fulfilled once the case is stocked — the next shortage starts a fresh one.
+            </div>
+          )}
           {order.customer_phone && (
             <div style={{ fontSize: '0.82rem', color: C.lightBrown }}>{order.customer_phone}</div>
           )}
@@ -982,7 +1005,7 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
 // ══════════════════════════════════════════════════════════════════════════════
 // ORDER LIST TAB (open or fulfilled)
 // ══════════════════════════════════════════════════════════════════════════════
-function OrderListTab({ fulfilled, pluList }: { fulfilled: boolean; pluList: PluItem[] }) {
+function OrderListTab({ fulfilled, pluList, focusOrderId = null }: { fulfilled: boolean; pluList: PluItem[]; focusOrderId?: string | null }) {
   const [orders, setOrders]     = useState<RetailOrder[]>([])
   const [selected, setSelected] = useState<RetailOrder | null>(null)
   const [loading, setLoading]   = useState(true)
@@ -994,9 +1017,13 @@ function OrderListTab({ fulfilled, pluList }: { fulfilled: boolean; pluList: Plu
     const data: RetailOrder[] = await res.json()
     // For open tab, exclude fulfilled
     const filtered = fulfilled ? data : data.filter(o => o.status !== 'fulfilled')
-    setOrders(Array.isArray(filtered) ? filtered : [])
+    // The case's standing order sits on top of the open list — it is the one
+    // the crew fills from whatever comes through, not a pickup on a date.
+    const list = Array.isArray(filtered) ? [...filtered].sort((a, b) => Number(isRestock(b)) - Number(isRestock(a))) : []
+    setOrders(list)
+    if (focusOrderId) setSelected(list.find(o => o.id === focusOrderId) ?? null)
     setLoading(false)
-  }, [fulfilled])
+  }, [fulfilled, focusOrderId])
 
   useEffect(() => { load() }, [load])
 
@@ -1010,7 +1037,7 @@ function OrderListTab({ fulfilled, pluList }: { fulfilled: boolean; pluList: Plu
     setSelected(prev => prev?.id === id ? null : prev)
   }
 
-  const overdue = (o: RetailOrder) => o.due_date < isoDate() && o.status !== 'fulfilled'
+  const overdue = (o: RetailOrder) => !isRestock(o) && o.due_date < isoDate() && o.status !== 'fulfilled'
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: '1.5rem', height: '100%' }}>
@@ -1039,15 +1066,21 @@ function OrderListTab({ fulfilled, pluList }: { fulfilled: boolean; pluList: Plu
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.25rem' }}>
-                <span style={{ color: C.cream, fontWeight: 600, fontSize: '0.88rem' }}>{o.customer_name}</span>
+                <span style={{ color: C.cream, fontWeight: 600, fontSize: '0.88rem' }}>{isRestock(o) ? '🥩 ' : ''}{o.customer_name}</span>
                 <StatusBadge status={o.status} />
               </div>
+              {isRestock(o) ? (
+                <div style={{ fontSize: '0.75rem', color: C.tan }}>
+                  Standing restock · {o.retail_order_items.length} item{o.retail_order_items.length === 1 ? '' : 's'} short
+                </div>
+              ) : (
               <div style={{ fontSize: '0.75rem', color: overdue(o) ? C.red : C.tan }}>
                 Due {new Date(o.due_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                 {overdue(o) ? ' — OVERDUE' : ''}
                 {' · '}{o.fulfillment_type.charAt(0).toUpperCase() + o.fulfillment_type.slice(1)}
                 {addressNeed(o)?.missing && <span style={{ color: C.red }}> · ⚠ no address</span>}
               </div>
+              )}
               <FillBar items={o.retail_order_items} />
             </div>
           ))}
@@ -1069,12 +1102,135 @@ function OrderListTab({ fulfilled, pluList }: { fulfilled: boolean; pluList: Plu
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// OUT OF STOCK — one line onto the case's standing restock order
+// ══════════════════════════════════════════════════════════════════════════════
+function OutOfStockButton({ pluList, onAdded }: { pluList: PluItem[]; onAdded: (orderId: string) => void }) {
+  const [open, setOpen]         = useState(false)
+  const [search, setSearch]     = useState('')
+  const [dropdown, setDropdown] = useState<PluItem[]>([])
+  const [pick, setPick]         = useState<PluItem | null>(null)
+  const [qty, setQty]           = useState('')
+  const [saving, setSaving]     = useState(false)
+  const [done, setDone]         = useState<string | null>(null)
+  const [err, setErr]           = useState<string | null>(null)
+
+  function doSearch(q: string) {
+    setSearch(q); setPick(null)
+    if (q.length < 1) { setDropdown([]); return }
+    const lower = q.toLowerCase()
+    setDropdown(pluList.filter(p => p.plu_number.includes(q) || p.item_name.toLowerCase().includes(lower)).slice(0, 8))
+  }
+  function choose(p: PluItem) {
+    setPick(p); setSearch(`${p.plu_number} — ${p.item_name}`); setDropdown([])
+  }
+  function reset() { setSearch(''); setDropdown([]); setPick(null); setQty(''); setErr(null) }
+
+  // The open restock order, or a new one. Status in_progress from the start:
+  // it is being worked the moment something is on it.
+  async function restockOrder(): Promise<RetailOrder> {
+    const all: unknown = await fetch('/api/orders').then(r => r.json())
+    const found = (Array.isArray(all) ? all as RetailOrder[] : []).find(o => isRestock(o) && o.status !== 'fulfilled')
+    if (found) return found
+    const created: RetailOrder = await fetch('/api/orders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        customer_name: RESTOCK_CUSTOMER, taken_by: 'Retail', order_date: isoDate(), due_date: isoDate(),
+        fresh_or_frozen: 'fresh', fulfillment_type: 'pickup',
+        notes: 'Standing restock order for the retail case. Fill from boxed meat or the next carcass; mark fulfilled once the case is stocked.',
+        items: [],
+      }),
+    }).then(r => r.json())
+    if (!created?.id) throw new Error(((created as unknown) as { error?: string })?.error ?? 'could not start the restock order')
+    await fetch('/api/orders', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: created.id, status: 'in_progress' }) })
+    return created
+  }
+
+  async function add() {
+    const name = pick?.item_name ?? search.trim()
+    const n = parseFloat(qty)
+    if (!name || !(n > 0)) return
+    setSaving(true); setErr(null)
+    try {
+      const order = await restockOrder()
+      // Already short on this item: top the line up rather than listing it twice.
+      const line = (order.retail_order_items ?? []).find(i =>
+        pick ? i.plu_number === pick.plu_number : i.item_name.trim().toLowerCase() === name.toLowerCase())
+      const res = line
+        ? await fetch('/api/orders/items', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: line.id, qty_ordered: Number(line.qty_ordered) + n }) })
+        : await fetch('/api/orders/items', { method: 'POST',  headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order_id: order.id, plu_number: pick?.plu_number ?? null, item_name: name, unit: pick?.unit ?? 'LB', qty_ordered: n }) })
+      if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error ?? 'could not add the line')
+      setDone(`${n} ${pick?.unit ?? 'LB'} ${name} ${line ? 'added to the' : 'put on the'} restock order`)
+      setTimeout(() => setDone(null), 4000)
+      reset()
+      onAdded(order.id)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'could not add the line')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        onClick={() => { setOpen(o => !o); if (!open) reset() }}
+        title="Short on something in the case? Put it on the standing restock order — the crew fills it from boxed meat or the next carcass."
+        style={{ ...BTN(open ? C.red : 'rgba(229,62,62,0.18)', open ? C.cream : '#F08080'), border: '1px solid rgba(229,62,62,0.5)', whiteSpace: 'nowrap' }}
+      >
+        🥩 Out of stock
+      </button>
+      {done && !open && (
+        <div style={{ position: 'absolute', top: '110%', right: 0, background: 'rgba(76,175,80,0.15)', border: '1px solid rgba(76,175,80,0.4)', color: C.green, borderRadius: 4, padding: '0.4rem 0.7rem', fontSize: '0.78rem', whiteSpace: 'nowrap', zIndex: 20 }}>
+          ✓ {done}
+        </div>
+      )}
+      {open && (
+        <div style={{ position: 'absolute', top: '110%', right: 0, width: 360, background: C.dark, border: '1px solid rgba(166,120,90,0.35)', borderRadius: 4, padding: '0.9rem', zIndex: 20, boxShadow: '0 8px 24px rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+          <div style={{ fontSize: '0.72rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em' }}>What&apos;s the case out of?</div>
+          <div style={{ position: 'relative' }}>
+            <input style={INPUT} value={search} autoFocus placeholder="PLU or item — e.g. New York" onChange={e => doSearch(e.target.value)} />
+            {dropdown.length > 0 && (
+              <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: C.darkBrown, border: '1px solid rgba(166,120,90,0.35)', borderRadius: 3, zIndex: 30, maxHeight: 220, overflowY: 'auto' }}>
+                {dropdown.map(p => (
+                  <div key={p.plu_number} onClick={() => choose(p)} style={{ padding: '0.45rem 0.7rem', cursor: 'pointer', fontSize: '0.83rem', color: C.cream, borderBottom: '1px solid rgba(166,120,90,0.12)' }}>
+                    <span style={{ fontFamily: 'monospace', color: C.lightBrown, marginRight: '0.4rem' }}>{p.plu_number}</span>{p.item_name}
+                    <span style={{ float: 'right', color: C.tan, fontSize: '0.72rem' }}>{p.unit}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <input type="number" min="0" step="0.5" style={{ ...INPUT, width: 110 }} value={qty} placeholder="How much" onChange={e => setQty(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') add() }} />
+            <span style={{ color: C.tan, fontSize: '0.82rem' }}>{pick?.unit ?? 'LB'}</span>
+            <div style={{ flex: 1 }} />
+            <button onClick={() => setOpen(false)} style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.3)' }}>Cancel</button>
+            <button onClick={add} disabled={saving || !(search.trim()) || !(parseFloat(qty) > 0)} style={{ ...BTN(C.green), opacity: saving || !(search.trim()) || !(parseFloat(qty) > 0) ? 0.5 : 1 }}>
+              {saving ? '…' : 'Add to restock'}
+            </button>
+          </div>
+          {!pick && search.trim() && dropdown.length === 0 && (
+            <div style={{ fontSize: '0.72rem', color: C.lightBrown }}>No PLU matches — it will go on by name, in LB.</div>
+          )}
+          {err && <div style={{ fontSize: '0.78rem', color: C.red }}>{err}</div>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // PAGE
 // ══════════════════════════════════════════════════════════════════════════════
 export default function OrdersPage() {
   const [tab,    setTab]    = useState<Tab>('open')
   const [newKey, setNewKey] = useState(0)
   const [pluList, setPluList] = useState<PluItem[]>([])
+  // Bumped when the Out-of-stock button lands a line, so the open list reloads
+  // and opens the restock order on it.
+  const [restockKey, setRestockKey] = useState(0)
+  const [focusOrderId, setFocusOrderId] = useState<string | null>(null)
 
   useEffect(() => {
     fetch('/api/processing?active=true')
@@ -1104,6 +1260,8 @@ export default function OrdersPage() {
           <span style={{ color: 'rgba(166,120,90,0.4)' }}>|</span>
           <h1 style={{ fontFamily: 'Georgia, serif', fontSize: '1.1rem', fontWeight: 700, color: C.cream, letterSpacing: '0.08em', textTransform: 'uppercase', margin: 0 }}>Retail Orders</h1>
         </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+        <OutOfStockButton pluList={pluList} onAdded={id => { setFocusOrderId(id); setRestockKey(k => k + 1); setTab('open') }} />
         <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden' }}>
           {tabs.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)} style={{
@@ -1114,11 +1272,12 @@ export default function OrdersPage() {
             }}>{t.label}</button>
           ))}
         </div>
+        </div>
       </header>
 
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1400px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
         {tab === 'new'       && <NewOrderTab key={newKey} onSaved={() => { setNewKey(k => k + 1); setTab('open') }} pluList={pluList} />}
-        {tab === 'open'      && <OrderListTab key="open"      fulfilled={false} pluList={pluList} />}
+        {tab === 'open'      && <OrderListTab key={`open-${restockKey}`} fulfilled={false} pluList={pluList} focusOrderId={focusOrderId} />}
         {tab === 'fulfilled' && <OrderListTab key="fulfilled" fulfilled={true}  pluList={pluList} />}
       </main>
 
