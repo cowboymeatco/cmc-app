@@ -1,8 +1,9 @@
 'use client'
 // Who's on the time clock. Add people and carry in their PTO balance as of
 // go-live — from then on the balance runs off their punches. PINs: leave it
-// blank and they pick their own at the iPad, signing in once with the shared
-// setup PIN set here. Reset PIN sends someone back to that, for a forgotten PIN.
+// blank and they pick their own the first time they tap their name at the
+// iPad. Reset PIN sends someone back to that — a forgotten PIN, or a name
+// claimed by the wrong person.
 // Nobody is deleted (their shifts are payroll records); they're deactivated.
 
 import { useState } from 'react'
@@ -22,19 +23,7 @@ const formOf = (e: TkEmployee): Form => ({
   ptoOpeningHours: String(e.ptoOpeningHours), ptoOpeningAsOf: e.ptoOpeningAsOf, qboEmployeeId: e.qboEmployeeId ?? '',
 })
 
-export function EmployeesTab({ employees, today, setupPinSet, reload }: {
-  employees: TkEmployee[]; today: string; setupPinSet: boolean; reload: () => Promise<void>
-}) {
-  const [setupPin, setSetupPin] = useState('')
-  const [setupMsg, setSetupMsg] = useState('')
-  const saveSetupPin = async () => {
-    setSetupMsg('')
-    try {
-      await api('/api/timekeeping/setup-pin', { method: 'PUT', body: JSON.stringify({ pin: setupPin }) })
-      setSetupPin(''); setSetupMsg('Saved.')
-      await reload()
-    } catch (e) { setSetupMsg((e as Error).message) }
-  }
+export function EmployeesTab({ employees, today, reload }: { employees: TkEmployee[]; today: string; reload: () => Promise<void> }) {
   const [form, setForm] = useState<Form | null>(null)
   const [err, setErr] = useState('')
   const [saving, setSaving] = useState(false)
@@ -63,7 +52,7 @@ export function EmployeesTab({ employees, today, setupPinSet, reload }: {
   }
 
   const resetPin = async (e: TkEmployee) => {
-    if (!confirm(`Reset ${e.name}'s PIN? Their old PIN stops working. Next time they sign in at the iPad they use the setup PIN and pick a new one.`)) return
+    if (!confirm(`Reset ${e.name}'s PIN? Their old PIN stops working. Next time they tap their name at the iPad they pick a new one. This also lifts a lockout from too many wrong PINs.`)) return
     try { await api('/api/timekeeping/employees', { method: 'PATCH', body: JSON.stringify({ id: e.id, resetPin: true }) }); await reload() }
     catch (x) { setErr((x as Error).message) }
   }
@@ -87,20 +76,6 @@ export function EmployeesTab({ employees, today, setupPinSet, reload }: {
         {!form && <button style={btn(C.green)} onClick={() => { setForm(blank(today)); setErr('') }}>+ Add employee</button>}
       </div>
 
-      <div style={{ background: C.darkBrown, borderRadius: 4, padding: '0.7rem 0.8rem', marginBottom: '0.8rem', display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
-        <div style={{ flex: '1 1 280px' }}>
-          <div style={{ color: C.cream, fontWeight: 700 }}>Setup PIN {setupPinSet ? <Pill color={C.green}>set</Pill> : <Pill color={C.red}>not set</Pill>}</div>
-          <div style={{ color: C.tan, fontSize: '0.78rem', lineHeight: 1.5 }}>
-            One PIN for everyone who isn&apos;t set up yet. They tap their name at the iPad, enter this, and pick their own PIN.
-            Tell it to new people in person. Change it any time — it never opens anyone who already has their own PIN.
-          </div>
-        </div>
-        <input value={setupPin} onChange={e => setSetupPin(e.target.value.replace(/\D/g, '').slice(0, 4))} inputMode="numeric" autoComplete="off"
-          placeholder={setupPinSet ? 'new setup PIN' : '4 digits'} style={{ ...input, width: 140, letterSpacing: '0.3em' }} />
-        <button style={btn(C.green)} disabled={setupPin.length !== 4} onClick={saveSetupPin}>{setupPinSet ? 'Change' : 'Set'}</button>
-        {setupMsg && <span style={{ color: setupMsg === 'Saved.' ? C.green : C.red, fontSize: '0.82rem' }}>{setupMsg}</span>}
-      </div>
-
       {form && (
         <div style={{ background: C.darkBrown, border: `1px solid ${C.medBrown}`, borderRadius: 4, padding: '0.8rem', marginBottom: '0.8rem' }}>
           <div style={{ color: C.cream, fontWeight: 700, marginBottom: 8 }}>{form.id ? `Edit ${form.name}` : 'New employee'}</div>
@@ -118,7 +93,7 @@ export function EmployeesTab({ employees, today, setupPinSet, reload }: {
           </div>
           <div style={{ color: C.lightBrown, fontSize: '0.75rem', marginTop: 8, lineHeight: 1.5 }}>
             PTO balance at go-live: their current balance from QuickBooks on the &ldquo;as of&rdquo; date. From that date on, the balance runs off their punches here —
-            shifts before it don&apos;t earn again. Leave the PIN blank and they&apos;ll pick their own at the iPad using the setup PIN.
+            shifts before it don&apos;t earn again. Leave the PIN blank and they&apos;ll pick their own the first time they tap their name at the iPad. Check the PIN column after: it shows when each person picked theirs — Reset PIN if a name was claimed by the wrong person.
           </div>
           {err && <div style={{ color: C.red, fontSize: '0.85rem', marginTop: 6 }}>{err}</div>}
           <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>

@@ -2,13 +2,13 @@ export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { requireExec } from '@/lib/execGate'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
-import { hashPin, jsonError, validPin } from '@/lib/timeclockServer'
+import { clearPinFailures, hashPin, jsonError, validPin } from '@/lib/timeclockServer'
 
 // POST  /api/timekeeping/employees — add someone to the time clock.
 // PATCH /api/timekeeping/employees — edit, set or reset a PIN, or deactivate.
-// A PIN is optional: someone without one signs in at the kiosk with the shared
-// setup PIN and picks their own. "Reset PIN" (resetPin: true) puts them back
-// there — for a forgotten PIN.
+// A PIN is optional: someone without one picks their own the first time they
+// tap their name at the kiosk. "Reset PIN" (resetPin: true) puts them back
+// there — for a forgotten PIN, or a name claimed by the wrong person.
 // Nobody is ever deleted: their shifts are payroll records.
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/
@@ -62,8 +62,12 @@ export async function PATCH(req: NextRequest) {
     if (body.pin && !body.resetPin) { row.pin_hash = await hashPin(body.id, body.pin); row.pin_set_at = null }
     const { error } = await supabaseAdmin.from('tk_employees').update(row).eq('id', body.id)
     if (error) return jsonError(error.message)
-    // A new or cleared PIN ends any session they had open.
-    if (body.pin || body.resetPin) await supabaseAdmin.from('tk_kiosk_sessions').delete().eq('employee_id', body.id)
+    // A new or cleared PIN ends any session they had open, and lifts a
+    // lockout — the kiosk tells a locked-out person to ask a manager.
+    if (body.pin || body.resetPin) {
+      await supabaseAdmin.from('tk_kiosk_sessions').delete().eq('employee_id', body.id)
+      await clearPinFailures(body.id)
+    }
     // Deactivating someone signs them out of the kiosk.
     if (body.active === false) await supabaseAdmin.from('tk_kiosk_sessions').delete().eq('employee_id', body.id)
     return NextResponse.json({ ok: true })

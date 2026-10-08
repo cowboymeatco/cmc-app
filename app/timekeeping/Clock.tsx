@@ -4,7 +4,8 @@
 // You tap your name on the roster, then enter your PIN — checked against you
 // alone, so two people can share a PIN. The server hands back a short-lived
 // session for you, and every punch acts only on your shift. First time on the
-// clock? You sign in with the shared setup PIN and pick your own.
+// clock? Tapping your name goes straight to picking your own PIN (typed
+// twice, so a typo can't lock you out of it).
 // The server stamps the time, not the iPad. The front camera takes a small
 // photo at each punch, and the clock signs itself out after a few idle seconds
 // so the next person can't punch on your session.
@@ -68,7 +69,6 @@ export function KioskClock({ onChange }: { onChange?: () => void }) {
   const [pinError, setPinError] = useState('')
   const [roster, setRoster] = useState<RosterEntry[] | null>(null)
   const [picked, setPicked] = useState<RosterEntry | null>(null)
-  const [mustSetPin, setMustSetPin] = useState(false)
   const [newPin, setNewPin] = useState('')          // first entry of the PIN they're choosing
   const loadRoster = useCallback(() => {
     api<{ roster: RosterEntry[] }>('/api/timeclock/roster').then(r => setRoster(r.roster)).catch(e => setPinError((e as Error).message))
@@ -93,7 +93,7 @@ export function KioskClock({ onChange }: { onChange?: () => void }) {
   const signOut = useCallback((msg = '') => {
     if (token) api('/api/timeclock/pin', { method: 'DELETE', token }).catch(() => {})
     setToken(null); setMe(null); setPin(''); setNotice(''); setError(''); setShowSched(false)
-    setPicked(null); setMustSetPin(false); setNewPin('')
+    setPicked(null); setNewPin('')
     setPinError(msg)
     loadRoster()
   }, [token, loadRoster])
@@ -157,12 +157,11 @@ export function KioskClock({ onChange }: { onChange?: () => void }) {
     if (!picked) return
     setBusy(true); setPinError('')
     try {
-      const r = await api<{ token: string; employee: TkEmployee; mustSetPin: boolean }>('/api/timeclock/pin', {
+      const r = await api<{ token: string; employee: TkEmployee }>('/api/timeclock/pin', {
         method: 'POST', body: JSON.stringify({ employeeId: picked.id, pin: entered }),
       })
       setToken(r.token); setNotice(''); setError(''); setActivity(a => a + 1)
-      if (r.mustSetPin) setMustSetPin(true)
-      else await load(r.token)
+      await load(r.token)
     } catch (e) {
       setPinError((e as Error).message)
     } finally {
@@ -178,10 +177,9 @@ export function KioskClock({ onChange }: { onChange?: () => void }) {
     if (next.length === 4) submitPin(next)
   }
 
-  // Picking their own PIN: type it, type it again, saved.
+  // First time: pick your own PIN — type it, type it again, saved, signed in.
   const pressNew = async (k: string) => {
-    if (busy || !token) return
-    setActivity(a => a + 1)
+    if (busy || !picked) return
     if (k === 'clear') { setPin(''); return }
     const next = (pin + k).slice(0, 4)
     setPin(next)
@@ -190,10 +188,12 @@ export function KioskClock({ onChange }: { onChange?: () => void }) {
     if (next !== newPin) { setNewPin(''); setPin(''); setPinError('Those didn\'t match. Start over — type your new PIN.'); return }
     setBusy(true)
     try {
-      await api('/api/timeclock/set-pin', { method: 'POST', token, body: JSON.stringify({ pin: next }) })
-      setMustSetPin(false); setNewPin(''); setPinError('')
+      const r = await api<{ token: string; employee: TkEmployee }>('/api/timeclock/claim', {
+        method: 'POST', body: JSON.stringify({ employeeId: picked.id, pin: next }),
+      })
+      setToken(r.token); setNewPin(''); setPinError(''); setError(''); setActivity(a => a + 1)
       setNotice('Your PIN is set. Use it every time from now on — don\'t share it.')
-      await load(token)
+      await load(r.token)
     } catch (e) {
       setNewPin(''); setPinError((e as Error).message)
     } finally {
@@ -210,11 +210,12 @@ export function KioskClock({ onChange }: { onChange?: () => void }) {
   )
 
   // ── First time: pick your own PIN ──
-  if (token && mustSetPin) {
+  if (!token && picked?.needsSetup) {
     return (
-      <div style={{ ...card, maxWidth: 440, margin: '0 auto', textAlign: 'center', padding: '1.5rem' }} onClick={() => setActivity(a => a + 1)}>
-        <h2 style={h2}>Welcome, {picked?.name}</h2>
-        <div style={{ color: C.cream, marginBottom: 4, fontSize: '1.05rem' }}>{newPin ? 'Type it again to make sure' : 'Pick your own 4-digit PIN'}</div>
+      <div style={{ ...card, maxWidth: 440, margin: '0 auto', textAlign: 'center', padding: '1.5rem' }}>
+        <h2 style={h2}>Welcome, {picked.name}</h2>
+        <div style={{ color: C.amber, fontSize: '0.85rem', marginBottom: '0.6rem' }}>First time on the clock. Only go on if this is you.</div>
+        <div style={{ color: C.cream, marginBottom: 4, fontSize: '1.05rem' }}>{busy ? 'Saving…' : newPin ? 'Type it again to make sure' : 'Pick your own 4-digit PIN'}</div>
         <div style={{ color: C.lightBrown, fontSize: '0.8rem', marginBottom: '0.8rem' }}>You&apos;ll use it every time you punch. Nothing easy like 1111 or 1234.</div>
         <Keypad value={pin} onKey={pressNew} disabled={busy} />
         {pinError && <div style={{ color: C.red, fontSize: '0.9rem', marginTop: '0.7rem' }}>{pinError}</div>}
@@ -230,7 +231,7 @@ export function KioskClock({ onChange }: { onChange?: () => void }) {
         <h2 style={h2}>{picked.name}</h2>
         {clockLine}
         <div style={{ color: C.cream, marginBottom: 6 }}>
-          {busy ? 'Checking…' : picked.needsSetup ? 'First time? Enter the setup PIN your manager gave you' : 'Enter your PIN'}
+          {busy ? 'Checking…' : 'Enter your PIN'}
         </div>
         <Keypad value={pin} onKey={press} disabled={busy} />
         {pinError && <div style={{ color: C.red, fontSize: '0.9rem', marginTop: '0.7rem' }}>{pinError}</div>}
@@ -255,7 +256,7 @@ export function KioskClock({ onChange }: { onChange?: () => void }) {
               padding: '1.1rem 0.6rem', fontSize: '1.15rem', fontWeight: 700, cursor: 'pointer', touchAction: 'manipulation', minHeight: 72,
             }}>
               {r.name}
-              {r.needsSetup && <div style={{ color: C.amber, fontSize: '0.72rem', fontWeight: 600, marginTop: 2 }}>new — set up PIN</div>}
+              {r.needsSetup && <div style={{ color: C.amber, fontSize: '0.72rem', fontWeight: 600, marginTop: 2 }}>new — tap to pick your PIN</div>}
             </button>
           ))}
         </div>
