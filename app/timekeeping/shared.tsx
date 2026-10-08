@@ -74,3 +74,27 @@ export async function api<T = unknown>(path: string, init: RequestInit & { token
   }
   return data as T
 }
+
+/**
+ * A big "Back" button for the printout pages, which open in their own tab.
+ * Without it the iPad is stuck on the printout — and with Guided Access on
+ * there's no tab bar to escape by. The button never prints, and being fixed it
+ * adds nothing to the page height the label printer measures. `autoClose`
+ * also closes the tab on its own once the print dialog is done.
+ */
+export function printBackButton(backUrl: string, label: string, autoClose = false): string {
+  return `<style>
+    .tk-back { position: fixed; top: 12px; right: 12px; z-index: 10; background: #1A0A04; color: #F2E8D9; border: none;
+      border-radius: 10px; padding: 16px 22px; font: 700 18px Arial, sans-serif; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.35); }
+    @media print { .tk-back { display: none !important; } }
+  </style>
+  <button class="tk-back" type="button" onclick="tkBack()">← ${label}</button>
+  <script>
+    function tkBack() {
+      // A tab opened by the app can close itself; if this one can't, go back to the clock instead.
+      window.close()
+      setTimeout(function () { location.href = ${JSON.stringify(backUrl)} }, 300)
+    }
+    ${autoClose ? "window.addEventListener('afterprint', function () { setTimeout(tkBack, 400) })" : ''}
+  </script>`
+}

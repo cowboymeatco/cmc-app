@@ -9,17 +9,23 @@ import { schedKey } from '@/lib/timeclock'
 // service role: the tk_* tables are RLS-on with no policies.
 //
 // Two doors:
-//   • The kiosk (the iPad at the employee entrance). A correct PIN mints a
-//     short-lived session; every punch and request carries it, and acts only
-//     on that one employee. Times are stamped here, on the shop clock — the
-//     iPad never says what time it is.
+//   • The kiosk (the iPad at the employee entrance). You tap your name on the
+//     roster and enter your PIN; the PIN is checked against that one person,
+//     so two people can share a PIN. A correct PIN mints a short-lived session;
+//     every punch and request carries it, and acts only on that one employee.
+//     Times are stamped here, on the shop clock — the iPad never says what
+//     time it is. Someone not set up yet signs in once with the shared setup
+//     PIN and picks their own before they can punch.
 //   • Managers. The /api/timekeeping/* routes sit behind requireExec, the
 //     same passphrase gate as /exec.
 
 export const KIOSK_HEADER = 'x-timeclock-token'
 const KIOSK_SESSION_MIN = 10          // renewed on every call
-const LOCKOUT_FAILS = 3               // wrong PINs…
-const LOCKOUT_WINDOW_S = 30           // …within this many seconds locks the keypad
+// The roster tells anyone whose PIN they're guessing at, so the lockout is per
+// person, and long enough that walking a 4-digit PIN takes weeks, not minutes.
+const LOCKOUT_FAILS = 5               // wrong PINs for one person…
+const LOCKOUT_WINDOW_MIN = 15         // …within this many minutes locks that person out
+const SPRAY_FAILS = 25                // wrong PINs across everyone in 5 min locks the keypad
 export const PHOTO_BUCKET = 'timeclock-photos'
 
 // ── Clock ───────────────────────────────────────────────────────────────────
@@ -40,25 +46,74 @@ async function pepper(): Promise<string> {
   return pepperCache
 }
 
-/** HMAC-SHA256 of the PIN under a server-held key. Deterministic, so the kiosk can look a PIN up directly. */
-export async function hashPin(pin: string): Promise<string> {
+async function hmacHex(text: string): Promise<string> {
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(await pepper()), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
-  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(pin))
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(text))
   return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
+/** HMAC of the PIN under a server-held key, salted with the employee id — the same PIN hashes differently for two people. */
+export const hashPin = (employeeId: string, pin: string) => hmacHex(`${employeeId}:${pin}`)
+/** The first release hashed the bare PIN. Still accepted, and upgraded on use. */
+const legacyHashPin = (pin: string) => hmacHex(pin)
+const hashSetupPin = (pin: string) => hmacHex(`setup:${pin}`)
+
 export const validPin = (pin: unknown): pin is string => typeof pin === 'string' && /^\d{4}$/.test(pin)
 
-export async function pinLocked(): Promise<boolean> {
-  const since = new Date(Date.now() - LOCKOUT_WINDOW_S * 1000).toISOString()
-  const { count } = await supabaseAdmin.from('tk_pin_failures').select('id', { count: 'exact', head: true }).gte('at', since)
-  return (count ?? 0) >= LOCKOUT_FAILS
+/** PINs anyone would guess first: 0000, 1111, 1234, 4321, 2468… */
+export function weakPin(pin: string): boolean {
+  const d = pin.split('').map(Number)
+  const steps = d.slice(1).map((x, i) => x - d[i])
+  return steps.every(x => x === steps[0]) && Math.abs(steps[0]) <= 2
 }
 
-export async function recordPinFailure(): Promise<void> {
-  await supabaseAdmin.from('tk_pin_failures').insert({})
+/** Does `pin` open this employee? Upgrades a legacy hash in place when it matches. */
+export async function checkEmployeePin(employeeId: string, storedHash: string | null, pin: string): Promise<boolean> {
+  if (!storedHash) return false
+  if (storedHash === await hashPin(employeeId, pin)) return true
+  if (storedHash === await legacyHashPin(pin)) {
+    await supabaseAdmin.from('tk_employees').update({ pin_hash: await hashPin(employeeId, pin) }).eq('id', employeeId)
+    return true
+  }
+  return false
+}
+
+// The shared setup ("dummy") PIN: what someone not set up yet signs in with,
+// once, to pick their own. Set by a manager on the Employees tab.
+export async function setupPinIsSet(): Promise<boolean> {
+  const { data } = await supabaseAdmin.from('tk_config').select('key').eq('key', 'setup_pin_hash').maybeSingle()
+  return !!data
+}
+export async function checkSetupPin(pin: string): Promise<boolean> {
+  const { data } = await supabaseAdmin.from('tk_config').select('value').eq('key', 'setup_pin_hash').maybeSingle()
+  return !!data && data.value === await hashSetupPin(pin)
+}
+export async function saveSetupPin(pin: string): Promise<void> {
+  const { error } = await supabaseAdmin.from('tk_config').upsert({ key: 'setup_pin_hash', value: await hashSetupPin(pin) })
+  if (error) throw new Error(error.message)
+}
+
+export async function pinLocked(employeeId: string): Promise<boolean> {
+  const since = new Date(Date.now() - LOCKOUT_WINDOW_MIN * 60_000).toISOString()
+  const spraySince = new Date(Date.now() - 5 * 60_000).toISOString()
+  const [{ count: mine }, { count: all }] = await Promise.all([
+    supabaseAdmin.from('tk_pin_failures').select('id', { count: 'exact', head: true }).eq('employee_id', employeeId).gte('at', since),
+    supabaseAdmin.from('tk_pin_failures').select('id', { count: 'exact', head: true }).gte('at', spraySince),
+  ])
+  return (mine ?? 0) >= LOCKOUT_FAILS || (all ?? 0) >= SPRAY_FAILS
+}
+
+export const LOCKOUT_MESSAGE = `Too many wrong PINs. Try again in ${LOCKOUT_WINDOW_MIN} minutes, or ask a manager.`
+
+export async function recordPinFailure(employeeId: string): Promise<void> {
+  await supabaseAdmin.from('tk_pin_failures').insert({ employee_id: employeeId })
   // Keep the table from growing forever.
   await supabaseAdmin.from('tk_pin_failures').delete().lt('at', new Date(Date.now() - 86_400_000).toISOString())
+}
+
+/** A correct PIN wipes that person's strikes. */
+export async function clearPinFailures(employeeId: string): Promise<void> {
+  await supabaseAdmin.from('tk_pin_failures').delete().eq('employee_id', employeeId)
 }
 
 // ── Kiosk sessions ──────────────────────────────────────────────────────────
@@ -79,8 +134,12 @@ export async function endKioskSession(token: string): Promise<void> {
 
 export type KioskAuth = { ok: true; employee: TkEmployee; token: string } | { ok: false; response: NextResponse }
 
-/** The employee behind this request's kiosk token, or a 401. */
-export async function requireKiosk(req: NextRequest): Promise<KioskAuth> {
+/**
+ * The employee behind this request's kiosk token, or a 401. Someone who signed
+ * in with the setup PIN can't do anything but pick their own PIN until they
+ * have (`allowSetup` is for that one route).
+ */
+export async function requireKiosk(req: NextRequest, allowSetup = false): Promise<KioskAuth> {
   const token = req.headers.get(KIOSK_HEADER)
   const deny = { ok: false as const, response: NextResponse.json({ error: 'signed_out', message: 'Enter your PIN again.' }, { status: 401 }) }
   if (!token || !/^[0-9a-f-]{36}$/i.test(token)) return deny
@@ -88,6 +147,9 @@ export async function requireKiosk(req: NextRequest): Promise<KioskAuth> {
   if (!data || new Date(data.expires_at as string) < new Date()) return deny
   const emp = await getEmployee(data.employee_id as string)
   if (!emp || !emp.active) return deny
+  if (!emp.hasPin && !allowSetup) {
+    return { ok: false, response: NextResponse.json({ error: 'needs_pin', message: 'Pick your own PIN first.' }, { status: 403 }) }
+  }
   await supabaseAdmin.from('tk_kiosk_sessions')
     .update({ expires_at: new Date(Date.now() + KIOSK_SESSION_MIN * 60_000).toISOString() }).eq('token', token)
   return { ok: true, employee: emp, token }
@@ -111,15 +173,15 @@ async function fetchAll<T>(page: (from: number, to: number) => PromiseLike<{ dat
   }
 }
 
-const EMP_COLS = 'id, name, role, hire_date, active, pin_hash, qbo_employee_id, pto_opening_hours, pto_opening_as_of'
+export const EMP_COLS = 'id, name, role, hire_date, active, pin_hash, pin_set_at, qbo_employee_id, pto_opening_hours, pto_opening_as_of'
 
-interface EmpRow {
-  id: string; name: string; role: string | null; hire_date: string; active: boolean; pin_hash: string | null
+export interface EmpRow {
+  id: string; name: string; role: string | null; hire_date: string; active: boolean; pin_hash: string | null; pin_set_at: string | null
   qbo_employee_id: string | null; pto_opening_hours: number | string; pto_opening_as_of: string
 }
 export function toEmployee(r: EmpRow): TkEmployee {
   return {
-    id: r.id, name: r.name, role: r.role, hireDate: r.hire_date, active: r.active, hasPin: !!r.pin_hash,
+    id: r.id, name: r.name, role: r.role, hireDate: r.hire_date, active: r.active, hasPin: !!r.pin_hash, pinSetAt: r.pin_set_at,
     qboEmployeeId: r.qbo_employee_id, ptoOpeningHours: Number(r.pto_opening_hours), ptoOpeningAsOf: r.pto_opening_as_of,
   }
 }

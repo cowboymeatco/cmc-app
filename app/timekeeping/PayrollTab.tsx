@@ -13,7 +13,7 @@ import { useState } from 'react'
 import { addDaysISO, dateLabel } from '@/lib/dates'
 import { Shift, calcShift, splitOvertime } from '@/lib/timekeeping'
 import { TimeOffRequest, TkEmployee } from '@/lib/timeclock'
-import { C, card, h2, th, td, btn, Pill } from './shared'
+import { C, card, h2, th, td, btn, Pill, printBackButton } from './shared'
 
 interface PayRow {
   empId:   string
@@ -119,6 +119,7 @@ export function PayrollTab({ employees, shifts, requests, thisMonday, today, now
       <tbody>${body}</tbody>
       <tfoot><tr><td class="n">Total</td><td>${h2dec(totals.regular)}</td><td>${h2dec(totals.overtime)}</td><td>${h2dec(totals.pto)}</td><td>${h2dec(totals.unpaid)}</td><td></td></tr></tfoot></table>
       <div class="foot">Hours in decimals, as QuickBooks takes them (7.75 = 7 h 45 min). Overtime is hours worked over 40 in the week; PTO and unpaid time off don't count toward it. Check off each row as it's entered.</div>
+      ${printBackButton('/timekeeping', 'Back to timekeeping')}
       <script>window.onload = () => window.print()</script></body></html>`
     const w = window.open('', '_blank')
     if (w) { w.document.write(html); w.document.close() }

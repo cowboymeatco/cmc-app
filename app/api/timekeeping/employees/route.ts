@@ -5,13 +5,16 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { hashPin, jsonError, validPin } from '@/lib/timeclockServer'
 
 // POST  /api/timekeeping/employees — add someone to the time clock.
-// PATCH /api/timekeeping/employees — edit, set a new PIN, or deactivate.
+// PATCH /api/timekeeping/employees — edit, set or reset a PIN, or deactivate.
+// A PIN is optional: someone without one signs in at the kiosk with the shared
+// setup PIN and picks their own. "Reset PIN" (resetPin: true) puts them back
+// there — for a forgotten PIN.
 // Nobody is ever deleted: their shifts are payroll records.
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/
 
 interface Body {
-  id?: string; name?: string; role?: string | null; hireDate?: string; pin?: string; active?: boolean
+  id?: string; name?: string; role?: string | null; hireDate?: string; pin?: string; resetPin?: boolean; active?: boolean
   qboEmployeeId?: string | null; ptoOpeningHours?: number; ptoOpeningAsOf?: string
 }
 
@@ -22,8 +25,9 @@ async function toRow(b: Body, creating: boolean): Promise<Record<string, unknown
   if (b.role !== undefined) row.role = b.role?.trim() || null
   if (b.hireDate !== undefined) { if (!ISO.test(b.hireDate)) return 'Hire date is required.'; row.hire_date = b.hireDate }
   else if (creating) return 'Hire date is required.'
-  if (b.pin !== undefined && b.pin !== '') { if (!validPin(b.pin)) return 'PIN must be 4 digits.'; row.pin_hash = await hashPin(b.pin) }
-  else if (creating) return 'Give them a 4-digit PIN.'
+  // The PIN hash is salted with the employee id, so it's written separately once the id is known.
+  if (b.pin !== undefined && b.pin !== '' && !validPin(b.pin)) return 'PIN must be 4 digits.'
+  if (b.resetPin) { row.pin_hash = null; row.pin_set_at = null }
   if (b.active !== undefined) row.active = !!b.active
   if (b.qboEmployeeId !== undefined) row.qbo_employee_id = b.qboEmployeeId?.trim() || null
   if (b.ptoOpeningHours !== undefined) { const n = Number(b.ptoOpeningHours); if (!Number.isFinite(n)) return 'Opening PTO must be a number.'; row.pto_opening_hours = n }
@@ -31,19 +35,16 @@ async function toRow(b: Body, creating: boolean): Promise<Record<string, unknown
   return row
 }
 
-function dbError(message: string, code?: string) {
-  if (code === '23505') return NextResponse.json({ error: 'That PIN is already someone else\'s. Pick another.' }, { status: 409 })
-  return NextResponse.json({ error: message }, { status: 500 })
-}
-
 export async function POST(req: NextRequest) {
   const gate = await requireExec(req)
   if (!gate.ok) return gate.response
   try {
-    const row = await toRow(await req.json(), true)
+    const body = await req.json() as Body
+    const row = await toRow(body, true)
     if (typeof row === 'string') return NextResponse.json({ error: row }, { status: 400 })
     const { data, error } = await supabaseAdmin.from('tk_employees').insert(row).select('id').single()
-    if (error) return dbError(error.message, error.code)
+    if (error) return jsonError(error.message)
+    if (body.pin) await supabaseAdmin.from('tk_employees').update({ pin_hash: await hashPin(data.id, body.pin) }).eq('id', data.id)
     return NextResponse.json({ id: data.id })
   } catch (e) {
     return jsonError(e)
@@ -58,8 +59,11 @@ export async function PATCH(req: NextRequest) {
     if (!body.id) return NextResponse.json({ error: 'id required' }, { status: 400 })
     const row = await toRow(body, false)
     if (typeof row === 'string') return NextResponse.json({ error: row }, { status: 400 })
+    if (body.pin && !body.resetPin) { row.pin_hash = await hashPin(body.id, body.pin); row.pin_set_at = null }
     const { error } = await supabaseAdmin.from('tk_employees').update(row).eq('id', body.id)
-    if (error) return dbError(error.message, error.code)
+    if (error) return jsonError(error.message)
+    // A new or cleared PIN ends any session they had open.
+    if (body.pin || body.resetPin) await supabaseAdmin.from('tk_kiosk_sessions').delete().eq('employee_id', body.id)
     // Deactivating someone signs them out of the kiosk.
     if (body.active === false) await supabaseAdmin.from('tk_kiosk_sessions').delete().eq('employee_id', body.id)
     return NextResponse.json({ ok: true })

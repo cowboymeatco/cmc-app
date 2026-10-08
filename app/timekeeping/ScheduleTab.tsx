@@ -13,7 +13,7 @@ import {
   SchedShift, Schedule, TimeOffRequest, TkEmployee,
   offOn, rangeLabel, requestDaysFromSchedule, requestHours, schedKey as key, scheduledHours,
 } from '@/lib/timeclock'
-import { C, api, card, h2, th, td, btn, bigBtn, Pill } from './shared'
+import { C, api, card, h2, th, td, btn, bigBtn, Pill, printBackButton } from './shared'
 
 // ── Manager: build the week, decide requests ────────────────────────────────
 
@@ -83,6 +83,7 @@ export function ScheduleTab({ employees, schedule, requests, thisMonday, today, 
     </style></head><body><h1>Cowboy Meat Co — Schedule</h1>
       <div class="sub">Week of ${dateLabel(weekStart, { month: 'long', day: 'numeric', year: 'numeric' })}</div>
       <table><tr><th></th>${days.map(d => `<th>${dateLabel(d, { weekday: 'short', month: 'numeric', day: 'numeric' })}</th>`).join('')}</tr>${rows}</table>
+      ${printBackButton('/timekeeping', 'Back to timekeeping')}
       <script>window.onload = () => window.print()</script></body></html>`
     const w = window.open('', '_blank')
     if (w) { w.document.write(html); w.document.close() }

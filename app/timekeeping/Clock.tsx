@@ -1,8 +1,10 @@
 'use client'
 // The punch clock — what the iPad at the employee entrance runs.
 //
-// Nobody picks a name: you punch in with your own PIN, the server hands back a
-// short-lived session for you alone, and every punch acts only on your shift.
+// You tap your name on the roster, then enter your PIN — checked against you
+// alone, so two people can share a PIN. The server hands back a short-lived
+// session for you, and every punch acts only on your shift. First time on the
+// clock? You sign in with the shared setup PIN and pick your own.
 // The server stamps the time, not the iPad. The front camera takes a small
 // photo at each punch, and the clock signs itself out after a few idle seconds
 // so the next person can't punch on your session.
@@ -15,7 +17,7 @@ import {
   accrualPerHour, annualPtoRate, calcShift, fmt12, fmtHours, nextAnniversary, shiftSegments, splitOvertime, toMin, yearsOfService,
 } from '@/lib/timekeeping'
 import { Schedule, TimeOffRequest, TkEmployee, ptoSummary } from '@/lib/timeclock'
-import { BreakPills, C, Stat, api, bigBtn, card, h2 } from './shared'
+import { BreakPills, C, Stat, api, bigBtn, card, h2, printBackButton } from './shared'
 import { MySchedule } from './ScheduleTab'
 
 const IDLE_SIGN_OUT_MS = 20_000
@@ -23,6 +25,28 @@ const IDLE_SCHEDULE_MS = 90_000
 const ROLL_KEY = 'timeclockLabelRoll' // per device, like the scanner's printer pick
 
 interface Me { employee: TkEmployee; shifts: Shift[]; schedule: Schedule; requests: TimeOffRequest[] }
+interface RosterEntry { id: string; name: string; needsSetup: boolean }
+const PICKED_IDLE_MS = 30_000  // a name tapped and walked away from goes back to the roster
+
+function Keypad({ value, onKey, disabled }: { value: string; onKey: (k: string) => void; disabled?: boolean }) {
+  return (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'center', gap: 10, marginBottom: '0.8rem' }}>
+        {[0, 1, 2, 3].map(i => (
+          <span key={i} style={{ width: 20, height: 20, borderRadius: '50%', border: `2px solid ${C.tan}`, background: i < value.length ? C.tan : 'transparent' }} />
+        ))}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, maxWidth: 340, margin: '0 auto' }}>
+        {['1', '2', '3', '4', '5', '6', '7', '8', '9', 'clear', '0'].map(k => (
+          <button key={k} onClick={() => onKey(k)} disabled={disabled} style={{
+            gridColumn: k === '0' ? 'span 2' : undefined, background: C.darkBrown, color: C.cream, border: `1px solid ${C.medBrown}`,
+            borderRadius: 10, padding: '1.2rem 0', fontSize: k === 'clear' ? '1rem' : '1.8rem', touchAction: 'manipulation', fontWeight: 700, cursor: disabled ? 'wait' : 'pointer',
+          }}>{k === 'clear' ? 'Clear' : k}</button>
+        ))}
+      </div>
+    </>
+  )
+}
 type PunchAction = 'in' | 'out' | 'break-start' | 'break-end' | 'lunch-start' | 'lunch-end'
 
 export const KIND_LABEL: Record<Segment['kind'], string> = { work: 'Work', break: 'Break', lunch: 'Lunch' }
@@ -42,6 +66,14 @@ export function KioskClock({ onChange }: { onChange?: () => void }) {
   const [me, setMe] = useState<Me | null>(null)
   const [pin, setPin] = useState('')
   const [pinError, setPinError] = useState('')
+  const [roster, setRoster] = useState<RosterEntry[] | null>(null)
+  const [picked, setPicked] = useState<RosterEntry | null>(null)
+  const [mustSetPin, setMustSetPin] = useState(false)
+  const [newPin, setNewPin] = useState('')          // first entry of the PIN they're choosing
+  const loadRoster = useCallback(() => {
+    api<{ roster: RosterEntry[] }>('/api/timeclock/roster').then(r => setRoster(r.roster)).catch(e => setPinError((e as Error).message))
+  }, [])
+  useEffect(() => { loadRoster() }, [loadRoster])
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
@@ -61,8 +93,17 @@ export function KioskClock({ onChange }: { onChange?: () => void }) {
   const signOut = useCallback((msg = '') => {
     if (token) api('/api/timeclock/pin', { method: 'DELETE', token }).catch(() => {})
     setToken(null); setMe(null); setPin(''); setNotice(''); setError(''); setShowSched(false)
+    setPicked(null); setMustSetPin(false); setNewPin('')
     setPinError(msg)
-  }, [token])
+    loadRoster()
+  }, [token, loadRoster])
+
+  // A name tapped and then walked away from goes back to the roster.
+  useEffect(() => {
+    if (!picked || token) return
+    const t = setTimeout(() => { setPicked(null); setPin(''); setPinError('') }, PICKED_IDLE_MS)
+    return () => clearTimeout(t)
+  }, [picked, token, pin])
 
   const load = useCallback(async (t: string) => {
     try {
@@ -113,11 +154,15 @@ export function KioskClock({ onChange }: { onChange?: () => void }) {
   }
 
   const submitPin = async (entered: string) => {
+    if (!picked) return
     setBusy(true); setPinError('')
     try {
-      const r = await api<{ token: string; employee: TkEmployee }>('/api/timeclock/pin', { method: 'POST', body: JSON.stringify({ pin: entered }) })
+      const r = await api<{ token: string; employee: TkEmployee; mustSetPin: boolean }>('/api/timeclock/pin', {
+        method: 'POST', body: JSON.stringify({ employeeId: picked.id, pin: entered }),
+      })
       setToken(r.token); setNotice(''); setError(''); setActivity(a => a + 1)
-      await load(r.token)
+      if (r.mustSetPin) setMustSetPin(true)
+      else await load(r.token)
     } catch (e) {
       setPinError((e as Error).message)
     } finally {
@@ -133,27 +178,87 @@ export function KioskClock({ onChange }: { onChange?: () => void }) {
     if (next.length === 4) submitPin(next)
   }
 
-  // ── Keypad (nobody signed in) ──
-  if (!token || !me) {
+  // Picking their own PIN: type it, type it again, saved.
+  const pressNew = async (k: string) => {
+    if (busy || !token) return
+    setActivity(a => a + 1)
+    if (k === 'clear') { setPin(''); return }
+    const next = (pin + k).slice(0, 4)
+    setPin(next)
+    if (next.length < 4) return
+    if (!newPin) { setNewPin(next); setPin(''); setPinError(''); return }
+    if (next !== newPin) { setNewPin(''); setPin(''); setPinError('Those didn\'t match. Start over — type your new PIN.'); return }
+    setBusy(true)
+    try {
+      await api('/api/timeclock/set-pin', { method: 'POST', token, body: JSON.stringify({ pin: next }) })
+      setMustSetPin(false); setNewPin(''); setPinError('')
+      setNotice('Your PIN is set. Use it every time from now on — don\'t share it.')
+      await load(token)
+    } catch (e) {
+      setNewPin(''); setPinError((e as Error).message)
+    } finally {
+      setPin(''); setBusy(false)
+    }
+  }
+
+  const clockLine = <div style={{ color: C.tan, fontSize: '0.9rem', marginBottom: '0.8rem', fontVariantNumeric: 'tabular-nums' }}>{dateLabel(today)} · {now ? fmt12(now) : '--:--'} MT</div>
+  const back = (
+    <button onClick={() => (token ? signOut() : (setPicked(null), setPin(''), setPinError('')))}
+      style={{ background: 'none', border: 'none', color: C.tan, fontSize: '1rem', cursor: 'pointer', marginTop: '1rem', padding: '0.6rem' }}>
+      ← Not you? Back to names
+    </button>
+  )
+
+  // ── First time: pick your own PIN ──
+  if (token && mustSetPin) {
+    return (
+      <div style={{ ...card, maxWidth: 440, margin: '0 auto', textAlign: 'center', padding: '1.5rem' }} onClick={() => setActivity(a => a + 1)}>
+        <h2 style={h2}>Welcome, {picked?.name}</h2>
+        <div style={{ color: C.cream, marginBottom: 4, fontSize: '1.05rem' }}>{newPin ? 'Type it again to make sure' : 'Pick your own 4-digit PIN'}</div>
+        <div style={{ color: C.lightBrown, fontSize: '0.8rem', marginBottom: '0.8rem' }}>You&apos;ll use it every time you punch. Nothing easy like 1111 or 1234.</div>
+        <Keypad value={pin} onKey={pressNew} disabled={busy} />
+        {pinError && <div style={{ color: C.red, fontSize: '0.9rem', marginTop: '0.7rem' }}>{pinError}</div>}
+        {back}
+      </div>
+    )
+  }
+
+  // ── PIN for the name you tapped ──
+  if (!token && picked) {
     return (
       <div style={{ ...card, maxWidth: 440, margin: '0 auto', textAlign: 'center', padding: '1.5rem' }}>
-        <h2 style={h2}>Punch Clock</h2>
-        <div style={{ color: C.tan, fontSize: '0.9rem', marginBottom: '0.8rem', fontVariantNumeric: 'tabular-nums' }}>{dateLabel(today)} · {now ? fmt12(now) : '--:--'} MT</div>
-        <div style={{ color: C.cream, marginBottom: 6 }}>{busy ? 'Checking…' : 'Enter your PIN'}</div>
-        <div style={{ display: 'flex', justifyContent: 'center', gap: 10, marginBottom: '0.8rem' }}>
-          {[0, 1, 2, 3].map(i => (
-            <span key={i} style={{ width: 20, height: 20, borderRadius: '50%', border: `2px solid ${C.tan}`, background: i < pin.length ? C.tan : 'transparent' }} />
+        <h2 style={h2}>{picked.name}</h2>
+        {clockLine}
+        <div style={{ color: C.cream, marginBottom: 6 }}>
+          {busy ? 'Checking…' : picked.needsSetup ? 'First time? Enter the setup PIN your manager gave you' : 'Enter your PIN'}
+        </div>
+        <Keypad value={pin} onKey={press} disabled={busy} />
+        {pinError && <div style={{ color: C.red, fontSize: '0.9rem', marginTop: '0.7rem' }}>{pinError}</div>}
+        {back}
+      </div>
+    )
+  }
+
+  // ── Roster: tap your name ──
+  if (!token || !me) {
+    return (
+      <div style={{ ...card, maxWidth: 820, margin: '0 auto', textAlign: 'center', padding: '1.5rem' }}>
+        <h2 style={h2}>Tap your name</h2>
+        {clockLine}
+        {pinError && <div style={{ color: C.red, fontSize: '0.9rem', marginBottom: '0.7rem' }}>{pinError}</div>}
+        {roster === null && <div style={{ color: C.tan }}>Loading…</div>}
+        {roster?.length === 0 && <div style={{ color: C.tan }}>No one is set up on the time clock yet.</div>}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 10 }}>
+          {roster?.map(r => (
+            <button key={r.id} onClick={() => { setPicked(r); setPin(''); setPinError('') }} style={{
+              background: C.darkBrown, color: C.cream, border: `1px solid ${C.medBrown}`, borderRadius: 10,
+              padding: '1.1rem 0.6rem', fontSize: '1.15rem', fontWeight: 700, cursor: 'pointer', touchAction: 'manipulation', minHeight: 72,
+            }}>
+              {r.name}
+              {r.needsSetup && <div style={{ color: C.amber, fontSize: '0.72rem', fontWeight: 600, marginTop: 2 }}>new — set up PIN</div>}
+            </button>
           ))}
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, maxWidth: 340, margin: '0 auto' }}>
-          {['1', '2', '3', '4', '5', '6', '7', '8', '9', 'clear', '0'].map(k => (
-            <button key={k} onClick={() => press(k)} disabled={busy} style={{
-              gridColumn: k === '0' ? 'span 2' : undefined, background: C.darkBrown, color: C.cream, border: `1px solid ${C.medBrown}`,
-              borderRadius: 10, padding: '1.2rem 0', fontSize: k === 'clear' ? '1rem' : '1.8rem', touchAction: 'manipulation', fontWeight: 700, cursor: busy ? 'wait' : 'pointer',
-            }}>{k === 'clear' ? 'Clear' : k}</button>
-          ))}
-        </div>
-        {pinError && <div style={{ color: C.red, fontSize: '0.85rem', marginTop: '0.7rem' }}>{pinError}</div>}
       </div>
     )
   }
@@ -241,7 +346,7 @@ export function KioskClock({ onChange }: { onChange?: () => void }) {
       nextBump: nextAnniversary(emp.hireDate, today), nextAnnual: annualPtoRate(years + 1),
     }
     const html = buildSummaryHTML(emp, shifts.filter(s => s.date >= from && s.date <= to),
-      from, to, range === 'day' ? 'Day' : 'Week', nowHHMM, accrual, roll)
+      from, to, range === 'day' ? 'Day' : 'Week', nowHHMM, accrual, roll, window.location.pathname + window.location.search)
     const win = window.open('', '_blank')
     if (win) { win.document.write(html); win.document.close() }
   }
@@ -382,7 +487,7 @@ interface Accrual {
 
 function buildSummaryHTML(
   emp: TkEmployee, shifts: Shift[], from: string, to: string, kind: 'Day' | 'Week',
-  nowHHMM: string, acc: Accrual, roll: LabelRoll,
+  nowHHMM: string, acc: Accrual, roll: LabelRoll, backUrl: string,
 ): string {
   const rows = [...shifts].sort((a, b) => a.date.localeCompare(b.date) || a.clockIn.localeCompare(b.clockIn))
   let total = 0, pto = 0, breakMin = 0, upto = 0, lunchMin = 0
@@ -477,6 +582,7 @@ function buildSummaryHTML(
     </div>
   </div>
   <div class="foot">Printed ${esc(md(isoDate()))} ${fmt12(nowHHMM)} MT · Questions? See the office.</div>
+  ${printBackButton(backUrl, 'Back to time clock', true)}
   ${rollPrintScript(roll)}
   </body></html>`
 }
