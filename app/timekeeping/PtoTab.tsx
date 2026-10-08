@@ -5,7 +5,7 @@
 
 import { useState } from 'react'
 import { dateLabel } from '@/lib/dates'
-import { Shift, accrualPerHour, annualPtoRate, calcShift, nextAnniversary, yearsOfService } from '@/lib/timekeeping'
+import { PTO_RULES, Shift, accrualPerHour, annualPtoRate, calcShift, nextAnniversary, yearsOfService } from '@/lib/timekeeping'
 import { TimeOffRequest, TkEmployee, ptoSummary } from '@/lib/timeclock'
 import { C, card, h2, td, th } from './shared'
 
@@ -28,7 +28,7 @@ export function PtoTab({ employees, shifts, requests, today, now }: {
       <div style={card}>
         <h2 style={h2}>Balances</h2>
         <p style={{ color: C.tan, fontSize: '0.8rem', margin: '0 0 0.6rem' }}>
-          Opening balance at go-live, plus every hour worked since at the employee&apos;s current rate, minus PTO taken. The rate goes up 8 h/yr on each work anniversary, so it&apos;s +40 every 5 years.
+          Opening balance at go-live, plus every hour worked since at the employee&apos;s current rate, minus PTO taken. The rate goes up {PTO_RULES.stepPerYear} h on each work anniversary, so it&apos;s +{5 * PTO_RULES.stepPerYear} every 5 years.
         </p>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
