@@ -4,7 +4,7 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { isoDate, addDaysISO } from '@/lib/dates'
 import {
   WASTE_KINDS, WEIGH_METHODS, DEFAULT_DESTINATION, netOf, sumWeights,
-  type WasteKind, type WeighMethod, type PoundsIn,
+  type WasteKind, type WeighMethod, type PoundsIn, type CuttingDay,
 } from '@/lib/waste'
 
 // Waste hauling — see lib/waste and scripts/2026-10-09_waste_hauls.sql.
@@ -12,7 +12,9 @@ import {
 //   GET    /api/waste?from=&to=   → the hauls in the window, newest first,
 //                                   plus what came in over the same days off
 //                                   the harvest log (head, hanging lbs, live
-//                                   lbs where recorded)
+//                                   lbs where recorded), plus the cutting
+//                                   floor by day (carcass scanned in vs
+//                                   packages out — waste_cutting_days())
 //   POST   /api/waste             → log a haul
 //   DELETE /api/waste?id=         → remove one (a fat-fingered gross is worse
 //                                   than no row)
@@ -96,14 +98,24 @@ export async function GET(req: NextRequest) {
   if (from > to) return NextResponse.json({ error: 'from is after to' }, { status: 400 })
 
   try {
-    const [hauls, pin] = await Promise.all([
+    const [hauls, pin, cutting] = await Promise.all([
       supabaseAdmin.from('waste_hauls').select('*')
         .gte('hauled_on', from).lte('hauled_on', to)
         .order('hauled_on', { ascending: false }).order('created_at', { ascending: false }),
       poundsIn(from, to),
+      supabaseAdmin.rpc('waste_cutting_days', { p_start: from, p_end: to }),
     ])
-    if (hauls.error) return NextResponse.json({ error: hauls.error.message }, { status: 500 })
-    return NextResponse.json({ hauls: (hauls.data ?? []).map(asNumbers), pounds_in: pin })
+    const err = hauls.error ?? cutting.error
+    if (err) return NextResponse.json({ error: err.message }, { status: 500 })
+    const days: CuttingDay[] = ((cutting.data ?? []) as Record<string, unknown>[]).map(r => ({
+      day:         String(r.day),
+      head:        Number(r.head ?? 0),
+      sides:       Number(r.sides ?? 0),
+      carcass_lbs: Number(r.carcass_lbs ?? 0),
+      packages:    Number(r.packages ?? 0),
+      packed_lbs:  Number(r.packed_lbs ?? 0),
+    }))
+    return NextResponse.json({ hauls: (hauls.data ?? []).map(asNumbers), pounds_in: pin, cutting: days })
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 })
   }

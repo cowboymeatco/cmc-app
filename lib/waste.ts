@@ -74,9 +74,49 @@ export interface PoundsIn {
   by_species: { species: string; head: number; hanging_lbs: number }[]
 }
 
+/** One processing day off waste_cutting_days(): what was scanned in against
+ *  what crossed the scale as packages. */
+export interface CuttingDay {
+  day: string
+  head: number
+  sides: number
+  carcass_lbs: number
+  packages: number
+  packed_lbs: number
+}
+
 export interface WastePayload {
   hauls: WasteHaul[]
   pounds_in: PoundsIn
+  cutting: CuttingDay[]
+}
+
+export interface CuttingSummary {
+  days: number
+  head: number
+  carcass_lbs: number
+  packed_lbs: number
+  /** carcass − packed. Negative when the window caught packing from earlier sides. */
+  waste_lbs: number
+  /** waste ÷ carcass, %. Null without carcass pounds. */
+  pct: number | null
+}
+
+/** Window totals for the cutting floor. Per-day numbers wobble because a side
+ *  scanned in late one day is boxed the next; the sum over the window is the
+ *  number to quote. */
+export function summarizeCutting(days: CuttingDay[]): CuttingSummary {
+  const carcass = days.reduce((s, d) => s + Number(d.carcass_lbs), 0)
+  const packed  = days.reduce((s, d) => s + Number(d.packed_lbs), 0)
+  const head    = days.reduce((s, d) => s + Number(d.head), 0)
+  return {
+    days: days.length,
+    head,
+    carcass_lbs: carcass,
+    packed_lbs: packed,
+    waste_lbs: carcass - packed,
+    pct: carcass > 0 ? ((carcass - packed) / carcass) * 100 : null,
+  }
 }
 
 /** Net off whichever numbers the form has. Null when there isn't enough to say. */
