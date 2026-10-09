@@ -160,7 +160,7 @@ export function splitOvertime(weekHours: number) {
 export const PTO_RULES = {
   fullTimeHours:  2080, // the yardstick: 2080 hours worked = one year's rate
   baseAnnual:     40,   // hours of PTO per 2080 worked, first year
-  stepPerYear:    8,    // added at every work anniversary → +40 every 5 years
+  stepPerYear:    10,   // added at every work anniversary → +50 every 5 years (Charlie, 10/7)
   maxAnnual:      null as number | null, // optional ceiling on the annual rate
   maxBalance:     null as number | null, // optional accrual cap (legal in MT)
 }

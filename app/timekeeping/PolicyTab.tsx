@@ -26,7 +26,7 @@ export function PolicyTab() {
       </div>
       <div style={card}>
         <h2 style={h2}>PTO</h2>
-        <p style={p}>Every paid hour worked, overtime included, earns PTO. Year 1 is {PTO_RULES.baseAnnual} h per {PTO_RULES.fullTimeHours} worked ({(PTO_RULES.baseAnnual / PTO_RULES.fullTimeHours).toFixed(4)} per hour). Each work anniversary adds {PTO_RULES.stepPerYear} h to that rate, so it&apos;s 80 at 5 years, 120 at 10 and 160 at 15.</p>
+        <p style={p}>Every paid hour worked, overtime included, earns PTO. Year 1 is {PTO_RULES.baseAnnual} h per {PTO_RULES.fullTimeHours} worked ({(PTO_RULES.baseAnnual / PTO_RULES.fullTimeHours).toFixed(4)} per hour). Each work anniversary adds {PTO_RULES.stepPerYear} h to that rate, so it&apos;s {PTO_RULES.baseAnnual + 5 * PTO_RULES.stepPerYear} at 5 years, {PTO_RULES.baseAnnual + 10 * PTO_RULES.stepPerYear} at 10 and {PTO_RULES.baseAnnual + 15 * PTO_RULES.stepPerYear} at 15.</p>
         <p style={p}><b style={{ color: C.cream }}>Montana law:</b> earned vacation counts as wages. Use-it-or-lose-it isn&apos;t allowed, and any unused balance has to be paid out when someone leaves. A cap on how much a balance can build up <i>is</i> allowed, but we&apos;re not using caps for now.</p>
         <p style={p}>Every employee sees the PTO they earned on the time clock, and on their printed summary (e.g. an 8-hour day in year 1 earns 0.15 h).</p>
       </div>
