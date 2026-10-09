@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { isoDate, addDaysISO, dateLabel } from '@/lib/dates'
 import {
-  summarize, netOf, sumWeights, lbsFmt, pctFmt, dollars,
+  summarize, summarizeCutting, netOf, sumWeights, lbsFmt, pctFmt, dollars,
   WASTE_KINDS, KIND_LABEL, WEIGH_METHODS, METHOD_LABEL, METHOD_HINT,
   DESTINATIONS, DEFAULT_DESTINATION,
   type WastePayload, type WasteHaul, type WasteKind, type WeighMethod,
@@ -67,6 +67,7 @@ export default function WasteHauling() {
   const pick = (p: Preset) => { setPreset(p); if (p !== 'custom') setRange(presetRange(p, today)) }
 
   const sum = useMemo(() => data ? summarize(data.hauls, data.pounds_in) : null, [data])
+  const cut = useMemo(() => data ? summarizeCutting(data.cutting) : null, [data])
 
   const remove = (h: WasteHaul) => {
     if (!confirm(`Remove the ${lbsFmt(h.net_lbs)} haul on ${dateLabel(h.hauled_on, { month: 'short', day: 'numeric' })}?`)) return
@@ -160,6 +161,63 @@ export default function WasteHauling() {
             )}
           </div>
         )}
+
+      {/* ── Cutting floor: carcass in − packages out ───────────────── */}
+      {data && cut && cut.days > 0 && (
+        <div style={{ ...card, marginTop: 12 }}>
+          <div style={{ color: C.cream, fontSize: 15, fontWeight: 700, marginBottom: 2 }}>Cutting floor</div>
+          <div style={{ color: C.lightBrown, fontSize: 12, marginBottom: 10 }}>
+            carcass weight scanned in, minus what went across the scale as packages
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 24 }}>
+            <Figure label={`carcass in · ${cut.head} head`} value={lbsFmt(cut.carcass_lbs)} tone={C.cream} />
+            <Figure label="packaged" value={lbsFmt(cut.packed_lbs)} tone={C.green} />
+            <Figure label="not packaged" value={lbsFmt(cut.waste_lbs)} tone={cut.waste_lbs < 0 ? C.lightBrown : C.amber} />
+            <Figure label="of carcass weight" value={pctFmt(cut.pct)} tone={cut.pct == null || cut.pct < 0 ? C.lightBrown : C.blue} />
+          </div>
+          {sum && sum.net_lbs > 0 && cut.waste_lbs > 0 && (
+            <div style={{ color: C.tan, fontSize: 13, marginTop: 10, lineHeight: 1.5 }}>
+              Of the <b style={{ color: C.cream }}>{lbsFmt(sum.net_lbs)}</b> hauled, the cutting floor accounts for about{' '}
+              <b style={{ color: C.cream }}>{lbsFmt(cut.waste_lbs)}</b>
+              {sum.net_lbs > cut.waste_lbs
+                ? <>; the other <b style={{ color: C.cream }}>{lbsFmt(sum.net_lbs - cut.waste_lbs)}</b> is kill floor — offal, hide, paunch.</>
+                : '. The hauls so far weigh less than the cutting floor threw away, so loads are still waiting to go.'}
+            </div>
+          )}
+          <details style={{ marginTop: 10 }}>
+            <summary style={{ color: C.lightBrown, fontSize: 12, cursor: 'pointer' }}>By day</summary>
+            <table style={{ marginTop: 6, borderCollapse: 'collapse', fontSize: 13, width: '100%' }}>
+              <thead>
+                <tr style={{ color: C.lightBrown, fontSize: 11 }}>
+                  <th style={th}>day</th><th style={thR}>head</th><th style={thR}>carcass in</th><th style={thR}>packaged</th><th style={thR}>not packaged</th><th style={thR}>%</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.cutting.map(d => {
+                  const w = d.carcass_lbs - d.packed_lbs
+                  const pct = d.carcass_lbs > 0 ? (w / d.carcass_lbs) * 100 : null
+                  const odd = w < 0 || d.carcass_lbs === 0
+                  return (
+                    <tr key={d.day} style={{ color: odd ? C.lightBrown : C.cream }}>
+                      <td style={td}>{dateLabel(d.day, { weekday: 'short', month: 'short', day: 'numeric' })}</td>
+                      <td style={tdR}>{d.head || '—'}</td>
+                      <td style={tdR}>{d.carcass_lbs ? lbsFmt(d.carcass_lbs).replace(' lb', '') : '—'}</td>
+                      <td style={tdR}>{d.packed_lbs ? lbsFmt(d.packed_lbs).replace(' lb', '') : '—'}</td>
+                      <td style={tdR}>{d.carcass_lbs ? lbsFmt(w).replace(' lb', '') : '—'}</td>
+                      <td style={tdR}>{pct != null && pct >= 0 ? pctFmt(pct) : '—'}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+            <div style={{ color: C.lightBrown, fontSize: 12, marginTop: 8, lineHeight: 1.4 }}>
+              Days bleed into each other: a side scanned in late Tuesday is boxed Wednesday, and bacon and
+              sausage get packaged a week after the hog was cut, so a single day can come out low or below
+              zero. The window total is the number to trust.
+            </div>
+          </details>
+        </div>
+      )}
 
       {/* ── Log a haul ─────────────────────────────────────────────── */}
       {adding
@@ -433,6 +491,11 @@ const input: React.CSSProperties = {
   width: '100%', minHeight: TAP, padding: '8px 10px', fontSize: 15, boxSizing: 'border-box',
   background: C.dark, color: C.cream, border: `1px solid ${C.medBrown}`, borderRadius: 8,
 }
+
+const th:  React.CSSProperties = { textAlign: 'left',  fontWeight: 400, padding: '2px 8px 4px 0' }
+const thR: React.CSSProperties = { ...th, textAlign: 'right', paddingRight: 0, paddingLeft: 8 }
+const td:  React.CSSProperties = { padding: '3px 8px 3px 0', whiteSpace: 'nowrap' }
+const tdR: React.CSSProperties = { ...td, textAlign: 'right', paddingRight: 0, paddingLeft: 8, fontVariantNumeric: 'tabular-nums' }
 
 const btn: React.CSSProperties = {
   minHeight: TAP, padding: '8px 16px', fontSize: 14, fontWeight: 700,

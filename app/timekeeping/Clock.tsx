@@ -123,11 +123,18 @@ export function KioskClock({ onChange }: { onChange?: () => void }) {
 
   // Front camera: a PIN can be shared, a face on the timesheet can't. If the
   // camera is off or denied the punch still goes through, with no photo.
-  const videoRef = useRef<HTMLVideoElement>(null)
+  //
+  // The stream is opened once, when the clock loads, and held for as long as
+  // the page is up. It used to be opened on every sign-in and closed on every
+  // sign-out, and Safari on the iPad treats each open as a fresh request, so
+  // every employee got the "allow camera?" sheet (Charlie, 10/7: "Can we make
+  // this so the iPad doesn't ask for camera permission each time?"). One ask
+  // per page load now — and none at all once Safari's per-site setting for
+  // the clock is on Allow (aA in the address bar → Website Settings → Camera).
+  const videoRef  = useRef<HTMLVideoElement>(null)
+  const streamRef = useRef<MediaStream | null>(null)
   const [camOk, setCamOk] = useState<boolean | null>(null)
   useEffect(() => {
-    if (!token) return
-    let stream: MediaStream | null = null
     let cancelled = false
     const media = navigator.mediaDevices
       ? navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 320, height: 240 }, audio: false })
@@ -135,13 +142,23 @@ export function KioskClock({ onChange }: { onChange?: () => void }) {
     media
       .then(s => {
         if (cancelled) { s.getTracks().forEach(t => t.stop()); return }
-        stream = s
-        if (videoRef.current) { videoRef.current.srcObject = s; videoRef.current.play().catch(() => {}) }
+        streamRef.current = s
         setCamOk(true)
       })
       .catch(() => setCamOk(false))
-    return () => { cancelled = true; stream?.getTracks().forEach(t => t.stop()) }
-  }, [token])
+    return () => {
+      cancelled = true
+      streamRef.current?.getTracks().forEach(t => t.stop())
+      streamRef.current = null
+    }
+  }, [])
+  // The preview only exists while someone is signed in; point it at the open
+  // stream each time it appears.
+  useEffect(() => {
+    const v = videoRef.current, s = streamRef.current
+    if (!token || !v || !s) return
+    if (v.srcObject !== s) { v.srcObject = s; v.play().catch(() => {}) }
+  }, [token, camOk])
 
   /** Grab the frame now, at the moment of the punch; upload once the server says which shift it's for. */
   const grabFrame = (): Promise<Blob | null> => {
