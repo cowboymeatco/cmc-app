@@ -45,6 +45,13 @@ const STATUS_TEXT: Record<string, string> = {
 const STATUS_OPT_BG = '#2a1d16'
 function statusColor(s: string) { return STATUS_TEXT[s] ?? 'var(--cream)' }
 
+// A booking nobody on staff has looked at yet. The public /book page files
+// these as 'PendingRequest'; the producer portal's schedule form files them as
+// 'Tentative'. Both belong in the Booking Requests inbox, not the schedule —
+// Rob Erickson's portal booking (2026-10-05) sat in the plain list for days
+// because only the first spelling was caught (Charlie, 2026-10-09).
+function isRequest(a: { status?: string }) { return a.status === 'PendingRequest' || a.status === 'Tentative' }
+
 function speciesColor(s: string) { return SPECIES_CLR[s] ?? '#9CA3AF' }
 
 // Encode: full days use "FULL|{note}", closed days use plain reason text
@@ -222,18 +229,18 @@ export default function SchedulePage() {
 
   // Separate pending requests from regular appointments
   const pendingRequests = appointments
-    .filter(a => a.status === 'PendingRequest')
+    .filter(isRequest)
     .sort((a, b) => a.harvest_date.localeCompare(b.harvest_date))
 
   // A search spans every status — last year's producer is findable without
   // flipping the list to "Complete" first.
   const words     = normalizeQuery(query)
   const searching = words.length > 0
-  const hits      = searching ? appointments.filter(a => a.status !== 'PendingRequest' && matchesQuery(a, words)) : null
+  const hits      = searching ? appointments.filter(a => !isRequest(a) && matchesQuery(a, words)) : null
 
   const filtered = (hits ?? appointments)
     .filter(a => {
-      if (a.status === 'PendingRequest') return false   // handled separately above
+      if (isRequest(a)) return false   // handled separately above
       if (searching) return true
       if (filter === 'upcoming') return a.status !== 'Complete'
       if (filter === 'complete') return a.status === 'Complete'
@@ -241,8 +248,8 @@ export default function SchedulePage() {
     })
     .sort((a, b) => a.harvest_date.localeCompare(b.harvest_date))
 
-  const needInstruct = appointments.filter(a => a.status !== 'Complete' && a.status !== 'PendingRequest' && a.customers?.some(c => !c.linked_cutting_instruction_id)).length
-  const readyCount   = appointments.filter(a => a.status !== 'Complete' && a.status !== 'PendingRequest' && a.customers?.every(c => !!c.linked_cutting_instruction_id)).length
+  const needInstruct = appointments.filter(a => a.status !== 'Complete' && !isRequest(a) && a.customers?.some(c => !c.linked_cutting_instruction_id)).length
+  const readyCount   = appointments.filter(a => a.status !== 'Complete' && !isRequest(a) && a.customers?.every(c => !!c.linked_cutting_instruction_id)).length
 
   async function save() {
     if (!editing) return
@@ -447,7 +454,7 @@ export default function SchedulePage() {
                 const lines   = (req.notes ?? '').split('\n')
                 const phone   = lines.find(l => l.startsWith('Phone:'))?.replace('Phone:', '').trim() ?? ''
                 const email   = lines.find(l => l.startsWith('Email:'))?.replace('Email:', '').trim() ?? ''
-                const noteText = lines.filter(l => !l.startsWith('Phone:') && !l.startsWith('Email:')).join(' ').trim()
+                const noteText = [req.animal_description, ...lines.filter(l => !l.startsWith('Phone:') && !l.startsWith('Email:'))].filter(Boolean).join(' · ').trim()
                 return (
                   <div key={req.id} style={{
                     display: 'flex', alignItems: 'center', gap: '1rem',
@@ -466,6 +473,11 @@ export default function SchedulePage() {
                         <span style={{ color: 'var(--tan)', fontSize: '0.82rem' }}>
                           {req.head_count} {req.species} · week of {weekLabel}
                         </span>
+                        {req.status === 'Tentative' && (
+                          <span title="Booked by the producer in the portal" style={{ background: 'rgba(232,136,58,0.18)', color: '#E8883A', borderRadius: 99, fontSize: '0.68rem', fontWeight: 700, padding: '1px 7px', letterSpacing: '0.04em' }}>
+                            PORTAL
+                          </span>
+                        )}
                       </div>
                       <div style={{ fontSize: '0.78rem', color: 'rgba(166,120,90,0.7)', marginTop: '0.15rem', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
                         {phone && <span>📞 {phone}</span>}
