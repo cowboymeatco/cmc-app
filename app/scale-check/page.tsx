@@ -90,7 +90,8 @@ export default function ScaleCheckPage() {
       <header style={{ background: C.dark, borderBottom: '1px solid rgba(166,120,90,0.3)', padding: '0 2rem', minHeight: 64, display: 'flex', alignItems: 'center', gap: '1.25rem', flexWrap: 'wrap' }}>
         <Link href="/processing" style={{ color: C.lightBrown, textDecoration: 'none', fontSize: '0.82rem' }}>← Processing</Link>
         <h1 style={{ fontFamily: 'Georgia, serif', fontSize: '1.1rem', fontWeight: 700, color: C.cream, letterSpacing: '0.08em', textTransform: 'uppercase', margin: 0 }}>Scale Check</h1>
-        <Link href="/producer-labels" style={{ color: C.lightBrown, textDecoration: 'none', fontSize: '0.82rem', marginLeft: 'auto' }}>Producer Labels →</Link>
+        <Link href="/scale-callup" style={{ color: C.lightBrown, textDecoration: 'none', fontSize: '0.82rem', marginLeft: 'auto' }}>Scale Call-up →</Link>
+        <Link href="/producer-labels" style={{ color: C.lightBrown, textDecoration: 'none', fontSize: '0.82rem' }}>Producer Labels →</Link>
       </header>
 
       <main style={{ maxWidth: 1100, margin: '0 auto', padding: '1.25rem 2rem 4rem' }}>

@@ -1,0 +1,22 @@
+# Copy to settings.toml on the CIRCUITPY drive and fill in. Strings in quotes,
+# numbers bare. CircuitPython reads the CIRCUITPY_WIFI_* ones itself at boot.
+
+# The shop wifi. A Pico W only does 2.4 GHz, so this must be a 2.4 GHz network name.
+CIRCUITPY_WIFI_SSID = "shop-wifi-name"
+CIRCUITPY_WIFI_PASSWORD = "shop-wifi-password"
+
+# Where the app lives, no trailing slash.
+CMC_API_URL = "https://app.cowboymeats.com"
+
+# The same value as SCALE_WEDGE_TOKEN in the app's Vercel env. Long and random.
+CMC_WEDGE_TOKEN = "paste-the-token-here"
+
+# Which scale this board is plugged into, as the crew numbers them: 1, 2 or 3.
+CMC_SCALE = "2"
+
+# How often to ask the app for work, in seconds.
+CMC_POLL_SECONDS = 1
+
+# Pause between keystrokes in milliseconds. 20 is scanner-like; raise it if the
+# scale drops digits.
+CMC_KEY_DELAY_MS = 20
