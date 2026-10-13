@@ -6,7 +6,7 @@ CIRCUITPY_WIFI_SSID = "shop-wifi-name"
 CIRCUITPY_WIFI_PASSWORD = "shop-wifi-password"
 
 # Where the app lives, no trailing slash.
-CMC_API_URL = "https://cmc-app.vercel.app"
+CMC_API_URL = "https://app.cowboymeats.com"
 
 # The same value as SCALE_WEDGE_TOKEN in the app's Vercel env. Long and random.
 CMC_WEDGE_TOKEN = "paste-the-token-here"

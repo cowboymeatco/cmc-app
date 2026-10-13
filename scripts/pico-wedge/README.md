@@ -99,7 +99,7 @@ port shows it (Mu Editor's "Serial" button is the easy one; PuTTY works). You wi
 | Key | What |
 | --- | --- |
 | `CIRCUITPY_WIFI_SSID` / `_PASSWORD` | shop wifi, 2.4 GHz only |
-| `CMC_API_URL` | `https://cmc-app.vercel.app` |
+| `CMC_API_URL` | `https://app.cowboymeats.com` |
 | `CMC_WEDGE_TOKEN` | same as `SCALE_WEDGE_TOKEN` in Vercel |
 | `CMC_SCALE` | `1`, `2` or `3` |
 | `CMC_POLL_SECONDS` | default 1 |
