@@ -12,6 +12,10 @@
 # adafruit_requests, adafruit_connection_manager. README.md has the steps.
 #
 # The onboard LED says what it's doing:
+#   nothing at all   code.py isn't running: no CircuitPython, or it crashed
+#                    before this file's first line (read the serial console)
+#   two blinks, pause   a library is missing from /lib (or is the wrong bundle)
+#   slow on/off, even   settings.toml is missing something
 #   solid            joining wifi
 #   one short blink  checked in with the app, nothing to do (heartbeat)
 #   three fast       typed a call-up
@@ -22,14 +26,31 @@ import time
 
 import board
 import digitalio
-import usb_hid
-import wifi
-import socketpool
-import ssl
 
-import adafruit_requests
-from adafruit_hid.keyboard import Keyboard
-from adafruit_hid.keycode import Keycode
+# LED first, before anything that can fail, so a failure has a way to show.
+led = digitalio.DigitalInOut(board.LED)
+led.direction = digitalio.Direction.OUTPUT
+
+def blink(times, on=0.06, off=0.08):
+    for _ in range(times):
+        led.value = True
+        time.sleep(on)
+        led.value = False
+        time.sleep(off)
+
+try:
+    import usb_hid
+    import wifi
+    import socketpool
+    import ssl
+    import adafruit_requests
+    from adafruit_hid.keyboard import Keyboard
+    from adafruit_hid.keycode import Keycode
+except ImportError as e:
+    print("missing library:", e, "- copy it from the CircuitPython bundle into /lib")
+    while True:
+        blink(2, on=0.15, off=0.15)
+        time.sleep(1)
 
 # ── settings ────────────────────────────────────────────────────────────────
 
@@ -47,18 +68,6 @@ PASSWORD     = str(setting("CIRCUITPY_WIFI_PASSWORD", ""))
 
 DEVICE_URL = API_URL + "/api/scale-callup/device"
 HEADERS = {"Authorization": "Bearer " + TOKEN, "Content-Type": "application/json"}
-
-# ── LED ─────────────────────────────────────────────────────────────────────
-
-led = digitalio.DigitalInOut(board.LED)
-led.direction = digitalio.Direction.OUTPUT
-
-def blink(times, on=0.06, off=0.08):
-    for _ in range(times):
-        led.value = True
-        time.sleep(on)
-        led.value = False
-        time.sleep(off)
 
 # ── keyboard ────────────────────────────────────────────────────────────────
 
@@ -104,6 +113,11 @@ def connect_wifi():
     led.value = False
     print("wifi: up,", wifi.radio.ipv4_address)
 
+if not (API_URL and TOKEN and SCALE and SSID):
+    print("settings.toml is missing CMC_API_URL, CMC_WEDGE_TOKEN, CMC_SCALE or CIRCUITPY_WIFI_SSID")
+    while True:
+        blink(1, on=0.5, off=0.5)
+
 connect_wifi()
 pool = socketpool.SocketPool(wifi.radio)
 requests = adafruit_requests.Session(pool, ssl.create_default_context())
@@ -119,11 +133,6 @@ def check_in(done):
         if r.status_code != 200:
             raise RuntimeError("app answered %d: %s" % (r.status_code, r.text[:120]))
         return r.json().get("job")
-
-if not (API_URL and TOKEN and SCALE and SSID):
-    print("settings.toml is missing CMC_API_URL, CMC_WEDGE_TOKEN, CMC_SCALE or CIRCUITPY_WIFI_SSID")
-    while True:
-        blink(1, on=0.5, off=0.5)
 
 print("wedge for scale", SCALE, "polling", DEVICE_URL)
 done = None

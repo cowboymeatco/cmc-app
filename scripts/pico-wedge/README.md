@@ -58,6 +58,18 @@ Enter into Notepad, the LED flashes three times, and the page shows the row as d
 If the digits show up in Notepad, the wedge works. Everything after this is about the
 scale, not the board.
 
+## What the LED means
+
+| LED | Meaning |
+| --- | --- |
+| nothing at all | `code.py` is not running: CircuitPython isn't on the board, or the stock `code.py` is still there, or it crashed before our first line. Check the CIRCUITPY drive, then the serial console. |
+| two blinks, pause | a library is missing from `lib`, or the bundle doesn't match the CircuitPython version |
+| slow, even on/off | `settings.toml` is missing one of the keys |
+| solid | joining wifi |
+| one quick blink a second | checked in with the app, nothing to type |
+| three fast blinks | typed a call-up |
+| long on, then off | can't reach wifi or the app; it keeps retrying |
+
 ## Serial console (when something is wrong)
 
 The board prints what it is doing. Any serial terminal at 115200 on the board's COM
