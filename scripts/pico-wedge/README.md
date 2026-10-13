@@ -27,9 +27,10 @@ Parts list and the plan: the "Pico Scale Wedge Parts" page (2026-09-06).
    and download the latest stable `.uf2`. Note the major version (9 or 10): the
    library bundle has to match it.
 2. **Put the board in bootloader mode.** Hold the white **BOOTSEL** button on the
-   board, plug it into the laptop, let go. A drive called **RPI-RP2** appears.
-3. **Drag the `.uf2` onto RPI-RP2.** The board reboots on its own and comes back as
-   a drive called **CIRCUITPY**.
+   board, plug it into the laptop, let go. A drive appears: **RP2350** on a
+   Pico 2 W, **RPI-RP2** on an original Pico W.
+3. **Drag the `.uf2` onto that drive.** The board reboots on its own and comes back
+   as a drive called **CIRCUITPY**.
 4. **Libraries.** From https://circuitpython.org/libraries download the bundle whose
    version matches step 1 (`adafruit-circuitpython-bundle-9.x-mpy-…zip` or `10.x`).
    Unzip it and copy these from its `lib/` folder into `CIRCUITPY/lib/`:
@@ -97,6 +98,8 @@ port shows it (Mu Editor's "Serial" button is the easy one; PuTTY works). You wi
 
 - **Charge-only cables** look identical and do nothing. The board must show up as a
   drive on the laptop; if it doesn't, the cable is the first suspect.
+- **The shop's boards are Pico 2 W** (RP2350). Its firmware file is not the Pico W
+  one; the two boards look alike, so check the name on the chip if unsure.
 - **A call-up waits 90 seconds, then expires.** A board that was off wifi does not
   type a stale PLU under whatever is on the platter now. The page shows `expired`.
 - **One per scale.** Two boards with the same `CMC_SCALE` would race for the same
