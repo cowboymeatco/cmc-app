@@ -17,7 +17,8 @@ export interface Customer {
 // ── Harvest Appointments ──────────────────────────────────────────────────────
 
 export type AppointmentStatus =
-  | 'PendingRequest'
+  | 'PendingRequest'   // public /book page, awaiting staff confirmation
+  | 'Tentative'        // producer portal schedule form, awaiting staff confirmation
   | 'Booked'
   | 'Confirmed'
   | 'InstructionsReceived'
@@ -67,6 +68,10 @@ export interface HarvestAppointment {
   /** Slaughter only — the carcass leaves whole and is never cut here. Shown
    *  as a badge on the schedule and kept off the cut schedule. */
   kill_only?: boolean
+  /** Breed / weight / description the producer typed in the portal's schedule form. */
+  animal_description?: string | null
+  /** True when the producer booked it themselves in the portal. */
+  self_scheduled?: boolean
 }
 
 // ── Cutting Instructions ──────────────────────────────────────────────────────
