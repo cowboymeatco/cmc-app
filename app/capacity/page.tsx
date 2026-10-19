@@ -484,6 +484,22 @@ export default function CapacityPage() {
                   Maximum days of work to hold in cooler before aging concerns
                 </div>
               </div>
+
+              {/* Charlie, 2026-10-18: the cut schedule's week view measures a
+                  day in pounds. Blank = derive it from beef-equivalents × the
+                  trailing average beef carcass. */}
+              <div>
+                <label style={{ display: 'block', fontSize: '0.68rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.09em', marginBottom: '0.3rem' }}>
+                  ⚖ Pounds Cut per Day
+                </label>
+                <input type="number" min="0" step="50" style={INPUT}
+                  value={settings.lbs_per_day ?? ''}
+                  placeholder="derived"
+                  onChange={e => updateSetting('lbs_per_day', e.target.value)} />
+                <div style={{ fontSize: '0.67rem', color: 'rgba(166,120,90,0.45)', marginTop: '0.2rem' }}>
+                  Hanging weight a full cutting day holds on the cut schedule&apos;s week view. 0 or blank = beef equiv. × average beef carcass.
+                </div>
+              </div>
             </div>
 
             {settingsDirty && (

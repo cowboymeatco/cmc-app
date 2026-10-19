@@ -978,3 +978,194 @@ export function killMix(entries: ScheduleEntry[]): { type: 'USDA' | 'Custom'; he
     ...(custom ? [{ type: 'Custom' as const, head: custom }] : []),
   ]
 }
+
+// ── Weight-based days ─────────────────────────────────────────────────────────
+// Charlie, 2026-10-11 (/processing): "Optimize the day break or maybe graduate
+// into a calendar view?" — and, asked what a full day should mean: pounds per
+// day, with the animals not yet harvested weighed by "our average carcass
+// sizes (taking in all our past data)" rather than a head count. These helpers
+// give the week view and the auto-fill one shared idea of how heavy a day is.
+
+/** Trailing average hot carcass weight per species, off /api/cut-schedule/averages. */
+export type CarcassAverages = Record<string, { avg: number; n: number }>
+
+// Used only when the history has too little of a species to average: a new
+// species, or a bad fetch. Rounded off the all-time harvest_log means.
+export const FALLBACK_AVG_LBS: Record<string, number> = { Beef: 725, Hog: 190, Lamb: 75, Goat: 50 }
+
+export function avgLbsFor(species: string, averages: CarcassAverages): number {
+  const a = averages[species]
+  if (a && a.n >= 10 && a.avg > 0) return a.avg
+  return FALLBACK_AVG_LBS[species] ?? 0
+}
+
+/** The pounds a row brings to its day: the hanging weight when the carcass is
+ *  on the rail and weighed, otherwise the species average, flagged `estimated`. */
+export function rowLbs(item: ListItem, averages: CarcassAverages): { lbs: number; estimated: boolean } {
+  if (item.type === 'carcass') {
+    if (item.hot_carcass_weight_lbs != null && item.hot_carcass_weight_lbs > 0) return { lbs: item.hot_carcass_weight_lbs, estimated: false }
+    return { lbs: avgLbsFor(item.species, averages), estimated: true }
+  }
+  if (item.type === 'future') return { lbs: avgLbsFor(item.species, averages), estimated: true }
+  return { lbs: 0, estimated: false }
+}
+
+export interface DayLoad {
+  date:       string
+  breakKey:   string
+  head:       number   // carcasses (deduped) + placeholders
+  lbs:        number   // weighed + estimated
+  estLbs:     number   // the estimated part of `lbs`
+  estHead:    number   // rows carrying an estimate
+}
+
+/** Head and pounds under every dated day break. A split carcass counts once. */
+export function dayLoads(list: ListItem[], averages: CarcassAverages): Map<string, DayLoad> {
+  const out = new Map<string, DayLoad>()
+  let cur: DayLoad | null = null
+  let seen = new Set<string>()
+  for (const e of list) {
+    if (e.type === 'break') {
+      cur = e.break_date ? { date: e.break_date, breakKey: e.key, head: 0, lbs: 0, estLbs: 0, estHead: 0 } : null
+      if (cur) out.set(cur.date, cur)
+      seen = new Set()
+      continue
+    }
+    if (!cur) continue
+    if (e.type === 'carcass') {
+      if (seen.has(e.harvest_log_id)) continue
+      seen.add(e.harvest_log_id)
+    }
+    const { lbs, estimated } = rowLbs(e, averages)
+    cur.head += 1
+    cur.lbs  += lbs
+    if (estimated) { cur.estLbs += lbs; cur.estHead += 1 }
+  }
+  return out
+}
+
+/** Monday..Sunday of the week holding `iso`. */
+export function weekDatesISO(mondayISO: string): string[] {
+  return Array.from({ length: 7 }, (_, i) => addDaysISO(mondayISO, i))
+}
+
+/**
+ * Put one row (and, for a split carcass, its sibling rows) at the end of the
+ * day dated `date`, creating that day's break in date order when the plan has
+ * none. The week view's "drop on a column" and the auto-fill both go through
+ * here, so a day created by either lands in the same place.
+ */
+export function moveItemToDay(list: ListItem[], key: string, date: string): ListItem[] {
+  const item = list.find(e => e.key === key)
+  if (!item || item.type === 'break' || !date) return list
+  const group = item.type === 'carcass'
+    ? list.filter(e => e.type === 'carcass' && e.harvest_log_id === item.harvest_log_id)
+    : [item]
+  const groupKeys = new Set(group.map(g => g.key))
+  let rest = list.filter(e => !groupKeys.has(e.key))
+
+  let at = rest.findIndex(e => e.type === 'break' && e.break_date === date)
+  if (at === -1) {
+    // No such day yet: a new break goes after the last day dated before it
+    // (and that day's rows), or above the first dated break when none is earlier.
+    const brk: BreakItem = { type: 'break', key: `break_${date}_${Math.random().toString(36).slice(2, 8)}`, rank: 0, break_date: date }
+    let insertAt = rest.findIndex(e => e.type === 'break' && !!e.break_date && e.break_date > date)
+    if (insertAt === -1) insertAt = rest.length
+    rest = [...rest.slice(0, insertAt), brk, ...rest.slice(insertAt)]
+    at = insertAt
+  }
+  // End of this day's block = just before the next break.
+  let end = at + 1
+  while (end < rest.length && rest[end].type !== 'break') end++
+  const out = [...rest.slice(0, end), ...group, ...rest.slice(end)]
+  return out.map((e, i) => ({ ...e, rank: i + 1 }))
+}
+
+export interface LayoutOptions {
+  today:      string
+  lbsPerDay:  number
+  averages:   CarcassAverages
+  /** Kill days: no cutting there unless the plan already has a break on the date. */
+  killDays:   Set<string>
+  /** How far ahead to look for room, in calendar days. */
+  horizonDays?: number
+}
+
+export interface LayoutResult {
+  list:     ListItem[]
+  placed:   number   // rows given a day
+  daysMade: string[] // breaks created
+  leftover: number   // rows that found no room inside the horizon
+}
+
+/**
+ * Lay the undated pile out into days by weight.
+ *
+ * Only rows with no cutting day move; anything already under a dated break
+ * stays exactly where it was put (Charlie, 2026-10-18: "only carcasses with
+ * no day yet"). Carcasses on the rail go first, in priority order, then the
+ * not-yet-harvested placeholders by kill date — one of those can't be cut
+ * before its animal is on the rail, so it waits for the first cutting day
+ * after its harvest date.
+ *
+ * Each row goes into the earliest cutting day with room for its pounds; a
+ * day with nothing on it takes a row regardless, so one carcass heavier than
+ * a whole day still lands somewhere instead of nowhere. Weekends are skipped,
+ * and so are kill days the plan isn't already cutting on.
+ */
+export function layoutByWeight(list: ListItem[], opts: LayoutOptions): LayoutResult {
+  const horizon = opts.horizonDays ?? 60
+  const dates   = cutDateByKey(list)
+  const carcassRows = list.filter((e): e is ScheduleEntry => e.type === 'carcass' && !dates.get(e.key))
+  const futureRows  = list.filter((e): e is FutureItem  => e.type === 'future'  && !dates.get(e.key))
+
+  // One pass per physical carcass; its sibling rows ride along in moveItemToDay.
+  const seen = new Set<string>()
+  const carcassHeads = carcassRows
+    .filter(e => { if (seen.has(e.harvest_log_id)) return false; seen.add(e.harvest_log_id); return true })
+    .sort((a, b) => b.priority_score - a.priority_score)
+  const futureHeads = [...futureRows].sort((a, b) => a.harvest_date.localeCompare(b.harvest_date) || a.seq - b.seq)
+
+  const start = (() => {
+    let d = opts.today
+    while (dayOfWeekISO(d) === 0 || dayOfWeekISO(d) === 6) d = addDaysISO(d, 1)
+    return d
+  })()
+  const last = addDaysISO(start, horizon)
+
+  let out = list
+  let loads = dayLoads(out, opts.averages)
+  const existing = new Set(loads.keys())
+  const cuttable = (d: string) => {
+    const dow = dayOfWeekISO(d)
+    if (dow === 0 || dow === 6) return false
+    if (opts.killDays.has(d) && !existing.has(d)) return false
+    return true
+  }
+
+  let placed = 0, leftover = 0
+  const daysMade: string[] = []
+  const place = (item: ListItem, notBefore: string) => {
+    const { lbs } = rowLbs(item, opts.averages)
+    let d = notBefore > start ? notBefore : start
+    while (d <= last) {
+      if (cuttable(d)) {
+        const load = loads.get(d)
+        const used = load?.lbs ?? 0
+        if (used === 0 || used + lbs <= opts.lbsPerDay) {
+          if (!load) daysMade.push(d)
+          out = moveItemToDay(out, item.key, d)
+          loads = dayLoads(out, opts.averages)
+          placed++
+          return
+        }
+      }
+      d = addDaysISO(d, 1)
+    }
+    leftover++
+  }
+
+  for (const c of carcassHeads) place(c, start)
+  for (const f of futureHeads)  place(f, addDaysISO(f.harvest_date, 1))
+  return { list: out, placed, daysMade, leftover }
+}

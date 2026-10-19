@@ -9,6 +9,11 @@ export interface CapacitySettings {
   goats_per_beef:   number   // how many goats equal 1 beef (e.g. 6)
   beef_eq_per_day:  number   // beef equivalents your team cuts per working day (e.g. 3)
   max_cooler_days:  number   // target max days of work in cooler (e.g. 6)
+  /** Pounds of hanging weight the crew cuts in a day — what the cut schedule's
+   *  week view calls a full day (Charlie, 2026-10-18). Null until someone sets
+   *  it; the planner then derives one from beef_eq_per_day × the trailing
+   *  average beef carcass. */
+  lbs_per_day?:     number | null
 }
 
 export interface CoolerCarcass {
@@ -72,6 +77,7 @@ export async function GET() {
         goats_per_beef:  settingsRes.data.goats_per_beef  ?? DEFAULTS.goats_per_beef,
         beef_eq_per_day: settingsRes.data.beef_eq_per_day ?? DEFAULTS.beef_eq_per_day,
         max_cooler_days: settingsRes.data.max_cooler_days ?? DEFAULTS.max_cooler_days,
+        lbs_per_day:     settingsRes.data.lbs_per_day ?? null,
       }
     : DEFAULTS
 
