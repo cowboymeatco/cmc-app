@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { DeliveryScan } from '@/lib/types'
-import { isoDateTime } from '@/lib/dates'
+import { isoDate, isoDateTime } from '@/lib/dates'
 import { shortItemName } from '@/lib/itemName'
 import { parseCarcassTag, carcassTagLabel } from '@/lib/carcassTag'
 
@@ -790,10 +790,15 @@ function DeliveryLogTab({ pluMap }: { pluMap: Record<string, string> }) {
   }
 
   function printPalletSignsD() {
-    const out = stops.map((stop, i) => ({
-      n: i + 1, stop: stop.trim(),
-      orders: picked.filter(d => palletOfPick(d.id) === i + 1).map(d => ({ c: d.customer, count: boxCount(d) })),
-    })).filter(p => p.orders.length)
+    // Check-in date on the sign = the day the run was logged, shop clock.
+    const out = stops.map((stop, i) => {
+      const on = picked.filter(d => palletOfPick(d.id) === i + 1)
+      return {
+        n: i + 1, stop: stop.trim(),
+        date: on[0] ? isoDate(new Date(on[0].delivered_at)) : undefined,
+        orders: on.map(d => ({ c: d.customer, count: boxCount(d) })),
+      }
+    }).filter(p => p.orders.length)
     if (!out.length) return
     const allBaker = picked.every(d => d.destination === 'baker_storage')
     const load = { to: allBaker ? 'Baker Storage' : '', pallets: out }
@@ -1697,7 +1702,8 @@ function LoadOutTab({ onSaved }: { onSaved: () => void }) {
       return { n, stop: p.stop.trim(), orders: [...orders.values()] }
     }).filter(p => p.orders.length)
     if (!out.length) return
-    const load = { to: destination === 'baker_storage' ? 'Baker Storage' : '', pallets: out }
+    // Release happens at the dock as the sign prints, so check-in is today.
+    const load = { to: destination === 'baker_storage' ? 'Baker Storage' : '', date: isoDate(), pallets: out }
     window.open(`/api/delivery/pallet-sign?load=${encodeURIComponent(JSON.stringify(load))}`, '_blank')
   }
 
