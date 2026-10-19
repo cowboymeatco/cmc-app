@@ -64,7 +64,7 @@ export async function GET(req: NextRequest) {
   // between words (never inside one) and the whole stack fits that height.
   const WIDTH = 677
   const wrapLines = (name: string, pt: number): number | null => {
-    const w = (t: string) => t.length * 0.68 * pt
+    const w = (t: string) => t.length * 0.74 * pt
     let lines = 1, used = 0
     for (const word of name.split(/\s+/).filter(Boolean)) {
       if (w(word) > WIDTH) return null
@@ -94,7 +94,7 @@ export async function GET(req: NextRequest) {
   // on one line; size both to the longer pair so "Sept 30, 2026" and "128
   // CASES" can't run into each other (Charlie, 2026-10-18: they overlapped).
   const bandPt = (left: string, right: string) =>
-    Math.max(22, Math.min(44, Math.floor(677 / (0.68 * (left.length + right.length + 3)))))
+    Math.max(22, Math.min(44, Math.floor(677 / (0.72 * (left.length + right.length + 3)))))
 
   const pages = pallets.map((p, i) => {
     const size = fitSizes(p.map(o => o.c), p.some(o => o.count == null), !!sheets[i].stop)
@@ -127,8 +127,9 @@ export async function GET(req: NextRequest) {
     const dateText  = date ? checkIn(date) : ''
     const casesText = `${boxes} CASE${boxes !== 1 ? 'S' : ''}`
     const big = bandPt(dateText || '          ', casesText)
+    const cap = p.length === 1 ? 120 : p.length === 2 ? 80 : p.length <= 4 ? 60 : 44
     return `
-  <div class="sheet">
+  <div class="sheet" data-cap="${cap}">
     <div class="top">
       <span>Cowboy Meat Co.${to ? ` &rarr; ${esc(to)}` : ''}</span>
       <span>Pallet ${sheets[i].n} of ${Math.max(...sheets.map(x => x.n))}</span>
@@ -161,9 +162,9 @@ export async function GET(req: NextRequest) {
   .sheet { border: 6px solid #000; padding: 0.3in 0.4in; height: 7.2in; overflow: hidden; display: flex; flex-direction: column; page-break-after: always; margin-bottom: 0.4in; }
   .sheet:last-child { page-break-after: auto; }
   .top { display: flex; justify-content: space-between; font-size: 16pt; font-weight: bold; letter-spacing: 0.12em; text-transform: uppercase; border-bottom: 4px solid #000; padding-bottom: 8px; margin-bottom: 6px; }
-  .dest { font-size: 30pt; font-weight: 900; text-transform: uppercase; background: #000; color: #fff; padding: 6px 12px; margin: 4px 0 6px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .dest { font-size: 30pt; font-weight: 900; text-transform: uppercase; background: #000; color: #fff; padding: 6px 12px; margin: 4px 0 6px; white-space: nowrap; overflow: hidden; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .cust { border-bottom: 2px solid #000; padding: 10px 0 8px; page-break-inside: avoid; }
-  .name { font-weight: 900; line-height: 1.02; text-transform: uppercase; word-break: break-word; }
+  .name { font-weight: 900; line-height: 1.02; text-transform: uppercase; word-break: normal; overflow-wrap: normal; }
   .count { font-size: 40pt; font-weight: 900; line-height: 1.05; margin-top: 2px; }
   .line { display: flex; justify-content: space-between; gap: 24px; font-size: 15pt; margin-top: 4px; }
   .band { margin-top: auto; display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; border-top: 4px solid #000; padding-top: 10px; page-break-inside: avoid; }
@@ -179,6 +180,54 @@ export async function GET(req: NextRequest) {
 <body>
   <div class="noprint"><button onclick="window.print()">🖨 Print</button></div>
   ${pages}
+  <script>
+  // The sizes above are estimates made without the font. Once the page has
+  // the real glyphs, shrink anything that doesn't fit: a single word wider
+  // than the sheet (EVA HOLLENBECK broke as HOLLENBE/CK — Charlie, 2026-10-18),
+  // a street address in the stop bar, the check-in band, and finally a sheet
+  // taller than its page. Nothing ever breaks inside a word or spills over.
+  (function () {
+    function px(el) { return parseFloat(getComputedStyle(el).fontSize) }
+    function fitWidth(el, minPx) {
+      var s = px(el), guard = 0
+      while (el.scrollWidth > el.clientWidth + 1 && s > minPx && guard++ < 200) { s -= 1; el.style.fontSize = s + 'px' }
+    }
+    function run() {
+      document.querySelectorAll('.sheet').forEach(function (sheet) {
+        sheet.querySelectorAll('.dest').forEach(function (el) { fitWidth(el, 18) })
+        sheet.querySelectorAll('.big').forEach(function (el) { fitWidth(el, 20) })
+        var names  = Array.prototype.slice.call(sheet.querySelectorAll('.name'))
+        var counts = Array.prototype.slice.call(sheet.querySelectorAll('.count'))
+        if (!names.length) return
+        var capPx = (parseFloat(sheet.getAttribute('data-cap')) || 44) * 96 / 72
+        function setAll(sz) {
+          names.forEach(function (el) { el.style.fontSize = sz + 'px' })
+          counts.forEach(function (el) { el.style.fontSize = Math.max(24, Math.min(53, Math.round(sz * 0.45))) + 'px' })
+        }
+        // Fits = no single word wider than the sheet (names wrap only at
+        // spaces, so a word that doesn't fit is the only way a name gets
+        // wider than its box) and the sheet not taller than its page.
+        function fits() {
+          if (sheet.scrollHeight > sheet.clientHeight + 1) return false
+          return names.every(function (el) { return el.scrollWidth <= el.clientWidth + 1 })
+        }
+        // Grow every name on the sheet in step until the cap or the page
+        // stops it — the server sized them blind, usually small.
+        var sz = px(names[0]), guard = 0
+        while (guard++ < 200 && sz + 2 <= capPx) {
+          setAll(sz + 2)
+          if (!fits()) { setAll(sz); break }
+          sz += 2
+        }
+        // Then back off until everything fits, whatever the starting point.
+        guard = 0
+        while (guard++ < 200 && !fits() && sz > 24) { sz -= 2; setAll(sz) }
+      })
+    }
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(run); else run()
+    window.addEventListener('beforeprint', run)
+  })()
+  </script>
 </body>
 </html>`
   return new NextResponse(html, { headers: { 'Content-Type': 'text/html;charset=utf-8', 'Cache-Control': 'no-store' } })
