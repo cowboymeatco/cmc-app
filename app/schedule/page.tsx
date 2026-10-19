@@ -6,6 +6,7 @@ import { isoDate, addDaysISO, dayOfWeekISO } from '@/lib/dates'
 import { SPECIES_CLR, SPECIES_EMOJI } from '@/lib/cutSchedule'
 import BookedDollars from './BookedDollars'
 import QboPicker from './QboPicker'
+import MoveHeadPanel from './MoveHeadPanel'
 
 const SPECIES  = ['Beef', 'Hog', 'Lamb', 'Goat']
 const PORTIONS = ['Whole', 'Half', 'Quarter']
@@ -647,6 +648,7 @@ export default function SchedulePage() {
           onChange={setEditing}
           onSave={save}
           onClose={() => { setShowForm(false); setEditing(null) }}
+          onMoved={summary => { setShowForm(false); setEditing(null); load(); alert(summary) }}
         />
       )}
     </div>
@@ -1021,7 +1023,7 @@ function ListView({ filtered, onEdit, onDelete, onNew }: {
 
 // ── Edit Modal ────────────────────────────────────────────────────────────────
 
-function Modal({ editing, saving, onChange, onSave, onClose }: {
+function Modal({ editing, saving, onChange, onSave, onClose, onMoved }: {
   editing:  Partial<HarvestAppointment>
   saving:   boolean
   // Dispatch (not a plain setter) so async who-pays predictions can merge via
@@ -1029,6 +1031,8 @@ function Modal({ editing, saving, onChange, onSave, onClose }: {
   onChange: React.Dispatch<React.SetStateAction<Partial<HarvestAppointment> | null>>
   onSave:   () => void
   onClose:  () => void
+  /** Part of this booking was moved to another day; close and reload. */
+  onMoved:  (summary: string) => void
 }) {
   // Producer-level who-pays default, learned from this producer's history.
   // Applied to rows with no name yet and to newly added rows; a named row
@@ -1157,6 +1161,19 @@ function Modal({ editing, saving, onChange, onSave, onClose }: {
             </div>
           ))}
         </div>
+
+        {/* Jill, 2026-10-14: "Move one animal from an appointment to the next
+            day's kill." Only a saved booking with more than one head has
+            anything to peel off. */}
+        {editing.id && editing.harvest_date && (editing.head_count ?? 1) > 1 && (
+          <MoveHeadPanel
+            appointmentId={editing.id}
+            harvestDate={editing.harvest_date}
+            headCount={editing.head_count ?? 1}
+            customers={editing.customers ?? []}
+            onMoved={onMoved}
+          />
+        )}
 
         <div style={{ display:'flex', gap:'0.75rem', marginTop:'1.5rem', justifyContent:'flex-end' }}>
           <button onClick={onClose} style={btnStyle('transparent','var(--tan)')}>Cancel</button>
