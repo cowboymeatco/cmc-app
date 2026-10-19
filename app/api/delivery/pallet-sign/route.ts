@@ -89,7 +89,12 @@ export async function GET(req: NextRequest) {
     }
     return { name: 20, count: 18 }
   }
-  const checkIn = (d: string) => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
+  const checkIn = (d: string) => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  // The foot band holds the date on the left and the case total on the right
+  // on one line; size both to the longer pair so "Sept 30, 2026" and "128
+  // CASES" can't run into each other (Charlie, 2026-10-18: they overlapped).
+  const bandPt = (left: string, right: string) =>
+    Math.max(22, Math.min(44, Math.floor(677 / (0.68 * (left.length + right.length + 3)))))
 
   const pages = pallets.map((p, i) => {
     const size = fitSizes(p.map(o => o.c), p.some(o => o.count == null), !!sheets[i].stop)
@@ -119,6 +124,9 @@ export async function GET(req: NextRequest) {
       return n + (o.b?.length ? all.filter(b => o.b!.includes(b.box_number)).length : all.filter(b => !b.picked_up_at).length)
     }, 0)
     const date = sheets[i].date
+    const dateText  = date ? checkIn(date) : ''
+    const casesText = `${boxes} CASE${boxes !== 1 ? 'S' : ''}`
+    const big = bandPt(dateText || '          ', casesText)
     return `
   <div class="sheet">
     <div class="top">
@@ -130,11 +138,11 @@ export async function GET(req: NextRequest) {
     <div class="band">
       <div class="cell">
         <div class="lbl">Check-in</div>
-        <div class="big">${date ? esc(checkIn(date)) : '<span class="blank">&nbsp;</span>'}</div>
+        <div class="big" style="font-size:${big}pt">${date ? esc(dateText) : '<span class="blank">&nbsp;</span>'}</div>
       </div>
       <div class="cell right">
         <div class="lbl">${p.length} customer${p.length !== 1 ? 's' : ''}</div>
-        <div class="big">${boxes} CASE${boxes !== 1 ? 'S' : ''}</div>
+        <div class="big" style="font-size:${big}pt">${casesText}</div>
       </div>
     </div>
   </div>`
