@@ -5,8 +5,11 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin'
 export const dynamic = 'force-dynamic'
 
 // GET /api/delivery/pallet-sign?load=<json>
-//   load = { to?: string, pallets: { n?: number, stop?: string, orders: { c: customer_name, d: YYYY-MM-DD, b?: box_numbers[] }[] }[] }
+//   load = { to?: string, date?: YYYY-MM-DD, pallets: { n?: number, stop?: string, date?: YYYY-MM-DD, orders: { c: customer_name, d: YYYY-MM-DD, b?: box_numbers[] }[] }[] }
 //   stop is where that pallet is going ("Baker Storage / US Foods") and prints big.
+//   date is the day the pallet left (the run date), printed big as CHECK-IN so
+//   Baker's clerk and the driver read it off the pallet, not off a slip. A
+//   pallet's own date wins over the load's; neither given → nothing printed.
 //
 // One sheet per pallet, every customer on it named big enough to read from
 // across a freezer (Charlie, 2026-09-24: several small orders share one
@@ -20,12 +23,15 @@ const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;
 interface OrderRef { c: string; d?: string; b?: number[]; count?: number }
 
 export async function GET(req: NextRequest) {
-  let load: { to?: string; pallets?: { n?: number; stop?: string; orders?: OrderRef[] }[] }
+  let load: { to?: string; date?: string; pallets?: { n?: number; stop?: string; date?: string; orders?: OrderRef[] }[] }
   try { load = JSON.parse(new URL(req.url).searchParams.get('load') ?? '') } catch { load = {} }
+  const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/
+  const loadDate = ISO_DAY.test(String(load.date ?? '')) ? String(load.date) : ''
   const sheets = (load.pallets ?? [])
     .map((p, i) => ({
       n: Number(p?.n) || i + 1,
       stop: String(p?.stop ?? '').trim(),
+      date: ISO_DAY.test(String(p?.date ?? '')) ? String(p?.date) : loadDate,
       orders: (Array.isArray(p?.orders) ? p.orders : []).filter(o => o?.c && (o.count != null || /^\d{4}-\d{2}-\d{2}$/.test(o.d ?? ''))),
     }))
     .filter(p => p.orders.length)
@@ -51,14 +57,47 @@ export async function GET(req: NextRequest) {
   const to = (load.to ?? '').trim()
   const fmt = (d: string) => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 
+  // Names as big as the sheet allows. Arial bold caps run about 0.68em a
+  // character and the sheet is ~9.4in (677pt) wide by ~7.2in tall; after the
+  // header, the stop bar and the check-in band about 320pt of height is left
+  // for the customers. Try sizes from the cap down until every name wraps
+  // between words (never inside one) and the whole stack fits that height.
+  const WIDTH = 677
+  const wrapLines = (name: string, pt: number): number | null => {
+    const w = (t: string) => t.length * 0.68 * pt
+    let lines = 1, used = 0
+    for (const word of name.split(/\s+/).filter(Boolean)) {
+      if (w(word) > WIDTH) return null
+      const need = used ? used + w(' ') + w(word) : w(word)
+      if (need <= WIDTH) used = need
+      else { lines++; used = w(word) }
+    }
+    return lines
+  }
+  const fitSizes = (names: string[], hasLine: boolean, hasStop: boolean) => {
+    const cap = names.length === 1 ? 120 : names.length === 2 ? 80 : names.length <= 4 ? 60 : 44
+    const budget = 330 - (hasStop ? 58 : 0)
+    for (let pt = cap; pt >= 20; pt -= 2) {
+      const count = Math.max(18, Math.min(40, Math.round(pt * 0.45)))
+      let h = 0, ok = true
+      for (const n of names) {
+        const lines = wrapLines(n, pt)
+        if (lines == null) { ok = false; break }
+        h += lines * pt * 1.02 + count * 1.05 + (hasLine ? 20 : 0) + 20
+      }
+      if (ok && h <= budget) return { name: pt, count }
+    }
+    return { name: 20, count: 18 }
+  }
+  const checkIn = (d: string) => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
+
   const pages = pallets.map((p, i) => {
-    // Fewer customers on the pallet → bigger names.
-    const nameSize = p.length === 1 ? 72 : p.length === 2 ? 50 : p.length <= 4 ? 38 : 28
+    const size = fitSizes(p.map(o => o.c), p.some(o => o.count == null), !!sheets[i].stop)
     const rows = p.map(o => {
       if (o.count != null) return `
       <div class="cust">
-        <div class="name" style="font-size:${o.c.length > 26 ? Math.round(nameSize * 0.75) : nameSize}pt">${esc(o.c)}</div>
-        <div class="count">${o.count} BOX${o.count !== 1 ? 'ES' : ''}</div>
+        <div class="name" style="font-size:${size.name}pt">${esc(o.c)}</div>
+        <div class="count" style="font-size:${size.count}pt">${o.count} CASE${o.count !== 1 ? 'S' : ''}</div>
       </div>`
       const all  = orders.get(`${o.c}|${o.d}`) ?? []
       const want = new Set(o.b ?? [])
@@ -66,8 +105,8 @@ export async function GET(req: NextRequest) {
       const lbs  = on.reduce((s, b) => s + (Number(b.total_weight_lbs) || 0), 0)
       return `
       <div class="cust">
-        <div class="name" style="font-size:${o.c.length > 26 ? Math.round(nameSize * 0.75) : nameSize}pt">${esc(o.c)}</div>
-        <div class="count">${on.length}${on.length !== all.length ? ` OF ${all.length}` : ''} BOX${on.length !== 1 ? 'ES' : ''}</div>
+        <div class="name" style="font-size:${size.name}pt">${esc(o.c)}</div>
+        <div class="count" style="font-size:${size.count}pt">${on.length}${on.length !== all.length ? ` OF ${all.length}` : ''} CASE${on.length !== 1 ? 'S' : ''}</div>
         <div class="line">
           <span>${on.length ? `Box ${on.map(b => b.box_number).join(' · ')}` : ''}</span>
           <span>${lbs > 0 ? `${lbs.toFixed(1)} lb &nbsp;·&nbsp; ` : ''}packed ${esc(fmt(o.d!))}</span>
@@ -79,6 +118,7 @@ export async function GET(req: NextRequest) {
       const all = orders.get(`${o.c}|${o.d}`) ?? []
       return n + (o.b?.length ? all.filter(b => o.b!.includes(b.box_number)).length : all.filter(b => !b.picked_up_at).length)
     }, 0)
+    const date = sheets[i].date
     return `
   <div class="sheet">
     <div class="top">
@@ -87,7 +127,16 @@ export async function GET(req: NextRequest) {
     </div>
     ${sheets[i].stop ? `<div class="dest">&rarr; ${esc(sheets[i].stop)}</div>` : ''}
     ${rows}
-    <div class="foot">${p.length} customer${p.length !== 1 ? 's' : ''}${boxes ? ` &nbsp;·&nbsp; ${boxes} box${boxes !== 1 ? 'es' : ''} on this pallet` : ''}</div>
+    <div class="band">
+      <div class="cell">
+        <div class="lbl">Check-in</div>
+        <div class="big">${date ? esc(checkIn(date)) : '<span class="blank">&nbsp;</span>'}</div>
+      </div>
+      <div class="cell right">
+        <div class="lbl">${p.length} customer${p.length !== 1 ? 's' : ''}</div>
+        <div class="big">${boxes} CASE${boxes !== 1 ? 'S' : ''}</div>
+      </div>
+    </div>
   </div>`
   }).join('')
 
@@ -101,15 +150,20 @@ export async function GET(req: NextRequest) {
   * { box-sizing: border-box; }
   body { font-family: Arial, Helvetica, sans-serif; color: #000; background: #fff; margin: 0; padding: 0.4in; }
   @media print { body { padding: 0; } .noprint { display: none; } .sheet { margin: 0; } }
-  .sheet { border: 6px solid #000; padding: 0.3in 0.4in; min-height: 7.2in; display: flex; flex-direction: column; page-break-after: always; margin-bottom: 0.4in; }
+  .sheet { border: 6px solid #000; padding: 0.3in 0.4in; height: 7.2in; overflow: hidden; display: flex; flex-direction: column; page-break-after: always; margin-bottom: 0.4in; }
   .sheet:last-child { page-break-after: auto; }
   .top { display: flex; justify-content: space-between; font-size: 16pt; font-weight: bold; letter-spacing: 0.12em; text-transform: uppercase; border-bottom: 4px solid #000; padding-bottom: 8px; margin-bottom: 6px; }
   .dest { font-size: 30pt; font-weight: 900; text-transform: uppercase; background: #000; color: #fff; padding: 6px 12px; margin: 4px 0 6px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .cust { border-bottom: 2px solid #000; padding: 10px 0 8px; page-break-inside: avoid; }
   .name { font-weight: 900; line-height: 1.02; text-transform: uppercase; word-break: break-word; }
-  .count { font-size: 34pt; font-weight: 900; line-height: 1.05; margin-top: 2px; }
+  .count { font-size: 40pt; font-weight: 900; line-height: 1.05; margin-top: 2px; }
   .line { display: flex; justify-content: space-between; gap: 24px; font-size: 15pt; margin-top: 4px; }
-  .foot { margin-top: auto; padding-top: 10px; font-size: 13pt; letter-spacing: 0.08em; text-transform: uppercase; text-align: right; }
+  .band { margin-top: auto; display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; border-top: 4px solid #000; padding-top: 10px; page-break-inside: avoid; }
+  .cell { min-width: 0; }
+  .cell.right { text-align: right; }
+  .lbl { font-size: 14pt; font-weight: bold; letter-spacing: 0.12em; text-transform: uppercase; }
+  .big { font-size: 44pt; font-weight: 900; line-height: 1.05; text-transform: uppercase; white-space: nowrap; }
+  .blank { display: inline-block; width: 4.2in; border-bottom: 3px solid #000; }
   .noprint { position: fixed; top: 8px; right: 8px; }
   .noprint button { font: inherit; padding: 6px 14px; cursor: pointer; }
 </style>
