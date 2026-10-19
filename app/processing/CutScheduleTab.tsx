@@ -5,12 +5,14 @@ import { HarvestAppointment, HarvestLog, CarcassAssignment } from '@/lib/types'
 import AssignCarcassesModal from './AssignCarcassesModal'
 import LinkScanSheetModal from './LinkScanSheetModal'
 import GrindAllModal from './GrindAllModal'
+import WeekView from './WeekView'
 import {
   type PriorityWeights, type ScheduleEntry, type BreakItem, type ListItem, type FutureBooking,
   type FutureItem, type HarvestDay, type CarcassLink,
   DEFAULT_WEIGHTS, WEIGHT_LABELS, buildEntries, loadScheduleData, uniqueCarcasses as uniqueOf,
   calcScore, speciesColor, speciesIcon, portionBadge, cutDateByKey, hangAtCut, hangColor, autoDateBreaks, moveDayIntoDateOrder,
   carcassTotals, FUTURE_WINDOW_DEFAULT_DAYS, FUTURE_WINDOW_CHOICES, buildCarcassLinks, scannedCutDay,
+  type CarcassAverages, avgLbsFor, moveItemToDay, layoutByWeight,
 } from '@/lib/cutSchedule'
 import { isoDate, dateLabel, addDaysISO, mondayOfISO, daysBetweenISO } from '@/lib/dates'
 
@@ -56,6 +58,8 @@ const PAST_WINDOW_CHOICES: { label: string; days: number }[] = [
   { label: '26wk', days: 182 },
 ]
 const PAST_WINDOW_STORAGE_KEY = 'cmc.cutSchedule.pastWindowDays'
+// List or week. Remembered per machine like the windows above.
+const VIEW_STORAGE_KEY = 'cmc.cutSchedule.view'
 
 /** A carcass marked cut or delivered whole, with the buyers off its booking
  *  and, if it was scanned into packing, the day that first happened and who
@@ -305,6 +309,17 @@ export default function CutScheduleTab() {
   const [pastWindow,   setPastWindow]   = useState<number>(OFF_RAIL_DAYS)
   const pastWindowRef = useRef(OFF_RAIL_DAYS)
   const [breakError,  setBreakError]  = useState<{ key: string; msg: string } | null>(null)
+  // Charlie, 2026-10-11: "Optimize the day break or maybe graduate into a
+  // calendar view?" The week view lays the same list out as columns and
+  // measures each day in pounds. Its yardstick is lbs_per_day off the
+  // capacity settings when set, else beef_eq_per_day × the trailing average
+  // beef carcass; the not-yet-weighed rows are priced at their species average.
+  const [view,         setView]         = useState<'list' | 'week'>('list')
+  const [averages,     setAverages]     = useState<CarcassAverages>({})
+  const [averagesNote, setAveragesNote] = useState('averages still loading')
+  const [capSettings,  setCapSettings]  = useState<{ beef_eq_per_day: number; lbs_per_day: number | null }>({ beef_eq_per_day: 3, lbs_per_day: null })
+  const [lbsNote,      setLbsNote]      = useState('')
+  const [layoutBusy,   setLayoutBusy]   = useState(false)
 
   // Cached source data, so the assign modal can read carcasses/customers and we
   // can rebuild the list after an assignment changes without a full reload.
@@ -335,7 +350,58 @@ export default function CutScheduleTab() {
     if (FUTURE_WINDOW_CHOICES.some(c => c.days === saved)) setFutureWindow(saved)
     const past = Number(window.localStorage.getItem(PAST_WINDOW_STORAGE_KEY))
     if (PAST_WINDOW_CHOICES.some(c => c.days === past)) { setPastWindow(past); pastWindowRef.current = past }
+    if (window.localStorage.getItem(VIEW_STORAGE_KEY) === 'week') setView('week')
   }, [])
+
+  const changeView = (v: 'list' | 'week') => {
+    setView(v)
+    try { window.localStorage.setItem(VIEW_STORAGE_KEY, v) } catch { /* private mode */ }
+  }
+
+  // Carcass averages and the day limit: two small reads that only the week
+  // view and the auto-fill need, kept out of the main batch so a miss here
+  // can't hold the schedule up. Fallback averages still give a number.
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/cut-schedule/averages').then(r => r.json()).then((d: unknown) => {
+      if (cancelled) return
+      const sp = (d as { species?: Record<string, { avg: number; n: number }>; window_days?: number })?.species
+      if (sp && typeof sp === 'object') {
+        setAverages(sp)
+        const parts = ['Beef', 'Hog', 'Lamb'].filter(k => sp[k]).map(k => `${k} ${Math.round(sp[k].avg)} lb over ${sp[k].n}`)
+        setAveragesNote(`trailing year: ${parts.join(', ')}`)
+      } else setAveragesNote('averages unavailable — using fallbacks')
+    }).catch(() => { if (!cancelled) setAveragesNote('averages unavailable — using fallbacks') })
+    fetch('/api/capacity').then(r => r.json()).then((d: unknown) => {
+      if (cancelled) return
+      const st = (d as { settings?: { beef_eq_per_day?: number; lbs_per_day?: number | null } })?.settings
+      if (st) setCapSettings({ beef_eq_per_day: Number(st.beef_eq_per_day) || 3, lbs_per_day: st.lbs_per_day ?? null })
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  const lbsPerDay = capSettings.lbs_per_day && capSettings.lbs_per_day > 0
+    ? capSettings.lbs_per_day
+    : Math.round(capSettings.beef_eq_per_day * (avgLbsFor('Beef', averages) || 725))
+  const lbsPerDayNote = capSettings.lbs_per_day && capSettings.lbs_per_day > 0
+    ? `Set on the Capacity page: ${capSettings.lbs_per_day.toLocaleString()} lb a day.${lbsNote ? ' ' + lbsNote : ''}`
+    : `Derived: ${capSettings.beef_eq_per_day} beef-equivalents a day × the trailing average beef carcass (${Math.round(avgLbsFor('Beef', averages) || 725)} lb). Type a number to set it for everyone.${lbsNote ? ' ' + lbsNote : ''}`
+
+  const handleLbsPerDay = async (n: number) => {
+    const prev = capSettings
+    setCapSettings(p => ({ ...p, lbs_per_day: n }))
+    setLbsNote('')
+    try {
+      const res = await fetch('/api/capacity', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lbs_per_day: n }) })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        setLbsNote(`Could not save it for everyone (${d?.error ?? `HTTP ${res.status}`}); it holds on this screen until reload.`)
+      }
+    } catch {
+      setLbsNote('Could not save it for everyone (network); it holds on this screen until reload.')
+      setCapSettings(prev)
+    }
+  }
 
   const changeWindow = (days: number) => {
     setFutureWindow(days)
@@ -603,6 +669,35 @@ export default function CutScheduleTab() {
   }
 
   const handleDragEnd = () => { setDragging(null); setDragOver(null) }
+
+  // Week view: a card dropped on a day column goes to the end of that day,
+  // and the day's break is made if the plan has none (see moveItemToDay).
+  const handleDropOnDay = (date: string) => {
+    if (!dragging) return
+    const key = dragging
+    setEntries(prev => autoDateBreaks(moveItemToDay(prev, key, date)).map((e, i) => ({ ...e, rank: i + 1 })))
+    setDragging(null); setDragOver(null)
+  }
+
+  // Everything with no cutting day, into the coming days by weight. Only the
+  // undated pile moves; see layoutByWeight for the rules.
+  const handleLayout = () => {
+    setLayoutBusy(true)
+    try {
+      const killDays = new Set(harvestDays.map(h => h.date))
+      const r = layoutByWeight(entries, { today: todayISO, lbsPerDay, averages, killDays })
+      setEntries(r.list)
+      const made = r.daysMade.length
+      window.alert(
+        `Laid out ${r.placed} row${r.placed !== 1 ? 's' : ''} into the coming days at up to ${lbsPerDay.toLocaleString()} lb a day` +
+        (made ? `, making ${made} new day${made !== 1 ? 's' : ''}` : '') +
+        (r.leftover ? `. ${r.leftover} found no room inside 60 days.` : '.') +
+        `\n\nNothing is saved yet — look it over, drag anything you want moved, then Save.`
+      )
+    } finally {
+      setLayoutBusy(false)
+    }
+  }
 
   const handleToggleLock = (key: string) =>
     setEntries(prev => prev.map(e =>
@@ -901,7 +996,7 @@ export default function CutScheduleTab() {
 
   return (
     <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start', maxWidth: 1200 }}>
-    <div style={{ flex: '1 1 auto', minWidth: 0, maxWidth: 900 }}>
+    <div style={{ flex: '1 1 auto', minWidth: 0, maxWidth: view === 'week' && !showPast ? 1200 : 900 }}>
 
       {loadError && (
         <div style={{
@@ -955,6 +1050,23 @@ export default function CutScheduleTab() {
         </div>
 
         <div style={{ display: 'flex', gap: '0.6rem' }}>
+          {!showPast && (
+            <div style={{ display: 'inline-flex', border: '1px solid rgba(201,168,130,0.45)', borderRadius: 4, overflow: 'hidden' }}>
+              {(['list', 'week'] as const).map(v => (
+                <button
+                  key={v}
+                  onClick={() => changeView(v)}
+                  title={v === 'list' ? 'The running order, one list with day breaks' : 'The same plan as a week: a column per cutting day, pounds against a daily limit'}
+                  style={{
+                    background: view === v ? 'rgba(201,168,130,0.25)' : 'transparent', color: C.tan,
+                    border: 'none', padding: '0.5rem 0.9rem', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer',
+                  }}
+                >
+                  {v === 'list' ? '☰ List' : '🗓 Week'}
+                </button>
+              ))}
+            </div>
+          )}
           {/* Jill, 2026-10-05: "Somewhere I could go to see past cut days?"
               Flips the list to what was cut on which day, read-only. */}
           <button
@@ -1127,7 +1239,32 @@ export default function CutScheduleTab() {
       )}
 
       {/* Schedule list */}
-      {!loading && !showPast && entries.length > 0 && (
+      {!loading && !showPast && view === 'week' && entries.length > 0 && (
+        <WeekView
+          entries={entries}
+          cutDates={cutDates}
+          noDayKeys={noDayKeys}
+          railFutures={futureGroups.flatMap(g => g.pending)}
+          harvestDays={harvestDays}
+          averages={averages}
+          averagesNote={averagesNote}
+          lbsPerDay={lbsPerDay}
+          lbsPerDayNote={lbsPerDayNote}
+          onLbsPerDay={handleLbsPerDay}
+          todayISO={todayISO}
+          atCutByKey={atCutByKey}
+          dragging={dragging}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+          onDropOnDay={handleDropOnDay}
+          onDropBefore={handleDrop}
+          onDropToRail={handleDropToRail}
+          onLayout={handleLayout}
+          layoutBusy={layoutBusy}
+        />
+      )}
+
+      {!loading && !showPast && view === 'list' && entries.length > 0 && (
         <>
           {/* Column headers */}
           <div style={{
@@ -1926,7 +2063,7 @@ export default function CutScheduleTab() {
         whatever the last day break happened to be (Charlie, 2026-08-05). Drag
         one onto a row to slot it into that day; drag a scheduled row back here
         to take its day away again. */}
-    {!loading && !showPast && (carcasses.length > 0 || futureBookings.length > 0) && (
+    {!loading && !showPast && view === 'list' && (carcasses.length > 0 || futureBookings.length > 0) && (
       <aside
         onDragOver={e => { e.preventDefault(); setDragOver('__rail__') }}
         onDrop={handleDropToRail}
