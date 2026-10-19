@@ -1437,7 +1437,12 @@ interface WSRow {
 // pushed to another day. The block stays on this day's sheet holding the
 // numbers it spent — tags are printed with this day's Julian code, so those
 // numbers can't be handed back — and shows where the animals went.
-interface WSGroup { producer: string; species: string; rows: WSRow[]; slots: number; movedTo?: string }
+interface WSGroup {
+  producer: string; species: string; rows: WSRow[]; slots: number; movedTo?: string
+  /** Slots whose animal was moved to another day on its own (a partial move
+   *  off /schedule) → the day it went to. The number stays spent here. */
+  movedSlots?: Record<number, string>
+}
 
 // One row of harvest_rolls: an appointment moved off this day after check-in.
 interface WSRoll {
@@ -1593,6 +1598,15 @@ function WorksheetTab({ date }: { date: string }) {
       })
       const tagCursor = new Map<string, number>()
 
+      // One animal peeled off to another day keeps its row here as 'removed'
+      // with "Moved to <date>" in its notes (see /api/appointments/split), so
+      // its gap can say where it went instead of "taken off the day".
+      const movedSlots: Record<number, string> = {}
+      for (const an of all) {
+        const m = an.status === 'removed' ? /^Moved to (\d{4}-\d{2}-\d{2})/.exec(an.notes ?? '') : null
+        if (m && an.animal_index) movedSlots[an.animal_index] = m[1]
+      }
+
       const producer = a.source || a.customers?.[0]?.customer_name || 'Unknown'
       built.push({
         producer,
@@ -1601,6 +1615,7 @@ function WorksheetTab({ date }: { date: string }) {
           producer,
           species:  a.species,
           slots,
+          movedSlots,
           rows: live.map((an, i) => {
             const key    = an.ear_tag || ''
             const cursor = tagCursor.get(key) ?? 0
@@ -1727,7 +1742,11 @@ function WorksheetTab({ date }: { date: string }) {
         : '— taken off the day —'
       const gaps = Array.from({ length: g.slots }, (_, i) => i + 1)
         .filter(slot => !g.rows.some(r => r.slot === slot))
-        .map(slot => `<tr class="void"><td class="cid">${String(groupStart[gi] + slot - 1).padStart(2, '0')}</td><td colspan="8">${voidLabel}</td></tr>`)
+        .map(slot => {
+          const went = g.movedSlots?.[slot]
+          const label = went ? `— moved to ${esc(shortDate(went))} —` : voidLabel
+          return `<tr class="void"><td class="cid">${String(groupStart[gi] + slot - 1).padStart(2, '0')}</td><td colspan="8">${label}</td></tr>`
+        })
         .join('')
       const body = g.rows.map(r => {
         const cidStr = String(groupStart[gi] + r.slot - 1).padStart(2, '0')
@@ -2215,8 +2234,8 @@ function FragmentGroup({ gi, group, startId, skipped, onToggle }: {
               {String(startId + slot - 1).padStart(2, '0')}
             </td>
             <td colSpan={8} style={{ padding: '0.5rem 0.75rem', color: 'rgba(166,120,90,0.55)', fontSize: '0.78rem', fontStyle: 'italic' }}>
-              {group.movedTo
-                ? `moved to ${shortDate(group.movedTo)} — number stays spent on this day's tags`
+              {group.movedTo || group.movedSlots?.[slot]
+                ? `moved to ${shortDate(group.movedTo ?? group.movedSlots![slot])} — number stays spent on this day's tags`
                 : 'taken off the day — number held so the tags behind it still match'}
             </td>
           </tr>
