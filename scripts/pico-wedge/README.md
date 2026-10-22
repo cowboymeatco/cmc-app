@@ -8,9 +8,13 @@ product up. Nothing on the scale changes; no HCT involved.
 
 Parts list and the plan: the "Pico Scale Wedge Parts" page (2026-09-06).
 
-**Flow:** app queues `scale 2, PLU 118` (`/scale-callup`, later the scanner page)
-→ `scale_callup_requests` row → the Pico on scale 2 polls `/api/scale-callup/device`
-→ types `118 ⏎` → reports done.
+**Flow:** the packer taps a still-to-pack line on `/scanner` (or sends one from
+`/scale-callup`) → `scale_callup_requests` row for that station's scale(s) → the Pico
+on that scale polls `/api/scale-callup/device` → types `118 ⏎` → reports done.
+
+**Proven 2026-10-22** on scales 2 and 1: the Hobart takes the bare PLU digits from
+its USB port, no barcode mapping needed. Every poll also stamps `scale_wedges`, so
+both pages show a green dot on a scale whose board has checked in within 15 s.
 
 ## Files
 
@@ -86,9 +90,9 @@ Ctrl+D in the black area restarts the program so it prints from the top). PuTTY 
 2. Plug it into the scale's USB port with the short data cable. Mount the case
    behind the scale housing, out of the spray.
 3. On **/scale-callup** send a PLU to that scale with the format set to **PLU
-   digits**. If the scale calls the product up, that is the format. If it does not,
-   try **13-digit barcode**: it types the in-store barcode the scale itself prints
-   for that PLU at zero weight (`2` + PLU + `0` + `00000` + check digit).
+   digits**. That is what the shop's HT scales take (proven on scales 1 and 2).
+   The **13-digit barcode** option stays for a scale that turns out to want the
+   in-store barcode instead (`2` + PLU + `0` + `00000` + check digit).
 4. If neither works and the scale ignores the board altogether, it may want a plain
    keyboard rather than a keyboard-plus-drive-plus-console. Add
    `CMC_KEYBOARD_ONLY = 1` to `settings.toml` and power-cycle. The drive disappears
