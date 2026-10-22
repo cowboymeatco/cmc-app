@@ -122,10 +122,12 @@ if not (API_URL and TOKEN and SCALE and SSID):
 connect_wifi()
 pool = socketpool.SocketPool(wifi.radio)
 
-# TLS. The app's certificate comes from Let's Encrypt's "Generation Y" chain
-# (YR2 -> Root YR, from Sept 2026), which the board's built-in trust list
-# predates: the stock bundle fails with MBEDTLS_ERR_X509_FATAL_ERROR. So we
-# trust the Let's Encrypt roots ourselves, from certs.pem next to this file.
+# TLS. app.cowboymeats.com sits behind Cloudflare, which hands a device a
+# certificate from one of several authorities, and Vercel behind it uses
+# Let's Encrypt's 2025 "Generation Y" roots. The board's built-in trust
+# list predates some of these (the stock bundle fails with
+# MBEDTLS_ERR_X509_FATAL_ERROR), so we trust the roots ourselves, from
+# certs.pem next to this file: every root any of those chains ends at.
 ssl_ctx = ssl.create_default_context()
 try:
     with open("/certs.pem") as f:

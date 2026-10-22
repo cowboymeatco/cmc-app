@@ -19,7 +19,7 @@ Parts list and the plan: the "Pico Scale Wedge Parts" page (2026-09-06).
 | `code.py` | the program: wifi, poll, type |
 | `boot.py` | USB identity; keyboard-only mode if a scale needs it |
 | `settings.toml.example` | copy to `settings.toml`, fill in |
-| `certs.pem` | the Let's Encrypt roots the board trusts (the app's certificate chain is newer than the board's built-in list) |
+| `certs.pem` | the root certificates the board trusts: everything Cloudflare (in front of the app) and Vercel's Let's Encrypt chain can end at, since the board's built-in list predates some of them |
 
 ## Flashing a board (first time, about ten minutes)
 
@@ -69,7 +69,7 @@ scale, not the board.
 | solid | joining wifi |
 | one quick blink a second | checked in with the app, nothing to type |
 | three fast blinks | typed a call-up |
-| long on, then off | can't reach wifi or the app; it keeps retrying. `error: (-12288, 'MBEDTLS_ERR_X509_FATAL_ERROR')` on the serial console means `certs.pem` is missing from the drive. |
+| long on, then off | can't reach wifi or the app; it keeps retrying. `MBEDTLS_ERR_X509_FATAL_ERROR` on the serial console means `certs.pem` is missing from the drive; `MBEDTLS_ERR_X509_CERT_VERIFY_FAILED` means the server's chain ends at a root that isn't in it (add it). |
 
 ## Serial console (when something is wrong)
 
