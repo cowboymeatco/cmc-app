@@ -50,3 +50,6 @@ next-env.d.ts
 __pycache__/
 *.pyc
 scripts/smokehouse/supabase.env
+
+# The Pico wedge ships its trusted roots; public certificates, not keys.
+!scripts/pico-wedge/certs.pem
