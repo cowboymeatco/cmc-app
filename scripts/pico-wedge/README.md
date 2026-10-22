@@ -19,6 +19,7 @@ Parts list and the plan: the "Pico Scale Wedge Parts" page (2026-09-06).
 | `code.py` | the program: wifi, poll, type |
 | `boot.py` | USB identity; keyboard-only mode if a scale needs it |
 | `settings.toml.example` | copy to `settings.toml`, fill in |
+| `certs.pem` | the Let's Encrypt roots the board trusts (the app's certificate chain is newer than the board's built-in list) |
 
 ## Flashing a board (first time, about ten minutes)
 
@@ -37,8 +38,8 @@ Parts list and the plan: the "Pico Scale Wedge Parts" page (2026-09-06).
    - `adafruit_hid/` (the whole folder)
    - `adafruit_requests.mpy`
    - `adafruit_connection_manager.mpy`
-5. **Our files.** Copy `code.py` and `boot.py` from this folder onto CIRCUITPY
-   (replacing the stock `code.py`). Copy `settings.toml.example` there as
+5. **Our files.** Copy `code.py`, `boot.py` and `certs.pem` from this folder onto
+   CIRCUITPY (replacing the stock `code.py`). Copy `settings.toml.example` there as
    `settings.toml` and fill it in: the shop wifi (2.4 GHz name), the app URL,
    the token, and which scale this board is for.
 6. **Token.** `CMC_WEDGE_TOKEN` must equal `SCALE_WEDGE_TOKEN` in the app's Vercel
@@ -68,12 +69,15 @@ scale, not the board.
 | solid | joining wifi |
 | one quick blink a second | checked in with the app, nothing to type |
 | three fast blinks | typed a call-up |
-| long on, then off | can't reach wifi or the app; it keeps retrying |
+| long on, then off | can't reach wifi or the app; it keeps retrying. `error: (-12288, 'MBEDTLS_ERR_X509_FATAL_ERROR')` on the serial console means `certs.pem` is missing from the drive. |
 
 ## Serial console (when something is wrong)
 
-The board prints what it is doing. Any serial terminal at 115200 on the board's COM
-port shows it (Mu Editor's "Serial" button is the easy one; PuTTY works). You will see
+The board prints what it is doing. The no-install way: in Chrome open
+https://googlechromelabs.github.io/serial-terminal/, click Connect, pick the
+"Pico 2 W - CircuitPython CDC control" port, and the output appears (Ctrl+C then
+Ctrl+D in the black area restarts the program so it prints from the top). PuTTY at
+115200 on the board's COM port works too. You will see
 `wifi: joining`, `wedge for scale 2 polling …`, `call-up: 118 …`, and any error.
 
 ## Going on a scale
