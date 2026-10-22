@@ -9,6 +9,10 @@ with one tap. Nothing is typed, nothing is read off the display.
 Sister project: `scripts/pico-wedge` (the boards on the Hobart scales). Same
 flashing steps, same wifi, same token, same `certs.pem`.
 
+No MAX3232 in the drawer yet? `scripts/scale-reader` does the same job from a
+computer with the Keyspan USB-to-serial adapter, posting to the same API, so the
+app side is identical either way.
+
 **Flow:** indicator streams `<STX> 1245.LG <CR>` → Pico parses the frame →
 `POST /api/scale-readings/device` → `scale_readings` row for `live_animal` →
 harvest page polls `/api/scale-readings` once a second while a Part A row is
