@@ -6,6 +6,7 @@ import { HarvestAppointment, HarvestLog, ChillLog, AnimalReceivingLog, Correctiv
 import { setFeedbackContext, clearFeedbackContext } from '@/lib/feedbackTelemetry'
 import { isoDate, isoDateTime, addDaysISO } from '@/lib/dates'
 import { splitsIntoHalves, WHOLE_WEIGHT_LABEL } from '@/lib/carcass'
+import { readingIsStale, type ScaleReading } from '@/lib/scaleReading'
 
 type Tab = 'parta' | 'partb' | 'worksheet' | 'harvestlog' | 'chill'
 
@@ -302,6 +303,26 @@ function PartATab({ date, appt }: { date: string; appt: HarvestAppointment | nul
   const [loading, setLoading]   = useState(false)
   const [inspInitials, setInsp] = useState('')
   const [performedBy, setPerf]  = useState('')
+
+  // The live-animal scale, read off the Rice Lake indicator by the Pico on
+  // its serial port (scripts/pico-scale). Polled only while a row is open,
+  // which is the only time anybody is weighing. A reading older than a few
+  // seconds is not what is on the platform and is shown as such.
+  const [live, setLive]       = useState<ScaleReading | null>(null)
+  const [liveNow, setLiveNow] = useState(() => Date.now())
+  const anyOpen = rows.some(r => r.expanded)
+  useEffect(() => {
+    if (!anyOpen) return
+    let stop = false
+    const poll = () => fetch('/api/scale-readings?scale_id=live_animal').then(r => r.json())
+      .then((j: { reading?: ScaleReading | null }) => { if (!stop) { setLive(j?.reading ?? null); setLiveNow(Date.now()) } })
+      .catch(() => {})
+    poll()
+    const iv = setInterval(() => { if (document.visibilityState === 'visible') poll() }, 1000)
+    return () => { stop = true; clearInterval(iv) }
+  }, [anyOpen])
+  const liveStale = readingIsStale(live, liveNow)
+  const liveLbs = live && !liveStale && live.lb != null ? Math.round(Number(live.lb)) : null
 
   const load = useCallback(async () => {
     if (!appt) return
@@ -679,8 +700,31 @@ Save anyway?`
                 </div>
                 <div>
                   <label style={LABEL}>Live Weight (lbs)</label>
-                  <input type="number" step="1" style={INPUT} value={row.liveWeight}
-                    onChange={e => upd(i, { liveWeight: e.target.value })} placeholder="e.g. 1245" />
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'stretch' }}>
+                    <input type="number" step="1" style={INPUT} value={row.liveWeight}
+                      onChange={e => upd(i, { liveWeight: e.target.value })} placeholder="e.g. 1245" />
+                    {/* What the floor scale reads right now. One tap takes it;
+                        typing still works when the board is off. */}
+                    <button
+                      type="button"
+                      disabled={liveLbs == null || !live?.stable}
+                      onClick={() => { if (liveLbs != null) upd(i, { liveWeight: String(liveLbs) }) }}
+                      title={live == null ? 'No reading from the live-animal scale yet. Is the Pico on the indicator powered and on wifi?'
+                        : liveStale ? `The scale board has not reported for ${Math.round((liveNow - new Date(live.read_at).getTime()) / 1000)}s`
+                        : live.stable ? 'Take the weight on the scale' : 'Scale is in motion — wait for it to settle'}
+                      style={{
+                        flexShrink: 0, minWidth: 120, borderRadius: 3, padding: '0.4rem 0.7rem', cursor: liveLbs != null && live?.stable ? 'pointer' : 'default',
+                        fontFamily: 'monospace', fontSize: '0.95rem', fontWeight: 700, fontVariantNumeric: 'tabular-nums',
+                        background: liveLbs != null && live?.stable ? 'rgba(76,175,80,0.15)' : 'rgba(255,255,255,0.04)',
+                        border: `1px solid ${liveLbs != null && live?.stable ? 'rgba(76,175,80,0.5)' : 'rgba(166,120,90,0.3)'}`,
+                        color: liveLbs == null ? C.lightBrown : live?.stable ? C.green : C.yellow,
+                      }}>
+                      {liveLbs == null ? '⚖ — ' : `⚖ ${liveLbs.toLocaleString()} lb`}
+                      <span style={{ display: 'block', fontSize: '0.6rem', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', fontFamily: 'system-ui, sans-serif' }}>
+                        {live == null ? 'no scale' : liveStale ? 'stale' : live.stable ? 'use' : 'settling'}
+                      </span>
+                    </button>
+                  </div>
                 </div>
               </div>
               <div style={{ marginBottom: '0.85rem' }}>

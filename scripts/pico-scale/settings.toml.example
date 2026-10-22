@@ -1,0 +1,31 @@
+# Copy to settings.toml on the CIRCUITPY drive and fill in. Strings in quotes,
+# numbers bare. CircuitPython reads the CIRCUITPY_WIFI_* ones itself at boot.
+
+# The shop wifi. A Pico W only does 2.4 GHz, so this must be a 2.4 GHz network name.
+CIRCUITPY_WIFI_SSID = "shop-wifi-name"
+CIRCUITPY_WIFI_PASSWORD = "shop-wifi-password"
+
+# Where the app lives, no trailing slash.
+CMC_API_URL = "https://app.cowboymeats.com"
+
+# The same value as SCALE_WEDGE_TOKEN in the app's Vercel env: the scale
+# wedges and this reader share it.
+CMC_WEDGE_TOKEN = "paste-the-token-here"
+
+# Which scale this board reads. live_animal is the Rice Lake at harvest.
+CMC_SCALE_ID = "live_animal"
+
+# A name for this board, shown with the reading.
+CMC_KIOSK = "pico-scale-harvest"
+
+# The indicator's serial port speed. 9600 is the Rice Lake default; the port
+# must be set to 8 data bits, no parity, 1 stop bit, continuous stream.
+CMC_BAUD = 9600
+
+# How often a changing weight is reported (seconds), and how often an
+# unchanged one is re-reported so the app knows the board is still alive.
+CMC_POST_SECONDS = 0.5
+CMC_IDLE_SECONDS = 5
+
+# Bench-test escape hatch only. 1 turns certificate checking off entirely.
+# CMC_INSECURE_TLS = 1
