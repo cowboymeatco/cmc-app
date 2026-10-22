@@ -3244,6 +3244,7 @@ export default function ScannerPage() {
         <div style={{ background: C.darkBrown, borderBottom: '1px solid rgba(166,120,90,0.3)', padding: '0.75rem 1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
             <Link href="/processing?tab=browser" style={{ color: C.lightBrown, fontSize: '0.8rem', textDecoration: 'none' }}>← Processing Tools</Link>
+            <Link href="/bench" title="The big-type still-to-pack list for the screen at the scale: tap a cut, the scale calls it up." style={{ color: C.lightBrown, fontSize: '0.8rem', textDecoration: 'none' }}>Bench ›</Link>
             <span style={{ color: 'rgba(166,120,90,0.35)' }}>|</span>
             <span style={{ fontFamily: 'Georgia, serif', color: C.cream, fontSize: '1rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Processing Scanner</span>
             {/* The PLU list, one tap away in its own tab — the scanner stays
