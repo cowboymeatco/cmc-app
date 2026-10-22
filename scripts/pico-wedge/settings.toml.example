@@ -20,3 +20,7 @@ CMC_POLL_SECONDS = 1
 # Pause between keystrokes in milliseconds. 20 is scanner-like; raise it if the
 # scale drops digits.
 CMC_KEY_DELAY_MS = 20
+
+# Bench-test escape hatch only. 1 turns certificate checking off entirely. Leave
+# it out: certs.pem next to code.py is the real fix for a certificate error.
+# CMC_INSECURE_TLS = 1

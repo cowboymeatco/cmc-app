@@ -27,6 +27,15 @@ export async function POST(req: NextRequest) {
   if (!SCALE_NUMBER_RE.test(scale)) return NextResponse.json({ error: 'scale must be the scale number, e.g. 2' }, { status: 400 })
   const now = new Date()
 
+  // 0. Heartbeat: this wedge is alive and answering to this scale number.
+  //    One tiny upsert a second per board; the call-up and scanner pages read
+  //    it to show which boards are online (scripts/2026-10-22_scale_wedges.sql).
+  const { data: beat } = await supabaseAdmin.from('scale_wedges').select('check_ins').eq('scale', scale).maybeSingle()
+  await supabaseAdmin.from('scale_wedges').upsert(
+    { scale, last_seen_at: now.toISOString(), check_ins: (beat?.check_ins ?? 0) + 1 },
+    { onConflict: 'scale' },
+  )
+
   // 1. How the last one went. Only a row this wedge claimed can be closed.
   const done = body.done
   if (done && typeof done.id === 'string') {

@@ -8,8 +8,9 @@
 # calls the product up and the packer weighs it.
 #
 # CircuitPython. Settings come from settings.toml next to this file (see
-# settings.toml.example). Libraries needed in /lib: adafruit_hid,
-# adafruit_requests, adafruit_connection_manager. README.md has the steps.
+# settings.toml.example); certs.pem next to it holds the roots we trust.
+# Libraries needed in /lib: adafruit_hid, adafruit_requests,
+# adafruit_connection_manager. README.md has the steps.
 #
 # The onboard LED says what it's doing:
 #   nothing at all   code.py isn't running: no CircuitPython, or it crashed
@@ -120,7 +121,27 @@ if not (API_URL and TOKEN and SCALE and SSID):
 
 connect_wifi()
 pool = socketpool.SocketPool(wifi.radio)
-requests = adafruit_requests.Session(pool, ssl.create_default_context())
+
+# TLS. app.cowboymeats.com sits behind Cloudflare, which hands a device a
+# certificate from one of several authorities, and Vercel behind it uses
+# Let's Encrypt's 2025 "Generation Y" roots. The board's built-in trust
+# list predates some of these (the stock bundle fails with
+# MBEDTLS_ERR_X509_FATAL_ERROR), so we trust the roots ourselves, from
+# certs.pem next to this file: every root any of those chains ends at.
+ssl_ctx = ssl.create_default_context()
+try:
+    with open("/certs.pem") as f:
+        pem = "".join(line for line in f if not line.startswith("#"))
+    ssl_ctx.load_verify_locations(cadata=pem)
+    print("tls: trusting the roots in certs.pem")
+except OSError:
+    print("tls: no certs.pem, using the built-in trust list")
+if str(setting("CMC_INSECURE_TLS", "")).strip() in ("1", "true", "yes"):
+    # Last resort for bench testing only: no certificate check at all.
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl.CERT_NONE
+    print("tls: VERIFICATION OFF (CMC_INSECURE_TLS)")
+requests = adafruit_requests.Session(pool, ssl_ctx)
 
 # ── main loop ───────────────────────────────────────────────────────────────
 

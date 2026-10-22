@@ -44,3 +44,11 @@ export function callupKeys(plu: string, format: CallupFormat): string {
  *  has moved on, and typing it late would call up the wrong product under
  *  whatever is on the platter now. */
 export const CALLUP_TTL_SECONDS = 90
+
+/** A wedge polls about once a second. Quiet for this long and it is off,
+ *  off the wifi, or has not been given this scale number. */
+export const WEDGE_ONLINE_SECONDS = 15
+export interface Wedge { scale: string; first_seen_at: string; last_seen_at: string; check_ins: number }
+export function wedgeOnline(w: Wedge | undefined, nowMs: number): boolean {
+  return !!w && nowMs - new Date(w.last_seen_at).getTime() < WEDGE_ONLINE_SECONDS * 1000
+}

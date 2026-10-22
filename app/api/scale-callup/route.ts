@@ -3,25 +3,32 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { CALLUP_FORMATS, CALLUP_TTL_SECONDS, PLU_RE, SCALE_NUMBER_RE, callupKeys, type CallupFormat } from '@/lib/scaleCallup'
 
-// GET  /api/scale-callup → the last few call-ups and the PLUs that can be
-//                          called up (for the /scale-callup bench page).
+// GET  /api/scale-callup → the last few call-ups, which wedges are alive, and
+//                          the PLUs that can be called up (the /scale-callup
+//                          bench page). ?wedges=1 → just the wedges and the
+//                          last 20 rows, which is all the scanner polls for.
 // POST /api/scale-callup → queue one: "scale 2, call up PLU 118". The Pico
 //                          wedge on that scale picks it up through
 //                          /api/scale-callup/device and types it.
 //
 // See scripts/2026-10-13_scale_callups.sql and scripts/pico-wedge/README.md.
 
-export async function GET() {
-  const [requests, items] = await Promise.all([
+export async function GET(req: NextRequest) {
+  const light = req.nextUrl.searchParams.get('wedges') === '1'
+  const [requests, wedges, items] = await Promise.all([
     supabaseAdmin.from('scale_callup_requests').select('*').order('created_at', { ascending: false }).limit(20),
-    supabaseAdmin.from('plu_items').select('plu_number, item_name, price').eq('active', true).order('plu_number'),
+    supabaseAdmin.from('scale_wedges').select('*').order('scale'),
+    light ? null : supabaseAdmin.from('plu_items').select('plu_number, item_name, price').eq('active', true).order('plu_number'),
   ])
   if (requests.error) return NextResponse.json({ error: requests.error.message }, { status: 500 })
   // Only what the price push sends is on the scales (see lib/scaleReads).
-  const plus = (items.data ?? [])
+  const plus = (items?.data ?? [])
     .filter(p => p.price != null && Number(p.price) > 0.01)
     .map(p => ({ plu: String(p.plu_number), name: p.item_name ?? '' }))
-  return NextResponse.json({ requests: requests.data ?? [], plus, now: new Date().toISOString(), ttl: CALLUP_TTL_SECONDS })
+  return NextResponse.json({
+    requests: requests.data ?? [], wedges: wedges.data ?? [], plus,
+    now: new Date().toISOString(), ttl: CALLUP_TTL_SECONDS,
+  })
 }
 
 export async function POST(req: NextRequest) {

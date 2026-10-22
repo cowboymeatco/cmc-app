@@ -10,6 +10,7 @@ import { speciesIcon, speciesFromDescription } from '@/lib/cutSchedule'
 import CustomerPicker, { resolveCiScan, type CustomerName } from './CustomerPicker'
 import AnimalStart, { type AnimalPick } from './AnimalStart'
 import { isCarcassTag } from '@/lib/carcassTag'
+import { wedgeOnline, type Wedge } from '@/lib/scaleCallup'
 import { weightInName } from '@/lib/label'
 import { WHOLE_BOX_PLUS, labelKey, type ScannerProducerSet } from '@/lib/producerLabels'
 const C = {
@@ -940,6 +941,18 @@ export default function ScannerPage() {
     return m
   }, [expected])
 
+  // The reverse: cut line → the PLU(s) linked to it. What the call-up tap
+  // sends to the scale.
+  const plusForKey = useMemo(() => {
+    const m = new Map<string, { plu: string; name: string }[]>()
+    for (const l of expected?.links ?? []) {
+      const arr = m.get(l.cut_key) ?? []
+      if (!arr.some(x => x.plu === l.plu_number)) arr.push({ plu: l.plu_number, name: l.item_name ?? '' })
+      m.set(l.cut_key, arr)
+    }
+    return m
+  }, [expected])
+
   const packedByKey = useMemo(() => {
     const m = new Map<string, { pkgs: number; lbs: number }>()
     for (const sc of sessionScans) {
@@ -1081,6 +1094,72 @@ export default function ScannerPage() {
   }, [expected, producerSets])
   const boxOnlyRef = useRef(false)
   useEffect(() => { boxOnlyRef.current = !!boxOnlyProducer }, [boxOnlyProducer])
+
+  // ── Call a cut up on the scale ────────────────────────────────────────────
+  // A Pico wedge on each scale's USB port types a PLU into it the way its
+  // barcode scanner would (scripts/pico-wedge, Charlie 2026-10-22). Tapping a
+  // still-to-pack line sends that line's PLU to every scale picked at this
+  // station, so the packer never keys a number in. The boards check in once a
+  // second; the dot on each scale button says whether that one is listening.
+  const [wedges, setWedges]         = useState<Wedge[]>([])
+  const [wedgeNow, setWedgeNow]     = useState(() => Date.now())
+  const [callups, setCallups]       = useState<Record<string, string>>({})   // line key → status
+  useEffect(() => {
+    if (!scaleIps.length) return
+    let stop = false
+    const poll = () => fetch('/api/scale-callup?wedges=1').then(r => r.json())
+      .then((j: { wedges?: Wedge[] }) => { if (!stop) { setWedges(Array.isArray(j?.wedges) ? j.wedges : []); setWedgeNow(Date.now()) } })
+      .catch(() => {})
+    poll()
+    const iv = setInterval(() => { if (document.visibilityState === 'visible') poll() }, 5000)
+    return () => { stop = true; clearInterval(iv) }
+  }, [scaleIps.length])
+  const wedgeOn = (scaleName: string) => wedgeOnline(wedges.find(w => w.scale === scaleName), wedgeNow)
+
+  async function callUp(lineKey: string, housePlu: string, itemName: string) {
+    if (!scaleIps.length) return
+    // The scale holds the producer's copy of a PLU while their animals are
+    // packed, so that is the number to call up, not the house one.
+    let plu = housePlu
+    for (const k of sessionLabelKeysRef.current) {
+      const theirs = producerRef.current.byKey[k]?.houseToPlu[housePlu]
+      if (theirs) { plu = theirs; break }
+    }
+    const scales = scaleIps.map(ip => SCALES.find(x => x.ip === ip)?.name).filter((n): n is string => !!n)
+    setCallups(c => ({ ...c, [lineKey]: '⏳' }))
+    addBreadcrumb('click', `call-up ${plu} → scale ${scales.join(',')}`)
+    try {
+      const ids: { id: string; scale: string }[] = []
+      for (const scale of scales) {
+        const res = await fetch('/api/scale-callup', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scale, plu, item_name: itemName, requested_by: 'scanner' }),
+        })
+        const d = await res.json()
+        if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`)
+        if (d.request?.id) ids.push({ id: d.request.id, scale })
+      }
+      const pending = new Map(ids.map(x => [x.id, x.scale]))
+      for (let i = 0; i < 12 && pending.size; i++) {
+        await new Promise(r => setTimeout(r, 1000))
+        const j = await fetch('/api/scale-callup?wedges=1').then(r => r.json()).catch(() => null)
+        for (const row of (j?.requests ?? []) as { id: string; status: string; error?: string | null }[]) {
+          const scale = pending.get(row.id)
+          if (!scale) continue
+          if (row.status === 'done') pending.delete(row.id)
+          if (row.status === 'error' || row.status === 'expired') {
+            setCallups(c => ({ ...c, [lineKey]: `✗ scale ${scale}: ${row.error ?? row.status}` }))
+            return
+          }
+        }
+      }
+      setCallups(c => ({ ...c, [lineKey]: pending.size
+        ? `⚠ scale ${[...pending.values()].join(', ')} hasn't typed it — is its board on?`
+        : `✓ ${scales.length > 1 ? `scales ${scales.join(', ')}` : `scale ${scales[0]}`} · ${plu}` }))
+    } catch (e) {
+      setCallups(c => ({ ...c, [lineKey]: `✗ ${e instanceof Error ? e.message : 'failed'}` }))
+    }
+  }
 
   // The PLU a scanned package is recorded under, and what's wrong with its
   // label for this session, if anything. Refs only — doScan is a stable callback.
@@ -3953,7 +4032,7 @@ export default function ScannerPage() {
                   <button
                     key={sc.ip}
                     onClick={() => toggleScale(sc.ip)}
-                    title={`Hobart scale at ${sc.ip}. Pick every scale this station is working; tap again to unset.`}
+                    title={`Hobart scale at ${sc.ip}${wedgeOn(sc.name) ? ' — its call-up board is online' : wedges.some(w => w.scale === sc.name) ? ' — its call-up board is not checking in' : ''}. Pick every scale this station is working; tap again to unset.`}
                     style={{
                       background: on ? 'rgba(201,168,130,0.28)' : 'rgba(255,255,255,0.03)',
                       border: `1px solid ${on ? 'rgba(201,168,130,0.6)' : 'rgba(166,120,90,0.2)'}`,
@@ -3963,6 +4042,10 @@ export default function ScannerPage() {
                     }}
                   >
                     {on ? '✓ ' : ''}{sc.name}
+                    {on && (
+                      <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: 3, marginLeft: '0.35rem', verticalAlign: 'middle',
+                        background: wedgeOn(sc.name) ? C.green : wedges.some(w => w.scale === sc.name) ? C.red : 'rgba(166,120,90,0.35)' }} />
+                    )}
                   </button>
                 )
               })}
@@ -4392,6 +4475,30 @@ export default function ScannerPage() {
                       <span style={{ color: C.lightBrown, fontSize: '0.72rem', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {l.spec}
                       </span>
+                      {/* Call this line's PLU up on the station's scales. Only
+                          a linked line has a PLU to send; a line with two (1 lb
+                          and 2 lb packs) gets a tap per PLU. */}
+                      {scaleIps.length > 0 && (plusForKey.get(l.key) ?? []).map(p => (
+                        <button
+                          key={p.plu}
+                          onClick={e => { e.stopPropagation(); callUp(l.key, p.plu, p.name) }}
+                          disabled={callups[l.key] === '⏳'}
+                          title={`Call ${p.name || `PLU ${p.plu}`} up on ${scaleIps.length > 1 ? 'the picked scales' : 'the scale'} — the board types ${p.plu} into it like a scan.`}
+                          style={{
+                            flexShrink: 0, background: 'rgba(76,175,80,0.12)', border: '1px solid rgba(76,175,80,0.4)',
+                            borderRadius: 3, padding: '0.05rem 0.45rem', color: C.green, fontSize: '0.7rem', fontWeight: 700,
+                            fontFamily: 'monospace', cursor: 'pointer', opacity: callups[l.key] === '⏳' ? 0.5 : 1,
+                          }}
+                        >
+                          ⚖ {(plusForKey.get(l.key)?.length ?? 0) > 1 ? p.plu : ''}
+                        </button>
+                      ))}
+                      {callups[l.key] && (
+                        <span style={{ flexShrink: 0, fontSize: '0.68rem', color: callups[l.key].startsWith('✓') ? C.green : callups[l.key].startsWith('⏳') ? C.lightBrown : C.yellow, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                          title={callups[l.key]}>
+                          {callups[l.key]}
+                        </span>
+                      )}
                     </div>
                   </div>
                 )

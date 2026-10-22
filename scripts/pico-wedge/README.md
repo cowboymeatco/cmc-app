@@ -8,9 +8,13 @@ product up. Nothing on the scale changes; no HCT involved.
 
 Parts list and the plan: the "Pico Scale Wedge Parts" page (2026-09-06).
 
-**Flow:** app queues `scale 2, PLU 118` (`/scale-callup`, later the scanner page)
-→ `scale_callup_requests` row → the Pico on scale 2 polls `/api/scale-callup/device`
-→ types `118 ⏎` → reports done.
+**Flow:** the packer taps a still-to-pack line on `/scanner` (or sends one from
+`/scale-callup`) → `scale_callup_requests` row for that station's scale(s) → the Pico
+on that scale polls `/api/scale-callup/device` → types `118 ⏎` → reports done.
+
+**Proven 2026-10-22** on scales 2 and 1: the Hobart takes the bare PLU digits from
+its USB port, no barcode mapping needed. Every poll also stamps `scale_wedges`, so
+both pages show a green dot on a scale whose board has checked in within 15 s.
 
 ## Files
 
@@ -19,6 +23,7 @@ Parts list and the plan: the "Pico Scale Wedge Parts" page (2026-09-06).
 | `code.py` | the program: wifi, poll, type |
 | `boot.py` | USB identity; keyboard-only mode if a scale needs it |
 | `settings.toml.example` | copy to `settings.toml`, fill in |
+| `certs.pem` | the root certificates the board trusts: everything Cloudflare (in front of the app) and Vercel's Let's Encrypt chain can end at, since the board's built-in list predates some of them |
 
 ## Flashing a board (first time, about ten minutes)
 
@@ -37,8 +42,8 @@ Parts list and the plan: the "Pico Scale Wedge Parts" page (2026-09-06).
    - `adafruit_hid/` (the whole folder)
    - `adafruit_requests.mpy`
    - `adafruit_connection_manager.mpy`
-5. **Our files.** Copy `code.py` and `boot.py` from this folder onto CIRCUITPY
-   (replacing the stock `code.py`). Copy `settings.toml.example` there as
+5. **Our files.** Copy `code.py`, `boot.py` and `certs.pem` from this folder onto
+   CIRCUITPY (replacing the stock `code.py`). Copy `settings.toml.example` there as
    `settings.toml` and fill it in: the shop wifi (2.4 GHz name), the app URL,
    the token, and which scale this board is for.
 6. **Token.** `CMC_WEDGE_TOKEN` must equal `SCALE_WEDGE_TOKEN` in the app's Vercel
@@ -68,12 +73,15 @@ scale, not the board.
 | solid | joining wifi |
 | one quick blink a second | checked in with the app, nothing to type |
 | three fast blinks | typed a call-up |
-| long on, then off | can't reach wifi or the app; it keeps retrying |
+| long on, then off | can't reach wifi or the app; it keeps retrying. `MBEDTLS_ERR_X509_FATAL_ERROR` on the serial console means `certs.pem` is missing from the drive; `MBEDTLS_ERR_X509_CERT_VERIFY_FAILED` means the server's chain ends at a root that isn't in it (add it). |
 
 ## Serial console (when something is wrong)
 
-The board prints what it is doing. Any serial terminal at 115200 on the board's COM
-port shows it (Mu Editor's "Serial" button is the easy one; PuTTY works). You will see
+The board prints what it is doing. The no-install way: in Chrome open
+https://googlechromelabs.github.io/serial-terminal/, click Connect, pick the
+"Pico 2 W - CircuitPython CDC control" port, and the output appears (Ctrl+C then
+Ctrl+D in the black area restarts the program so it prints from the top). PuTTY at
+115200 on the board's COM port works too. You will see
 `wifi: joining`, `wedge for scale 2 polling …`, `call-up: 118 …`, and any error.
 
 ## Going on a scale
@@ -82,9 +90,9 @@ port shows it (Mu Editor's "Serial" button is the easy one; PuTTY works). You wi
 2. Plug it into the scale's USB port with the short data cable. Mount the case
    behind the scale housing, out of the spray.
 3. On **/scale-callup** send a PLU to that scale with the format set to **PLU
-   digits**. If the scale calls the product up, that is the format. If it does not,
-   try **13-digit barcode**: it types the in-store barcode the scale itself prints
-   for that PLU at zero weight (`2` + PLU + `0` + `00000` + check digit).
+   digits**. That is what the shop's HT scales take (proven on scales 1 and 2).
+   The **13-digit barcode** option stays for a scale that turns out to want the
+   in-store barcode instead (`2` + PLU + `0` + `00000` + check digit).
 4. If neither works and the scale ignores the board altogether, it may want a plain
    keyboard rather than a keyboard-plus-drive-plus-console. Add
    `CMC_KEYBOARD_ONLY = 1` to `settings.toml` and power-cycle. The drive disappears

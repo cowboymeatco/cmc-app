@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { callupKeys, type CallupFormat } from '@/lib/scaleCallup'
+import { callupKeys, wedgeOnline, WEDGE_ONLINE_SECONDS, type CallupFormat, type Wedge } from '@/lib/scaleCallup'
 
 // ── Scale call-up ────────────────────────────────────────────────────────────
 // The bench page for the Pico wedges (scripts/pico-wedge): pick a scale, pick
@@ -16,7 +16,7 @@ interface Callup {
   status: 'pending' | 'claimed' | 'done' | 'error' | 'expired'
   claimed_at: string | null; completed_at: string | null; error: string | null
 }
-interface Data { requests: Callup[]; plus: { plu: string; name: string }[]; now: string; ttl: number }
+interface Data { requests: Callup[]; wedges: Wedge[]; plus: { plu: string; name: string }[]; now: string; ttl: number }
 
 const SCALES = ['1', '2', '3']
 const SCALE_KEY = 'scaleCallupScale'
@@ -73,11 +73,13 @@ export default function ScaleCallupPage() {
   const open = data?.requests.some(r => r.status === 'pending' || r.status === 'claimed') ?? false
   useEffect(() => {
     load()
-    const t = setInterval(load, open ? 1500 : 10000)
+    const t = setInterval(load, open ? 1500 : 5000)
     return () => clearInterval(t)
   }, [load, open])
 
   const byPlu = useMemo(() => new Map((data?.plus ?? []).map(p => [p.plu, p.name])), [data])
+  const wedgeFor = (s: string) => data?.wedges.find(w => w.scale === s)
+  const online = (s: string) => wedgeOnline(wedgeFor(s), now)
   const pluClean = plu.trim()
   const pluOk = /^\d{1,5}$/.test(pluClean) && parseInt(pluClean, 10) > 0
   const itemName = pluOk ? byPlu.get(String(parseInt(pluClean, 10))) ?? null : null
@@ -111,6 +113,7 @@ export default function ScaleCallupPage() {
           Sends a PLU to the Pico wedge on a scale, which types it into the scale the way a barcode scanner would.
           On the laptop, click into Notepad first and the board types there instead: that is the bench test.
           A call-up nobody types within {data?.ttl ?? 90} seconds expires rather than landing late.
+          A green dot on a scale means its board checked in within the last {WEDGE_ONLINE_SECONDS} seconds.
         </p>
 
         {error && <div style={{ background: 'rgba(239,68,68,0.12)', border: `1px solid ${C.red}`, borderRadius: 4, padding: '0.6rem 0.9rem', marginBottom: '1rem', fontSize: '0.85rem' }}>{error}</div>}
@@ -120,11 +123,18 @@ export default function ScaleCallupPage() {
             <div>
               <div style={{ fontSize: '0.65rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.35rem' }}>Scale</div>
               <div style={{ display: 'flex', gap: '0.4rem' }}>
-                {SCALES.map(s => (
-                  <button key={s} onClick={() => pickScale(s)} style={btn(scale === s ? C.tan : 'transparent', scale === s ? C.dark : C.tan)}>
-                    {scale === s ? '✓ ' : ''}{s}
-                  </button>
-                ))}
+                {SCALES.map(s => {
+                  const w = wedgeFor(s)
+                  const on = online(s)
+                  return (
+                    <button key={s} onClick={() => pickScale(s)}
+                      title={on ? `Board on scale ${s} is online (checked in ${mt(w!.last_seen_at)})` : w ? `Board on scale ${s} last checked in ${mt(w.last_seen_at)} — off, or off the wifi` : `No board has ever checked in as scale ${s}`}
+                      style={{ ...btn(scale === s ? C.tan : 'transparent', scale === s ? C.dark : C.tan), display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 4, background: on ? C.green : w ? C.red : 'rgba(166,120,90,0.35)', boxShadow: on ? `0 0 6px ${C.green}` : 'none' }} />
+                      {scale === s ? '✓ ' : ''}{s}
+                    </button>
+                  )
+                })}
               </div>
             </div>
             <div>
@@ -155,6 +165,13 @@ export default function ScaleCallupPage() {
               ? <>{itemName ?? <span style={{ color: C.amber }}>not a PLU the price push sends</span>} · will type <strong style={{ color: C.cream }}>{callupKeys(pluClean, format)}</strong> ⏎</>
               : 'Type a PLU, or start typing a name to pick from the book.'}
           </div>
+          {data && !online(scale) && (
+            <div style={{ fontSize: '0.8rem', color: C.amber, marginTop: '0.4rem' }}>
+              {wedgeFor(scale)
+                ? `The board on scale ${scale} has not checked in for ${Math.round((now - new Date(wedgeFor(scale)!.last_seen_at).getTime()) / 1000)}s. A call-up will wait ${data.ttl}s for it, then expire.`
+                : `No board has ever checked in as scale ${scale}. Is one flashed with CMC_SCALE = "${scale}"?`}
+            </div>
+          )}
         </div>
 
         <h2 style={{ fontSize: '0.75rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em', margin: '0 0 0.5rem' }}>Last 20</h2>
