@@ -54,3 +54,4 @@ scripts/smokehouse/supabase.env
 # The Pico wedge ships its trusted roots; public certificates, not keys.
 !scripts/pico-wedge/certs.pem
 !scripts/pico-scale/certs.pem
+!scripts/scale-reader/.env.example
