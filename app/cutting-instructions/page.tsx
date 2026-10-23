@@ -2448,6 +2448,104 @@ export default function CuttingInstructionsPage() {
     load()
   }
 
+  // ── Claim part of a bigger share ─────────────────────────────────────────
+  // Charlie, 2026-10-20 (/cutting-instructions): "From here when I link to
+  // appointment I think we should be able to overwrite the appointment data and
+  // be able to claim a half half or something like that." A Half card against
+  // a Whole share used to leave two bad choices: link the card to the Whole
+  // (wrong portion on the sheet), or add a second customer on the schedule
+  // (1.5 beef on a one-head booking — the same day's other feedback). This
+  // splits the share in place instead: the claimed part keeps the slot's id
+  // (so a carcass already assigned to it stays put), takes the card's buyer and
+  // links to the card; the remainder is a new open share that keeps whatever
+  // name and contact the slot had. Head count is untouched — two halves are
+  // still one animal.
+  const SHARE_FRACTION: Record<string, number> = { whole: 1, half: 0.5, quarter: 0.25 }
+  function shareFraction(portion: string | null | undefined): number {
+    const p = String(portion ?? '').toLowerCase()
+    if (p.startsWith('three-quarter')) return 0.75
+    for (const k of Object.keys(SHARE_FRACTION)) if (p.startsWith(k)) return SHARE_FRACTION[k]
+    return 1
+  }
+  const SHARE_LABEL: Record<number, string> = { 1: 'Whole', 0.5: 'Half', 0.25: 'Quarter' }
+  /** What a card can claim off a share: the card's own portion, only when it is
+   *  a schedule portion (Half or Quarter) and smaller than the share. */
+  function claimablePortion(slotPortion: string): string | null {
+    if (!selected) return null
+    const want = shareFraction(selected.data?.portion)
+    if (!SHARE_LABEL[want] || want >= shareFraction(slotPortion)) return null
+    return SHARE_LABEL[want]
+  }
+  /** The open shares left after taking `claimed` off `slot`, as schedule portions. */
+  function remainderPortions(slotPortion: string, claimed: string): string[] {
+    let left = shareFraction(slotPortion) - shareFraction(claimed)
+    const out: string[] = []
+    for (const f of [0.5, 0.25]) while (left >= f - 1e-6) { out.push(SHARE_LABEL[f]); left -= f }
+    return out
+  }
+
+  async function claimShare(apptId: string, customerIdx: number) {
+    if (!selected) return
+    const appt = appointments.find(a => a.id === apptId)
+    const slot = appt?.customers?.[customerIdx]
+    if (!appt || !slot) return
+    if (!sameSpecies(appt.species, speciesOf(selected))) {
+      alert(`This is a ${speciesOf(selected)} cutting card — it can't be linked to a ${appt.species} appointment.`)
+      return
+    }
+    const claimed = claimablePortion(slot.portion)
+    if (!claimed) return
+    // Stored as-is; a blank card name leaves the slot blank for the PATCH's
+    // backfill rather than writing a placeholder onto the booking.
+    const cardName = String(selected.data?.customerName ?? '').trim()
+    const cardWord = cardName || 'this card'
+    const oldName  = (slot.customer_name ?? '').trim()
+    const rest     = remainderPortions(slot.portion, claimed)
+    const restWord = rest.join(' + ')
+    // Show the old name before writing over it (Charlie, 2026-10-23). The
+    // remainder keeps it, so nothing booked is lost — it just gets smaller.
+    if (oldName && oldName.toLowerCase() !== cardName.toLowerCase()) {
+      const ok = confirm(
+        `This share is booked as ${oldName} (${slot.portion}).\n\n` +
+        `Claim a ${claimed} of it for ${cardWord}? The booking becomes:\n` +
+        `  • ${cardWord} — ${claimed} (this card)\n` +
+        `  • ${oldName} — ${restWord} (still open, no card yet)`)
+      if (!ok) return
+    }
+    setLinking(true)
+    try {
+      const claimedSlot = {
+        ...slot, portion: claimed, customer_name: cardName,
+        // A new name means a new customers-table link; the PATCH resolves it.
+        customer_id: null, qbo_customer_id: null, qbo_display_name: null,
+        linked_cutting_instruction_id: selected.id, reminder_last_sent_at: null, reminder_count: 0,
+      }
+      const remainder = rest.map(portion => ({
+        ...slot, id: crypto.randomUUID(), portion,
+        linked_cutting_instruction_id: '', reminder_last_sent_at: null, reminder_count: 0,
+      }))
+      const customers = appt.customers.flatMap((c, i) => i === customerIdx ? [claimedSlot, ...remainder] : [c])
+      const res = await fetch('/api/appointments', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: apptId, customers }),
+      })
+      if (!res.ok) throw new Error('Could not update the appointment')
+      const saved = await res.json().catch(() => null)
+      const customerId = saved?.customers?.[customerIdx]?.customer_id ?? null
+      await fetch('/api/cutting-instructions', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [selected.id], status: 'linked', customer_id: customerId }),
+      })
+      setSelected(prev => prev ? { ...prev, status: 'linked' } : null)
+      setShowLinkPicker(false)
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLinking(false)
+      load()
+    }
+  }
+
   // Copy this card onto another share the same customer is taking — same cuts,
   // its own row and its own portion. Linking one card to two slots instead
   // prints the wrong portion on the second animal and makes a later edit rewrite
@@ -2601,6 +2699,7 @@ export default function CuttingInstructionsPage() {
     onPick: (apptId: string, idx: number) => void,
     busy: boolean,
     busyLabel: string,
+    onClaim?: (apptId: string, idx: number) => void,
   ) {
     return (
       <div key={a.id} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.15)', borderRadius: '4px', padding: '0.85rem 1rem', marginBottom: '0.75rem' }}>
@@ -2632,6 +2731,14 @@ export default function CuttingInstructionsPage() {
                 <div style={{ color: '#E8883A', fontSize: '0.72rem', marginBottom: '0.35rem', paddingLeft: '0.25rem' }}>
                   ⚠ Name says {mismatch}, but no carcass on this appointment was ear-tagged {mismatch} at receiving — check before linking.
                 </div>
+              )}
+              {onClaim && claimablePortion(c.portion) && (
+                <button onClick={() => onClaim(a.id, a.customers.indexOf(c))} disabled={busy}
+                  title={`Splits this ${c.portion} share: a ${claimablePortion(c.portion)} for this card, the rest stays open${c.customer_name ? ` under ${c.customer_name}` : ''}. Head count doesn't change.`}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', background: 'transparent', border: '1px dashed rgba(166,120,90,0.35)', borderRadius: '3px', padding: '0.4rem 0.75rem', marginTop: '-0.15rem', marginBottom: '0.5rem', color: 'var(--tan)', cursor: busy ? 'wait' : 'pointer', fontSize: '0.8rem', opacity: busy ? 0.6 : 1 }}>
+                  ⤷ Claim a {claimablePortion(c.portion)} of this {c.portion}
+                  <span style={{ color: 'var(--light-brown)', fontSize: '0.72rem' }}> · the other {remainderPortions(c.portion, claimablePortion(c.portion)!).join(' + ')} stays open{c.customer_name ? ` as ${c.customer_name}` : ''}</span>
+                </button>
               )}
             </div>
           )
@@ -3738,7 +3845,7 @@ export default function CuttingInstructionsPage() {
               <p style={{ color: 'var(--tan)', textAlign: 'center', padding: '2rem' }}>No {selectedSpecies.toLowerCase()} appointments need instructions yet.</p>
             ) : (
               shownAppts.map(a => (
-                apptShares(a, linkToCustomer, linking, 'Linking…')
+                apptShares(a, linkToCustomer, linking, 'Linking…', claimShare)
               ))
             )}
             {takenApptsToggle()}
