@@ -3,13 +3,34 @@ import { useEffect, useState, useRef } from 'react'
 import Link from 'next/link'
 import type { HarvestAppointment, AppointmentCustomer, Customer } from '@/lib/types'
 import { isoDate, addDaysISO, dayOfWeekISO } from '@/lib/dates'
-import { SPECIES_CLR, SPECIES_EMOJI } from '@/lib/cutSchedule'
+import { SPECIES_CLR, SPECIES_EMOJI, FRACTION } from '@/lib/cutSchedule'
 import BookedDollars from './BookedDollars'
 import QboPicker from './QboPicker'
 import MoveHeadPanel from './MoveHeadPanel'
 
 const SPECIES  = ['Beef', 'Hog', 'Lamb', 'Goat']
 const PORTIONS = ['Whole', 'Half', 'Quarter']
+
+// How many animals the customer slots claim between them, against the head
+// count the appointment was booked for. Charlie, 2026-10-20: "Mark Holmes has a
+// beef but this is letting me put 1.5 beef on his appointment." Over-booking
+// warns and asks before it saves rather than blocking — he wants the root
+// cause of how it happens first, then a hard stop. Under-booking is fine: a
+// half still looking for a buyer is a normal state for a slot.
+function claimedHead(customers: Pick<AppointmentCustomer, 'portion'>[] | undefined): number {
+  return (customers ?? []).reduce((n, c) => n + (FRACTION[c.portion] ?? 0), 0)
+}
+function overbookedBy(a: { head_count?: number | null; customers?: Pick<AppointmentCustomer, 'portion'>[] }): number {
+  const over = claimedHead(a.customers) - (a.head_count ?? 1)
+  return over > 0.001 ? over : 0
+}
+/** 1.5 → "1½", 0.25 → "¼", 2 → "2". */
+function fmtHead(n: number): string {
+  const whole = Math.floor(n + 1e-9)
+  const frac  = n - whole
+  const part  = frac >= 0.74 ? '¾' : frac >= 0.49 ? '½' : frac >= 0.24 ? '¼' : ''
+  return `${whole || (part ? '' : '0')}${part}`
+}
 const CONTACTS = ['Email', 'Text Message', 'Phone Call']
 const STATUSES = ['Booked', 'Confirmed', 'InstructionsReceived', 'AnimalIn', 'Processing', 'Complete']
 
@@ -254,6 +275,12 @@ export default function SchedulePage() {
 
   async function save() {
     if (!editing) return
+    const over = overbookedBy(editing)
+    if (over > 0) {
+      const head = editing.head_count ?? 1
+      const sp   = (editing.species ?? 'animal').toLowerCase()
+      if (!confirm(`The customers add up to ${fmtHead(claimedHead(editing.customers))} ${sp} but this appointment is ${head} head — that's ${fmtHead(over)} ${sp} too many.\n\nSave anyway?`)) return
+    }
     setSaving(true)
     const method = editing.id ? 'PATCH' : 'POST'
     await fetch('/api/appointments', { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(editing) })
@@ -1175,9 +1202,16 @@ function Modal({ editing, saving, onChange, onSave, onClose, onMoved }: {
           />
         )}
 
+        {overbookedBy(editing) > 0 && (
+          <div style={{ marginTop:'1.25rem', padding:'0.6rem 0.85rem', background:'rgba(245,158,11,0.12)', border:'1px solid rgba(245,158,11,0.45)', borderRadius:'4px', color:'#F59E0B', fontSize:'0.83rem', lineHeight:1.4 }}>
+            ⚠️ Customers add up to <strong>{fmtHead(claimedHead(editing.customers))} {(editing.species ?? 'animal').toLowerCase()}</strong> on a <strong>{editing.head_count ?? 1}-head</strong> appointment
+            {' '}— {fmtHead(overbookedBy(editing))} too many. Raise the head count or trim a portion. Saving will ask you to confirm.
+          </div>
+        )}
+
         <div style={{ display:'flex', gap:'0.75rem', marginTop:'1.5rem', justifyContent:'flex-end' }}>
           <button onClick={onClose} style={btnStyle('transparent','var(--tan)')}>Cancel</button>
-          <button onClick={onSave} disabled={saving} style={btnStyle('var(--med-brown)')}>{saving?'Saving…':'Save Appointment'}</button>
+          <button onClick={onSave} disabled={saving} style={btnStyle(overbookedBy(editing) > 0 ? '#B45309' : 'var(--med-brown)')}>{saving?'Saving…':'Save Appointment'}</button>
         </div>
       </div>
     </div>
