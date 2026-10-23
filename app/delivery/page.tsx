@@ -2408,7 +2408,16 @@ export default function DeliveryPage() {
 
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: '1300px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
         {tab === 'schedule' && <ScheduleTab />}
-        {tab === 'new'  && <NewDeliveryTab onSaved={() => setLogKey(k => k + 1)} pluMap={pluMap} />}
+        {/* New Delivery stays mounted while another tab is showing. It used to
+            unmount on every tab switch, so a half-built load — picked orders,
+            scanned boxes, hand-checked serials — was gone the moment somebody
+            glanced at the log and came back (Charlie, 2026-10-19: "Hold this
+            list until cancelled or saved. I just switched to another tab and
+            came back and all my work was gone."). The load now lives until
+            Save or Clear Load. display:contents keeps the layout identical. */}
+        <div style={{ display: tab === 'new' ? 'contents' : 'none' }}>
+          <NewDeliveryTab onSaved={() => setLogKey(k => k + 1)} pluMap={pluMap} />
+        </div>
         {tab === 'loadout' && <LoadOutTab onSaved={() => setLogKey(k => k + 1)} />}
         {tab === 'log'  && <DeliveryLogTab key={logKey} pluMap={pluMap} />}
         {tab === 'baker' && <BakerStorageTab key={logKey} />}

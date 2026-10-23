@@ -72,7 +72,18 @@ const BOX_SERIAL_RE = /^CMC\d{6}[A-Z0-9]{4}$/i
 
 // baker_storage = hauled to the Baker storage locker — out of our freezer but not
 // yet in the customer's hands, and accruing a monthly storage fee.
-type SessionStatus = 'scanning' | 'value_add' | 'complete' | 'baker_storage' | 'picked_up'
+// ready_to_invoice = packed and in the freezer, waiting on the office to write
+// the invoice before the customer is called (Jill, 2026-10-20: "put a place on
+// this page to send cards that are ready to invoice, then once I get them
+// invoiced I will send them to finished/call"). The crew's ✓ Complete lands
+// here; Jill's ✓ Invoiced moves it on to complete, which is the Freezer / call
+// list it always was. Our own animals (cmc) are never invoiced, so they skip it.
+type SessionStatus = 'scanning' | 'value_add' | 'ready_to_invoice' | 'complete' | 'baker_storage' | 'picked_up'
+
+/** Where a packed session goes when the crew calls it done. */
+function finishedStatus(cmc: boolean | null | undefined): SessionStatus {
+  return cmc ? 'complete' : 'ready_to_invoice'
+}
 
 interface SessionWithStats {
   id:             string | null
@@ -3023,6 +3034,10 @@ export default function ScannerPage() {
 
     const scanning  = pick('scanning')
     const valueAdd  = pick('value_add')
+    // Ready to Invoice = packed, in the freezer, waiting on the office. Oldest
+    // first — the customer has been waiting on a call the longest.
+    const toInvoice = pick('ready_to_invoice')
+      .sort((a, b) => a.session_date.localeCompare(b.session_date))
     // Complete = boxed up and in the freezer awaiting pickup. Oldest first —
     // they've been waiting the longest.
     const freezer   = pick('complete')
@@ -3032,7 +3047,7 @@ export default function ScannerPage() {
     const bakerStorage = pick('baker_storage')
       .sort((a, b) => a.session_date.localeCompare(b.session_date))
     const pickedUp  = pick('picked_up')
-    const shownCount = scanning.length + valueAdd.length + freezer.length + bakerStorage.length + pickedUp.length
+    const shownCount = scanning.length + valueAdd.length + toInvoice.length + freezer.length + bakerStorage.length + pickedUp.length
     // Retail orders Jill marked "In Progress" — ready to pack/scan straight in.
     // A search narrows these too, so a lookup isn't buried under unrelated orders.
     const inProgressOrders = orders.filter(o =>
@@ -3042,6 +3057,7 @@ export default function ScannerPage() {
       { value: 'all' as const,           label: 'All',           dot: '',   color: C.cream },
       { value: 'scanning' as const,      label: 'Scanning',      dot: '●',  color: C.yellow },
       { value: 'value_add' as const,     label: 'Value Add',     dot: '◆',  color: '#E8883A' },
+      { value: 'ready_to_invoice' as const, label: 'Ready to Invoice', dot: '💵', color: '#C3A6FF' },
       { value: 'complete' as const,      label: 'Freezer',       dot: '🧊', color: '#7CAFDD' },
       { value: 'baker_storage' as const, label: 'Baker Storage', dot: '🚚', color: C.tan },
       { value: 'picked_up' as const,     label: 'Picked Up',     dot: '✓',  color: C.green },
@@ -3052,6 +3068,7 @@ export default function ScannerPage() {
     const STATUS_CFG = {
       scanning:  { label: 'Scanning',   color: C.yellow,        dot: '●' },
       value_add: { label: 'Value Add',  color: '#E8883A',       dot: '◆' },
+      ready_to_invoice: { label: 'Ready to Invoice', color: '#C3A6FF', dot: '💵' },
       complete:  { label: 'In Freezer', color: '#7CAFDD',       dot: '🧊' },
       baker_storage: { label: 'Baker Storage', color: C.tan,    dot: '🚚' },
       picked_up: { label: 'Picked Up',  color: C.green,         dot: '✓' },
@@ -3067,7 +3084,7 @@ export default function ScannerPage() {
       const dateStr = new Date(s.session_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
       const cfg = STATUS_CFG[s.status]
       // Days waiting — in our freezer, or on the shelf in Baker (where it bills monthly)
-      const waitingDays = s.status === 'complete' || s.status === 'baker_storage'
+      const waitingDays = s.status === 'complete' || s.status === 'ready_to_invoice' || s.status === 'baker_storage'
         ? Math.max(0, Math.floor((Date.now() - new Date(s.session_date + 'T12:00:00').getTime()) / 86400000))
         : null
       const btnBase: React.CSSProperties = { borderRadius: 3, padding: '0.3rem 0.75rem', fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer' }
@@ -3152,15 +3169,21 @@ export default function ScannerPage() {
               </button>
             )}
             {s.status === 'scanning' && (
-              <button onClick={() => quickStatus(s, 'complete')}
+              <button onClick={() => quickStatus(s, finishedStatus(s.cmc))}
                 style={{ ...btnBase, background: 'transparent', border: `1px solid rgba(76,175,80,0.5)`, color: C.green }}>
                 ✓ Complete
               </button>
             )}
             {s.status === 'value_add' && (
-              <button onClick={() => quickStatus(s, 'complete')}
+              <button onClick={() => quickStatus(s, finishedStatus(s.cmc))}
                 style={{ ...btnBase, background: 'transparent', border: `1px solid rgba(76,175,80,0.5)`, color: C.green }}>
                 ✓ Complete
+              </button>
+            )}
+            {s.status === 'ready_to_invoice' && (
+              <button onClick={() => quickStatus(s, 'complete')} title="Invoice written — on to the Freezer list to call the customer"
+                style={{ ...btnBase, background: '#C3A6FF', color: C.dark, border: 'none' }}>
+                💵 Invoiced → Freezer / Call
               </button>
             )}
             {s.status === 'complete' && (
@@ -3182,7 +3205,7 @@ export default function ScannerPage() {
                 Open button on a finished session, so bacon coming out of the
                 cure had nowhere to go (AE, 2026-08-04: "says bob is picked up
                 and cannot scan he has bacon"). */}
-            {(s.status === 'complete' || s.status === 'picked_up' || s.status === 'baker_storage') && (
+            {(s.status === 'complete' || s.status === 'ready_to_invoice' || s.status === 'picked_up' || s.status === 'baker_storage') && (
               <button onClick={() => quickStatus(s, 'scanning')}
                 title={s.status === 'complete' ? 'Back to scanning' : 'Back to scanning — for product still to come, like bacon out of the cure'}
                 style={{ ...btnBase, background: 'transparent', border: '1px solid rgba(166,120,90,0.3)', color: C.lightBrown }}>
@@ -3414,6 +3437,7 @@ export default function ScannerPage() {
               {/* A search should surface every hit, not hide one behind "Show all 46" */}
               {section({ title: '● Scanning',        color: C.yellow, items: scanning })}
               {section({ title: '◆ Value Add Queue', color: '#E8883A', items: valueAdd })}
+              {section({ title: '💵 Ready to Invoice', color: '#C3A6FF', items: toInvoice })}
               {section({ title: '🧊 Freezer — Ready for Pickup', color: '#7CAFDD', items: freezer, showAll: showAllFreezer || searching, onToggle: () => setShowAllFreezer(p => !p) })}
               {section({ title: '🚚 Baker Storage',  color: C.tan,    items: bakerStorage, showAll: showAllBaker || searching, onToggle: () => setShowAllBaker(p => !p) })}
               {section({ title: '✓ Picked Up',       color: C.green,  items: pickedUp, showAll: showAllPickedUp || searching, onToggle: () => setShowAllPickedUp(p => !p) })}
@@ -3619,9 +3643,18 @@ export default function ScannerPage() {
           {currentStatus === 'value_add' && (
             <>
               <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#E8883A', background: 'rgba(232,136,58,0.12)', borderRadius: 99, padding: '2px 8px' }}>◆ Value Add</span>
-              <button onClick={() => updateSessionStatus('complete')}
+              <button onClick={() => updateSessionStatus(finishedStatus(cmc))}
                 style={{ background: 'transparent', border: `1px solid rgba(76,175,80,0.4)`, color: C.green, borderRadius: 3, padding: '0.2rem 0.6rem', fontSize: '0.72rem', cursor: 'pointer', fontWeight: 600 }}>
                 ✓ Complete
+              </button>
+            </>
+          )}
+          {currentStatus === 'ready_to_invoice' && (
+            <>
+              <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#C3A6FF', background: 'rgba(195,166,255,0.12)', borderRadius: 99, padding: '2px 8px' }}>💵 Ready to Invoice</span>
+              <button onClick={() => updateSessionStatus('complete')}
+                style={{ background: 'transparent', border: '1px solid rgba(195,166,255,0.5)', color: '#C3A6FF', borderRadius: 3, padding: '0.2rem 0.6rem', fontSize: '0.72rem', cursor: 'pointer', fontWeight: 600 }}>
+                💵 Invoiced → Freezer
               </button>
             </>
           )}
@@ -4672,7 +4705,7 @@ export default function ScannerPage() {
             </div>
             {(() => {
               const open = sessions.filter(s =>
-                s.status !== 'complete' && !(s.customer_name === customer && s.session_date === date))
+                s.status !== 'complete' && s.status !== 'ready_to_invoice' && !(s.customer_name === customer && s.session_date === date))
               return open.length === 0 ? (
                 <div style={{ color: C.lightBrown, fontSize: '0.85rem', textAlign: 'center', padding: '1.5rem 1rem', fontStyle: 'italic' }}>
                   No other open sessions — type a name above to start one.
