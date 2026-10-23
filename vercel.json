@@ -28,6 +28,14 @@
     {
       "path": "/api/cron/register-report",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/cron/invoice-ready",
+      "schedule": "0 23 * * *"
+    },
+    {
+      "path": "/api/cron/invoice-ready",
+      "schedule": "0 0 * * *"
     }
   ]
 }

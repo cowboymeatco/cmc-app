@@ -43,6 +43,9 @@ const FREEZE_HOLD_HOURS = 48
 const SESSION_STAGE: Record<string, AnimalStage> = {
   scanning: 'cutting',
   value_add: 'smokehouse',
+  // Packed and in the freezer, waiting on the office's invoice — the freezer
+  // clock runs the same.
+  ready_to_invoice: 'freezing',
   complete: 'freezing',
   baker_storage: 'at_baker',
   picked_up: 'picked_up',
