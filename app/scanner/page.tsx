@@ -121,6 +121,9 @@ interface BoxRecord {
 interface RetailOrderItem {
   id: string; plu_number: string | null; item_name: string
   unit: string; qty_ordered: number; qty_filled: number; notes?: string | null
+  /** What the scanner has put against this line (lbs for LB lines, packages
+   *  otherwise), computed by /api/orders off the boxes linked to the order. */
+  scanned_qty?: number
 }
 interface RetailOrderLite {
   id: string; customer_name: string; due_date: string; status: string
@@ -575,6 +578,17 @@ export default function ScannerPage() {
       setOrders(Array.isArray(data) ? (data as RetailOrderLite[]).filter(o => o.status !== 'fulfilled') : [])
     } catch { setOrders([]) }
   }, [])
+  // The "ordered" panel shows how far each line has got, and that number is
+  // the server's (every box linked to the order, not just the one on screen),
+  // so re-read the orders whenever the scan list moves under a linked box.
+  // One fetch per scan, debounced so a split into 10 packages is one read.
+  // Charlie, 2026-10-24, after scanning Nathan Schott's jerky: "How is it
+  // reacting with retail order? I don't see it clearing off."
+  useEffect(() => {
+    if (!activeBox?.order_id) return
+    const t = setTimeout(() => { loadOrders() }, 400)
+    return () => clearTimeout(t)
+  }, [scans, activeBox?.order_id, loadOrders])
 
   // ── Scan input ───────────────────────────────────────────────────────────────
   const [scanValue,   setScanValue]   = useState('')
@@ -2063,6 +2077,36 @@ export default function ScannerPage() {
     })
   }
   const linkedOrder = activeBox?.order_id ? orders.find(o => o.id === activeBox.order_id) ?? null : null
+
+  // One line of a linked order against what's been scanned for it. Same rule
+  // as the fill bars on /orders: the scanner's number wins once there is one,
+  // and a line is done at 100% of what was ordered.
+  function lineFill(it: RetailOrderItem): { filled: number; done: boolean } {
+    const filled  = it.scanned_qty != null ? it.scanned_qty : Number(it.qty_filled) || 0
+    const ordered = Number(it.qty_ordered) || 0
+    return { filled, done: ordered > 0 ? filled >= ordered : filled > 0 }
+  }
+  const linkedLines    = linkedOrder?.retail_order_items ?? []
+  const linkedDone     = linkedLines.filter(it => lineFill(it).done).length
+  const linkedComplete = linkedLines.length > 0 && linkedDone === linkedLines.length
+
+  // Status stays a person's call (Jill moves orders along on /orders); this is
+  // the one step the scanner offers, and only once every line is covered.
+  const [markingReady, setMarkingReady] = useState(false)
+  async function markOrderReady(order: RetailOrderLite) {
+    if (markingReady) return
+    setMarkingReady(true)
+    try {
+      const res = await fetch('/api/orders', {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ id: order.id, status: 'ready' }),
+      })
+      if (!res.ok) { window.alert('Could not mark the order ready — try again, or do it on the Orders page.'); return }
+      setOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: 'ready' } : o))
+      loadOrders()
+    } finally { setMarkingReady(false) }
+  }
 
   // ── Close box + auto-print label ─────────────────────────────────────────────
   // The totals are the server's answer, computed off the scans it holds — this
@@ -3985,17 +4029,41 @@ export default function ScannerPage() {
                 <button onClick={() => { loadOrders(); setShowOrderPicker(true) }} style={{ background: 'rgba(201,168,130,0.12)', border: '1px solid rgba(201,168,130,0.4)', borderRadius: 3, padding: '0.3rem 0.7rem', color: C.tan, fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>📋 Link retail order</button>
               )}
             </div>
-            {/* What the linked customer ordered — a packing reference */}
-            {linkedOrder && (linkedOrder.retail_order_items?.length ?? 0) > 0 && (
-              <div style={{ marginBottom: '0.5rem', background: 'rgba(76,175,80,0.06)', border: '1px solid rgba(76,175,80,0.2)', borderRadius: 4, padding: '0.4rem 0.6rem' }}>
-                <div style={{ fontSize: '0.64rem', color: C.green, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700, marginBottom: '0.3rem' }}>📋 {linkedOrder.customer_name} ordered</div>
+            {/* What the linked customer ordered, and how far each line has got.
+                Scanned against any box linked to this order; a covered line
+                ticks green, and once they all are the order can be marked
+                Ready from here. */}
+            {linkedOrder && linkedLines.length > 0 && (
+              <div style={{ marginBottom: '0.5rem', background: 'rgba(76,175,80,0.06)', border: `1px solid ${linkedComplete ? 'rgba(76,175,80,0.55)' : 'rgba(76,175,80,0.2)'}`, borderRadius: 4, padding: '0.4rem 0.6rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '0.3rem' }}>
+                  <span style={{ fontSize: '0.64rem', color: C.green, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>📋 {linkedOrder.customer_name} ordered</span>
+                  <span style={{ fontSize: '0.7rem', color: linkedComplete ? C.green : C.lightBrown, fontWeight: linkedComplete ? 700 : 400 }}>
+                    {linkedDone} of {linkedLines.length} line{linkedLines.length === 1 ? '' : 's'} packed
+                  </span>
+                  <span style={{ flex: 1 }} />
+                  {linkedOrder.status === 'ready' ? (
+                    <span style={{ fontSize: '0.72rem', color: C.green, fontWeight: 700 }}>✓ Marked Ready</span>
+                  ) : linkedComplete ? (
+                    <button disabled={markingReady} onClick={() => markOrderReady(linkedOrder)}
+                      title="Everything on the order is scanned — move it to Ready on the Orders page"
+                      style={{ background: C.green, color: C.dark, border: 'none', borderRadius: 3, padding: '0.25rem 0.7rem', fontSize: '0.75rem', fontWeight: 700, cursor: markingReady ? 'wait' : 'pointer', opacity: markingReady ? 0.6 : 1 }}>
+                      ✓ Mark order Ready
+                    </button>
+                  ) : null}
+                </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem 0.9rem' }}>
-                  {linkedOrder.retail_order_items!.map(it => (
-                    <span key={it.id} style={{ fontSize: '0.78rem', color: C.cream }}>
-                      <strong style={{ color: C.tan }}>{it.qty_ordered}{it.unit === 'LB' ? ' lb' : '×'}</strong> {it.item_name}
-                      {it.notes ? <span style={{ color: C.lightBrown }}> ({it.notes})</span> : null}
-                    </span>
-                  ))}
+                  {linkedLines.map(it => {
+                    const { filled, done } = lineFill(it)
+                    const lb  = it.unit === 'LB'
+                    const got = lb ? filled.toFixed(1) : String(Math.round(filled))
+                    return (
+                      <span key={it.id} style={{ fontSize: '0.78rem', color: done ? C.green : C.cream, textDecoration: done ? 'line-through' : 'none', textDecorationColor: 'rgba(76,175,80,0.6)' }}>
+                        {done ? '✓ ' : ''}
+                        <strong style={{ color: done ? C.green : filled > 0 ? C.yellow : C.tan }}>{got}/{it.qty_ordered}{lb ? ' lb' : ''}</strong> {it.item_name}
+                        {it.notes ? <span style={{ color: C.lightBrown }}> ({it.notes})</span> : null}
+                      </span>
+                    )
+                  })}
                 </div>
               </div>
             )}

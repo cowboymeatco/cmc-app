@@ -20,7 +20,15 @@ interface OrderItem {
   notes:       string
   /** Packed on the scanner into a box linked to this order (added by /api/orders). */
   scanned_qty?: number
+  /** The same scans as pounds and packages, whatever the line's unit, with
+   *  each package's weight — a by-the-each line still crossed the scale. */
+  scanned_lbs?:     number
+  scanned_pkgs?:    number
+  scanned_weights?: number[]
 }
+
+// "0.52 lb" for a line the scanner weighed, '' for one it didn't.
+const scannedLbs = (i: OrderItem) => i.scanned_lbs != null && i.scanned_lbs > 0 ? `${i.scanned_lbs.toFixed(2)} lb` : ''
 
 // What's actually been filled on a line. Scanned packages are weighed by the
 // scale, so they win over a hand-typed number; a line nobody scanned falls
@@ -516,19 +524,40 @@ function printOrder(order: RetailOrder) {
   const items = order.retail_order_items ?? []
   // The Picked box is left empty to write in, whatever the unit — the unit column
   // right beside it already says whether that means pounds or packages.
+  //
+  // A line the scanner weighed prints what the scale said, not just a count:
+  // an LB line is its pounds; a by-the-each line is its packages and their
+  // pounds, with each package's weight under that so a priced-by-weight item
+  // can be billed off the slip (Charlie, 2026-10-24: "we have actual weights
+  // that have been applied. Can we get those across on the order slip?").
   const rows = items.map(i => {
-    const filled = filledQty(i) > 0
+    const lbs  = scannedLbs(i)
+    const perPkg = (i.scanned_weights?.length ?? 0) > 1 && i.unit !== 'LB'
+      ? `<div class="each">${i.scanned_weights!.map(w => w.toFixed(2)).join(' · ')}</div>` : ''
+    const picked =
+      i.scanned_qty != null && lbs
+        ? (i.unit === 'LB'
+            ? `<span class="pre">${esc(lbs)}</span>`
+            : `<span class="pre">${esc(String(i.scanned_pkgs ?? i.scanned_qty))} pk</span> <span class="lbs">${esc(lbs)}</span>${perPkg}`)
+        : filledQty(i) > 0 ? `<span class="pre">${esc(String(filledQty(i)))}</span>` : ''
     return `<tr>
       <td class="plu">${i.plu_number ? esc(i.plu_number) : ''}</td>
       <td class="nm">${esc(i.item_name)}</td>
       <td class="qty">${esc(String(i.qty_ordered))}</td>
       <td class="un">${esc(i.unit || '')}</td>
-      <td class="pick">${filled ? `<span class="pre">${esc(String(filledQty(i)))}</span>` : ''}</td>
+      <td class="pick">${picked}</td>
       <td class="note">${esc(i.notes || '')}</td>
     </tr>`
   }).join('')
 
   const body = rows || '<tr><td colspan="6" class="empty">No items on this order.</td></tr>'
+
+  // What crossed the scale for the whole order, when anything did.
+  const totLbs  = items.reduce((n, i) => n + (i.scanned_lbs ?? 0), 0)
+  const totPkgs = items.reduce((n, i) => n + (i.scanned_pkgs ?? 0), 0)
+  const scaleTotal = totPkgs > 0
+    ? `<tr class="tot"><td colspan="4">Scale weight on this order</td><td class="pick"><span class="pre">${totLbs.toFixed(2)} lb</span> <span class="lbs">${totPkgs} pkg${totPkgs === 1 ? '' : 's'}</span></td><td></td></tr>`
+    : ''
 
   const boxes = [
     { k: 'Due',         v: fmtDay(order.due_date) },
@@ -561,9 +590,12 @@ function printOrder(order: RetailOrder) {
     td.nm { font-weight: 600; }
     td.qty { width: 0.5in; text-align: center; font-weight: 800; font-size: 11pt; }
     td.un { width: 0.5in; font-size: 8.5pt; color: #444; }
-    td.pick { width: 0.9in; height: 30pt; }
-    td.note { width: 1.6in; font-size: 8.5pt; color: #333; }
+    td.pick { width: 1.15in; height: 30pt; white-space: nowrap; }
+    td.note { width: 1.5in; font-size: 8.5pt; color: #333; }
     .pre { font-weight: 700; font-size: 11pt; }
+    .lbs { font-size: 9pt; color: #333; }
+    .each { font-size: 7.5pt; color: #555; font-family: monospace; margin-top: 1pt; white-space: normal; }
+    tr.tot td { background: #f4f4f4; font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.05em; color: #333; font-weight: 700; }
     .empty { text-align: center; padding: 20pt; color: #666; }
     .sig { margin-top: 22pt; font-size: 9pt; }
     .sig span { display: inline-block; border-top: 0.75pt solid #000; padding-top: 2pt; width: 2.1in; margin-right: 0.45in; }
@@ -587,7 +619,7 @@ function printOrder(order: RetailOrder) {
       <thead><tr>
         <th>PLU</th><th>Item</th><th>Qty</th><th>Unit</th><th>Picked</th><th>Notes</th>
       </tr></thead>
-      <tbody>${body}</tbody>
+      <tbody>${body}${scaleTotal}</tbody>
     </table>
     <div class="sig"><span>Picked by</span><span>Checked by</span><span>Date</span></div>
     <div class="foot">Cowboy Meat Company · 1109 Front St, Forsyth MT · (406) 346-7660</div>
@@ -976,7 +1008,7 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
                           fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer', padding: '0.25rem 0.6rem', whiteSpace: 'nowrap',
                         }}
                       >
-                        {filledQty(item).toFixed(item.unit === 'LB' ? 1 : 0)} filled{item.scanned_qty != null ? ' · scanned' : ''}
+                        {filledQty(item).toFixed(item.unit === 'LB' ? 1 : 0)} filled{item.scanned_qty != null ? (item.unit !== 'LB' && scannedLbs(item) ? ` · ${scannedLbs(item)} scanned` : ' · scanned') : ''}
                       </button>
                     )}
                     <button

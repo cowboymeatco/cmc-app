@@ -9,7 +9,7 @@ import { isLegacyFileCard, formatBytes as fmtBytes, type CutSheetFile } from '@/
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-import { applyAgeRule, hasBoneInShortLoin, buildPackList, BONE_IN_FILET_THICKNESS, baggedTrimPackRows, loinFields, mergeSides, shoulderFields, EIGHTHS, FMT_OVERRIDES, STEAK_STANDARDS, bagSizeLabel, baggedTrimCutterRows, beefTrimCutterRows, beefTrimPackRows, beefTrimRows, bellyRows, bellyWord, brisketLabel, fracThick, hamCut, hamLine, hamRows, hamStyleWord, hockStyle, isWholeAnimal, lgTrimLabel, porkTrimCutterRows, porkTrimRows, rawWeighIn, ribeyeAdds, roastOr, roastText, sidePair, smokehouseRows, smokehouseTotalLbs, stdThick, trimIsBagged, trimSplitOf, v2fmt } from '@/lib/packList'
+import { applyAgeRule, hasBoneInShortLoin, buildPackList, BONE_IN_FILET_THICKNESS, baggedTrimPackRows, loinFields, mergeSides, shoulderFields, EIGHTHS, FMT_OVERRIDES, STEAK_STANDARDS, bagSizeLabel, baggedTrimCutterRows, beefTrimCutterRows, beefTrimPackRows, beefTrimRows, bellyRows, bellyWord, brisketLabel, brisketPair, fracThick, hamCut, hamLine, hamRows, hamStyleWord, hockStyle, isWholeAnimal, lgTrimLabel, porkTrimCutterRows, porkTrimRows, rawWeighIn, ribeyeAdds, roastOr, roastText, sidePair, smokehouseRows, smokehouseTotalLbs, stdThick, trimIsBagged, trimSplitOf, v2fmt } from '@/lib/packList'
 
 interface RawInstruction {
   id:         string
@@ -654,7 +654,7 @@ function renderV2Detail(ci: RawInstruction) {
           <V2Section title="Chuck">
             <V2Field label="Brisket" value={
               d.brisket?.cut2
-                ? sidePair(brisketLabel(d.brisket.cut, d.brisket.half, v2fmt), brisketLabel(d.brisket.cut2, d.brisket.half2, v2fmt))
+                ? brisketPair(brisketLabel(d.brisket.cut, d.brisket.half, v2fmt), brisketLabel(d.brisket.cut2, d.brisket.half2, v2fmt))
                 : brisketLabel(d.brisket?.cut, d.brisket?.half, v2fmt)
             } />
             <V2Field label="Shank" value={v2fmt(d.shank?.cut)} />
@@ -990,7 +990,7 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
   // was later switched to all-grind must not print them (Jill, 2026-07-27).
   if (isBeef && !d.grindWhole) {
     cutSections += sec('Chuck', [
-      row('Brisket', d.brisket?.cut2 ? sidePair(brisketLabel(d.brisket.cut, d.brisket.half, fmt), brisketLabel(d.brisket.cut2, d.brisket.half2, fmt)) : brisketLabel(d.brisket?.cut, d.brisket?.half, fmt)),
+      row('Brisket', d.brisket?.cut2 ? brisketPair(brisketLabel(d.brisket.cut, d.brisket.half, fmt), brisketLabel(d.brisket.cut2, d.brisket.half2, fmt)) : brisketLabel(d.brisket?.cut, d.brisket?.half, fmt)),
       d.brisket?.fat ? row('  Brisket Fat', fmt(d.brisket.fat)) : '',
       row('Shank', fmt(d.shank?.cut)),
       d.shank?.addons?.length ? row('  Add-ons', adds(d.shank.addons), true) : '',
