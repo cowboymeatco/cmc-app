@@ -353,6 +353,16 @@ export function sidePair(a: string, b: string): string {
   return `1: ${a} / 2: ${b}`
 }
 
+// The two briskets off a whole beef are "Brisket A" and "Brisket B" on the
+// floor, so a split brisket prints that way rather than "1: / 2:" (crh,
+// 2026-10-23, from the cutting form: "Make this brisket A and Brisket B on
+// the cutting instruction."). Same collapse as sidePair when both match.
+export function brisketPair(a: string, b: string): string {
+  if (!a) return b ?? ''
+  if (!b || a === b) return a
+  return `A: ${a} / B: ${b}`
+}
+
 // Hocks follow the ham style (the wizard leaves hocks.cut empty). The cutter
 // only needs the word: Fresh or Smoked. Whole-hog split hams (style2) can
 // differ, so print both when they do; grind hams get no hock line.
@@ -677,7 +687,7 @@ export function buildPackList(d: any, species: string): PackRow[] {
     if (d.brisket?.cut) {
       if (d.brisket.cut === 'grind') { pg('Brisket') }
       else {
-        const bSpec = (d.brisket.cut2 ? sidePair(brisketLabel(d.brisket.cut, d.brisket.half, fmt), brisketLabel(d.brisket.cut2, d.brisket.half2, fmt)) : brisketLabel(d.brisket.cut, d.brisket.half, fmt))
+        const bSpec = (d.brisket.cut2 ? brisketPair(brisketLabel(d.brisket.cut, d.brisket.half, fmt), brisketLabel(d.brisket.cut2, d.brisket.half2, fmt)) : brisketLabel(d.brisket.cut, d.brisket.half, fmt))
           + (d.brisket.fat ? ` · ${fmt(d.brisket.fat)}` : '')
         pc('Brisket', bSpec)
       }
