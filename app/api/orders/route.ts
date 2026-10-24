@@ -26,20 +26,35 @@ async function attachScans<T extends OrderRow>(orders: T[]): Promise<T[]> {
     .select('box_id, plu_number, weight_lbs, quantity')
     .in('box_id', [...orderOfBox.keys()])
 
-  const lbs = new Map<string, number>(), pkgs = new Map<string, number>()
+  const lbs = new Map<string, number>(), pkgs = new Map<string, number>(), each = new Map<string, number[]>()
   for (const s of scans ?? []) {
     const key = `${orderOfBox.get(s.box_id)}|${s.plu_number ?? ''}`
-    lbs.set(key, (lbs.get(key) ?? 0) + (Number(s.weight_lbs) || 0))
+    const w = Number(s.weight_lbs) || 0
+    lbs.set(key, (lbs.get(key) ?? 0) + w)
     pkgs.set(key, (pkgs.get(key) ?? 0) + (Number(s.quantity) || 1))
+    each.set(key, [...(each.get(key) ?? []), w])
   }
+  const r2 = (n: number) => Math.round(n * 100) / 100
 
+  // scanned_qty is in the line's own unit (pounds for LB, packages otherwise).
+  // The pounds and the per-package weights ride along for every scanned line,
+  // because a by-the-each line still crossed the scale: two jerky were 0.25
+  // and 0.27 lb, and the order slip wants that, not just "2" (Charlie,
+  // 2026-10-24: "we have actual weights that have been applied. Can we get
+  // those across on the order slip?").
   return orders.map(o => ({
     ...o,
     retail_order_items: (o.retail_order_items ?? []).map(i => {
       const key = `${o.id}|${i.plu_number ?? ''}`
       if (!i.plu_number || !pkgs.has(key)) return i
-      const qty = i.unit === 'LB' ? Math.round((lbs.get(key) ?? 0) * 100) / 100 : pkgs.get(key)
-      return { ...i, scanned_qty: qty }
+      const qty = i.unit === 'LB' ? r2(lbs.get(key) ?? 0) : pkgs.get(key)
+      return {
+        ...i,
+        scanned_qty:     qty,
+        scanned_lbs:     r2(lbs.get(key) ?? 0),
+        scanned_pkgs:    pkgs.get(key) ?? 0,
+        scanned_weights: (each.get(key) ?? []).map(r2),
+      }
     }),
   }))
 }
