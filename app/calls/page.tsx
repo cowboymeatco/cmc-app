@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { CALL_CATEGORIES, callCategorySpec, type CallCategory } from '@/lib/callCategories'
-import { isoDate, isoDateTime, addDaysISO, mondayOfISO, dateLabel } from '@/lib/dates'
+import { isoDate, addDaysISO, mondayOfISO, dateLabel } from '@/lib/dates'
 import type { Customer } from '@/lib/types'
 
 // Front-desk call log. Two jobs, in this order on the page:
@@ -63,6 +63,16 @@ interface CallRow {
   customers:    { name: string; ranch_name: string | null } | null
 }
 
+/** <input type="datetime-local"> wants the browser's local wall time, not an
+ * ISO instant (same as /value-add and /delivery). It has to be the browser's
+ * clock, not the shop's: new Date(value) reads it back on the browser's clock,
+ * so building it on the shop clock saved a call hours off on any device that
+ * isn't set to Mountain Time. */
+function toLocalInput(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
 /** "Mon, Oct 27 · 9:42 AM" on the shop clock. */
 function whenLabel(iso: string): string {
   const d = new Date(iso)
@@ -111,7 +121,10 @@ function CategoryChips({ value, onChange, size = 'md' }: { value: CallCategory |
 
 interface Draft {
   taken_by:     string
-  called_at:    string        // datetime-local wall time on the shop clock
+  called_at:    string        // datetime-local wall time on the browser's clock
+  // Untouched, the server stamps now() itself — exact on every device. Only an
+  // edited value (back-dating a call logged after the rush) is sent.
+  called_at_touched: boolean
   caller_name:  string
   caller_phone: string
   customer_id:  string | null
@@ -123,7 +136,7 @@ interface Draft {
 
 function freshDraft(taken_by: string): Draft {
   return {
-    taken_by, called_at: isoDateTime(), caller_name: '', caller_phone: '',
+    taken_by, called_at: toLocalInput(new Date()), called_at_touched: false, caller_name: '', caller_phone: '',
     customer_id: null, customer_label: '', category: '', question: '', answer: '',
   }
 }
@@ -192,7 +205,7 @@ function LogCallForm({ onSaved }: { onSaved: (row: CallRow) => void }) {
       body: JSON.stringify({
         taken_by:     d.taken_by,
         // datetime-local is wall time; store a real instant (see /delivery).
-        called_at:    d.called_at ? new Date(d.called_at).toISOString() : null,
+        called_at:    d.called_at_touched && d.called_at ? new Date(d.called_at).toISOString() : null,
         caller_name:  d.caller_name,
         caller_phone: d.caller_phone,
         customer_id:  d.customer_id,
@@ -230,7 +243,7 @@ function LogCallForm({ onSaved }: { onSaved: (row: CallRow) => void }) {
           <input style={INPUT} value={d.taken_by} onChange={e => set('taken_by')(e.target.value)} placeholder="Your name" />
         </Field>
         <Field label="When">
-          <input type="datetime-local" style={INPUT} value={d.called_at} onChange={e => set('called_at')(e.target.value)} />
+          <input type="datetime-local" style={INPUT} value={d.called_at} onChange={e => setD(prev => ({ ...prev, called_at: e.target.value, called_at_touched: true }))} />
         </Field>
         <Field label="Caller">
           <div ref={wrapRef} style={{ position: 'relative' }}>
