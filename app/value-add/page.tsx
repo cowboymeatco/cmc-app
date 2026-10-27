@@ -27,9 +27,52 @@ type WeightProposal = WeightOutProposal & {
 }
 
 // The WIP tag rides with the tub to value add — opens in its own window and
-// prints itself, same as the box label.
-function printWIPTag(jobId: string) {
-  window.open(`/api/value-add/label?id=${encodeURIComponent(jobId)}`, '_blank')
+// prints itself, same as the box label. Since 2026-10-26 it is also the tag
+// that goes into the smokehouse on a 2.5in plastic hang tag, so it prints to
+// whichever roll THIS station has (the scanner's own per-device setting, same
+// key, so a desk set up for the Brother once is set up for both) and carries
+// the inspection level — read off the cut card, or picked on the job card.
+type Insp = 'card' | 'usda' | 'custom' | 'exempt'
+const INSP_LABEL: Record<Insp, string> = {
+  card:   'Inspection: from cut card',
+  usda:   'USDA inspected',
+  custom: 'Custom exempt · not for sale',
+  exempt: 'Retail exempt',
+}
+type LabelRoll = '4in' | '62mm'
+const ROLL_KEY = 'scannerLabelRoll'
+const ROLL_LABEL: Record<LabelRoll, string> = { '4in': '4in', '62mm': 'Brother 2.4in' }
+function currentRoll(): LabelRoll {
+  try { return localStorage.getItem(ROLL_KEY) === '62mm' ? '62mm' : '4in' } catch { return '4in' }
+}
+function printWIPTag(jobId: string, insp: Insp = 'card') {
+  const q = new URLSearchParams({ id: jobId, roll: currentRoll() })
+  if (insp !== 'card') q.set('insp', insp)
+  window.open(`/api/value-add/label?${q}`, '_blank')
+}
+
+// Which label printer this station prints to. Read after mount — it is the
+// browser's own setting, and the server has no idea.
+function RollToggle() {
+  const [roll, setRoll] = useState<LabelRoll>('4in')
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- reading the device setting is the whole point
+  useEffect(() => { setRoll(currentRoll()) }, [])
+  function pick(r: LabelRoll) {
+    try { localStorage.setItem(ROLL_KEY, r) } catch { /* private mode — the pick lasts the page */ }
+    setRoll(r)
+  }
+  return (
+    <span title="Which printer the WIP tags come out of on this device" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.72rem', color: C.lightBrown }}>
+      🏷 tags
+      {(['4in', '62mm'] as LabelRoll[]).map(r => (
+        <button key={r} onClick={() => pick(r)} style={{
+          background: roll === r ? C.medBrown : 'transparent', color: roll === r ? C.cream : C.lightBrown,
+          border: '1px solid rgba(166,120,90,0.35)', borderRadius: 3, padding: '0.15rem 0.5rem',
+          fontSize: '0.72rem', cursor: 'pointer', fontWeight: roll === r ? 700 : 400,
+        }}>{ROLL_LABEL[r]}</button>
+      ))}
+    </span>
+  )
 }
 
 interface RetailOrderSummary { id: string; customer_name: string; due_date: string }
@@ -497,6 +540,7 @@ function JobCard({ job, mates, proposal, onUpdated, onBoxLinksChanged, cardLabel
   const [picking, setPicking]           = useState(false)
   const [wIn,  setWIn]  = useState(String(job.weight_in_lbs  ?? ''))
   const [wOut, setWOut] = useState(String(job.weight_out_lbs ?? ''))
+  const [insp, setInsp] = useState<Insp>('card')
 
   const nextStatus = NEXT_STATUS[job.status]
   const typeColor  = JOB_TYPE_COLORS[job.job_type]
@@ -787,10 +831,19 @@ function JobCard({ job, mates, proposal, onUpdated, onBoxLinksChanged, cardLabel
         )}
         <button
           style={{ ...BTN('transparent', C.tan), border: `1px solid ${C.tan}`, fontSize: '0.78rem', padding: '0.35rem 0.9rem' }}
-          onClick={() => printWIPTag(job.id)}
+          onClick={() => printWIPTag(job.id, insp)}
+          title="Prints to this station's roll — see the 🏷 tags switch in the header"
         >
           🏷 Print WIP Tag
         </button>
+        {/* The inspection band on the tag. "From cut card" reads the carcasses
+            on the linked card; a job with no card, or no carcass yet, prints
+            INSPECTION NOT MARKED until somebody picks here. */}
+        <select value={insp} onChange={e => setInsp(e.target.value as Insp)}
+                style={{ ...INPUT, padding: '0.3rem 0.5rem', fontSize: '0.75rem', width: 'auto' }}
+                title="What the tag's inspection band says">
+          {(Object.keys(INSP_LABEL) as Insp[]).map(k => <option key={k} value={k}>{INSP_LABEL[k]}</option>)}
+        </select>
         <button
           style={{
             ...BTN('transparent', picking ? C.purple : C.lightBrown),
@@ -1509,6 +1562,8 @@ export default function ValueAddPage() {
           <Link href="/" style={{ color: C.lightBrown, textDecoration: 'none', fontSize: '0.82rem' }}>← Dashboard</Link>
           <span style={{ color: 'rgba(166,120,90,0.4)' }}>|</span>
           <h1 style={{ fontFamily: 'Georgia, serif', fontSize: '1.1rem', fontWeight: 700, color: C.cream, letterSpacing: '0.08em', textTransform: 'uppercase', margin: 0 }}>Value Add</h1>
+          <span style={{ color: 'rgba(166,120,90,0.4)' }}>|</span>
+          <RollToggle />
         </div>
         <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, overflow: 'hidden' }}>
           {tabs.map(t => (
