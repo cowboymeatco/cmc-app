@@ -27,6 +27,16 @@ export interface WIPTagData {
   // so value add never seasons a single-flavor batch against a two-flavor order
   // (Charlie, 2026-07-30).
   orders?:           { label: string; lbs: number | null; current: boolean }[]
+  // The smokehouse load this job cooks in (lib/valueAddLoads.ts). The batch
+  // code is what gets read through the house door, so it prints big; the
+  // others in the load print small so one tag says what else is in there.
+  batchCode?:        string | null
+  loadMates?:        string[]
+  // Numbered tamper seal on the product, when one was put on.
+  sealNumber?:       string | null
+  // Why the inspection band is unmarked, when it is — so the crew knows the
+  // fix (pick the level on the job card) instead of reading it as a verdict.
+  inspectionNote?:   string | null
 }
 
 export interface WIPJob {
@@ -42,6 +52,8 @@ export interface WIPJob {
   assigned_to:        string | null
   requested_date:     string
   notes:              string | null
+  seal_number?:       string | null
+  load?:              { batch_code: string } | null
 }
 
 const esc = (v: unknown) => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string))
@@ -71,9 +83,13 @@ export function wipIntent(job: WIPJob): string {
 
 // ── Adapters ──────────────────────────────────────────────────────────────────
 
-export function wipDataFromJob(job: WIPJob): WIPTagData {
+export function wipDataFromJob(job: WIPJob, extra: { loadMates?: string[]; inspectionNote?: string | null } = {}): WIPTagData {
   const customer = (job.customer_name || '').trim()
   return {
+    batchCode:         job.load?.batch_code ?? null,
+    sealNumber:        job.seal_number ?? null,
+    loadMates:         extra.loadMates ?? [],
+    inspectionNote:    extra.inspectionNote ?? null,
     customer:          customer || 'CMC SHELF STOCK',
     keepSeparate:      !!customer,
     sourceDescription: job.source_description,
@@ -243,32 +259,58 @@ export function generateWIPLabel(data: WIPTagData, flags: LabelFlags = DEFAULT_F
   .intent .iline + .iline { border-top: 1px solid #000; }
   .batch   { text-align: center; font-size: 10pt; margin-top: 3px; }
   .batch b { font-family: monospace; letter-spacing: 0.1em; font-size: 12pt; }
+  /* The load's batch code — read through the smokehouse door, so it is the
+     one line on the tag sized like the customer name. */
+  .batchbox { display: flex; align-items: baseline; justify-content: center; gap: 8px;
+             border: 2.5px solid #000; border-radius: 3px; padding: 2px 4px; margin-top: 4px; }
+  .batchbox .bk { font-size: 9pt; font-weight: bold; letter-spacing: 0.14em; }
+  .batchbox .bc { font-family: monospace; font-size: 22pt; font-weight: bold; letter-spacing: 0.08em; }
+  .mates   { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 8pt; text-align: center; margin-top: 2px; }
+  .mates .k2 { font-weight: bold; letter-spacing: 0.1em; }
   .barcode { text-align: center; margin: 3px 0 1px; }
   .barcode svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
   .code    { text-align: center; font-size: 10pt; font-family: monospace; letter-spacing: 0.12em; font-weight: bold; }
   .foot    { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 8.5pt; text-align: center; margin-top: 3px; }
 ${roll !== '62mm' ? '' : `
   /* ── Brother 62mm roll ──────────────────────────────────────────────────
-     INTENT is what this tag exists to say, so it gives up the least. The
-     FROM/WEIGHT/LABEL/FOR rows stack their key over the fill line instead of
-     sitting beside it — a 1.05in key column would leave nothing to write on. */
-  .logo    { max-width: 1.7in; }
-  .title   { font-size: 13pt; }
-  .cust    { font-size: 15pt; }
-  .intent  { font-size: 15pt; }
-  .intent.multi { font-size: 11.5pt; }
-  .sline   { font-size: 10.5pt; }
-  .insp    { font-size: 9pt; gap: 4px; }
-  .insp .bug { width: 0.36in; }
-  .insp.nfs  { font-size: 10pt; }
-  .row     { display: block; font-size: 10.5pt; padding: 2px 0; }
-  .k       { width: auto; display: block; font-size: 8pt; }
-  .v       { display: block; min-height: 17px; }
+     Charlie, 2026-10-26: the tag goes into the house on a 2.5in plastic hang
+     tag, so the whole thing has to land inside 5in of roll. INTENT, the
+     inspection band and the batch code give up the least; everything else
+     tightens, and the FROM/WEIGHT/LABEL/FOR rows go back beside a short key
+     rather than stacking — a stacked row costs a line each. */
+  .logo    { max-width: 1.15in; margin-bottom: 1px; }
+  .title   { font-size: 11pt; padding: 1px 0; margin-bottom: 2px; }
+  .cust    { font-size: 14pt; line-height: 1; }
+  .keepsep { font-size: 7.5pt; padding: 0; margin: 1px 0; }
+  .producer{ font-size: 8.5pt; }
+  .intent-k{ font-size: 7.5pt; margin-top: 1px; }
+  .intent  { font-size: 14pt; padding: 2px 3px; margin-bottom: 2px; }
+  .intent.multi { font-size: 11pt; }
+  .scope-k { font-size: 7pt; }
+  .sline   { font-size: 9.5pt; }
+  .insp    { font-size: 8.5pt; gap: 4px; margin: 2px 0; padding: 1px 3px; }
+  .insp .bug { width: 0.32in; }
+  .insp.nfs  { font-size: 9.5pt; }
+  .srcnote { font-size: 7pt; margin: 0 0 2px; }
+  .row     { font-size: 9.5pt; padding: 1px 0; }
+  .k       { width: 0.6in; font-size: 7.5pt; letter-spacing: 0.06em; }
+  .v       { min-height: 13px; }
+  .item    { font-size: 9pt; }
+  .batchbox { margin-top: 2px; padding: 1px 3px; gap: 6px; }
+  .batchbox .bk { font-size: 8pt; }
+  .batchbox .bc { font-size: 16pt; }
+  .batch   { font-size: 8.5pt; margin-top: 1px; }
+  .batch b { font-size: 10pt; }
+  /* Two lines at most: the names are a hint, the batch code is the record. */
+  .mates   { font-size: 7pt; line-height: 1.15; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .barcode { margin: 2px 0 0; }
   /* Squeezed to 2.2in the barcode would come out 0.3in tall. Bar WIDTHS are
      still above the reader's floor; the height isn't, so stretch it back —
      !important because makeCode39Barcode carries height:auto inline, and it is
      shared with surfaces (game tag, PLU book) that still want that. */
-  .barcode svg { width: 100% !important; height: 0.62in !important; }
+  .barcode svg { width: 100% !important; height: 0.5in !important; }
+  .code    { font-size: 8.5pt; }
+  .foot    { font-size: 7.5pt; margin-top: 2px; }
 `}
 </style>
 </head>
@@ -293,6 +335,8 @@ ${roll !== '62mm' ? '' : `
         : ''}
 
   ${inspection}
+  ${data.inspectionNote && !flags.not_for_sale && !marksInspection(flags)
+    ? `<div class="srcnote">${esc(data.inspectionNote)}</div>` : ''}
 
   ${row('FROM:',   data.sourceDescription)}
   ${row('WEIGHT:', weight)}
@@ -301,7 +345,12 @@ ${roll !== '62mm' ? '' : `
 
   ${itemRows}
 
-  <div class="batch">BATCH <b>${julian}</b> &nbsp;&middot;&nbsp; ${dateStr}</div>
+  ${data.batchCode
+    ? `<div class="batchbox"><span class="bk">BATCH</span><span class="bc">${esc(data.batchCode)}</span></div>
+  <div class="batch">${dateStr}${data.sealNumber ? ` &nbsp;&middot;&nbsp; SEAL <b>${esc(data.sealNumber)}</b>` : ''}</div>`
+    : `<div class="batch">BATCH <b>${julian}</b> &nbsp;&middot;&nbsp; ${dateStr}${data.sealNumber ? ` &nbsp;&middot;&nbsp; SEAL <b>${esc(data.sealNumber)}</b>` : ''}</div>`}
+  ${data.loadMates?.length
+    ? `<div class="mates"><span class="k2">IN THE HOUSE WITH</span> ${data.loadMates.map(m => esc(m)).join(' &middot; ')}</div>` : ''}
 
   ${data.code ? `<div class="barcode">${makeCode39Barcode(data.code)}</div>
   <div class="code">${esc(data.code)}</div>` : ''}

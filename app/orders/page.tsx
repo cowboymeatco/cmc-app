@@ -27,6 +27,26 @@ interface OrderItem {
 // back to whatever was typed in.
 const filledQty = (i: OrderItem) => i.scanned_qty != null ? i.scanned_qty : Number(i.qty_filled)
 
+// How far along an order is. This used to be pounds packed over pounds
+// ordered, so an order with every roast weighed out and none of its packaged
+// items touched read 100% (Charlie, 2026-10-26: "showing 100% completed by
+// weight but no by item"). Every line now counts the same, capped at full, so
+// a two-pack of snack sticks is as much of the order as forty pounds of burger,
+// and each line says what it still needs.
+const lineFill  = (i: OrderItem) => { const o = Number(i.qty_ordered); return o > 0 ? Math.min(1, filledQty(i) / o) : 1 }
+const lineShort = (i: OrderItem) => Math.max(0, Number(i.qty_ordered) - filledQty(i))
+// Full once it is within what the display rounds away: a tenth of a pound, or
+// less than a package — so a 2.96 lb line against 3.0 doesn't "need 0.0 lb".
+const lineDone  = (i: OrderItem) => lineShort(i) < (i.unit === 'LB' ? 0.05 : 0.5)
+const fmtQty    = (n: number, unit: string) => unit === 'LB' ? `${n.toFixed(1)} lb` : `${Math.ceil(n - 1e-9)} ea`
+function orderFill(items: OrderItem[]) {
+  const lines = items.length
+  const done  = items.filter(lineDone).length
+  const pct   = lines ? Math.round(items.reduce((s, i) => s + lineFill(i), 0) / lines * 100) : null
+  const short = items.filter(i => !lineDone(i))
+  return { lines, done, pct, short }
+}
+
 // plu_items.unit is the Hobart scale code ('02' on every PLU), not a unit of
 // sale — an order line wants LB or EA, which is the PLU's sell-by-weight flag.
 const saleUnit = (d: { sell_by_weight?: boolean | null }) => d.sell_by_weight === false ? 'EA' : 'LB'
@@ -132,39 +152,31 @@ function StatusBadge({ status }: { status: OrderStatus }) {
 
 // Fill progress bar for an order
 function FillBar({ items }: { items: OrderItem[] }) {
-  const lbItems = items.filter(i => i.unit === 'LB')
-  const eaItems = items.filter(i => i.unit === 'EA')
-
-  const totalLb   = lbItems.reduce((s, i) => s + Number(i.qty_ordered), 0)
-  const filledLb  = lbItems.reduce((s, i) => s + filledQty(i),  0)
-  const totalEa   = eaItems.reduce((s, i) => s + Number(i.qty_ordered), 0)
-  const filledEa  = eaItems.reduce((s, i) => s + filledQty(i),  0)
-
   if (items.length === 0) return null
-
-  const pct = totalLb > 0 ? Math.min(100, Math.round((filledLb / totalLb) * 100)) : null
+  const { lines, done, pct, short } = orderFill(items)
+  const totalLb  = items.filter(i => i.unit === 'LB').reduce((s, i) => s + Number(i.qty_ordered), 0)
+  const filledLb = items.filter(i => i.unit === 'LB').reduce((s, i) => s + filledQty(i),  0)
 
   return (
     <div style={{ marginTop: '0.5rem' }}>
-      {totalLb > 0 && (
-        <div style={{ marginBottom: '0.25rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: C.lightBrown, marginBottom: '0.2rem' }}>
-            <span>{filledLb.toFixed(1)} / {totalLb.toFixed(1)} lbs filled</span>
-            <span style={{ color: pct === 100 ? C.green : C.tan, fontWeight: 700 }}>{pct}%</span>
-          </div>
-          <div style={{ height: 6, background: 'rgba(255,255,255,0.08)', borderRadius: 99, overflow: 'hidden' }}>
-            <div style={{
-              height: '100%', borderRadius: 99,
-              width: `${pct}%`,
-              background: pct === 100 ? C.green : C.tan,
-              transition: 'width 0.3s ease',
-            }} />
-          </div>
-        </div>
-      )}
-      {totalEa > 0 && (
-        <div style={{ fontSize: '0.72rem', color: C.lightBrown }}>
-          {filledEa} / {totalEa} ea filled
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: C.lightBrown, marginBottom: '0.2rem' }}>
+        <span>{done} / {lines} item{lines === 1 ? '' : 's'} filled{totalLb > 0 ? ` · ${filledLb.toFixed(1)} / ${totalLb.toFixed(1)} lbs` : ''}</span>
+        <span style={{ color: pct === 100 ? C.green : C.tan, fontWeight: 700 }}>{pct}%</span>
+      </div>
+      <div style={{ height: 6, background: 'rgba(255,255,255,0.08)', borderRadius: 99, overflow: 'hidden' }}>
+        <div style={{
+          height: '100%', borderRadius: 99,
+          width: `${pct}%`,
+          background: pct === 100 ? C.green : C.tan,
+          transition: 'width 0.3s ease',
+        }} />
+      </div>
+      {short.length > 0 && (
+        <div
+          style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.25rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+          title={short.map(i => `${i.item_name}: needs ${fmtQty(lineShort(i), i.unit)}`).join('\n')}
+        >
+          Still needs {short.map(i => `${fmtQty(lineShort(i), i.unit)} ${i.item_name}`).join(' · ')}
         </div>
       )}
     </div>
@@ -729,7 +741,8 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
 
   const totalLb   = order.retail_order_items.filter(i => i.unit === 'LB').reduce((s, i) => s + Number(i.qty_ordered), 0)
   const filledLb  = order.retail_order_items.filter(i => i.unit === 'LB').reduce((s, i) => s + filledQty(i),  0)
-  const pct = totalLb > 0 ? Math.min(100, Math.round((filledLb / totalLb) * 100)) : null
+  const fill = orderFill(order.retail_order_items)
+  const pct  = fill.pct
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto', gap: '1.25rem' }}>
@@ -849,8 +862,16 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
             <div style={{ height: '100%', width: `${pct}%`, borderRadius: 99, background: pct === 100 ? C.green : C.tan, transition: 'width 0.3s' }} />
           </div>
           <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.3rem' }}>
-            {filledLb.toFixed(2)} of {totalLb.toFixed(2)} lbs filled
+            {fill.done} of {fill.lines} item{fill.lines === 1 ? '' : 's'} filled{totalLb > 0 ? ` · ${filledLb.toFixed(2)} of ${totalLb.toFixed(2)} lbs` : ''}
           </div>
+          {fill.short.length > 0 && (
+            <div style={{ fontSize: '0.78rem', color: C.tan, marginTop: '0.4rem', lineHeight: 1.5 }}>
+              <div style={{ color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.08em', fontSize: '0.7rem' }}>Still needs</div>
+              {fill.short.map(i => (
+                <div key={i.id}>{fmtQty(lineShort(i), i.unit)} <span style={{ color: C.cream }}>{i.item_name}</span></div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -932,8 +953,8 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
             <div style={{ color: C.lightBrown, fontSize: '0.85rem', fontStyle: 'italic' }}>No items on this order.</div>
           )}
           {order.retail_order_items.map(item => {
-            const itemPct = item.qty_ordered > 0 ? Math.min(100, Math.round((filledQty(item) / Number(item.qty_ordered)) * 100)) : 0
-            const done    = itemPct >= 100
+            const itemPct = Math.round(lineFill(item) * 100)
+            const done    = lineDone(item)
             return (
               <div key={item.id} style={{ background: 'rgba(255,255,255,0.04)', border: `1px solid ${done ? 'rgba(76,175,80,0.3)' : 'rgba(166,120,90,0.15)'}`, borderRadius: 3, padding: '0.65rem 0.85rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: item.unit === 'LB' ? '0.35rem' : 0 }}>
@@ -950,6 +971,7 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                     <span style={{ fontSize: '0.82rem', color: C.tan }}>
                       {Number(item.qty_ordered).toFixed(item.unit === 'LB' ? 1 : 0)} {item.unit}
+                      {!done && <span style={{ color: '#f0b866', fontWeight: 700 }}> · needs {fmtQty(lineShort(item), item.unit)}</span>}
                     </span>
                     {/* Fill input */}
                     {editingItem === item.id ? (

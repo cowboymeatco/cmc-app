@@ -269,7 +269,9 @@ export interface CookReading {
 
 export type ValueAddStatus = 'pending' | 'in_progress' | 'complete'
 export type ValueAddJobType = 'smokehouse' | 'patties' | 'sausage' | 'other'
-export type ValueAddSourceType = 'retail_order' | 'cutting_instruction' | 'general'
+// 'cure' — made by the house door when cure seals (hams, bacon) are scanned
+// into a load; one per customer per product (lib/valueAddLoads.ts).
+export type ValueAddSourceType = 'retail_order' | 'cutting_instruction' | 'general' | 'cure'
 
 export interface ValueAddJob {
   id:                            string
@@ -306,6 +308,31 @@ export interface ValueAddJob {
   // with the Enviropak's own cook cycles.
   smoke_in_at:                   string | null
   smoke_out_at:                  string | null
+  // The house load this job cooks in — several customers' jobs grouped by hand
+  // into one cook (Charlie, 2026-10-26: five snack-stick customers, one load).
+  // The load carries the batch code; the in/out taps stay on each job and are
+  // copied across the load, so cookMatch and /cooks never had to learn about
+  // loads. Null = not grouped yet.
+  load_id?:                      string | null
+  // Numbered tamper seal — the same stock the cure cooler uses — zip-tied to
+  // this job's product on its way into the house. Hams and bacon already go
+  // through the heat wearing theirs, which is why a printed label lost out.
+  seal_number?:                  string | null
+  // Pieces this job stands for — hams, combs — kept in step with the cure
+  // seals scanned into its load. The house is sized in pieces for those
+  // products (cook_profile.units_per_batch), so the planner reads this.
+  piece_count?:                  number | null
+  // Joined in by GET /api/value-add.
+  load?:                         ValueAddLoad | null
+}
+
+// One smokehouse cook. The batch code is the kill-sheet style julian plus the
+// cook's number that day: 26299-2 is the second cook of 2026-10-26.
+export interface ValueAddLoad {
+  id:         string
+  created_at: string
+  batch_code: string
+  notes:      string | null
 }
 
 // ── Cut Schedule ─────────────────────────────────────────────────────────────
@@ -370,6 +397,12 @@ export interface CureTag {
   // account for five different end buyers). Null = not pinned, and the tag
   // shows against all of that customer's sheets. Never inferred.
   linked_harvest_id?: string | null
+  // The smokehouse load this piece was scanned into at the house door, and
+  // when that load went in and came out (lib/valueAddLoads.ts). A piece with
+  // smokehouse_in_at set is out of the cure cooler whatever its status says.
+  load_id?:           string | null
+  smokehouse_in_at?:  string | null
+  smokehouse_out_at?: string | null
   // The exact cut sheet this piece belongs to — set when the seal was scanned
   // in a session opened off a cut card's CI-xxxxxxxx barcode, so a customer
   // with two hogs gets each piece on the right animal's sheet. Null = legacy

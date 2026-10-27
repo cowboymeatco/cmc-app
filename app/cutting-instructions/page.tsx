@@ -157,6 +157,30 @@ function declaredHead(ci: RawInstruction): number {
   return Number.isFinite(n) && n >= 1 && n <= 99 ? Math.floor(n) : 1
 }
 
+// Share of one animal a schedule portion stands for. "Three-quarter" first so
+// it doesn't read as a Quarter.
+const SHARE_FRACTION: Record<string, number> = { whole: 1, half: 0.5, quarter: 0.25 }
+function shareFraction(portion: string | null | undefined): number {
+  const p = String(portion ?? '').toLowerCase()
+  if (p.startsWith('three-quarter')) return 0.75
+  for (const k of Object.keys(SHARE_FRACTION)) if (p.startsWith(k)) return SHARE_FRACTION[k]
+  return 1
+}
+
+// Head this one card is linked to on the harvest schedule. A card can be linked
+// to every slot of a drop-off when the customer wants the same cuts on each
+// animal — Kristin's twelve hogs came in on ONE card linked to all twelve
+// (Charlie, 2026-10-26) — and those head are covered as surely as if twelve
+// cards had been filed. Shares add up by portion, so two Halves on one card are
+// one head, and a partial animal still counts as a head to cover.
+function linkedHeadOf(ciId: string, appointments: HarvestAppointment[]): number {
+  let share = 0
+  for (const a of appointments)
+    for (const c of a.customers ?? [])
+      if (c.linked_cutting_instruction_id === ciId) share += shareFraction(c.portion)
+  return Math.ceil(share - 1e-9)
+}
+
 // ── Drop-off groups ──────────────────────────────────────────────────────────
 // The office can tie several cards together as one drop-off (Charlie,
 // 2026-09-28: Daniels' twelve lambs, CMB's five beef — "in reality they are all
@@ -1318,6 +1342,10 @@ function v2CardPages(ci: RawInstruction, appointments: HarvestAppointment[], car
               they read a "one animal only" line further down. */
            herdN
              ? `<div style="font-size:16px;margin-top:2px;font-weight:bold">${herdN} animals on this sheet — same cuts on each</div>`
+           : linkedHeadOf(ci.id, appointments) > 1
+             // One card for the whole drop-off: the form's "which animal is
+             // this one" answer means nothing on it, so say what it covers.
+             ? `<div style="font-size:16px;margin-top:2px;font-weight:bold">One of ${linkedHeadOf(ci.id, appointments)} head on this card — same cuts on each</div>`
            : declaredHead(ci) > 1
              ? `<div style="font-size:16px;margin-top:2px;font-weight:bold">Animal ${headIndexOf(ci)} of ${declaredHead(ci)} this drop-off</div>`
              : ''}
@@ -2259,10 +2287,13 @@ export default function CuttingInstructionsPage() {
     cardsPerDropOff.set(k, (cardsPerDropOff.get(k) ?? 0) + 1)
   }
   // null when the count is satisfied — the common case is one head, one card.
+  // "Covered" is the larger of cards on file for the drop-off and head this
+  // card is linked to on the schedule: one card linked to all twelve slots
+  // covers twelve head, and read 1/12 until it counted links (2026-10-26).
   const headShortfall = (ci: RawInstruction): { declared: number; onFile: number } | null => {
     const declared = declaredHead(ci)
     if (declared <= 1) return null
-    const onFile = cardsPerDropOff.get(dropOffKey(ci)) ?? 1
+    const onFile = Math.max(cardsPerDropOff.get(dropOffKey(ci)) ?? 1, linkedHeadOf(ci.id, appointments))
     return onFile < declared ? { declared, onFile } : null
   }
 
@@ -2459,14 +2490,8 @@ export default function CuttingInstructionsPage() {
   // (so a carcass already assigned to it stays put), takes the card's buyer and
   // links to the card; the remainder is a new open share that keeps whatever
   // name and contact the slot had. Head count is untouched — two halves are
-  // still one animal.
-  const SHARE_FRACTION: Record<string, number> = { whole: 1, half: 0.5, quarter: 0.25 }
-  function shareFraction(portion: string | null | undefined): number {
-    const p = String(portion ?? '').toLowerCase()
-    if (p.startsWith('three-quarter')) return 0.75
-    for (const k of Object.keys(SHARE_FRACTION)) if (p.startsWith(k)) return SHARE_FRACTION[k]
-    return 1
-  }
+  // still one animal. (shareFraction sits at module scope — the head-count
+  // badge counts linked shares with it too.)
   const SHARE_LABEL: Record<number, string> = { 1: 'Whole', 0.5: 'Half', 0.25: 'Quarter' }
   /** What a card can claim off a share: the card's own portion, only when it is
    *  a schedule portion (Half or Quarter) and smaller than the share. */
@@ -3119,7 +3144,7 @@ export default function CuttingInstructionsPage() {
             if (!short) return null
             return (
               <span
-                title={`This customer said they were bringing ${short.declared} head, and only ${short.onFile} cutting card${short.onFile === 1 ? ' is' : 's are'} on file. One card covers one animal — check whether the rest are coming before this is cut.`}
+                title={`This customer said they were bringing ${short.declared} head, and only ${short.onFile} ${short.onFile === 1 ? 'is' : 'are'} covered — by a cutting card on file, or by linking this card to a slot on the schedule. Check whether the rest are coming before this is cut.`}
                 style={{ marginLeft: '0.4rem', fontSize: '0.68rem', fontWeight: 700, padding: '0.05rem 0.35rem', borderRadius: 4, background: 'rgba(200,120,20,0.28)', color: '#f0b866', whiteSpace: 'nowrap' }}>
                 ⚠ {short.onFile}/{short.declared} head
               </span>
@@ -3660,10 +3685,12 @@ export default function CuttingInstructionsPage() {
                 <div style={{ padding: '0.75rem 1.25rem', borderBottom: '1px solid rgba(166,120,90,0.15)', background: 'rgba(200,120,20,0.12)', display: 'flex', flexDirection: 'column', gap: '0.45rem', flexShrink: 0 }}>
                   {short && (
                     <div style={{ fontSize: '0.82rem', color: '#f0b866' }}>
-                      ⚠ <strong>{short.declared} head declared, {short.onFile} card{short.onFile === 1 ? '' : 's'} on file.</strong>{' '}
-                      A cutting card covers one animal. Check whether the rest are
-                      coming before anything gets cut &mdash; or copy this one for
-                      each remaining animal.
+                      ⚠ <strong>{short.declared} head declared, {short.onFile} covered.</strong>{' '}
+                      A head is covered by its own cutting card, or by linking this
+                      card to its slot on the schedule when every animal gets the
+                      same cuts. Check whether the rest are coming before anything
+                      gets cut &mdash; then link this card to them, or copy it for
+                      each one.
                     </div>
                   )}
                   {pinned.length > 0 && (

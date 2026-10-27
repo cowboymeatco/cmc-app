@@ -261,19 +261,24 @@ export function predict(
 
 /** Convenience: match + predict in one step. Null when nothing matched. */
 export function predictJob(
-  job:      Pick<ValueAddJob, 'output_item_name' | 'description' | 'job_type' | 'weight_in_lbs'> & { profile_key?: string | null },
+  job:      Pick<ValueAddJob, 'output_item_name' | 'description' | 'job_type' | 'weight_in_lbs'> & { profile_key?: string | null; piece_count?: number | null },
   profiles: CookProfile[],
   settings: CookSettings = DEFAULT_SETTINGS
 ): Prediction | null {
   const m = matchProfile(job, profiles)
   if (!m) return null
-  return predict(m.profile, job.weight_in_lbs, settings)
+  // Pieces when the job counts them (hams and bacon scanned in off their cure
+  // seals) — the rack holds 24 hams whatever they weigh.
+  return predict(m.profile, job.weight_in_lbs, settings, job.piece_count ?? null)
 }
 
 // ── Sequencing the house ─────────────────────────────────────────────────────
 
 export interface PlannedJob {
+  /** The job the row is named for — a load's lead, carrying the load's summed pounds (loadAsJob). */
   job:        ValueAddJob
+  /** Every job in this cook: one for a job on its own, several for a load. */
+  jobs:       ValueAddJob[]
   start:      Date
   end:        Date
   prediction: Prediction | null
@@ -288,6 +293,39 @@ export interface Plan {
   /** Jobs left out because nothing predicts their length. */
   unplannable: ValueAddJob[]
   houseEnd:    Date | null
+}
+
+// ── Loads ────────────────────────────────────────────────────────────────────
+// Jobs sharing a load_id cook as ONE house load (lib/valueAddLoads.ts): five
+// customers' snack sticks on one truck used to plan as five back-to-back cooks
+// (Charlie, 2026-10-26). The planner sees a load as a single job — the lead's
+// name, everyone's pounds — placed where its first member sits in the queue.
+
+/** Queue order preserved; a load's members collapse onto the first one seen. */
+export function groupLoads(jobs: ValueAddJob[]): ValueAddJob[][] {
+  const groups: ValueAddJob[][] = []
+  const byLoad = new Map<string, ValueAddJob[]>()
+  for (const j of jobs) {
+    if (!j.load_id) { groups.push([j]); continue }
+    const g = byLoad.get(j.load_id)
+    if (g) g.push(j)
+    else { const ng = [j]; byLoad.set(j.load_id, ng); groups.push(ng) }
+  }
+  return groups
+}
+
+/** One job standing for the whole load: the lead's identity, the members' pounds. */
+export function loadAsJob(jobs: ValueAddJob[]): ValueAddJob {
+  const lead = jobs[0]
+  if (jobs.length === 1) return lead
+  const weights = jobs.map(j => j.weight_in_lbs).filter((w): w is number => w != null)
+  const lbs = weights.length ? weights.reduce((s, w) => s + Number(w), 0) : null
+  const counts = jobs.map(j => j.piece_count).filter((n): n is number => n != null)
+  const piece_count = counts.length ? counts.reduce((s, n) => s + Number(n), 0) : null
+  // A profile anybody in the load picked governs the cook; the lead's first.
+  const profile_key = lead.profile_key ?? jobs.find(j => j.profile_key)?.profile_key ?? null
+  // Pinned and placed by the lead — toggling the pin writes every member.
+  return { ...lead, weight_in_lbs: lbs, piece_count, profile_key }
 }
 
 function addMinutes(d: Date, m: number): Date {
@@ -317,14 +355,17 @@ export function planHouse(
   const scheduled:   PlannedJob[] = []
   const unplannable: ValueAddJob[] = []
 
+  const units = groupLoads(jobs)
+
   // Locked jobs are immovable walls; the flowing jobs must not overlap them.
-  const locked = jobs
-    .filter(j => j.schedule_locked && j.scheduled_start)
-    .map(j => {
+  const locked = units
+    .filter(u => u[0].schedule_locked && u[0].scheduled_start)
+    .map(u => {
+      const j = loadAsJob(u)
       const p = predictJob(j, profiles, settings)
       const start = new Date(j.scheduled_start as string)
       return {
-        job: j, start, prediction: p,
+        job: j, jobs: u, start, prediction: p,
         end: addMinutes(start, p?.minutes ?? j.predicted_minutes ?? 0),
         unknown: !p && !j.predicted_minutes,
         overnight: false,
@@ -352,13 +393,14 @@ export function planHouse(
     return s
   }
 
-  for (const job of jobs) {
+  for (const u of units) {
+    const job = loadAsJob(u)
     if (job.schedule_locked && job.scheduled_start) continue  // already placed
 
     const prediction = predictJob(job, profiles, settings)
     const minutes = prediction?.minutes ?? job.predicted_minutes ?? null
     if (minutes === null) {
-      unplannable.push(job)
+      unplannable.push(...u)
       continue
     }
 
@@ -366,7 +408,7 @@ export function planHouse(
     const end   = addMinutes(start, minutes)
 
     scheduled.push({
-      job, start, end, prediction,
+      job, jobs: u, start, end, prediction,
       unknown:   !prediction,
       overnight: end.getHours() >= settings.day_end_hour || end.getDate() !== start.getDate(),
     })

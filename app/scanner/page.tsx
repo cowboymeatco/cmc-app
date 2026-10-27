@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import Link from 'next/link'
-import { isCureTagNumber, type ProcessingInput, type CureTag } from '@/lib/types'
+import { isCureTagNumber, ValueAddJob, type ProcessingInput, type CureTag } from '@/lib/types'
 import { CURE_PICKER_PRODUCTS, sourceCutOptions } from '@/lib/cureLoad'
 import { isoDate } from '@/lib/dates'
 import { addBreadcrumb } from '@/lib/feedbackTelemetry'
@@ -530,6 +530,17 @@ function buildPackoutHTML(
 
 <script>window.onload = () => window.print()</script>
 </body></html>`
+}
+
+// The open smokehouse job wearing a seal, or null. Snack sticks and the like
+// go into the house under the same numbered seals the cure cooler uses, so a
+// seal scanned here may be a job's rather than a ham's (lib/valueAddLoads.ts).
+async function smokehouseJobBySeal(tagNumber: string): Promise<ValueAddJob | null> {
+  try {
+    const r = await fetch(`/api/value-add?seal=${encodeURIComponent(tagNumber)}`)
+    const j = await r.json()
+    return j && j.id ? j as ValueAddJob : null
+  } catch { return null }
 }
 
 export default function ScannerPage() {
@@ -1759,6 +1770,30 @@ export default function ScannerPage() {
       const res = await fetch(`/api/cure-tags?tag=${encodeURIComponent(tagNumber)}`)
       const tag: CureTag | null = await res.json().catch(() => null)
       if (!tag) {
+        // Not a cure seal — maybe the seal on a smokehouse job arriving at the
+        // bench to be packed. That taps its whole load out of the house and
+        // opens its customer's session, the way a ham seal does out of cure.
+        const sealJob = await smokehouseJobBySeal(tagNumber)
+        if (sealJob) {
+          const inHouse = !!sealJob.smoke_in_at && !sealJob.smoke_out_at
+          if (inHouse) {
+            await fetch('/api/value-add', {
+              method:  'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body:    JSON.stringify({ id: sealJob.id, smoke_out_at: new Date().toISOString() }),
+            })
+          }
+          if (sealJob.customer_name) {
+            const dt = isoDate()
+            const sorted = await startSessionFromExisting(sealJob.customer_name, dt)
+            if (!sorted.some(b => !b.is_closed)) await addBoxTo(sealJob.customer_name, dt, sorted)
+          }
+          setLastKind('ok')
+          setLastItem(`🔥 ${sealJob.output_item_name || sealJob.description} · ${sealJob.customer_name ?? 'CMC shelf stock'}${sealJob.load?.batch_code ? ` · batch ${sealJob.load.batch_code}` : ''}${inHouse ? ' — out of the house ✓' : ''}${sealJob.customer_name ? ' · scan packages' : ''}`)
+          setFlash('ok')
+          setTimeout(() => setFlash(null), 3000)
+          return
+        }
         const msg = `Seal ${tagNumber} isn't tagged to a customer — tag it in from their session first`
         if (!startedRef.current) window.alert(msg)
         else {
@@ -1773,6 +1808,22 @@ export default function ScannerPage() {
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify({ id: tag.id, status: 'done' }),
         })
+      }
+      // A ham reaching the bench is out of the house: if its load is still
+      // tapped in, tap it out — every job on the truck at once (Charlie,
+      // 2026-10-26). The pack-out goes ahead either way.
+      if (tag.load_id) {
+        try {
+          const l = await fetch(`/api/value-add/loads?id=${encodeURIComponent(tag.load_id)}`).then(r => r.json())
+          const inHouse = (l?.jobs ?? []).find((j: { smoke_in_at: string | null; smoke_out_at: string | null }) => j.smoke_in_at && !j.smoke_out_at)
+          if (inHouse) {
+            await fetch('/api/value-add', {
+              method:  'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body:    JSON.stringify({ id: inHouse.id, smoke_out_at: new Date().toISOString() }),
+            })
+          }
+        } catch { /* the bench still packs the piece */ }
       }
       const dt = tag.session_date ?? isoDate()
       const sorted = await startSessionFromExisting(tag.customer_name, dt)
@@ -2636,6 +2687,15 @@ export default function ScannerPage() {
     setCureProduct(null)
     setCureShowAll(false)
     setCureWarn(null)
+    // A seal on a smokehouse job is not a cure seal — say whose it is rather
+    // than offer to tag a ham with it (lib/valueAddLoads.ts).
+    const sealJob = await smokehouseJobBySeal(tagNumber)
+    if (sealJob) {
+      setLastKind('warn')
+      setLastItem(`🔥 Seal ${tagNumber} is on a smokehouse job: ${sealJob.customer_name ?? 'CMC'} · ${sealJob.output_item_name || sealJob.description}${sealJob.load?.batch_code ? ` · batch ${sealJob.load.batch_code}` : ''}`)
+      setFlash('warn'); setTimeout(() => setFlash(null), 4000)
+      return
+    }
     let existing: CureTag | null = null
     try {
       const res = await fetch(`/api/cure-tags?tag=${encodeURIComponent(tagNumber)}`)

@@ -12,7 +12,9 @@ export const dynamic = 'force-dynamic'
 // board is the seal scans and nothing else.
 export async function GET() {
   const [{ data: tags, error }, { data: profiles }] = await Promise.all([
-    supabaseAdmin.from('cure_tags').select('*').eq('status', 'curing'),
+    // A piece scanned into a load and tapped into the house has left the
+    // cooler, whatever its status still says (it goes 'done' at the bench).
+    supabaseAdmin.from('cure_tags').select('*').eq('status', 'curing').is('smokehouse_in_at', null),
     supabaseAdmin.from('cook_profile').select('*'),
   ])
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
