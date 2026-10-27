@@ -261,13 +261,15 @@ export function predict(
 
 /** Convenience: match + predict in one step. Null when nothing matched. */
 export function predictJob(
-  job:      Pick<ValueAddJob, 'output_item_name' | 'description' | 'job_type' | 'weight_in_lbs'> & { profile_key?: string | null },
+  job:      Pick<ValueAddJob, 'output_item_name' | 'description' | 'job_type' | 'weight_in_lbs'> & { profile_key?: string | null; piece_count?: number | null },
   profiles: CookProfile[],
   settings: CookSettings = DEFAULT_SETTINGS
 ): Prediction | null {
   const m = matchProfile(job, profiles)
   if (!m) return null
-  return predict(m.profile, job.weight_in_lbs, settings)
+  // Pieces when the job counts them (hams and bacon scanned in off their cure
+  // seals) — the rack holds 24 hams whatever they weigh.
+  return predict(m.profile, job.weight_in_lbs, settings, job.piece_count ?? null)
 }
 
 // ── Sequencing the house ─────────────────────────────────────────────────────
@@ -318,10 +320,12 @@ export function loadAsJob(jobs: ValueAddJob[]): ValueAddJob {
   if (jobs.length === 1) return lead
   const weights = jobs.map(j => j.weight_in_lbs).filter((w): w is number => w != null)
   const lbs = weights.length ? weights.reduce((s, w) => s + Number(w), 0) : null
+  const counts = jobs.map(j => j.piece_count).filter((n): n is number => n != null)
+  const piece_count = counts.length ? counts.reduce((s, n) => s + Number(n), 0) : null
   // A profile anybody in the load picked governs the cook; the lead's first.
   const profile_key = lead.profile_key ?? jobs.find(j => j.profile_key)?.profile_key ?? null
   // Pinned and placed by the lead — toggling the pin writes every member.
-  return { ...lead, weight_in_lbs: lbs, profile_key }
+  return { ...lead, weight_in_lbs: lbs, piece_count, profile_key }
 }
 
 function addMinutes(d: Date, m: number): Date {

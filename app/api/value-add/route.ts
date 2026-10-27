@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { isoDate } from '@/lib/dates'
-import { JOB_WITH_LOAD, isUniqueViolation, jobBySeal, sealConflict, tapLoad } from '@/lib/valueAddLoads'
+import { JOB_WITH_LOAD, isUniqueViolation, jobBySeal, nextTagCode, sealConflict, tapLoad } from '@/lib/valueAddLoads'
 
 export const dynamic = 'force-dynamic'
 
@@ -31,29 +31,6 @@ export async function GET(req: NextRequest) {
   const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json(data)
-}
-
-// WIP tag code: WIP<julian><seq>, e.g. WIP26205003 for the third job of the
-// day. Code 39 only carries A-Z/0-9, so no punctuation. Sequence comes from
-// what's already tagged that day — at a handful of jobs a day the read-then-
-// write gap is not worth a sequence table, and the unique index catches a tie.
-async function nextTagCode(requestedDate: string): Promise<string> {
-  const d     = new Date(requestedDate + 'T12:00:00')
-  const start = new Date(d.getFullYear(), 0, 0)
-  const day   = Math.floor((d.getTime() - start.getTime()) / 86_400_000)
-  const prefix = `WIP${String(d.getFullYear()).slice(2)}${String(day).padStart(3, '0')}`
-
-  const { data } = await supabaseAdmin
-    .from('value_add_jobs')
-    .select('tag_code')
-    .like('tag_code', `${prefix}%`)
-
-  const seq = (data ?? []).reduce((max, r) => {
-    const n = parseInt(String(r.tag_code ?? '').slice(prefix.length), 10)
-    return Number.isFinite(n) && n > max ? n : max
-  }, 0) + 1
-
-  return `${prefix}${String(seq).padStart(3, '0')}`
 }
 
 // POST /api/value-add â€” create a new value-add job

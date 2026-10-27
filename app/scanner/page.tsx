@@ -1809,6 +1809,22 @@ export default function ScannerPage() {
           body:    JSON.stringify({ id: tag.id, status: 'done' }),
         })
       }
+      // A ham reaching the bench is out of the house: if its load is still
+      // tapped in, tap it out — every job on the truck at once (Charlie,
+      // 2026-10-26). The pack-out goes ahead either way.
+      if (tag.load_id) {
+        try {
+          const l = await fetch(`/api/value-add/loads?id=${encodeURIComponent(tag.load_id)}`).then(r => r.json())
+          const inHouse = (l?.jobs ?? []).find((j: { smoke_in_at: string | null; smoke_out_at: string | null }) => j.smoke_in_at && !j.smoke_out_at)
+          if (inHouse) {
+            await fetch('/api/value-add', {
+              method:  'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body:    JSON.stringify({ id: inHouse.id, smoke_out_at: new Date().toISOString() }),
+            })
+          }
+        } catch { /* the bench still packs the piece */ }
+      }
       const dt = tag.session_date ?? isoDate()
       const sorted = await startSessionFromExisting(tag.customer_name, dt)
       if (!sorted.some(b => !b.is_closed)) await addBoxTo(tag.customer_name, dt, sorted)

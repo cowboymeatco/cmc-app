@@ -2,19 +2,22 @@ export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import {
-  BATCH_CODE_RE, createLoad, deleteIfEmpty, isUniqueViolation, jobsInLoad,
+  BATCH_CODE_RE, createLoad, deleteIfEmpty, isUniqueViolation, jobsInLoad, openLoads,
 } from '@/lib/valueAddLoads'
 
 export const dynamic = 'force-dynamic'
 
 // Smokehouse loads — see lib/valueAddLoads.ts and the 2026-10-26 migration.
 //
+// GET    /api/value-add/loads                    — loads the door can still use:
+//        empty, queued, or in the house, each with its jobs and piece count
 // GET    /api/value-add/loads?id=<load>          — one load with its jobs
-// POST   /api/value-add/loads                    — { job_ids, day?, load_id?, notes? }
+// POST   /api/value-add/loads                    — { job_ids?, day?, load_id?, notes? }
 //        Groups the jobs into one load. With load_id the jobs join that load;
 //        without, a new load is numbered for `day` (the scheduled cook day,
-//        else today). Chris groups by hand — nothing here guesses what cooks
-//        together.
+//        else today). No job_ids at all makes an EMPTY load — what the door
+//        starts before scanning hams into it. Chris groups by hand — nothing
+//        here guesses what cooks together.
 // PATCH  /api/value-add/loads                    — { id, batch_code?, notes? }
 // DELETE /api/value-add/loads?id=<load>          — split: every job goes back
 //        to standing alone, the load row goes away.
@@ -23,7 +26,10 @@ export const dynamic = 'force-dynamic'
 
 export async function GET(req: NextRequest) {
   const id = new URL(req.url).searchParams.get('id')
-  if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
+  if (!id) {
+    try { return NextResponse.json(await openLoads()) }
+    catch (e) { return NextResponse.json({ error: e instanceof Error ? e.message : 'failed' }, { status: 500 }) }
+  }
   const { data: load, error } = await supabaseAdmin.from('value_add_loads').select('*').eq('id', id).maybeSingle()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   if (!load) return NextResponse.json({ error: 'load not found' }, { status: 404 })
@@ -41,7 +47,15 @@ export async function POST(req: NextRequest) {
   const jobIds = Array.isArray(body.job_ids)
     ? Array.from(new Set(body.job_ids.map(String).filter(Boolean)))
     : []
-  if (jobIds.length === 0) return NextResponse.json({ error: 'job_ids required' }, { status: 400 })
+  if (jobIds.length === 0) {
+    // An empty load for the door to scan cure pieces into.
+    try {
+      const load = await createLoad(body.day ?? null, body.notes ?? null)
+      return NextResponse.json({ load, jobs: [] })
+    } catch (e) {
+      return NextResponse.json({ error: e instanceof Error ? e.message : 'failed' }, { status: 500 })
+    }
+  }
 
   // Only open jobs join a load. A completed one is history; it would only
   // drag a finished weight into a cook it was never in.

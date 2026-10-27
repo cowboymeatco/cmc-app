@@ -198,6 +198,7 @@ function QueueRow({
                 <div key={j.id} style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                   <span style={{ color: C.tan, fontWeight: 700 }}>👤 {j.customer_name ?? 'CMC shelf stock'}</span>
                   <span>{j.output_item_name || j.description}</span>
+                  {j.piece_count != null && <span>{j.piece_count} pc</span>}
                   {j.weight_in_lbs != null && <span>{Number(j.weight_in_lbs).toFixed(0)} lbs</span>}
                   {j.tag_code && <span style={{ fontFamily: 'monospace' }}>{j.tag_code}</span>}
                   {j.seal_number && <span style={{ fontFamily: 'monospace' }} title="Seal on the product in the house">🔒 {j.seal_number}</span>}
@@ -207,6 +208,7 @@ function QueueRow({
           ) : (
             <div style={{ fontSize: '0.72rem', color: C.lightBrown, display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.15rem' }}>
               {job.customer_name && <span style={{ color: C.tan, fontWeight: 700 }}>👤 {job.customer_name}</span>}
+              {job.piece_count != null && <span>{job.piece_count} pc</span>}
               {job.weight_in_lbs != null && <span>{Number(job.weight_in_lbs).toFixed(0)} lbs in</span>}
               {job.tag_code && <span style={{ fontFamily: 'monospace' }}>{job.tag_code}</span>}
               {job.seal_number && <span style={{ fontFamily: 'monospace' }} title="Seal on the product in the house">🔒 {job.seal_number}</span>}
@@ -234,7 +236,7 @@ function QueueRow({
           )}
           {isLoad && (
             <Pill color={C.orange} title="Several customers' jobs cooked as one house load">
-              {jobs.length} jobs{job.weight_in_lbs != null ? ` · ${Number(job.weight_in_lbs).toFixed(0)} lbs` : ''}
+              {jobs.length} jobs{job.piece_count != null ? ` · ${job.piece_count} pc` : ''}{job.weight_in_lbs != null ? ` · ${Number(job.weight_in_lbs).toFixed(0)} lbs` : ''}
             </Pill>
           )}
           {mixed.length > 1 && prediction && (

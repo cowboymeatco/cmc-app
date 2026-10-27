@@ -273,27 +273,44 @@ export function generateWIPLabel(data: WIPTagData, flags: LabelFlags = DEFAULT_F
   .foot    { font-family: 'Arial Narrow', Arial, sans-serif; font-size: 8.5pt; text-align: center; margin-top: 3px; }
 ${roll !== '62mm' ? '' : `
   /* ── Brother 62mm roll ──────────────────────────────────────────────────
-     INTENT is what this tag exists to say, so it gives up the least. The
-     FROM/WEIGHT/LABEL/FOR rows stack their key over the fill line instead of
-     sitting beside it — a 1.05in key column would leave nothing to write on. */
-  .logo    { max-width: 1.7in; }
-  .title   { font-size: 13pt; }
-  .cust    { font-size: 15pt; }
-  .intent  { font-size: 15pt; }
-  .intent.multi { font-size: 11.5pt; }
-  .sline   { font-size: 10.5pt; }
-  .insp    { font-size: 9pt; gap: 4px; }
-  .insp .bug { width: 0.36in; }
-  .insp.nfs  { font-size: 10pt; }
-  .batchbox .bc { font-size: 17pt; }
-  .row     { display: block; font-size: 10.5pt; padding: 2px 0; }
-  .k       { width: auto; display: block; font-size: 8pt; }
-  .v       { display: block; min-height: 17px; }
+     Charlie, 2026-10-26: the tag goes into the house on a 2.5in plastic hang
+     tag, so the whole thing has to land inside 5in of roll. INTENT, the
+     inspection band and the batch code give up the least; everything else
+     tightens, and the FROM/WEIGHT/LABEL/FOR rows go back beside a short key
+     rather than stacking — a stacked row costs a line each. */
+  .logo    { max-width: 1.15in; margin-bottom: 1px; }
+  .title   { font-size: 11pt; padding: 1px 0; margin-bottom: 2px; }
+  .cust    { font-size: 14pt; line-height: 1; }
+  .keepsep { font-size: 7.5pt; padding: 0; margin: 1px 0; }
+  .producer{ font-size: 8.5pt; }
+  .intent-k{ font-size: 7.5pt; margin-top: 1px; }
+  .intent  { font-size: 14pt; padding: 2px 3px; margin-bottom: 2px; }
+  .intent.multi { font-size: 11pt; }
+  .scope-k { font-size: 7pt; }
+  .sline   { font-size: 9.5pt; }
+  .insp    { font-size: 8.5pt; gap: 4px; margin: 2px 0; padding: 1px 3px; }
+  .insp .bug { width: 0.32in; }
+  .insp.nfs  { font-size: 9.5pt; }
+  .srcnote { font-size: 7pt; margin: 0 0 2px; }
+  .row     { font-size: 9.5pt; padding: 1px 0; }
+  .k       { width: 0.6in; font-size: 7.5pt; letter-spacing: 0.06em; }
+  .v       { min-height: 13px; }
+  .item    { font-size: 9pt; }
+  .batchbox { margin-top: 2px; padding: 1px 3px; gap: 6px; }
+  .batchbox .bk { font-size: 8pt; }
+  .batchbox .bc { font-size: 16pt; }
+  .batch   { font-size: 8.5pt; margin-top: 1px; }
+  .batch b { font-size: 10pt; }
+  /* Two lines at most: the names are a hint, the batch code is the record. */
+  .mates   { font-size: 7pt; line-height: 1.15; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .barcode { margin: 2px 0 0; }
   /* Squeezed to 2.2in the barcode would come out 0.3in tall. Bar WIDTHS are
      still above the reader's floor; the height isn't, so stretch it back —
      !important because makeCode39Barcode carries height:auto inline, and it is
      shared with surfaces (game tag, PLU book) that still want that. */
-  .barcode svg { width: 100% !important; height: 0.62in !important; }
+  .barcode svg { width: 100% !important; height: 0.5in !important; }
+  .code    { font-size: 8.5pt; }
+  .foot    { font-size: 7.5pt; margin-top: 2px; }
 `}
 </style>
 </head>
