@@ -6,6 +6,7 @@ import { isoDate } from '@/lib/dates'
 import {
   ValueAddJob, ValueAddJobType as JobType,
   ValueAddStatus as JobStatus, ValueAddSourceType as SourceType,
+  isCureTagNumber,
 } from '@/lib/types'
 import { fmtDayClock } from '@/lib/cookPredict'
 import { WeightOutProposal } from '@/lib/boxWeight'
@@ -476,8 +477,10 @@ function SmokeTimes({ job, cooks, lastImportedAt, onUpdated }: {
 // ══════════════════════════════════════════════════════════════════════════════
 // JOB CARD (in active list)
 // ══════════════════════════════════════════════════════════════════════════════
-function JobCard({ job, proposal, onUpdated, onBoxLinksChanged, cardLabels, cooks, lastImportedAt }: {
+function JobCard({ job, mates, proposal, onUpdated, onBoxLinksChanged, cardLabels, cooks, lastImportedAt }: {
   job:      ValueAddJob
+  /** The other jobs in this job's house load. */
+  mates:    ValueAddJob[]
   proposal: WeightProposal | null
   onUpdated: (j: ValueAddJob) => void
   /** Re-pull the weight proposals — linking a box changes what they say. */
@@ -635,8 +638,23 @@ function JobCard({ job, proposal, onUpdated, onBoxLinksChanged, cardLabels, cook
       </div>
 
       {/* Any job bound for the house — some smokehouse runs get filed as "Other". */}
-      {(job.job_type === 'smokehouse' || job.profile_key || job.scheduled_start || job.smoke_in_at) && (
-        <SmokeTimes job={job} cooks={cooks} lastImportedAt={lastImportedAt} onUpdated={onUpdated} />
+      {(job.job_type === 'smokehouse' || job.profile_key || job.scheduled_start || job.smoke_in_at || job.load_id) && (
+        <>
+          {/* The load this job cooks in, who else is in it, and the seal that
+              says which product is whose inside the house (lib/valueAddLoads.ts). */}
+          <div style={{ fontSize: '0.75rem', color: C.lightBrown, marginBottom: '0.5rem', display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            {job.load?.batch_code
+              ? <span style={{ fontFamily: 'monospace', color: C.orange, fontWeight: 700 }} title="Batch code — this cook">🔥 {job.load.batch_code}</span>
+              : <span title="Group it with others on the Schedule tab; on its own it becomes a load of one when it is tapped in">🔥 not in a load yet</span>}
+            {mates.length > 0 && (
+              <span title="Cooking in the same load">
+                with {mates.map(m => `${m.customer_name ?? 'CMC'} · ${m.output_item_name || m.description}`).join(', ')}
+              </span>
+            )}
+            <SealField job={job} onUpdated={onUpdated} />
+          </div>
+          <SmokeTimes job={job} cooks={cooks} lastImportedAt={lastImportedAt} onUpdated={onUpdated} />
+        </>
       )}
 
       {/* Weight in / out */}
@@ -1092,6 +1110,159 @@ function NewJobTab({ onSaved, orders, cuttingInstructions, pluList }: { onSaved:
   )
 }
 
+// ── Seal on the product ──────────────────────────────────────────────────────
+// The numbered tamper seal zip-tied to this job's product on its way into the
+// house — the same stock the cure cooler uses, because hams and bacon already
+// ride through the heat wearing theirs and a thermal label would not
+// (Charlie, 2026-10-26). Typed or scanned here; the server refuses a seal that
+// is live on a cure tag or on another open job.
+const linkBtn: React.CSSProperties = { background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '0.72rem', padding: 0 }
+
+function SealField({ job, onUpdated }: { job: ValueAddJob; onUpdated: (j: ValueAddJob) => void }) {
+  const [editing, setEditing] = useState(false)
+  const [val,  setVal]  = useState('')
+  const [err,  setErr]  = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  async function save(seal: string | null) {
+    setBusy(true); setErr(null)
+    const res = await fetch('/api/value-add', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: job.id, seal_number: seal }),
+    })
+    const body = await res.json().catch(() => null)
+    setBusy(false)
+    if (!res.ok || body?.error) { setErr(body?.error ?? 'Could not save the seal'); return }
+    setEditing(false); setVal('')
+    onUpdated(body)
+  }
+
+  if (!editing) {
+    return (
+      <span style={{ display: 'inline-flex', gap: '0.4rem', alignItems: 'center', fontSize: '0.75rem' }}>
+        {job.seal_number ? (
+          <>
+            <span style={{ fontFamily: 'monospace', color: C.tan }} title="Seal on the product in the house">🔒 {job.seal_number}</span>
+            <button onClick={() => { setVal(job.seal_number ?? ''); setEditing(true) }} style={linkBtn}>change</button>
+            <button onClick={() => save(null)} disabled={busy} style={linkBtn} title="Take the seal off this job">✕</button>
+          </>
+        ) : (
+          <button onClick={() => setEditing(true)} style={linkBtn}>🔒 add seal</button>
+        )}
+        {err && <span style={{ color: C.red }}>{err}</span>}
+      </span>
+    )
+  }
+  return (
+    <span style={{ display: 'inline-flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
+      <input autoFocus value={val} placeholder="0036013"
+             onChange={e => setVal(e.target.value.replace(/\D/g, '').slice(0, 7))}
+             onKeyDown={e => {
+               if (e.key === 'Enter' && isCureTagNumber(val) && !busy) save(val)
+               if (e.key === 'Escape') setEditing(false)
+             }}
+             style={{ ...INPUT, width: 110, padding: '0.2rem 0.5rem', fontFamily: 'monospace', fontSize: '0.8rem' }} />
+      <button style={{ ...BTN(C.green), padding: '0.2rem 0.6rem', fontSize: '0.75rem' }}
+              disabled={busy || !isCureTagNumber(val)} onClick={() => save(val)}>Save</button>
+      <button style={linkBtn} onClick={() => setEditing(false)}>cancel</button>
+      {err && <span style={{ fontSize: '0.72rem', color: C.red }}>{err}</span>}
+    </span>
+  )
+}
+
+// ── The house door ───────────────────────────────────────────────────────────
+// Scan (or type) the seal on anything going in or coming out. The seal finds
+// its job, the job finds its load, and the whole load is tapped in or out at
+// once — five customers' sticks on one truck are one tap. Under it, what is in
+// the house right now by batch code, so "what's what in there" has an answer
+// without reading the tags through the door.
+function HouseDoor({ jobs, onChanged }: { jobs: ValueAddJob[]; onChanged: () => void }) {
+  const [val,  setVal]  = useState('')
+  const [msg,  setMsg]  = useState<{ kind: 'ok' | 'warn'; text: string } | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  async function tap(code: string) {
+    setBusy(true); setMsg(null)
+    try {
+      const job: ValueAddJob | null = await fetch(`/api/value-add?seal=${encodeURIComponent(code)}`)
+        .then(r => r.json()).catch(() => null)
+      if (!job || !job.id) {
+        setMsg({ kind: 'warn', text: `Seal ${code} isn't on any open smokehouse job — add it on the job card first.` })
+        return
+      }
+      const who = `${job.customer_name ?? 'CMC'} · ${job.output_item_name || job.description}`
+      const fields: Partial<ValueAddJob> | null = !job.smoke_in_at
+        ? { smoke_in_at: new Date().toISOString(), ...(job.status === 'pending' ? { status: 'in_progress' as JobStatus } : {}) }
+        : !job.smoke_out_at ? { smoke_out_at: new Date().toISOString() } : null
+      if (!fields) {
+        setMsg({ kind: 'warn', text: `${who} already came out${job.load?.batch_code ? ` (batch ${job.load.batch_code})` : ''}.` })
+        return
+      }
+      const res = await fetch('/api/value-add', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: job.id, ...fields }),
+      })
+      const updated: ValueAddJob | { error?: string } = await res.json().catch(() => ({}))
+      if (!res.ok || !('id' in updated)) {
+        setMsg({ kind: 'warn', text: ('error' in updated && updated.error) || 'Tap failed' })
+        return
+      }
+      const mates = jobs.filter(j => j.load_id && j.load_id === updated.load_id && j.id !== job.id).length
+      setMsg({
+        kind: 'ok',
+        text: `${'smoke_in_at' in fields ? '🔥 Into the house' : '✅ Out of the house'}: ${who}`
+          + (updated.load?.batch_code ? ` · batch ${updated.load.batch_code}` : '')
+          + (mates ? ` · with ${mates} other job${mates === 1 ? '' : 's'} in the load` : ''),
+      })
+      onChanged()
+    } finally {
+      setBusy(false); setVal('')
+    }
+  }
+
+  const inHouse = jobs.filter(j => j.smoke_in_at && !j.smoke_out_at)
+  const byLoad = new Map<string, ValueAddJob[]>()
+  for (const j of inHouse) {
+    const k = j.load_id ?? j.id
+    const a = byLoad.get(k); if (a) a.push(j); else byLoad.set(k, [j])
+  }
+
+  return (
+    <div style={{ background: C.dark, border: '1px solid rgba(232,136,58,0.35)', borderRadius: 4, padding: '0.85rem 1.25rem' }}>
+      <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: '0.72rem', color: C.orange, textTransform: 'uppercase', letterSpacing: '0.12em', fontWeight: 700 }}>🚪 House door</span>
+        <input value={val} placeholder="scan a seal"
+               onChange={e => setVal(e.target.value.replace(/\D/g, '').slice(0, 7))}
+               onKeyDown={e => { if (e.key === 'Enter' && isCureTagNumber(val) && !busy) tap(val) }}
+               style={{ ...INPUT, width: 150, fontFamily: 'monospace' }} />
+        <button style={{ ...BTN(C.orange), padding: '0.4rem 0.9rem', fontSize: '0.78rem' }}
+                disabled={busy || !isCureTagNumber(val)} onClick={() => tap(val)}>
+          {busy ? '…' : 'Tap in / out'}
+        </button>
+        <span style={{ fontSize: '0.72rem', color: C.lightBrown }}>One seal taps its whole load in, or out.</span>
+        {msg && <span style={{ fontSize: '0.8rem', color: msg.kind === 'ok' ? C.green : C.yellow, fontWeight: 600 }}>{msg.text}</span>}
+      </div>
+      {inHouse.length > 0 && (
+        <div style={{ marginTop: '0.6rem', display: 'grid', gap: '0.25rem', fontSize: '0.78rem' }}>
+          <div style={{ fontSize: '0.68rem', color: C.lightBrown, textTransform: 'uppercase', letterSpacing: '0.1em' }}>In the house now</div>
+          {Array.from(byLoad.values()).map(group => (
+            <div key={group[0].load_id ?? group[0].id} style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', alignItems: 'baseline' }}>
+              <span style={{ fontFamily: 'monospace', color: C.orange, fontWeight: 700 }}>🔥 {group[0].load?.batch_code ?? 'no code'}</span>
+              <span style={{ color: C.lightBrown }}>in {dayClock(group[0].smoke_in_at!)}</span>
+              {group.map(j => (
+                <span key={j.id} style={{ color: C.tan }}>
+                  👤 {j.customer_name ?? 'CMC'} <span style={{ color: C.cream }}>{j.output_item_name || j.description}</span>
+                  {j.seal_number && <span style={{ fontFamily: 'monospace', color: C.lightBrown }}> 🔒{j.seal_number}</span>}
+                </span>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // ACTIVE JOBS TAB
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1127,8 +1298,10 @@ function ActiveJobsTab({ cardLabels }: { cardLabels: Map<string, string> }) {
       .catch(() => {})
   }, [])
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  // `quiet` re-pulls the list without the Loading… flash — used after a tap,
+  // which moves a whole load's cards, not just the one that was pressed.
+  const load = useCallback(async (quiet = false) => {
+    if (!quiet) setLoading(true)
     const res  = await fetch('/api/value-add')
     const data = await res.json()
     const active = Array.isArray(data) ? data.filter((j: ValueAddJob) => j.status !== 'complete') : []
@@ -1145,6 +1318,9 @@ function ActiveJobsTab({ cardLabels }: { cardLabels: Map<string, string> }) {
     } else {
       setJobs(prev => prev.map(j => j.id === updated.id ? updated : j))
     }
+    // A tap on one job in a load tapped its siblings too, and a first tap may
+    // have made a load of one — pull the list so every card agrees.
+    if (updated.load_id) load(true)
   }
 
   const byType = (jobs: ValueAddJob[], type: JobType) => jobs.filter(j => j.job_type === type)
@@ -1159,6 +1335,9 @@ function ActiveJobsTab({ cardLabels }: { cardLabels: Map<string, string> }) {
           No active jobs — use <strong style={{ color: C.tan }}>+ New Job</strong> to create one.
         </div>
       )}
+      {!loading && jobs.some(j => j.job_type === 'smokehouse' || j.load_id || j.smoke_in_at) && (
+        <HouseDoor jobs={jobs} onChanged={() => load(true)} />
+      )}
       {typeOrder.map(type => {
         const group = byType(jobs, type)
         if (group.length === 0) return null
@@ -1172,6 +1351,7 @@ function ActiveJobsTab({ cardLabels }: { cardLabels: Map<string, string> }) {
                 <JobCard
                   key={j.id}
                   job={j}
+                  mates={j.load_id ? jobs.filter(o => o.load_id === j.load_id && o.id !== j.id) : []}
                   proposal={proposals.get(j.id) ?? null}
                   onUpdated={handleUpdated}
                   onBoxLinksChanged={loadProposals}

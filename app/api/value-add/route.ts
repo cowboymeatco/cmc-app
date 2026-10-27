@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { isoDate } from '@/lib/dates'
+import { JOB_WITH_LOAD, isUniqueViolation, jobBySeal, sealConflict, tapLoad } from '@/lib/valueAddLoads'
 
 export const dynamic = 'force-dynamic'
 
@@ -11,9 +12,17 @@ export async function GET(req: NextRequest) {
   const status   = searchParams.get('status')
   const order_id = searchParams.get('order_id')
 
+  // ?seal=0036013 — the open job wearing this seal (or null), so a seal scanned
+  // at the house door or the packing bench can say whose product it is.
+  const seal = searchParams.get('seal')
+  if (seal) {
+    try { return NextResponse.json(await jobBySeal(seal.trim())) }
+    catch (e) { return NextResponse.json({ error: e instanceof Error ? e.message : 'failed' }, { status: 500 }) }
+  }
+
   let query = supabaseAdmin
     .from('value_add_jobs')
-    .select('*')
+    .select(JOB_WITH_LOAD)
     .order('requested_date', { ascending: false })
 
   if (status)   query = query.eq('status', status)
@@ -95,14 +104,49 @@ export async function PATCH(req: NextRequest) {
     updates.completed_date = isoDate()
   }
 
+  // A seal is one job's: refuse one that is live on a cure tag or on another
+  // open job, rather than letting two customers' sticks answer to one number.
+  if ('seal_number' in updates) {
+    const seal = String(updates.seal_number ?? '').trim()
+    updates.seal_number = seal || null
+    if (seal) {
+      const why = await sealConflict(seal, String(id))
+      if (why) return NextResponse.json({ error: why }, { status: 409 })
+    }
+  }
+
+  // In/out taps move the whole load (lib/valueAddLoads.ts). Anything else in
+  // the same request still lands on this one job.
+  let tapped = null
+  if ('smoke_in_at' in updates || 'smoke_out_at' in updates) {
+    const { smoke_in_at, smoke_out_at, status, ...rest } = updates
+    try {
+      tapped = await tapLoad(String(id), {
+        ...('smoke_in_at'  in updates ? { smoke_in_at }  : {}),
+        ...('smoke_out_at' in updates ? { smoke_out_at } : {}),
+      }, status ?? null)
+    } catch (e) {
+      return NextResponse.json({ error: e instanceof Error ? e.message : 'tap failed' }, { status: 500 })
+    }
+    if (!tapped) return NextResponse.json({ error: 'job not found' }, { status: 404 })
+    if (Object.keys(rest).length === 0) return NextResponse.json(tapped)
+    for (const k of Object.keys(updates)) delete updates[k]
+    Object.assign(updates, rest)
+  }
+
   const { data, error } = await supabaseAdmin
     .from('value_add_jobs')
     .update({ ...updates, updated_at: new Date().toISOString() })
     .eq('id', id)
-    .select()
+    .select(JOB_WITH_LOAD)
     .single()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) {
+    if (isUniqueViolation(error) && 'seal_number' in updates) {
+      return NextResponse.json({ error: `Seal ${updates.seal_number} is already on another job` }, { status: 409 })
+    }
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
   return NextResponse.json(data)
 }
 

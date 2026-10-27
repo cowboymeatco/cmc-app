@@ -306,6 +306,27 @@ export interface ValueAddJob {
   // with the Enviropak's own cook cycles.
   smoke_in_at:                   string | null
   smoke_out_at:                  string | null
+  // The house load this job cooks in — several customers' jobs grouped by hand
+  // into one cook (Charlie, 2026-10-26: five snack-stick customers, one load).
+  // The load carries the batch code; the in/out taps stay on each job and are
+  // copied across the load, so cookMatch and /cooks never had to learn about
+  // loads. Null = not grouped yet.
+  load_id?:                      string | null
+  // Numbered tamper seal — the same stock the cure cooler uses — zip-tied to
+  // this job's product on its way into the house. Hams and bacon already go
+  // through the heat wearing theirs, which is why a printed label lost out.
+  seal_number?:                  string | null
+  // Joined in by GET /api/value-add.
+  load?:                         ValueAddLoad | null
+}
+
+// One smokehouse cook. The batch code is the kill-sheet style julian plus the
+// cook's number that day: 26299-2 is the second cook of 2026-10-26.
+export interface ValueAddLoad {
+  id:         string
+  created_at: string
+  batch_code: string
+  notes:      string | null
 }
 
 // ── Cut Schedule ─────────────────────────────────────────────────────────────

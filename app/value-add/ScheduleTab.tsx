@@ -8,9 +8,10 @@
 // it shifts — which is exactly what happens on the floor.
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { ValueAddJob } from '@/lib/types'
+import { isoDate } from '@/lib/dates'
 import {
   CookProfile, CookSettings, DEFAULT_SETTINGS, PlannedJob,
-  planHouse, fmtDuration, fmtClock, fmtDayClock,
+  planHouse, predictJob, fmtDuration, fmtClock, fmtDayClock,
 } from '@/lib/cookPredict'
 import { MIN_JOBS_FOR_SUGGESTION } from '@/lib/loadLearning'
 import SmokehouseBookPanel from './SmokehouseBookPanel'
@@ -105,21 +106,35 @@ function StagePlanBar({ profile }: { profile: CookProfile }) {
 
 function QueueRow({
   planned, index, count, onMove, onToggleLock, onSetProfile, profiles,
+  selected, onSelect, onSplit, onRename,
 }: {
   planned:  PlannedJob
   index:    number
   count:    number
-  onMove:   (from: number, to: number) => void
-  onToggleLock: (job: ValueAddJob) => void
-  onSetProfile: (job: ValueAddJob, key: string) => void
+  onMove:   (planned: PlannedJob, delta: number) => void
+  onToggleLock: (planned: PlannedJob) => void
+  onSetProfile: (planned: PlannedJob, key: string) => void
   profiles: CookProfile[]
+  selected: boolean
+  onSelect: (planned: PlannedJob, on: boolean) => void
+  onSplit:  (loadId: string) => void
+  onRename: (loadId: string, code: string) => Promise<string | null>
 }) {
-  const { job, start, end, prediction, overnight } = planned
+  const { job, jobs, start, end, prediction, overnight } = planned
   const [open, setOpen] = useState(false)
+  const [code, setCode] = useState(job.load?.batch_code ?? '')
+  const [codeErr, setCodeErr] = useState<string | null>(null)
 
   const locked = job.schedule_locked && !!job.scheduled_start
+  // Several customers' jobs cooking as one house load (lib/valueAddLoads.ts).
+  const isLoad = jobs.length > 1
   const label  = job.output_item_name || job.description || 'Untitled job'
   const conf   = prediction?.confidence
+  // Members whose own text matches a different cook profile — brats and sticks
+  // on one truck is a real thing, but the board should say which one it timed.
+  const mixed = isLoad
+    ? Array.from(new Set(jobs.map(j => predictJob(j, profiles)?.profile.display_name ?? 'no profile')))
+    : []
 
   return (
     <div style={{
@@ -129,10 +144,14 @@ function QueueRow({
       borderRadius: 4, padding: '0.7rem 0.9rem',
     }}>
       <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+        {/* Tick rows to cook them as one load */}
+        <input type="checkbox" checked={selected} onChange={e => onSelect(planned, e.target.checked)}
+               title={isLoad ? 'Tick to add more jobs to this load' : 'Tick to group into a load'}
+               style={{ width: 16, height: 16, accentColor: C.orange, cursor: 'pointer', flexShrink: 0 }} />
         {/* Order controls — the crew's priority IS the schedule */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <button
-            onClick={() => onMove(index, index - 1)}
+            onClick={() => onMove(planned, -1)}
             disabled={index === 0 || locked}
             title="Move earlier"
             style={{
@@ -142,7 +161,7 @@ function QueueRow({
               fontSize: '0.6rem', lineHeight: 1, padding: '2px 5px',
             }}>▲</button>
           <button
-            onClick={() => onMove(index, index + 1)}
+            onClick={() => onMove(planned, +1)}
             disabled={index === count - 1 || locked}
             title="Move later"
             style={{
@@ -166,13 +185,33 @@ function QueueRow({
         {/* Identity */}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ color: C.cream, fontWeight: 600, fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {job.load?.batch_code && (
+              <span style={{ color: C.orange, fontFamily: 'monospace', marginRight: '0.5rem' }} title="Batch code">🔥 {job.load.batch_code}</span>
+            )}
             {label}
           </div>
-          <div style={{ fontSize: '0.72rem', color: C.lightBrown, display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.15rem' }}>
-            {job.customer_name && <span style={{ color: C.tan, fontWeight: 700 }}>👤 {job.customer_name}</span>}
-            {job.weight_in_lbs != null && <span>{Number(job.weight_in_lbs).toFixed(0)} lbs in</span>}
-            {job.tag_code && <span style={{ fontFamily: 'monospace' }}>{job.tag_code}</span>}
-          </div>
+          {isLoad ? (
+            /* One line per customer in the load — this is where Chris checks
+               what is riding together before it goes in. */
+            <div style={{ fontSize: '0.72rem', color: C.lightBrown, marginTop: '0.2rem', display: 'grid', gap: '0.1rem' }}>
+              {jobs.map(j => (
+                <div key={j.id} style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <span style={{ color: C.tan, fontWeight: 700 }}>👤 {j.customer_name ?? 'CMC shelf stock'}</span>
+                  <span>{j.output_item_name || j.description}</span>
+                  {j.weight_in_lbs != null && <span>{Number(j.weight_in_lbs).toFixed(0)} lbs</span>}
+                  {j.tag_code && <span style={{ fontFamily: 'monospace' }}>{j.tag_code}</span>}
+                  {j.seal_number && <span style={{ fontFamily: 'monospace' }} title="Seal on the product in the house">🔒 {j.seal_number}</span>}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: '0.72rem', color: C.lightBrown, display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.15rem' }}>
+              {job.customer_name && <span style={{ color: C.tan, fontWeight: 700 }}>👤 {job.customer_name}</span>}
+              {job.weight_in_lbs != null && <span>{Number(job.weight_in_lbs).toFixed(0)} lbs in</span>}
+              {job.tag_code && <span style={{ fontFamily: 'monospace' }}>{job.tag_code}</span>}
+              {job.seal_number && <span style={{ fontFamily: 'monospace' }} title="Seal on the product in the house">🔒 {job.seal_number}</span>}
+            </div>
+          )}
         </div>
 
         {/* Prediction */}
@@ -193,9 +232,19 @@ function QueueRow({
               no profile
             </Pill>
           )}
+          {isLoad && (
+            <Pill color={C.orange} title="Several customers' jobs cooked as one house load">
+              {jobs.length} jobs{job.weight_in_lbs != null ? ` · ${Number(job.weight_in_lbs).toFixed(0)} lbs` : ''}
+            </Pill>
+          )}
+          {mixed.length > 1 && prediction && (
+            <Pill color={C.yellow} title={`Timed as ${prediction.profile.display_name}. The members read as: ${mixed.join(', ')}.`}>
+              mixed profiles
+            </Pill>
+          )}
           {overnight && <Pill color={C.purple} title="Comes out after hours — somebody has to pull it">🌙</Pill>}
           <button
-            onClick={() => onToggleLock(job)}
+            onClick={() => onToggleLock(planned)}
             title={locked ? 'Unpin from this time' : 'Pin to this time'}
             style={{
               background: locked ? `${C.purple}22` : 'transparent',
@@ -221,7 +270,7 @@ function QueueRow({
               <select
                 style={{ ...INPUT, minWidth: 220 }}
                 value={prediction?.profile.profile_key ?? ''}
-                onChange={e => onSetProfile(job, e.target.value)}
+                onChange={e => onSetProfile(planned, e.target.value)}
               >
                 <option value="">— none —</option>
                 {profiles.map(p => (
@@ -250,6 +299,31 @@ function QueueRow({
               </div>
             )}
           </div>
+          {job.load && (
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <div>
+                <label style={LABEL}>Batch code</label>
+                <input type="text" style={{ ...INPUT, width: 120, fontFamily: 'monospace' }} value={code}
+                       onChange={e => { setCode(e.target.value); setCodeErr(null) }} placeholder="26299-2" />
+              </div>
+              <button style={{ ...BTN(C.green), padding: '0.4rem 0.9rem', fontSize: '0.78rem' }}
+                      disabled={code.trim() === job.load.batch_code}
+                      onClick={async () => setCodeErr(await onRename(job.load!.id, code.trim()))}>
+                Save code
+              </button>
+              {isLoad && (
+                <button style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.35)', padding: '0.4rem 0.9rem', fontSize: '0.78rem' }}
+                        onClick={() => onSplit(job.load!.id)}>
+                  Split load
+                </button>
+              )}
+              {codeErr && <span style={{ fontSize: '0.75rem', color: C.red }}>{codeErr}</span>}
+              <span style={{ fontSize: '0.7rem', color: C.lightBrown, maxWidth: 320 }}>
+                Julian of the cook day, a dash, the cook number that day. Grouping,
+                splitting and the code save at once; the times still need Publish.
+              </span>
+            </div>
+          )}
           {prediction && <StagePlanBar profile={prediction.profile} />}
           {job.notes && (
             <div style={{ fontSize: '0.78rem', color: C.tan, fontStyle: 'italic' }}>{job.notes}</div>
@@ -355,8 +429,12 @@ function toLocalInput(d: Date): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
+// One queue row per cook: a load's members share its key and move together.
+const unitKey = (j: ValueAddJob) => j.load_id ? `load:${j.load_id}` : j.id
+
 export default function ScheduleTab() {
   const [jobs,     setJobs]     = useState<ValueAddJob[]>([])
+  const [selected, setSelected] = useState<Set<string>>(new Set())
   const [profiles, setProfiles] = useState<CookProfile[]>([])
   const [settings, setSettings] = useState<CookSettings>(DEFAULT_SETTINGS)
   const [order,    setOrder]    = useState<string[]>([])
@@ -387,7 +465,8 @@ export default function ScheduleTab() {
       const placed = open.filter(j => j.scheduled_start)
         .sort((a, b) => String(a.scheduled_start).localeCompare(String(b.scheduled_start)))
       const fresh = open.filter(j => !j.scheduled_start)
-      setOrder([...placed, ...fresh].map(j => j.id))
+      setOrder(Array.from(new Set([...placed, ...fresh].map(unitKey))))
+      setSelected(new Set())
       setDirty(false)
     } catch {
       setError('Could not load the schedule.')
@@ -398,8 +477,12 @@ export default function ScheduleTab() {
   useEffect(() => { load() }, [load])
 
   const ordered = useMemo(() => {
-    const byId = new Map(jobs.map(j => [j.id, j]))
-    return order.map(id => byId.get(id)).filter((j): j is ValueAddJob => !!j)
+    const byKey = new Map<string, ValueAddJob[]>()
+    for (const j of jobs) {
+      const k = unitKey(j)
+      const a = byKey.get(k); if (a) a.push(j); else byKey.set(k, [j])
+    }
+    return order.flatMap(k => byKey.get(k) ?? [])
   }, [jobs, order])
 
   const plan = useMemo(() => {
@@ -407,8 +490,10 @@ export default function ScheduleTab() {
     return planHouse(ordered, profiles, settings, from)
   }, [ordered, profiles, settings, startAt])
 
-  function move(from: number, to: number) {
-    if (to < 0 || to >= order.length) return
+  function move(p: PlannedJob, delta: number) {
+    const from = order.indexOf(unitKey(p.jobs[0]))
+    const to   = from + delta
+    if (from < 0 || to < 0 || to >= order.length) return
     setOrder(prev => {
       const next = [...prev]
       const [x] = next.splice(from, 1)
@@ -418,39 +503,102 @@ export default function ScheduleTab() {
     setDirty(true)
   }
 
-  function toggleLock(job: ValueAddJob) {
-    // Pinning uses the time the board currently shows for that job, so what
+  // Every member of a load changes together — a pin or a profile belongs to
+  // the cook, not to one customer's share of it.
+  function toggleLock(p: PlannedJob) {
+    // Pinning uses the time the board currently shows for that cook, so what
     // you see is what gets frozen.
-    const placed = plan.scheduled.find(p => p.job.id === job.id)
-    setJobs(prev => prev.map(j => j.id === job.id
-      ? {
-        ...j,
-        schedule_locked: !job.schedule_locked,
-        scheduled_start: !job.schedule_locked
-          ? (placed?.start ?? new Date()).toISOString()
-          : j.scheduled_start,
-      }
+    const ids  = new Set(p.jobs.map(j => j.id))
+    const lock = !p.job.schedule_locked
+    setJobs(prev => prev.map(j => ids.has(j.id)
+      ? { ...j, schedule_locked: lock, scheduled_start: lock ? p.start.toISOString() : j.scheduled_start }
       : j))
     setDirty(true)
   }
 
-  function setProfile(job: ValueAddJob, key: string) {
-    setJobs(prev => prev.map(j => j.id === job.id ? { ...j, profile_key: key || null } : j))
+  function setJobProfile(job: ValueAddJob, key: string) {
+    const ids = new Set(jobs.filter(j => j.id === job.id || (!!job.load_id && j.load_id === job.load_id)).map(j => j.id))
+    setJobs(prev => prev.map(j => ids.has(j.id) ? { ...j, profile_key: key || null } : j))
     setDirty(true)
+  }
+  const setProfile = (p: PlannedJob, key: string) => setJobProfile(p.job, key)
+
+  // ── Loads ──────────────────────────────────────────────────────────────────
+  // Chris ticks the rows that ride together and groups them. That saves at
+  // once — it is a fact about the cook, not a draft of the timing — and the
+  // board reloads with the load as one row. Nothing groups on its own.
+  function select(p: PlannedJob, on: boolean) {
+    const key = unitKey(p.jobs[0])
+    setSelected(prev => { const n = new Set(prev); if (on) n.add(key); else n.delete(key); return n })
+  }
+
+  const selectedUnits = plan.scheduled.filter(p => selected.has(unitKey(p.jobs[0])))
+
+  async function groupSelected() {
+    const loads = selectedUnits.filter(p => p.jobs[0].load_id)
+    if (loads.length > 1) {
+      setError('Two loads can’t be merged into each other — split one first, then group.')
+      return
+    }
+    const jobIds = selectedUnits.flatMap(p => p.jobs.map(j => j.id))
+    if (jobIds.length < 2) return
+    // Numbered for the day the board has it going in — the earliest of the
+    // rows being grouped — so the code reads right on the tag before the cook.
+    const day = isoDate(selectedUnits.reduce((d, p) => p.start < d ? p.start : d, selectedUnits[0].start))
+    setSaving(true); setError(null)
+    try {
+      const res = await fetch('/api/value-add/loads', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_ids: jobIds, load_id: loads[0]?.jobs[0].load_id ?? null, day }),
+      })
+      const body = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(body?.error ?? 'grouping failed')
+      setSaved(`Load ${body?.load?.batch_code ?? ''} · ${jobIds.length} jobs cook together. Publish to update the times.`)
+      setTimeout(() => setSaved(null), 6000)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not group the jobs.')
+    }
+    setSaving(false)
+  }
+
+  async function splitLoad(loadId: string) {
+    setSaving(true); setError(null)
+    try {
+      const res = await fetch(`/api/value-add/loads?id=${encodeURIComponent(loadId)}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? 'split failed')
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not split the load.')
+    }
+    setSaving(false)
+  }
+
+  async function renameLoad(loadId: string, code: string): Promise<string | null> {
+    const res = await fetch('/api/value-add/loads', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: loadId, batch_code: code }),
+    })
+    const body = await res.json().catch(() => null)
+    if (!res.ok) return body?.error ?? 'Could not save the code'
+    setJobs(prev => prev.map(j => j.load_id === loadId && j.load ? { ...j, load: { ...j.load, batch_code: code } } : j))
+    return null
   }
 
   async function publish() {
     setSaving(true)
     setError(null)
-    const payload = plan.scheduled.map(p => ({
-      id:                p.job.id,
+    // Every job in a load is written the load's slot, so each customer's card
+    // on the active list shows the same time the board does.
+    const payload = plan.scheduled.flatMap(p => p.jobs.map(j => ({
+      id:                j.id,
       scheduled_start:   p.start.toISOString(),
       predicted_minutes: Math.round((p.end.getTime() - p.start.getTime()) / 60000),
       profile_key:       p.prediction?.profile.profile_key ?? p.job.profile_key ?? null,
       batch_count:       p.prediction?.batches ?? null,
       resource:          'smokehouse',
       schedule_locked:   p.job.schedule_locked ?? false,
-    }))
+    })))
 
     try {
       const res = await fetch('/api/value-add', {
@@ -538,13 +686,26 @@ export default function ScheduleTab() {
       {plan.scheduled.length > 0 && (
         <>
           <div>
-            <div style={{ fontSize: '0.72rem', color: C.orange, textTransform: 'uppercase', letterSpacing: '0.12em', fontWeight: 700, marginBottom: '0.6rem' }}>
-              🔥 House Queue · {plan.scheduled.length}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.6rem', flexWrap: 'wrap' }}>
+              <div style={{ fontSize: '0.72rem', color: C.orange, textTransform: 'uppercase', letterSpacing: '0.12em', fontWeight: 700 }}>
+                🔥 House Queue · {plan.scheduled.length}
+              </div>
+              {selectedUnits.length > 0 && (
+                <>
+                  <button style={{ ...BTN(selectedUnits.length >= 2 ? C.orange : C.medBrown, selectedUnits.length >= 2 ? C.dark : C.lightBrown), padding: '0.35rem 0.9rem', fontSize: '0.78rem' }}
+                          disabled={saving || selectedUnits.length < 2} onClick={groupSelected}>
+                    🔥 Cook {selectedUnits.length} ticked as one load
+                  </button>
+                  <span style={{ fontSize: '0.72rem', color: C.lightBrown }}>
+                    {selectedUnits.length < 2 ? 'Tick at least one more row.' : 'Several customers, one truck, one batch code.'}
+                  </span>
+                </>
+              )}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
               {plan.scheduled.map((p, i) => (
                 <QueueRow
-                  key={p.job.id}
+                  key={`${p.job.id}:${p.job.load?.batch_code ?? ''}`}
                   planned={p}
                   index={i}
                   count={plan.scheduled.length}
@@ -552,6 +713,10 @@ export default function ScheduleTab() {
                   onToggleLock={toggleLock}
                   onSetProfile={setProfile}
                   profiles={profiles}
+                  selected={selected.has(unitKey(p.jobs[0]))}
+                  onSelect={select}
+                  onSplit={splitLoad}
+                  onRename={renameLoad}
                 />
               ))}
             </div>
@@ -592,7 +757,7 @@ export default function ScheduleTab() {
                 <select
                   style={{ ...INPUT, minWidth: 210 }}
                   value={job.profile_key ?? ''}
-                  onChange={e => setProfile(job, e.target.value)}
+                  onChange={e => setJobProfile(job, e.target.value)}
                 >
                   <option value="">— pick a cook profile —</option>
                   {profiles.map(p => (
