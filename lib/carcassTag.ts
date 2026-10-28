@@ -2,7 +2,7 @@
 //
 // Three shapes reach a scan gun, all of them printed by us at one time or
 // another:
-//   YYMMDD-TAG-SIDE   calendar half tag off /harvest  (260514-001-R)
+//   YYMMDD-TAG[-SIDE] calendar tag off /harvest        (260514-001-R, 261015-12)
 //   YYDDD-TAG[-SIDE]  Julian tag off a pre-printed sheet (26169-06-L)
 //   CT-<uuid>         legacy, the harvest_log id itself
 // No side suffix means the whole carcass; with one it's a half.
@@ -33,14 +33,16 @@ export function parseCarcassTag(raw: string): ParsedCarcassTag | null {
     return { code, legacyId: code.slice(3).toLowerCase(), harvestDate: null, tag: null, side: null }
   }
 
-  const cal = code.match(/^(\d{2})(\d{2})(\d{2})-(\w+)-([LR])$/)
+  // Six digits before the first dash is a calendar date; five is Julian, so
+  // the two forms can't collide even with the side suffix optional on both.
+  const cal = code.match(/^(\d{2})(\d{2})(\d{2})-(\w+?)(?:-([LR]))?$/)
   if (cal) {
     return {
       code,
       legacyId: null,
       harvestDate: `20${cal[1]}-${cal[2]}-${cal[3]}`,
       tag: cal[4],
-      side: cal[5] as 'L' | 'R',
+      side: (cal[5] as 'L' | 'R') ?? null,
     }
   }
 
