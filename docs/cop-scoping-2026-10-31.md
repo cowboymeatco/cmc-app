@@ -47,15 +47,16 @@ route on `supabaseAdmin`.
 
 | Proposed | Verdict | Notes |
 |---|---|---|
-| cop_requests | New | Add `requested_by_id` FK (see roster decision) plus name snapshot. Status enum: open, approved, rejected, live, closed; add `trial`. |
+| cop_requests | New | `requested_by_qbt_id` (payroll roster, see §7) plus name snapshot. Status enum: open, approved, rejected, live, closed; add `trial`. Optional `plu_item_ids[]` when the change is about specific items. |
 | cop_impact | New, 1:1 | Explicit boolean columns (8 food-safety + 5 ops), not jsonb, so the "any yes" rule can be a DB constraint. Plus reassessment_result, plans_reassessed[], reassessed_by, reassessed_on, iic_notified_on, notes. |
 | cop_approvals | New, append-only | A COP can be "approved with changes" then re-decided; keep history. decision: approved / approved_with_changes / rejected / trial; trial_end_date, conditions, go_live_date, rejection_reason. |
-| sop registry | **Missing from the proposal** | `sops`: sop_number (SOP-###), title, area, owner, active, current_version_id, optional links to haccp_documents and to an asset (cleaning procedure). Seeded from your SOP list. |
-| sop_versions | New | sop_id, version int, body (markdown), revision_note ("COP-2026-###: summary"), effective_date, cop_id, status draft / current / superseded, published_by, published_at, superseded_at. Unique (sop_id, version). |
-| sop_acknowledgments | New | sop_version_id, employee_id, acknowledged_at, method (kiosk_pin / tablet / phone), trained_by, how_communicated. Unique (sop_version_id, employee_id). |
+| sop registry | **Missing from the proposal** | `sops`: sop_number (SOP-###), title, kind (program / product), area, owner, active, current_version_id, optional links to haccp_documents and to an asset. See §7 for the item link. |
+| sop_items | **New, per your answer** | sop_id, plu_item_id. Many-to-many: one product SOP covers a family of PLUs, and one PLU can sit under several SOPs (harvest, cutting, smokehouse). Only for kind = product. |
+| sop_versions | New | sop_id, version int, body (markdown), revision_note ("COP-26304-01: summary"), effective_date, cop_id, status draft / current / superseded, published_by, published_at, superseded_at. Unique (sop_id, version). |
+| sop_acknowledgments | New | sop_version_id, qbt_user_id, name snapshot, acknowledged_at, method (kiosk_pin), trained_by, how_communicated. Unique (sop_version_id, qbt_user_id). |
 | cop_verifications | New | The four G checks as booleans + notes, verified_by, verified_at, result close / adjust (new_cop_id) / reverse, closed_by, closed_at. |
 | cop_links | **Add** | Section E "related app items updated": cop_id, kind (cleaning_task / asset_procedure / haccp_document / customer_material / other), target_id, note, done_by, done_at. |
-| COP numbering | Reuse pattern | `game_tag_counters` + `next_game_tag()` already do per-year counters. Same pattern for COP-YYYY-###. |
+| COP numbering | Reuse pattern | COP-YYDDD-NN, see §7. Counter table keyed by Julian day, same shape as `game_tag_counters` + `next_game_tag()`. |
 | Attachments (B) | Reuse pattern | haccp-docs private bucket + two-step signed upload already built in /api/haccp/documents. New `cop-attachments` bucket, same code shape. |
 | Reassessment record | Reuse | Link the written reassessment to haccp_documents (new category "Reassessment") so the inspector portal can show it. |
 
@@ -64,21 +65,21 @@ not a procedure store; cleaning_steps is per-asset teardown only.
 
 ## 3. Phased plan
 
-**Phase 0 – decisions and data, no code.** Pick the employee roster (recommend tk_employees,
-see §4), you supply the SOP list to seed `sops` (number, title, area, owner, which HACCP
-document or asset it maps to), confirm numbering starts at COP-2026-001 (paper COPs already
-filed get back-entered).
+**Phase 0 – data, no code.** Confirm who is current on the payroll roster (§7). Seed SOP-001
+SSOP v1 from the 02.15.24 document. Decide the first product-SOP families and which PLUs each
+covers. Change the paper form's COP # box from COP-2026-____ to COP-_____-__ (Julian, count).
 
 **Phase 1 – COP record and SOP versions (sections A–E, G). Paper still used for F.**
 - Migration 1: `sops`, `sop_versions`, `cop_requests`, `cop_impact`, `cop_approvals`, `cop_verifications`, `cop_links`, `cop_counters` + next_cop_number(). All RLS on, no anon policies, service role only. Trigger: a COP cannot move to live/trial while any Section C food-safety answer is yes and reassessment fields are null.
 - API: /api/cop (list, create, impact, links, verify), /api/cop/approve behind requireExec, /api/sops (registry, versions, publish). Publish = insert new version, mark old superseded, stamp cop_id, set sops.current_version_id. One transaction via a Postgres function.
 - UI: /cop list with status filter; /cop/new (A, B, C on one scrolling form, phone-friendly); /cop/[id] detail with approval panel (exec passphrase prompt, same as /exec), E checklist, G verification; /sops library and /sops/[id] with version history and diff of body text.
-- Roster rollout: add the crew to tk_employees (data entry, exec UI already exists).
+- Roster: COP pickers (requested by, affected crew, trained by, verified by) read the payroll roster by QuickBooks Time user id. Names only; the pay-rate column never leaves the server.
+- SOP library: program SOPs and product SOPs; product SOP page lists its PLUs, PLU book shows the SOPs that cover each item.
 - Size: 3 PRs. Largest piece is the detail page.
 
 **Phase 2 – Crew acknowledgment (section F).**
 - Migration 2: `sop_acknowledgments`.
-- Kiosk flow: on the floor tablet, tap name, PIN, see "You have 2 SOPs to sign", read the version body, tap "I read it, I was shown how, I can do it" (the form's wording), stamped on the shop clock. Reuses /api/timeclock PIN session code.
+- Kiosk flow: payroll roster people get a time clock record (tk_employees plus a qbt_user_id column) so they have a PIN. On the floor tablet, tap name, PIN, see "You have 2 SOPs to sign", read the version body, tap "I read it, I was shown how, I can do it" (the form's wording), stamped on the shop clock. Reuses /api/timeclock PIN session code.
 - Manager board on /cop/[id]: who is affected (pick from roster at approval time), who has signed, who is outstanding. "Anyone absent signs on first shift back" falls out of this for free.
 - Blocking rule per §4.
 - Size: 2 PRs.
@@ -130,8 +131,70 @@ Flags:
 - 49 tables have RLS on with no policy (intended; service role). 11 SECURITY DEFINER views and
   7 anon-executable SECURITY DEFINER functions are flagged; unrelated to COP.
 
-## 6. Decisions needed before Phase 1
+## 6. Decisions (answered 2026-10-31)
 
-1. Roster: tk_employees (PIN, long-term HR record, needs 11 names added) or cleaning_crew (names only, no auth)?
-2. SOP seed list: how many SOPs, and does each map to a HACCP document, a cleaning asset, or neither?
-3. Numbering: COP-2026-001 forward, back-enter the paper COPs already filed?
+1. **Roster: payroll roster.** Done, see §7.
+2. **SOPs: one SSOP today, SOPs tied to saleable items.** Done, see §7, with one push-back.
+3. **Numbering: COP-Julian-count per day.** Done, see §7.
+
+## 7. What the answers change
+
+**Payroll roster.** The payroll roster in the database is `labor_pay_rates`: 12 people keyed on
+the QuickBooks Time user id, copied from QuickBooks Payroll. It is service-role only because it
+holds hourly rates. COP records key every person on that id and keep a name snapshot. Checks:
+
+| Check | Result |
+|---|---|
+| People on the payroll table | 12 |
+| Also on the cleaning roster | 11 (all but Anthony Scrima) |
+| On the time clock | 0 (time clock has only Charlie) |
+| Inactive on the cleaning roster but still on payroll table | Dennis Derby, Jordan Thompson |
+| QuickBooks Payroll headcount per the cleaning roster route (2026-08-17) | 16 |
+
+So the table is likely missing about 4 current people and may still hold 2 leavers. It needs a
+cleanup before a sign-off record depends on it. Sign-off still needs a PIN, which only the time
+clock provides, so Phase 2 gives each payroll person a time clock record linked by the same id.
+
+**SOPs tied to saleable items.** Saleable items are `plu_items`, the PLU book: 396 rows (383
+active), and the shop `products` table already points at it. A new `sop_items` table links a SOP
+to the PLUs it governs.
+
+| PLU group | Active items |
+|---|---|
+| Beef | 126 |
+| Processed | 119 |
+| Wild Game | 41 |
+| Pork | 39 |
+| Lamb | 26 |
+| Goat | 20 |
+| Cheese | 11 |
+| Other | 1 |
+
+Push-back: the SSOP is not item-specific. Its text says it covers every food contact surface,
+every day, under 9 CFR 416, and the same is true of prerequisite programs and the 6 HACCP plans.
+Linking it to 383 items would add noise and would be wrong the day a new PLU is added. So SOPs
+get a `kind`. A **program** SOP (SSOP, prerequisites) applies plant-wide and has no item links.
+A **product** SOP (snack sticks, summer sausage, ground beef, a cut spec) links to its PLUs.
+Linking one SOP per product family, not per PLU, keeps this to tens of links, not hundreds.
+
+What the link buys: a COP opened from a PLU shows the SOPs that govern it, and a change to a
+Processed item pre-checks the ingredient and formulation question in Section C.
+
+The SSOP becomes **SOP-001, program, v1, effective 2024-02-15**, body from the attached document.
+It is not in the HACCP document library yet: the SSOP category there has zero files. Uploading it
+there is a one-minute task with no code.
+
+**COP numbering: COP-YYDDD-NN.** The app already writes Julian dates as YYDDD on harvest tags
+and smokehouse cook codes, with a two-digit sequence after the dash. COP numbers use the same
+shape: the first COP submitted today is **COP-26304-01**, the second COP-26304-02. Rules:
+
+- The Julian day is the submission date in Mountain Time, so a request typed at 9 PM is not stamped with tomorrow's UTC date.
+- The number is assigned by the server when the request is submitted, never typed.
+- A rejected COP keeps its number, so a gap never appears.
+- Revision notes read "COP-26304-01: summary".
+- Paper COPs already filed get back-entered under their own submission date.
+
+## 8. Open before Phase 1
+
+1. Who is current: confirm the payroll list, add the missing people, drop Dennis Derby and Jordan Thompson if they are gone.
+2. First product-SOP families: which processes get written first, and roughly which PLUs each covers.
