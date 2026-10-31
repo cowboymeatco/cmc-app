@@ -88,7 +88,7 @@ covers. Change the paper form's COP # box from COP-2026-____ to COP-_____-__ (Ju
 - HACCP printed headers read "Approved by / Current Version" from sop_versions instead of the hardcoded 02.15.24.
 - Inspector portal: SOP versions, effective dates and acknowledgment records (read-only).
 - Cleaning procedure edits (cleaning_steps) require an open COP once that asset is mapped to an SOP; cleaning admin writes move to service role (see §5).
-- Cron: 14 days after go-live, email you "verify COP-2026-0xx" via lib/mailer (vercel.json cron pattern exists).
+- Cron: 14 days after go-live, email you "verify COP-26304-01" via lib/mailer (vercel.json cron pattern exists).
 - Size: 2–3 PRs.
 
 ## 4. Recommendations
