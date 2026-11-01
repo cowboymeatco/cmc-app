@@ -15,7 +15,7 @@ import { addDaysISO, dateLabel, isoDate, isoDateTime, mondayOfISO } from '@/lib/
 import { LabelRoll, parseRoll, rollFrameCSS, rollPrintScript } from '@/lib/label'
 import {
   BREAK_RULES, MAX_PAID_BREAK_MINUTES, Segment, Shift,
-  accrualPerHour, annualPtoRate, calcShift, fmt12, fmtHours, nextAnniversary, shiftSegments, splitOvertime, toMin, yearsOfService,
+  accrualPerHour, annualPtoRate, between, calcShift, fmt12, fmtHours, nextAnniversary, shiftSegments, splitOvertime, toMin, yearsOfService,
 } from '@/lib/timekeeping'
 import { Schedule, TimeOffRequest, TkEmployee, ptoSummary } from '@/lib/timeclock'
 import { BreakPills, C, Stat, api, bigBtn, card, h2, printBackButton } from './shared'
@@ -292,7 +292,9 @@ export function KioskClock({ onChange }: { onChange?: () => void }) {
   const onBreak = !!openBreak
   const rate = accrualPerHour(yearsOfService(emp.hireDate, today))
 
-  const todays = shifts.filter(s => s.date === today)
+  // Today's punches, plus the open shift when it started last night — the
+  // night crew's morning clock-out belongs to the shift it closes.
+  const todays = shifts.filter(s => s.date === today || !s.clockOut)
   const todayCalcs = todays.map(s => calcShift(s, nowHHMM))
   const todayHours = todayCalcs.reduce((t, c) => t + c.workedHours, 0)
   const todayUpto = todayCalcs.reduce((t, c) => t + c.uptoMinutes, 0)
@@ -338,7 +340,7 @@ export function KioskClock({ onChange }: { onChange?: () => void }) {
   }
 
   const calc = open ? calcShift(open, nowHHMM) : null
-  const breakSoFar = openBreak ? toMin(nowHHMM) - toMin(openBreak.start) : 0
+  const breakSoFar = open && openBreak ? between(open.clockIn, openBreak.start, nowHHMM) : 0
 
   let nextUp: string | null = null
   if (calc && !onLunch && !onBreak) {
@@ -430,7 +432,7 @@ export function KioskClock({ onChange }: { onChange?: () => void }) {
         {open && !onLunch && !onBreak && <button style={bigBtn(C.blue)} disabled={busy} onClick={() => punch('break-start', at =>
           `Break started at ${fmt12(at)}. You've used ${todayBreakMin} break min today. Paid break time is 15 min per break earned — 30 min on an 8+ hour day — taken however you like. Anything over is UPTO (unpaid), figured when you clock out.`)}>Start Break</button>}
         {onBreak && <button style={bigBtn(C.blue)} disabled={busy} onClick={() => punch('break-end', at => {
-          const mins = toMin(at) - toMin(openBreak!.start)
+          const mins = between(open!.clockIn, openBreak!.start, at)
           const total = todayBreakMin - breakSoFar + mins
           return `Back from break at ${fmt12(at)}: ${mins} min. ${total} break min used today${total > MAX_PAID_BREAK_MINUTES ? ` — ${total - MAX_PAID_BREAK_MINUTES} min over 30 will be UPTO` : ''}.`
         })}>End Break</button>}

@@ -178,24 +178,28 @@ export async function listEmployees(includeInactive = false): Promise<TkEmployee
   return (data as EmpRow[]).map(toEmployee)
 }
 
-export const SHIFT_COLS = 'id, employee_id, shop_date, clock_in, clock_out, lunch_start, lunch_end, breaks, edited_at, edit_note'
-interface ShiftRow {
+export const SHIFT_COLS = 'id, employee_id, shop_date, clock_in, clock_out, lunch_start, lunch_end, breaks, edited_at, edit_note, voided_at, void_note'
+export interface ShiftRow {
   id: string; employee_id: string; shop_date: string; clock_in: string; clock_out: string | null
   lunch_start: string | null; lunch_end: string | null; breaks: { start: string; end: string | null }[]
-  edited_at: string | null; edit_note: string | null
+  edited_at: string | null; edit_note: string | null; voided_at: string | null; void_note: string | null
 }
-export type TkShift = Shift & { editedAt: string | null; editNote: string | null }
+export type TkShift = Shift & { editedAt: string | null; editNote: string | null; voidedAt: string | null; voidNote: string | null }
 export function toShift(r: ShiftRow): TkShift {
   return {
     id: r.id, empId: r.employee_id, date: r.shop_date, clockIn: r.clock_in, clockOut: r.clock_out,
     lunchStart: r.lunch_start, lunchEnd: r.lunch_end, breaks: Array.isArray(r.breaks) ? r.breaks : [],
-    editedAt: r.edited_at, editNote: r.edit_note,
+    editedAt: r.edited_at, editNote: r.edit_note, voidedAt: r.voided_at, voidNote: r.void_note,
   }
 }
 
+/**
+ * Shifts in a date window. Voided shifts (a punch that was a mistake) are left
+ * out: they are not hours, and the timesheet shows them from the change log.
+ */
 export async function listShifts(from: string, to: string, employeeId?: string): Promise<TkShift[]> {
   const rows = await fetchAll<ShiftRow>((a, b) => {
-    let q = supabaseAdmin.from('tk_shifts').select(SHIFT_COLS).gte('shop_date', from).lte('shop_date', to)
+    let q = supabaseAdmin.from('tk_shifts').select(SHIFT_COLS).gte('shop_date', from).lte('shop_date', to).is('voided_at', null)
       .order('shop_date').order('clock_in').order('id')
     if (employeeId) q = q.eq('employee_id', employeeId)
     return q.range(a, b)

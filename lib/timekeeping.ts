@@ -11,6 +11,8 @@
 // PTO — Montana treats earned vacation as wages: no use-it-or-lose-it, and the
 // balance is paid out at separation. A cap on how much can build up is legal.
 
+import { addDaysISO } from '@/lib/dates'
+
 // ── Breaks ──────────────────────────────────────────────────────────────────
 
 export const BREAK_RULES = {
@@ -53,6 +55,63 @@ export function toMin(hhmm: string): number {
   return h * 60 + m
 }
 
+/**
+ * Minutes from clock-in to a time on the same shift. A time earlier on the
+ * clock face than the clock-in is the next morning — the night sanitation
+ * shift clocks in at 22:00 and out at 06:30, and that's 8.5 hours, not −15.5.
+ * Every time inside a shift (lunch, breaks, "now") is measured this way, so a
+ * shift is at most 24 hours and always counts on the day it started.
+ */
+export function sinceIn(clockIn: string, hhmm: string): number {
+  const d = toMin(hhmm) - toMin(clockIn)
+  return d < 0 ? d + 24 * 60 : d
+}
+
+/** Minutes between two times on one shift, in shift order. */
+export function between(clockIn: string, from: string, to: string): number {
+  return sinceIn(clockIn, to) - sinceIn(clockIn, from)
+}
+
+/** Did this shift clock out on the morning after it clocked in? */
+export function overnight(s: Pick<Shift, 'clockIn' | 'clockOut'>): boolean {
+  return !!s.clockOut && toMin(s.clockOut) < toMin(s.clockIn)
+}
+
+/**
+ * A punched shift that nobody closed: open from before yesterday, or from
+ * yesterday and already 24 hours past its clock-in. Open shifts from today, or
+ * from last night and still inside 24 hours, are simply still on the clock.
+ */
+export function neverClosed(s: Pick<Shift, 'date' | 'clockIn' | 'clockOut'>, today: string, nowHHMM: string): boolean {
+  if (s.clockOut) return false
+  if (s.date === today) return false
+  return s.date !== addDaysISO(today, -1) || toMin(nowHHMM) >= toMin(s.clockIn)
+}
+
+/**
+ * Why a set of punches can't be a shift, or null when they can. Shared by the
+ * manager's correction form and its route so both say the same thing. Times
+ * are HH:MM; a time earlier than the clock-in is the next morning, so the
+ * only clock-out we refuse is one equal to the clock-in.
+ */
+export function shiftTimesProblem(b: {
+  clockIn: string; clockOut?: string | null; lunchStart?: string | null; lunchEnd?: string | null
+  breaks?: { start: string; end: string | null }[]
+}): string | null {
+  const span = b.clockOut ? sinceIn(b.clockIn, b.clockOut) : 24 * 60
+  if (b.clockOut && span === 0) return 'Clock-out can\'t be the same minute as clock-in. (An out time before the in time means the next morning.)'
+  const inside = (t: string) => sinceIn(b.clockIn, t) <= span
+  if (b.clockOut && !!b.lunchStart !== !!b.lunchEnd) return 'Lunch needs both a start and an end.'
+  if (b.lunchStart && !inside(b.lunchStart)) return 'Lunch starts after the clock-out.'
+  if (b.lunchEnd && !inside(b.lunchEnd)) return 'Lunch ends after the clock-out.'
+  if (b.lunchStart && b.lunchEnd && between(b.clockIn, b.lunchStart, b.lunchEnd) < 0) return 'Lunch ends before it starts.'
+  for (const x of b.breaks ?? []) {
+    if (!inside(x.start) || (x.end && !inside(x.end))) return 'A break falls after the clock-out.'
+    if (x.end && between(b.clockIn, x.start, x.end) < 0) return 'A break ends before it starts.'
+  }
+  return null
+}
+
 export function fmtHours(h: number): string {
   const sign = h < 0 ? '-' : ''
   const m = Math.round(Math.abs(h) * 60)
@@ -88,7 +147,7 @@ export interface ShiftCalc {
 export function calcShift(s: Shift, nowHHMM?: string): ShiftCalc {
   const now = nowHHMM ?? s.clockIn
   const out = s.clockOut ?? now
-  const spanMin = Math.max(0, toMin(out) - toMin(s.clockIn))
+  const spanMin = sinceIn(s.clockIn, out)
   const flags: string[] = []
 
   let lunchMin = 0
@@ -97,7 +156,7 @@ export function calcShift(s: Shift, nowHHMM?: string): ShiftCalc {
     const end = s.lunchEnd ?? (s.clockOut ? null : now)
     if (end == null) flags.push('Lunch started but never ended.')
     else {
-      lunchMin = Math.max(0, toMin(end) - toMin(s.lunchStart))
+      lunchMin = Math.max(0, between(s.clockIn, s.lunchStart, end))
       // A lunch still in progress is off the clock; the 30-min test applies once it ends.
       lunchUnpaid = !s.lunchEnd || lunchMin >= BREAK_RULES.lunchMinutes
       if (!lunchUnpaid) flags.push(`Lunch was only ${lunchMin} min — under 30 min it can't be unpaid, so it's counted as paid time.`)
@@ -106,7 +165,7 @@ export function calcShift(s: Shift, nowHHMM?: string): ShiftCalc {
 
   const breakMin = s.breaks.reduce((t, b) => {
     const end = b.end ?? (s.clockOut ? b.start : now)
-    return t + Math.max(0, toMin(end) - toMin(b.start))
+    return t + Math.max(0, between(s.clockIn, b.start, end))
   }, 0)
   if (s.clockOut && s.breaks.some(b => !b.end)) flags.push('A break was started but never ended.')
 
@@ -225,14 +284,15 @@ export function shiftSegments(s: Shift, nowHHMM?: string): Segment[] {
   const offs: { start: string; end: string; open: boolean; kind: 'break' | 'lunch' }[] = [
     ...s.breaks.map(b => ({ start: b.start, end: b.end ?? (s.clockOut ? b.start : now), open: !b.end, kind: 'break' as const })),
     ...(s.lunchStart ? [{ start: s.lunchStart, end: s.lunchEnd ?? (s.clockOut ? s.lunchStart : now), open: !s.lunchEnd, kind: 'lunch' as const }] : []),
-  ].sort((a, b) => toMin(a.start) - toMin(b.start))
+  ].sort((a, b) => sinceIn(s.clockIn, a.start) - sinceIn(s.clockIn, b.start))
 
   const segs: Segment[] = []
   const push = (start: string, stop: string, kind: Segment['kind'], pay: Segment['pay'], open = false) => {
-    const minutes = toMin(stop) - toMin(start)
+    const minutes = between(s.clockIn, start, stop)
     if (minutes > 0 || open) segs.push({ start, end: stop, open, kind, pay, minutes: Math.max(0, minutes) })
   }
-  const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+  // Minutes on the clock face → HH:MM, wrapping past midnight.
+  const hhmm = (m: number) => { const w = ((m % 1440) + 1440) % 1440; return `${String(Math.floor(w / 60)).padStart(2, '0')}:${String(w % 60).padStart(2, '0')}` }
 
   let cursor = s.clockIn
   let breakPaidLeft = c.paidBreakMinutes
@@ -240,7 +300,7 @@ export function shiftSegments(s: Shift, nowHHMM?: string): Segment[] {
     push(cursor, o.start, 'work', 'Pd')
     if (o.kind === 'lunch') push(o.start, o.end, 'lunch', c.lunchUnpaid ? 'Upd' : 'Pd', o.open)
     else {
-      const dur = toMin(o.end) - toMin(o.start)
+      const dur = between(s.clockIn, o.start, o.end)
       const paid = Math.min(dur, breakPaidLeft)
       breakPaidLeft -= paid
       const split = hhmm(toMin(o.start) + paid)

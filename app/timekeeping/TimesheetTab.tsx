@@ -6,11 +6,16 @@
 
 import { useState } from 'react'
 import { addDaysISO, dateLabel } from '@/lib/dates'
-import { Shift, accrualPerHour, annualPtoRate, calcShift, fmt12, fmtHours, splitOvertime, yearsOfService } from '@/lib/timekeeping'
+import { Shift, accrualPerHour, annualPtoRate, calcShift, fmt12, fmtHours, neverClosed, overnight, shiftTimesProblem, splitOvertime, yearsOfService } from '@/lib/timekeeping'
 import { TkEmployee } from '@/lib/timeclock'
 import { BreakPills, C, Pill, Stat, api, breakTimes, btn, card, h2, td, th } from './shared'
 
-type TkShift = Shift & { editedAt?: string | null; editNote?: string | null }
+type TkShift = Shift & { editedAt?: string | null; editNote?: string | null; voidedAt?: string | null; voidNote?: string | null }
+
+// One line of the change log (tk_shift_history): the punches before and after a manager's fix.
+interface Punches { shop_date: string; clock_in: string; clock_out: string | null; lunch_start: string | null; lunch_end: string | null; breaks: { start: string; end: string | null }[] }
+interface Change { id: string; shift_id: string; shop_date: string; action: 'add' | 'edit' | 'void'; before: Punches | null; after: Punches | null; note: string; at: string }
+interface Changes { history: Change[]; voided: TkShift[] }
 
 function PunchPhoto({ src, label }: { src?: string; label: string }) {
   return (
@@ -28,6 +33,19 @@ function PunchPhoto({ src, label }: { src?: string; label: string }) {
 }
 
 const t12 = (t: string | null | undefined) => (t ? fmt12(t) : '—')
+/** Clock-out with a marker when it landed the next morning. */
+const outLabel = (s: Pick<Shift, 'clockIn' | 'clockOut'>) => (
+  <>{t12(s.clockOut)}{overnight(s) && <span style={{ color: C.blue, fontSize: '0.7rem', marginLeft: 4 }}>next day</span>}</>
+)
+/** "7:02a–3:48p · lunch 12:00–12:30 · breaks 9:15–9:30" — a punch set on one line, for the change log. */
+function punchLine(p: Punches | null): string {
+  if (!p) return '—'
+  const bits = [`${fmt12(p.clock_in)}–${p.clock_out ? fmt12(p.clock_out) : 'open'}${p.clock_out && overnight({ clockIn: p.clock_in, clockOut: p.clock_out }) ? ' (next day)' : ''}`]
+  if (p.lunch_start) bits.push(`lunch ${fmt12(p.lunch_start)}–${p.lunch_end ? fmt12(p.lunch_end) : '…'}`)
+  if (p.breaks?.length) bits.push(`breaks ${p.breaks.map(b => `${fmt12(b.start)}–${b.end ? fmt12(b.end) : '…'}`).join(', ')}`)
+  return bits.join(' · ')
+}
+const stamp = (iso: string) => new Date(iso).toLocaleString('en-US', { timeZone: 'America/Denver', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 
 // ── Editing a shift ─────────────────────────────────────────────────────────
 
@@ -62,6 +80,9 @@ function ShiftEditor({ shift, employeeId, date, onDone }: {
   const save = async () => {
     const breaks = parseBreaks(d.breaks)
     if (typeof breaks === 'string') { setErr(breaks); return }
+    if (!d.clockIn) { setErr('Clock-in time is required.'); return }
+    const problem = shiftTimesProblem({ clockIn: d.clockIn, clockOut: d.clockOut || null, lunchStart: d.lunchStart || null, lunchEnd: d.lunchEnd || null, breaks })
+    if (problem) { setErr(problem); return }
     setSaving(true); setErr('')
     try {
       const body = { clockIn: d.clockIn, clockOut: d.clockOut || null, lunchStart: d.lunchStart || null, lunchEnd: d.lunchEnd || null, breaks, note: d.note }
@@ -74,10 +95,14 @@ function ShiftEditor({ shift, employeeId, date, onDone }: {
       setSaving(false)
     }
   }
-  const remove = async () => {
-    if (!shift || !confirm('Delete this shift? Only do this if it was punched by mistake — it comes off their hours.')) return
+  // Void, not delete: the shift comes off their hours but stays on the record with the reason.
+  const voidShift = async () => {
+    if (!shift) return
+    const why = prompt('Void this shift? Only if it was punched by mistake — it comes off their hours but stays on the record.\n\nWhy?')
+    if (why == null) return
+    if (!why.trim()) { setErr('Say why you\'re voiding it — it goes on the record.'); return }
     setSaving(true)
-    try { await api(`/api/timekeeping/shifts?id=${shift.id}`, { method: 'DELETE' }); onDone(true) }
+    try { await api(`/api/timekeeping/shifts?id=${shift.id}&note=${encodeURIComponent(why.trim())}`, { method: 'DELETE' }); onDone(true) }
     catch (e) { setErr((e as Error).message); setSaving(false) }
   }
 
@@ -91,13 +116,17 @@ function ShiftEditor({ shift, employeeId, date, onDone }: {
         <label>to <input type="time" value={d.lunchEnd} onChange={set('lunchEnd')} style={input} /></label>
         <label>Breaks <input value={d.breaks} onChange={set('breaks')} placeholder="09:30-09:45, 14:00-14:15" style={{ ...input, width: 220 }} /></label>
       </div>
+      <div style={{ color: C.lightBrown, fontSize: '0.72rem', marginTop: 6 }}>
+        An out time earlier than the in time means the next morning (night shift: in 10:00 PM, out 6:30 AM). The shift counts on the day it started.
+        {shift && ' The punches as they were are kept — see Changes.'}
+      </div>
       <input value={d.note} onChange={set('note')} placeholder="Why? (required — e.g. forgot to clock out, left at 3:30 per Charlie)"
         style={{ ...input, width: '100%', marginTop: 8 }} />
       {err && <div style={{ color: C.red, fontSize: '0.82rem', marginTop: 6 }}>{err}</div>}
       <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
         <button style={btn(C.green)} disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Save'}</button>
         <button style={{ ...btn('transparent'), border: `1px solid ${C.medBrown}`, color: C.tan }} onClick={() => onDone(false)}>Cancel</button>
-        {shift && <button style={{ ...btn('transparent'), border: `1px solid ${C.red}`, color: C.red, marginLeft: 'auto' }} disabled={saving} onClick={remove}>Delete shift</button>}
+        {shift && <button style={{ ...btn('transparent'), border: `1px solid ${C.red}`, color: C.red, marginLeft: 'auto' }} disabled={saving} onClick={voidShift}>Void shift</button>}
       </div>
     </div>
   )
@@ -116,6 +145,10 @@ export function TimesheetTab({ employees, shifts, photos, thisMonday, today, now
   const days = [0, 1, 2, 3, 4, 5, 6].map(i => addDaysISO(weekStart, i))
   const [empId, setEmpId] = useState<string>('all')
   const [editing, setEditing] = useState<{ shiftId?: string; empId: string; date: string } | null>(null)
+  // Change log per employee, loaded when its "Changes" button is pressed and dropped when the week moves.
+  const [changes, setChanges] = useState<Record<string, Changes | 'loading' | string>>({})
+  const [changesWeek, setChangesWeek] = useState(weekStart)
+  if (changesWeek !== weekStart) { setChangesWeek(weekStart); setChanges({}) }
   const nowHHMM = now ?? '00:00'
   const nameOf = (id: string) => employees.find(e => e.id === id)?.name ?? '?'
 
@@ -124,7 +157,20 @@ export function TimesheetTab({ employees, shifts, photos, thisMonday, today, now
   // On the clock now, plus anything left open from an earlier day — those need a manager.
   const live = shifts.filter(s => s.date === today || !s.clockOut)
 
-  const done = async (saved: boolean) => { setEditing(null); if (saved) await reload() }
+  const done = async (saved: boolean) => {
+    setEditing(null)
+    if (saved) { setChanges({}); await reload() }
+  }
+  const showChanges = async (id: string) => {
+    if (changes[id] && changes[id] !== 'loading' && typeof changes[id] !== 'string') { setChanges(c => { const n = { ...c }; delete n[id]; return n }); return }
+    setChanges(c => ({ ...c, [id]: 'loading' }))
+    try {
+      const r = await api<Changes>(`/api/timekeeping/shifts?employeeId=${id}&from=${weekStart}&to=${weekEnd}`)
+      setChanges(c => ({ ...c, [id]: r }))
+    } catch (e) {
+      setChanges(c => ({ ...c, [id]: (e as Error).message || 'Couldn\'t load the changes.' }))
+    }
+  }
 
   return (
     <>
@@ -139,7 +185,7 @@ export function TimesheetTab({ employees, shifts, photos, thisMonday, today, now
               {live.map(s => {
                 const onLunch = !!s.lunchStart && !s.lunchEnd && !s.clockOut
                 const onBreak = !s.clockOut && s.breaks.some(b => !b.end)
-                const stale = !s.clockOut && s.date !== today
+                const stale = neverClosed(s, today, nowHHMM)
                 const c = calcShift(s, stale ? s.clockIn : nowHHMM)
                 return (
                   <tr key={s.id}>
@@ -147,7 +193,7 @@ export function TimesheetTab({ employees, shifts, photos, thisMonday, today, now
                     <td style={td}>{t12(s.clockIn)}</td>
                     <td style={td}>{s.lunchStart ? `${t12(s.lunchStart)}–${s.lunchEnd ? t12(s.lunchEnd) : '…'}` : '—'}</td>
                     <td style={{ ...td, fontSize: '0.78rem' }}>{breakTimes(s)}</td>
-                    <td style={td}>{s.clockOut ? t12(s.clockOut) : <Pill color={stale ? C.red : onLunch || onBreak ? C.amber : C.green}>{stale ? 'still open' : onLunch ? 'at lunch' : onBreak ? 'on break' : 'on clock'}</Pill>}</td>
+                    <td style={td}>{s.clockOut ? outLabel(s) : <Pill color={stale ? C.red : onLunch || onBreak ? C.amber : C.green}>{stale ? 'still open' : onLunch ? 'at lunch' : onBreak ? 'on break' : 'on clock'}</Pill>}</td>
                     <td style={{ ...td, fontVariantNumeric: 'tabular-nums' }}>{stale ? '—' : fmtHours(c.workedHours)}</td>
                     <td style={td}><BreakPills c={c} /></td>
                     <td style={td}>
@@ -189,14 +235,15 @@ export function TimesheetTab({ employees, shifts, photos, thisMonday, today, now
       {shown.length === 0 && <div style={{ ...card, color: C.tan }}>No one to show. Add people on the Employees tab.</div>}
       {shown.map(e => {
         const rows = week.filter(s => s.empId === e.id).sort((a, b) => a.date.localeCompare(b.date) || a.clockIn.localeCompare(b.clockIn))
-        const calcs = rows.map(s => calcShift(s, s.date === today ? nowHHMM : s.clockIn))
+        const calcs = rows.map(s => calcShift(s, !s.clockOut && !neverClosed(s, today, nowHHMM) ? nowHHMM : s.clockIn))
         const total = calcs.reduce((t, c) => t + c.workedHours, 0)
         const { regular, overtime } = splitOvertime(total)
         const paidBreakHrs = calcs.reduce((t, c) => t + c.paidBreakMinutes / 60, 0)
         const uptoMin = calcs.reduce((t, c) => t + c.uptoMinutes, 0)
         const years = yearsOfService(e.hireDate, weekEnd)
         const ptoThisWeek = rows.reduce((t, s, i) => t + calcs[i].workedHours * accrualPerHour(yearsOfService(e.hireDate, s.date)), 0)
-        const flagCount = calcs.reduce((t, c) => t + c.flags.length, 0) + rows.filter(s => !s.clockOut && s.date !== today).length
+        const flagCount = calcs.reduce((t, c) => t + c.flags.length, 0) + rows.filter(s => neverClosed(s, today, nowHHMM)).length
+        const log = changes[e.id]
         const worked = new Set(rows.map(s => s.date))
 
         return (
@@ -213,13 +260,14 @@ export function TimesheetTab({ employees, shifts, photos, thisMonday, today, now
                     {rows.map((s, i) => {
                       const c = calcs[i]
                       const open = !s.clockOut
+                      const never = neverClosed(s, today, nowHHMM)
                       return (
                         <tr key={s.id}>
                           <td style={td}>{dateLabel(s.date, { weekday: 'short', month: 'numeric', day: 'numeric' })}</td>
                           <td style={td}>{t12(s.clockIn)}</td>
                           <td style={td}>{s.lunchStart ? `${t12(s.lunchStart)}–${s.lunchEnd ? t12(s.lunchEnd) : '…'}` : '—'}</td>
                           <td style={{ ...td, fontSize: '0.78rem' }}>{breakTimes(s)}</td>
-                          <td style={td}>{open ? <Pill color={s.date === today ? C.green : C.red}>{s.date === today ? 'on clock' : 'never out'}</Pill> : t12(s.clockOut)}</td>
+                          <td style={td}>{open ? <Pill color={never ? C.red : C.green}>{never ? 'never out' : 'on clock'}</Pill> : outLabel(s)}</td>
                           <td style={{ ...td, fontVariantNumeric: 'tabular-nums' }}>{fmtHours(c.workedHours)}</td>
                           <td style={{ ...td, fontVariantNumeric: 'tabular-nums', color: c.uptoMinutes > 0 ? C.red : C.cream }}>{c.uptoMinutes ? `${c.uptoMinutes} min` : '—'}</td>
                           <td style={td}><BreakPills c={c} /></td>
@@ -248,6 +296,37 @@ export function TimesheetTab({ employees, shifts, photos, thisMonday, today, now
                 </button>
               ))}
             </div>
+            <div style={{ margin: '0.3rem 0' }}>
+              <button onClick={() => showChanges(e.id)}
+                style={{ background: 'none', border: `1px solid ${C.medBrown}`, borderRadius: 4, color: C.tan, cursor: 'pointer', fontSize: '0.75rem', padding: '0.15rem 0.5rem' }}>
+                {log && log !== 'loading' && typeof log !== 'string' ? 'Hide changes' : 'Changes this week'}
+              </button>
+              <span style={{ color: C.lightBrown, fontSize: '0.72rem', marginLeft: 8 }}>every fix and void, with the punches as they were</span>
+            </div>
+            {log === 'loading' && <div style={{ color: C.tan, fontSize: '0.8rem' }}>Loading…</div>}
+            {typeof log === 'string' && log !== 'loading' && <div style={{ color: C.red, fontSize: '0.8rem' }}>{log}</div>}
+            {log && log !== 'loading' && typeof log !== 'string' && (
+              <div style={{ background: C.darkBrown, border: `1px solid ${C.medBrown}`, borderRadius: 4, padding: '0.6rem 0.7rem', margin: '0.3rem 0', fontSize: '0.8rem' }}>
+                {log.history.length === 0 && log.voided.length === 0 && <div style={{ color: C.tan }}>No changes this week — every shift is as punched.</div>}
+                {log.history.map(h => (
+                  <div key={h.id} style={{ padding: '0.3rem 0', borderBottom: '1px solid rgba(166,120,90,0.15)' }}>
+                    <div style={{ color: C.cream }}>
+                      <b>{dateLabel(h.shop_date, { weekday: 'short', month: 'numeric', day: 'numeric' })}</b>
+                      {' · '}<span style={{ color: h.action === 'void' ? C.red : h.action === 'add' ? C.green : C.blue, fontWeight: 700 }}>{h.action === 'void' ? 'Voided' : h.action === 'add' ? 'Added' : 'Fixed'}</span>
+                      {' · '}<span style={{ color: C.tan }}>{stamp(h.at)} MT</span>
+                      {' — '}<span style={{ color: C.tan }}>{h.note}</span>
+                    </div>
+                    {h.before && <div style={{ color: C.lightBrown }}>was: {punchLine(h.before)}</div>}
+                    {h.after && <div style={{ color: C.cream }}>now: {punchLine(h.after)}</div>}
+                  </div>
+                ))}
+                {log.voided.length > 0 && (
+                  <div style={{ color: C.lightBrown, marginTop: 6 }}>
+                    Voided shifts, not in the hours above: {log.voided.map(v => `${dateLabel(v.date, { weekday: 'short', month: 'numeric', day: 'numeric' })} ${fmt12(v.clockIn)}–${v.clockOut ? fmt12(v.clockOut) : 'open'}`).join('; ')}
+                  </div>
+                )}
+              </div>
+            )}
             {rows.length > 0 && (
               <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginTop: '0.4rem' }}>
                 <Stat label="Paid hours" value={fmtHours(total)} sub={`incl. ${fmtHours(paidBreakHrs)} paid breaks`} />

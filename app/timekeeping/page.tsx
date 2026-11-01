@@ -28,7 +28,7 @@ type Tab = 'clock' | 'timesheet' | 'schedule' | 'payroll' | 'pto' | 'employees' 
 
 interface Data {
   employees: TkEmployee[]
-  shifts: (Shift & { editedAt: string | null; editNote: string | null })[]
+  shifts: (Shift & { editedAt: string | null; editNote: string | null; voidedAt: string | null; voidNote: string | null })[]
   schedule: Schedule
   requests: TimeOffRequest[]
   photos: Record<string, string>

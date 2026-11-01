@@ -4,7 +4,7 @@
 // lib/timeclockServer.ts for that).
 
 import { dateLabel } from '@/lib/dates'
-import { BREAK_RULES, Shift, accrualPerHour, calcShift, toMin, yearsOfService } from '@/lib/timekeeping'
+import { BREAK_RULES, Shift, accrualPerHour, calcShift, sinceIn, yearsOfService } from '@/lib/timekeeping'
 
 export interface TkEmployee {
   id:               string
@@ -35,9 +35,10 @@ export interface TimeOffRequest {
 
 export const schedKey = (empId: string, date: string) => `${empId}|${date}`
 
-/** Paid hours for a scheduled shift: the 30-min unpaid lunch comes off a 6+ hour day. */
+/** Paid hours for a scheduled shift: the 30-min unpaid lunch comes off a 6+ hour day.
+ *  An end earlier than the start is the next morning (the night shift). */
 export function scheduledHours(sh: SchedShift): number {
-  const span = (toMin(sh.end) - toMin(sh.start)) / 60
+  const span = sinceIn(sh.start, sh.end) / 60
   return span - BREAK_RULES.lunchMinutes / 60 >= BREAK_RULES.lunchAt ? span - BREAK_RULES.lunchMinutes / 60 : span
 }
 
