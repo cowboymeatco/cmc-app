@@ -43,7 +43,6 @@ export default function Dashboard() {
   const [orders,     setOrders]     = useState<number | null>(null)
   const [valueAdd,   setValueAdd]   = useState<number | null>(null)
   const [cleaning,   setCleaning]   = useState<number | null>(null)
-  const [game,       setGame]       = useState<number | null>(null)
   const [kanban,     setKanban]     = useState<number | null>(null)
 
   // Red bubble: cutting instructions submitted since the last time the
@@ -71,9 +70,8 @@ export default function Dashboard() {
       fetch('/api/value-add').then(r => r.json()),
       // peek=1 — reading the dashboard must not open tonight's cleaning shift.
       fetch('/api/cleaning/shift?peek=1').then(r => r.json()),
-      fetch('/api/game?count=1').then(r => r.json()),
       fetch('/api/kanban?count=1').then(r => r.json()),
-    ]).then(([apptRes, procRes, delivRes, ordersRes, vaRes, cleanRes, gameRes, kanbanRes]) => {
+    ]).then(([apptRes, procRes, delivRes, ordersRes, vaRes, cleanRes, kanbanRes]) => {
       const appts  = apptRes.status    === 'fulfilled' && Array.isArray(apptRes.value)    ? apptRes.value    : []
       const procs  = procRes.status    === 'fulfilled' && Array.isArray(procRes.value)    ? procRes.value    : []
       const deliv  = delivRes.status   === 'fulfilled' && Array.isArray(delivRes.value)   ? delivRes.value   : []
@@ -101,7 +99,6 @@ export default function Dashboard() {
 
       // Animals still in the building. Zero is worth showing here — out of
       // season that IS the answer, and it means the board was checked.
-      setGame(gameRes.status === 'fulfilled' && typeof gameRes.value?.count === 'number' ? gameRes.value.count : null)
       // Kanban cards pulled and waiting on someone to place the order.
       setKanban(kanbanRes.status === 'fulfilled' && typeof kanbanRes.value?.count === 'number' ? kanbanRes.value.count : null)
 
@@ -169,13 +166,6 @@ export default function Dashboard() {
       desc:  'Smokehouse · Patties · Sausage',
       when:  'Custom processing or shelf stock jobs',
       count: valueAdd,
-    },
-    {
-      href: '/game',      icon: '🦌', color: '#8B6F47',
-      title: 'Wild Game',
-      desc:  'Hunter drop-off · Cut · Smokehouse',
-      when:  'Hunting season — a hunter at the door',
-      count: game,
     },
     {
       href: '/delivery',  icon: '🚚', color: '#E879A0',
