@@ -7,7 +7,8 @@ import { useState } from 'react'
 import { dateLabel } from '@/lib/dates'
 import { PTO_RULES, Shift, accrualPerHour, annualPtoRate, calcShift, nextAnniversary, yearsOfService } from '@/lib/timekeeping'
 import { TimeOffRequest, TkEmployee, ptoSummary } from '@/lib/timeclock'
-import { C, card, h2, td, th } from './shared'
+import { C, btn, card, h2, td, th } from './shared'
+import { printPtoStatements } from './ptoStatement'
 
 export function PtoTab({ employees, shifts, requests, today, now }: {
   employees: TkEmployee[]; shifts: Shift[]; requests: TimeOffRequest[]; today: string; now: string | null
@@ -26,18 +27,25 @@ export function PtoTab({ employees, shifts, requests, today, now }: {
   return (
     <>
       <div style={card}>
-        <h2 style={h2}>Balances</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '0.4rem' }}>
+          <h2 style={{ ...h2, margin: 0 }}>Balances</h2>
+          <span style={{ flex: 1 }} />
+          <button style={btn(C.medBrown)} onClick={() => printPtoStatements(rows.map(r => r.e), shifts, requests, today, nowHHMM)} disabled={rows.length === 0}>
+            🖨 Print all statements
+          </button>
+        </div>
         <p style={{ color: C.tan, fontSize: '0.8rem', margin: '0 0 0.6rem' }}>
           Opening balance at go-live, plus every hour worked since at the employee&apos;s current rate, minus PTO taken. The rate goes up {PTO_RULES.stepPerYear} h on each work anniversary, so it&apos;s +{5 * PTO_RULES.stepPerYear} every 5 years.
+          A <b>statement</b> is the same balance written out for the employee: week by week, what they worked, what it earned, and the PTO days that came off — one page to hand them.
         </p>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr>
               <th style={th}>Employee</th><th style={th}>Hired</th><th style={th}>Service</th><th style={th}>Rate now</th>
-              <th style={th}>Opening</th><th style={th}>Hrs worked</th><th style={th}>Earned</th><th style={th}>Taken</th><th style={th}>Balance</th><th style={th}>Approved / asked</th><th style={th}>Next bump</th>
+              <th style={th}>Opening</th><th style={th}>Hrs worked</th><th style={th}>Earned</th><th style={th}>Taken</th><th style={th}>Balance</th><th style={th}>Approved / asked</th><th style={th}>Next bump</th><th style={th}></th>
             </tr></thead>
             <tbody>
-              {rows.length === 0 && <tr><td style={td} colSpan={11}>No one yet — add people on the Employees tab.</td></tr>}
+              {rows.length === 0 && <tr><td style={td} colSpan={12}>No one yet — add people on the Employees tab.</td></tr>}
               {rows.map(({ e, s, hours, years, nextAnniv }) => (
                 <tr key={e.id}>
                   <td style={td}>{e.name}<div style={{ color: C.lightBrown, fontSize: '0.72rem' }}>{e.role}</div></td>
@@ -51,6 +59,11 @@ export function PtoTab({ employees, shifts, requests, today, now }: {
                   <td style={{ ...td, fontWeight: 700, color: C.green, fontVariantNumeric: 'tabular-nums' }}>{s.onBooks.toFixed(1)} h</td>
                   <td style={{ ...td, fontVariantNumeric: 'tabular-nums', color: C.tan }}>{s.booked || s.pending ? `${s.booked.toFixed(1)} / ${s.pending.toFixed(1)}` : '—'}</td>
                   <td style={td}>{dateLabel(nextAnniv, { month: 'short', day: 'numeric', year: 'numeric' })}<div style={{ color: C.lightBrown, fontSize: '0.72rem' }}>→ {annualPtoRate(years + 1)} h / 2080</div></td>
+                  <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                    <button style={{ ...btn(C.darkBrown), padding: '0.35rem 0.6rem', fontSize: '0.75rem', border: `1px solid ${C.medBrown}` }} onClick={() => printPtoStatements([e], shifts, requests, today, nowHHMM)} title={`Print ${e.name}'s PTO statement`}>
+                      🖨 Statement
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
