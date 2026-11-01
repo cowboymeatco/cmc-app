@@ -1656,7 +1656,9 @@ export default function ScannerPage() {
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ customer_name: cust, pack_date: date, box_number: 1, is_final: false }),
     })
-    const box: BoxRecord = await res.json()
+    // A customer with one open retail order is packing that order; tie Box 1
+    // to it without the "Link retail order" trip (Charlie, 2026-10-28).
+    const box = await autoLinkOrder(await res.json() as BoxRecord, cust)
     setBoxes([box])
     setActiveBox(box)
     setScans([])
@@ -2038,10 +2040,16 @@ export default function ScannerPage() {
     try {
       // The server numbers the box off the database; this is only a floor.
       const nextNum = siblings.length > 0 ? Math.max(...siblings.map(b => b.box_number)) + 1 : 1
+      // Box 2 of an order is still that order. Only linked boxes count toward
+      // the order's fill, so a session packing one order carries the link
+      // onto every box it adds; a session whose boxes point at different
+      // orders (or none) leaves the new box for the packer to link.
+      const linked = siblings.filter(b => b.order_id)
+      const orderId = linked.length && linked.every(b => b.order_id === linked[0].order_id) ? linked[0].order_id : null
       const res = await fetch('/api/boxes', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ customer_name: cust, pack_date: dt, box_number: nextNum, is_final: isFinal }),
+        body:    JSON.stringify({ customer_name: cust, pack_date: dt, box_number: nextNum, is_final: isFinal, ...(orderId ? { order_id: orderId, box_label: linked[0].box_label?.trim() || cust } : {}) }),
       })
       if (!res.ok) { window.alert('Could not add a box — try again.'); return }
       const box: BoxRecord = await res.json()
@@ -2089,6 +2097,36 @@ export default function ScannerPage() {
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ id: box.id, box_label: next }),
     })
+  }
+
+  // ── Tie a fresh box to the customer's open order, when there is exactly one ──
+  // Robert Gonzales's session was typed into New Session rather than started
+  // off the Ready to Pack card, so his box carried no order and nothing he
+  // scanned reached the order's fill (Charlie, 2026-10-28: "should be
+  // automatically attaching"). A name that matches one open order is not a
+  // guess. Two open orders for the same name is, so that stays a manual link.
+  async function autoLinkOrder(box: BoxRecord, cust: string): Promise<BoxRecord> {
+    if (box.order_id) return box
+    try {
+      const res  = await fetch('/api/orders', { signal: AbortSignal.timeout(8000) })
+      const data = await res.json().catch(() => [])
+      const name = cust.trim().toLowerCase()
+      const open = (Array.isArray(data) ? data as RetailOrderLite[] : [])
+        .filter(o => o.status !== 'fulfilled' && o.customer_name.trim().toLowerCase() === name)
+      if (open.length !== 1) return box
+      const order = open[0]
+      const nextLabel = box.box_label?.trim() || order.customer_name
+      const upd = await fetch('/api/boxes', {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ id: box.id, order_id: order.id, box_label: nextLabel }),
+      })
+      if (!upd.ok) return box
+      setOrders(prev => prev.some(o => o.id === order.id) ? prev : [...prev, order])
+      return { ...box, order_id: order.id, box_label: nextLabel }
+    } catch {
+      return box   // the manual link is still there
+    }
   }
 
   // ── Tie a box to a retail order ──────────────────────────────────────────────
