@@ -43,7 +43,7 @@ export function ScheduleTab({ employees, schedule, requests, thisMonday, today, 
     setDraft(cur)
   }
   const save = () => {
-    if (!sel || toMin(draft.end) <= toMin(draft.start)) return
+    if (!sel || !draft.start || !draft.end || draft.end === draft.start) return
     const { empId, date } = sel
     setSel(null)
     write(() => api('/api/timekeeping/schedule', { method: 'PUT', body: JSON.stringify({ employeeId: empId, date, start: draft.start, end: draft.end }) }))
@@ -117,7 +117,9 @@ export function ScheduleTab({ employees, schedule, requests, thisMonday, today, 
             <span style={{ color: C.tan }}>to</span>
             <input type="time" value={draft.end} onChange={e => setDraft(d => ({ ...d, end: e.target.value }))} style={timeInput} />
             <span style={{ color: C.tan, fontSize: '0.8rem' }}>
-              {toMin(draft.end) > toMin(draft.start) ? `${fmtHours(scheduledHours(draft))} paid` : 'end must be after start'}
+              {draft.start && draft.end && draft.end !== draft.start
+                ? `${fmtHours(scheduledHours(draft))} paid${toMin(draft.end) < toMin(draft.start) ? ' · ends next morning' : ''}`
+                : 'end must differ from start'}
             </span>
             <button style={btn(C.green)} onClick={save}>Save</button>
             <button style={btn(C.red)} onClick={clear}>Day off</button>

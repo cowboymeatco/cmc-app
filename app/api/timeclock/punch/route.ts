@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { dateLabel } from '@/lib/dates'
 import { SHIFT_COLS, jsonError, requireKiosk, shopNow, toShift } from '@/lib/timeclockServer'
+import { neverClosed } from '@/lib/timekeeping'
 
 // POST /api/timeclock/punch — { action }. Acts only on the signed-in
 // employee's own shift, and the time is the server's shop clock, not the
@@ -23,11 +24,14 @@ export async function POST(req: NextRequest) {
     const now = shopNow()
 
     const { data: openRow } = await supabaseAdmin.from('tk_shifts').select(SHIFT_COLS)
-      .eq('employee_id', emp.id).is('clock_out', null).maybeSingle()
+      .eq('employee_id', emp.id).is('clock_out', null).is('voided_at', null).maybeSingle()
     const open = openRow ? toShift(openRow) : null
-    // A shift left open from an earlier day can't be closed from the kiosk —
-    // the clock-out time would be a guess. A manager fixes it on Timesheets.
-    if (open && open.date !== now.date) {
+    // Last night's shift can still be closed this morning — night sanitation
+    // clocks in at 22:00 and out at 06:30 — as long as it's inside 24 hours of
+    // the clock-in; it counts on the day it started. Anything older was never
+    // closed, and the clock-out time would be a guess: a manager fixes it on
+    // Timesheets.
+    if (open && neverClosed(open, now.date, now.time)) {
       return refuse(`You're still clocked in from ${dateLabel(open.date, { weekday: 'long', month: 'numeric', day: 'numeric' })}. Ask a manager to fix that shift, then clock in.`)
     }
     const onLunch = !!open?.lunchStart && !open.lunchEnd
