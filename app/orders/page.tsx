@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { isoDate } from '@/lib/dates'
+import { isRegisterOnlyPlu, pluMatchKey } from '@/lib/pluAliases'
 
 type Tab       = 'new' | 'open' | 'fulfilled'
 type Fulfillment = 'pickup' | 'delivery' | 'shipping'
@@ -70,7 +71,7 @@ interface RetailOrder {
   retail_order_items: OrderItem[]
 }
 
-interface PluItem { plu_number: string; item_name: string; unit: string }
+interface PluItem { plu_number: string; item_name: string; unit: string; price?: number | null }
 
 const C = {
   dark:       '#1A0A04',
@@ -1039,15 +1040,42 @@ function OrderListTab({ fulfilled, pluList, focusOrderId = null }: { fulfilled: 
     const data: RetailOrder[] = await res.json()
     // For open tab, exclude fulfilled
     const filtered = fulfilled ? data : data.filter(o => o.status !== 'fulfilled')
-    // The case's standing order sits on top of the open list — it is the one
-    // the crew fills from whatever comes through, not a pickup on a date.
-    const list = Array.isArray(filtered) ? [...filtered].sort((a, b) => Number(isRestock(b)) - Number(isRestock(a))) : []
+    const list = Array.isArray(filtered) ? filtered : []
     setOrders(list)
     if (focusOrderId) setSelected(list.find(o => o.id === focusOrderId) ?? null)
     setLoading(false)
   }, [fulfilled, focusOrderId])
 
   useEffect(() => { load() }, [load])
+
+  // What an order is worth: each line's quantity at its PLU's scale price.
+  // Keyed through pluMatchKey so a line still written against a register-only
+  // PLU (204) prices at the scale PLU it is filled by (100). Lines with no
+  // PLU, or a PLU with no price, count as $0 — the list ranks by what we can
+  // price, it doesn't invent a number.
+  const priceOf = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const p of pluList) { const k = pluMatchKey(p.plu_number); if (!m.has(k)) m.set(k, Number(p.price) || 0) }
+    return m
+  }, [pluList])
+  const orderValue = useCallback((o: RetailOrder) =>
+    o.retail_order_items.reduce((s, i) => s + Number(i.qty_ordered) * (i.plu_number ? (priceOf.get(pluMatchKey(i.plu_number)) ?? 0) : 0), 0),
+    [priceOf])
+
+  // The case's standing order sits on top of the open list — it is the one
+  // the crew fills from whatever comes through, not a pickup on a date. Below
+  // it the open orders rank by value, biggest first (Charlie, 2026-11-01:
+  // "put the things with the highest value highest on the list"), due date
+  // breaking ties. The fulfilled tab stays in due-date order.
+  const list = useMemo(() => [...orders].sort((a, b) => {
+    const r = Number(isRestock(b)) - Number(isRestock(a))
+    if (r) return r
+    if (!fulfilled) {
+      const v = orderValue(b) - orderValue(a)
+      if (v) return v
+    }
+    return a.due_date.localeCompare(b.due_date)
+  }), [orders, fulfilled, orderValue])
 
   function handleUpdated(updated: RetailOrder) {
     setOrders(prev => prev.map(o => o.id === updated.id ? updated : o))
@@ -1076,7 +1104,7 @@ function OrderListTab({ fulfilled, pluList, focusOrderId = null }: { fulfilled: 
           {!loading && orders.length === 0 && (
             <div style={{ padding: '1.5rem', textAlign: 'center', color: C.lightBrown, fontSize: '0.85rem' }}>No orders found</div>
           )}
-          {orders.map(o => (
+          {list.map(o => (
             <div
               key={o.id}
               onClick={() => setSelected(o)}
@@ -1100,6 +1128,7 @@ function OrderListTab({ fulfilled, pluList, focusOrderId = null }: { fulfilled: 
                 Due {new Date(o.due_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                 {overdue(o) ? ' — OVERDUE' : ''}
                 {' · '}{o.fulfillment_type.charAt(0).toUpperCase() + o.fulfillment_type.slice(1)}
+                {orderValue(o) > 0 && <span style={{ color: C.cream }}> · ${orderValue(o).toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>}
                 {addressNeed(o)?.missing && <span style={{ color: C.red }}> · ⚠ no address</span>}
               </div>
               )}
@@ -1109,8 +1138,11 @@ function OrderListTab({ fulfilled, pluList, focusOrderId = null }: { fulfilled: 
         </div>
       </div>
 
-      {/* Right detail */}
-      <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1.5rem', overflowY: 'auto' }}>
+      {/* Right detail — pinned while the list scrolls (Charlie, 2026-11-01:
+          "when I scroll to the bottom of the left side I can still see the
+          info on the right"). The page is what scrolls when the list runs
+          long, so the pane sticks to the viewport and scrolls on its own. */}
+      <div style={{ background: C.dark, border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '1.5rem', overflowY: 'auto', position: 'sticky', top: '1rem', alignSelf: 'start', maxHeight: 'calc(100vh - 2rem)', boxSizing: 'border-box' }}>
         {!selected ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '60%', color: C.lightBrown, fontSize: '0.9rem' }}>
             ← Select an order to view
@@ -1259,9 +1291,13 @@ export default function OrdersPage() {
       .then(r => r.json())
       .then((data: unknown) => {
         if (Array.isArray(data)) {
-          setPluList((data as { plu_number?: string; item_name?: string; sell_by_weight?: boolean | null }[])
-            .filter(d => d.plu_number)
-            .map(d => ({ plu_number: String(d.plu_number), item_name: d.item_name ?? '', unit: saleUnit(d) }))
+          // Scale PLUs only. A Clover price group (204, 85% Lean Ground Beef)
+          // never prints on a label, so a line written against it is never
+          // filled by the scanner — Robert Gonzales's ground beef, 2026-10-28.
+          // The register-only numbers stay off the picker; lib/pluAliases.ts.
+          setPluList((data as { plu_number?: string; item_name?: string; sell_by_weight?: boolean | null; price?: number | string | null; raw_data?: unknown }[])
+            .filter(d => d.plu_number && !isRegisterOnlyPlu(d))
+            .map(d => ({ plu_number: String(d.plu_number), item_name: d.item_name ?? '', unit: saleUnit(d), price: d.price == null ? null : Number(d.price) }))
           )
         }
       })

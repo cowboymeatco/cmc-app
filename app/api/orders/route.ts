@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { isoDate } from '@/lib/dates'
+import { pluMatchKey } from '@/lib/pluAliases'
 
 export const dynamic = 'force-dynamic'
 
@@ -15,6 +16,9 @@ type OrderRow = { id: string; retail_order_items?: { plu_number: string | null; 
 // weight on it (Charlie, 2026-09-14: Sheena Schiffer's 15.1 lb brisket).
 // This is a keyed join, not a guess: only boxes linked to THIS order count,
 // matched to a line by PLU. LB lines sum pounds, anything else sums packages.
+// The PLU match goes through pluMatchKey so a register-only PLU on the line
+// (204, 85% Lean Ground Beef) is filled by the scale PLU on the label (100,
+// Ground Beef) — see lib/pluAliases.ts.
 async function attachScans<T extends OrderRow>(orders: T[]): Promise<T[]> {
   const ids = orders.map(o => o.id)
   if (ids.length === 0) return orders
@@ -28,7 +32,7 @@ async function attachScans<T extends OrderRow>(orders: T[]): Promise<T[]> {
 
   const lbs = new Map<string, number>(), pkgs = new Map<string, number>()
   for (const s of scans ?? []) {
-    const key = `${orderOfBox.get(s.box_id)}|${s.plu_number ?? ''}`
+    const key = `${orderOfBox.get(s.box_id)}|${pluMatchKey(s.plu_number)}`
     lbs.set(key, (lbs.get(key) ?? 0) + (Number(s.weight_lbs) || 0))
     pkgs.set(key, (pkgs.get(key) ?? 0) + (Number(s.quantity) || 1))
   }
@@ -36,7 +40,7 @@ async function attachScans<T extends OrderRow>(orders: T[]): Promise<T[]> {
   return orders.map(o => ({
     ...o,
     retail_order_items: (o.retail_order_items ?? []).map(i => {
-      const key = `${o.id}|${i.plu_number ?? ''}`
+      const key = `${o.id}|${pluMatchKey(i.plu_number)}`
       if (!i.plu_number || !pkgs.has(key)) return i
       const qty = i.unit === 'LB' ? Math.round((lbs.get(key) ?? 0) * 100) / 100 : pkgs.get(key)
       return { ...i, scanned_qty: qty }

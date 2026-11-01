@@ -3,6 +3,7 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { addDaysISO } from '@/lib/dates'
+import { pluMatchKey } from '@/lib/pluAliases'
 import { isOwnSession, OWN_PRODUCER } from '@/lib/ownership'
 import {
   buildDemandLines, summarize, yieldRates, type OpenLine, type RoomCount, type SpeciesSupply,
@@ -78,7 +79,9 @@ async function openLines(): Promise<OpenLine[]> {
   const rows = (orders ?? []) as OrderRow[]
   if (!rows.length) return []
 
-  // Only boxes linked to THIS order count, matched to a line by PLU.
+  // Only boxes linked to THIS order count, matched to a line by PLU — through
+  // pluMatchKey, so a register-only PLU on the line is filled by the scale
+  // PLU on the label (lib/pluAliases.ts). Same rule as /api/orders.
   const { data: boxes } = await supabaseAdmin.from('boxes').select('id, order_id').in('order_id', rows.map(o => o.id))
   const orderOfBox = new Map((boxes ?? []).map(b => [b.id as string, b.order_id as string]))
   const lbs = new Map<string, number>(), pkgs = new Map<string, number>()
@@ -87,7 +90,7 @@ async function openLines(): Promise<OpenLine[]> {
       const scans = await all<{ box_id: string; plu_number: string | null; weight_lbs: number | null; quantity: number | null }>((a, b) =>
         supabaseAdmin.from('box_scans').select('box_id, plu_number, weight_lbs, quantity').in('box_id', ids).range(a, b))
       for (const s of scans) {
-        const key = `${orderOfBox.get(s.box_id)}|${s.plu_number ?? ''}`
+        const key = `${orderOfBox.get(s.box_id)}|${pluMatchKey(s.plu_number)}`
         lbs.set(key, (lbs.get(key) ?? 0) + (Number(s.weight_lbs) || 0))
         pkgs.set(key, (pkgs.get(key) ?? 0) + (Number(s.quantity) || 1))
       }
@@ -97,7 +100,7 @@ async function openLines(): Promise<OpenLine[]> {
   const out: OpenLine[] = []
   for (const o of rows) {
     for (const i of o.retail_order_items ?? []) {
-      const key = `${o.id}|${i.plu_number ?? ''}`
+      const key = `${o.id}|${pluMatchKey(i.plu_number)}`
       const scanned = i.plu_number && pkgs.has(key)
         ? (String(i.unit).toUpperCase() === 'EA' ? pkgs.get(key)! : lbs.get(key)!)
         : null

@@ -42,12 +42,20 @@ export async function POST(req: NextRequest) {
     .order('box_number', { ascending: false })
     .limit(1)
   const dbNext = (Number(top?.[0]?.box_number) || 0) + 1
+  // The order link and label the scanner sends with a box started off a retail
+  // order ("→ Scan this order", or a New Session whose customer has one open
+  // order) used to be dropped here, so Box 1 came back unlinked and the
+  // order's fill never saw its scans (Charlie, 2026-10-28, Robert Gonzales).
+  const order_id  = typeof body.order_id === 'string' && body.order_id ? body.order_id : null
+  const box_label = typeof body.box_label === 'string' && body.box_label.trim() ? body.box_label.trim() : null
   const res = await createBox({
     customer_name,
     pack_date,
     box_number:    Math.max(Number(body.box_number) || 1, dbNext),
     is_final:      body.is_final ?? false,
     serial_number: body.serial_number ?? null,
+    ...(order_id  ? { order_id }  : {}),
+    ...(box_label ? { box_label } : {}),
   })
   if (!res.box) return NextResponse.json({ error: res.error }, { status: res.status })
   return NextResponse.json(res.box)

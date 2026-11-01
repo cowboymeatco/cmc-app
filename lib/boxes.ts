@@ -14,6 +14,7 @@ export interface NewBox {
   box_number:    number
   is_final?:     boolean
   box_label?:    string | null
+  order_id?:     string | null    // the retail order this box is packed against
   serial_number?: string | null   // supplied serials are taken at their word
 }
 
