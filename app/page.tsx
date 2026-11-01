@@ -45,6 +45,7 @@ export default function Dashboard() {
   const [cleaning,   setCleaning]   = useState<number | null>(null)
   const [game,       setGame]       = useState<number | null>(null)
   const [kanban,     setKanban]     = useState<number | null>(null)
+  const [demand,     setDemand]     = useState<number | null>(null)
 
   // Red bubble: cutting instructions submitted since the last time the
   // Cutting Instructions page was opened on this device. First visit just
@@ -73,7 +74,8 @@ export default function Dashboard() {
       fetch('/api/cleaning/shift?peek=1').then(r => r.json()),
       fetch('/api/game?count=1').then(r => r.json()),
       fetch('/api/kanban?count=1').then(r => r.json()),
-    ]).then(([apptRes, procRes, delivRes, ordersRes, vaRes, cleanRes, gameRes, kanbanRes]) => {
+      fetch('/api/demand?count=1').then(r => r.json()),
+    ]).then(([apptRes, procRes, delivRes, ordersRes, vaRes, cleanRes, gameRes, kanbanRes, demandRes]) => {
       const appts  = apptRes.status    === 'fulfilled' && Array.isArray(apptRes.value)    ? apptRes.value    : []
       const procs  = procRes.status    === 'fulfilled' && Array.isArray(procRes.value)    ? procRes.value    : []
       const deliv  = delivRes.status   === 'fulfilled' && Array.isArray(delivRes.value)   ? delivRes.value   : []
@@ -104,6 +106,8 @@ export default function Dashboard() {
       setGame(gameRes.status === 'fulfilled' && typeof gameRes.value?.count === 'number' ? gameRes.value.count : null)
       // Kanban cards pulled and waiting on someone to place the order.
       setKanban(kanbanRes.status === 'fulfilled' && typeof kanbanRes.value?.count === 'number' ? kanbanRes.value.count : null)
+      // Items the open orders are short that neither the freezer nor our own animals cover.
+      setDemand(demandRes.status === 'fulfilled' && typeof demandRes.value?.count === 'number' ? demandRes.value.count : null)
 
       // Null until a shift exists for the night, so the tile shows nothing
       // rather than a misleading zero on a day nobody has started cleaning.
@@ -197,6 +201,13 @@ export default function Dashboard() {
       desc:  'Ordering · Inventory · Locations',
       when:  'A bin runs empty — pull the card',
       count: kanban,
+    },
+    {
+      href: '/demand',    icon: '📈', color: '#DC2626',
+      title: 'Demand',
+      desc:  'What to buy · Orders vs freezer & kill floor',
+      when:  'Before buying meat — see what orders need',
+      count: demand,
     },
   ]
 
