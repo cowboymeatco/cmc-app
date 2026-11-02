@@ -6,6 +6,7 @@ import { HarvestAppointment, HarvestLog, ChillLog, AnimalReceivingLog, Correctiv
 import { setFeedbackContext, clearFeedbackContext } from '@/lib/feedbackTelemetry'
 import { isoDate, isoDateTime, addDaysISO } from '@/lib/dates'
 import { splitsIntoHalves, WHOLE_WEIGHT_LABEL } from '@/lib/carcass'
+import ScaleReadButton from '@/components/ScaleReadButton'
 
 type Tab = 'parta' | 'partb' | 'worksheet' | 'harvestlog' | 'chill'
 
@@ -679,8 +680,11 @@ Save anyway?`
                 </div>
                 <div>
                   <label style={LABEL}>Live Weight (lbs)</label>
-                  <input type="number" step="1" style={INPUT} value={row.liveWeight}
-                    onChange={e => upd(i, { liveWeight: e.target.value })} placeholder="e.g. 1245" />
+                  <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'flex-start' }}>
+                    <input type="number" step="1" style={INPUT} value={row.liveWeight}
+                      onChange={e => upd(i, { liveWeight: e.target.value })} placeholder="e.g. 1245" />
+                    <ScaleReadButton decimals={0} onWeight={lbs => upd(i, { liveWeight: String(lbs) })} />
+                  </div>
                 </div>
               </div>
               <div style={{ marginBottom: '0.85rem' }}>
@@ -972,17 +976,26 @@ function PartBTab({ date }: { date: string }) {
                       <>
                         <div>
                           <label style={LABEL}>Left Half (lbs)</label>
-                          <input type="number" step="0.1" style={INPUT} value={row.fields.half1} onChange={e => updField(i, { half1: e.target.value })} placeholder="0.0" />
+                          <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'flex-start' }}>
+                            <input type="number" step="0.1" style={INPUT} value={row.fields.half1} onChange={e => updField(i, { half1: e.target.value })} placeholder="0.0" />
+                            <ScaleReadButton onWeight={lbs => updField(i, { half1: String(lbs) })} />
+                          </div>
                         </div>
                         <div>
                           <label style={LABEL}>Right Half (lbs)</label>
-                          <input type="number" step="0.1" style={INPUT} value={row.fields.half2} onChange={e => updField(i, { half2: e.target.value })} placeholder="0.0" />
+                          <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'flex-start' }}>
+                            <input type="number" step="0.1" style={INPUT} value={row.fields.half2} onChange={e => updField(i, { half2: e.target.value })} placeholder="0.0" />
+                            <ScaleReadButton onWeight={lbs => updField(i, { half2: String(lbs) })} />
+                          </div>
                         </div>
                       </>
                     ) : (
                       <div>
                         <label style={LABEL}>{WHOLE_WEIGHT_LABEL}</label>
-                        <input type="number" step="0.1" style={INPUT} value={row.fields.whole} onChange={e => updField(i, { whole: e.target.value })} placeholder="0.0" />
+                        <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'flex-start' }}>
+                          <input type="number" step="0.1" style={INPUT} value={row.fields.whole} onChange={e => updField(i, { whole: e.target.value })} placeholder="0.0" />
+                          <ScaleReadButton onWeight={lbs => updField(i, { whole: String(lbs) })} />
+                        </div>
                       </div>
                     )}
                     <div>
