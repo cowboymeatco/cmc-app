@@ -12,7 +12,6 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { addDaysISO, dateLabel, isoDate, isoDateTime, mondayOfISO } from '@/lib/dates'
-import { LabelRoll, parseRoll, rollFrameCSS, rollPrintScript } from '@/lib/label'
 import {
   BREAK_RULES, MAX_PAID_BREAK_MINUTES, Segment, Shift,
   accrualPerHour, annualPtoRate, between, calcShift, fmt12, fmtHours, nextAnniversary, shiftSegments, splitOvertime, toMin, yearsOfService,
@@ -23,7 +22,6 @@ import { MySchedule } from './ScheduleTab'
 
 const IDLE_SIGN_OUT_MS = 20_000
 const IDLE_SCHEDULE_MS = 90_000
-const ROLL_KEY = 'timeclockLabelRoll' // per device, like the scanner's printer pick
 
 interface Me { employee: TkEmployee; shifts: Shift[]; schedule: Schedule; requests: TimeOffRequest[] }
 interface RosterEntry { id: string; name: string; needsSetup: boolean }
@@ -79,16 +77,6 @@ export function KioskClock({ onChange }: { onChange?: () => void }) {
   const [error, setError] = useState('')
   const [activity, setActivity] = useState(0)   // bumps on every tap, restarts the idle timer
   const [showSched, setShowSched] = useState(false)
-  const [roll, setRoll] = useState<LabelRoll>('4in')
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring this device's printer after mount; reading it during render would mismatch the server HTML
-    try { setRoll(parseRoll(localStorage.getItem(ROLL_KEY))) } catch { /* private browsing */ }
-  }, [])
-  const pickRoll = (r: LabelRoll) => {
-    setRoll(r)
-    try { localStorage.setItem(ROLL_KEY, r) } catch { /* private browsing */ }
-  }
 
   const signOut = useCallback((msg = '') => {
     if (token) api('/api/timeclock/pin', { method: 'DELETE', token }).catch(() => {})
@@ -366,7 +354,7 @@ export function KioskClock({ onChange }: { onChange?: () => void }) {
       nextBump: nextAnniversary(emp.hireDate, today), nextAnnual: annualPtoRate(years + 1),
     }
     const html = buildSummaryHTML(emp, shifts.filter(s => s.date >= from && s.date <= to),
-      from, to, range === 'day' ? 'Day' : 'Week', nowHHMM, accrual, roll, window.location.pathname + window.location.search)
+      from, to, range === 'day' ? 'Day' : 'Week', nowHHMM, accrual, window.location.pathname + window.location.search)
     const win = window.open('', '_blank')
     if (win) { win.document.write(html); win.document.close() }
   }
@@ -464,14 +452,7 @@ export function KioskClock({ onChange }: { onChange?: () => void }) {
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: '1rem' }}>
         <button style={{ ...bigBtn('transparent'), border: `1px solid ${C.medBrown}`, color: C.tan }} onClick={() => signOut()}>Done — sign out</button>
-        <span style={{ color: C.lightBrown, fontSize: '0.72rem' }}>
-          Signs out on its own after {IDLE_SIGN_OUT_MS / 1000}s idle · Printer:{' '}
-          {(['4in', '62mm'] as LabelRoll[]).map(r => (
-            <button key={r} onClick={() => pickRoll(r)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 3px', fontSize: '0.72rem', color: roll === r ? C.cream : C.lightBrown, fontWeight: roll === r ? 700 : 400, textDecoration: roll === r ? 'underline' : 'none' }}>
-              {r === '4in' ? '4in thermal' : 'Brother 2.4in'}
-            </button>
-          ))}
-        </span>
+        <span style={{ color: C.lightBrown, fontSize: '0.72rem' }}>Signs out on its own after {IDLE_SIGN_OUT_MS / 1000}s idle</span>
       </div>
     </div>
   )
@@ -485,12 +466,14 @@ function esc(s: string): string {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-// ── Printed summary (box label printer) ─────────────────────────────────────
+// ── Printed summary (letter paper) ──────────────────────────────────────────
 //
-// Same roll stock as the box labels: the 4in thermal at the packing bench or a
-// Brother on 62mm continuous. Black on white. Totals on the left, PTO accrual
-// boxed on the right, then one block per day. The 62mm roll is too narrow for
-// two columns, so there the accrual box drops under the totals.
+// One letter page on the office printer, over AirPrint from the iPad. Black on
+// white. One block per day on the left, hours and PTO accrual boxed on the
+// right. It used to be laid out for the box label rolls (4in thermal / Brother
+// 62mm) with a per-device printer pick; the kiosk printer turned out to be
+// Bluetooth-only, which the iPad's print dialog can't reach, so Charlie called
+// it (11/3): plain paper, no options.
 
 interface Accrual {
   balance: number     // PTO hours available right now
@@ -507,7 +490,7 @@ interface Accrual {
 
 function buildSummaryHTML(
   emp: TkEmployee, shifts: Shift[], from: string, to: string, kind: 'Day' | 'Week',
-  nowHHMM: string, acc: Accrual, roll: LabelRoll, backUrl: string,
+  nowHHMM: string, acc: Accrual, backUrl: string,
 ): string {
   const rows = [...shifts].sort((a, b) => a.date.localeCompare(b.date) || a.clockIn.localeCompare(b.clockIn))
   let total = 0, pto = 0, breakMin = 0, upto = 0, lunchMin = 0
@@ -530,38 +513,37 @@ function buildSummaryHTML(
   const range = from === to
     ? dateLabel(from, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
     : `${dateLabel(from, { month: 'short', day: 'numeric' })} – ${dateLabel(to, { month: 'short', day: 'numeric', year: 'numeric' })}`
-  const narrow = roll === '62mm'
   const md = (iso: string) => dateLabel(iso, { month: 'numeric', day: 'numeric', year: '2-digit' })
 
   return `<!doctype html><html><head><meta charset="utf-8"><title>Time clock summary — ${esc(emp.name)}</title><style>
-  ${rollFrameCSS(roll)}
+  @page { size: letter portrait; margin: 0.6in; }
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: #000; background: #fff; font-size: ${narrow ? '8pt' : '8.5pt'}; }
-  .co { font-weight: 900; font-size: ${narrow ? '11pt' : '13pt'}; letter-spacing: 0.04em; text-align: center; }
-  .kind { text-align: center; font-weight: 700; font-size: ${narrow ? '8pt' : '9pt'}; letter-spacing: 0.15em; text-transform: uppercase; border-bottom: 2px solid #000; padding-bottom: 3px; margin-bottom: 3px; }
-  .name { font-weight: 900; font-size: ${narrow ? '12pt' : '14pt'}; line-height: 1.1; }
-  .range { margin-bottom: 4px; }
+  body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: #000; background: #fff; font-size: 11pt; max-width: 7.3in; }
+  .co { font-weight: 900; font-size: 16pt; letter-spacing: 0.04em; text-align: center; }
+  .kind { text-align: center; font-weight: 700; font-size: 11pt; letter-spacing: 0.15em; text-transform: uppercase; border-bottom: 2px solid #000; padding-bottom: 4px; margin-bottom: 6px; }
+  .name { font-weight: 900; font-size: 18pt; line-height: 1.1; }
+  .range { margin-bottom: 10px; font-size: 12pt; }
   table { width: 100%; border-collapse: collapse; }
-  td { padding: 1px 0; vertical-align: top; }
+  td { padding: 2px 0; vertical-align: top; }
   .r { text-align: right; font-weight: 700; white-space: nowrap; }
-  .cols { display: ${narrow ? 'flex' : 'flex'}; flex-direction: ${narrow ? 'column-reverse' : 'row'}; gap: 0.08in; align-items: ${narrow ? 'stretch' : 'flex-start'}; }
+  .cols { display: flex; flex-direction: row; gap: 0.3in; align-items: flex-start; }
   .left { flex: 1 1 auto; min-width: 0; }
-  .right { flex: 0 0 1.4in; }
-  tr.day td { border-top: 1.5px solid #000; padding-top: 3px; font-weight: 900; font-size: ${narrow ? '9pt' : '9.5pt'}; }
-  tr.seg td { font-size: ${narrow ? '7.5pt' : '8pt'}; padding: 0.5px 0; }
-  tr.seg td.t { white-space: nowrap; padding-right: 4px; }
-  tr.seg td.pay { font-weight: 700; padding: 0.5px 3px; }
+  .right { flex: 0 0 2.7in; }
+  tr.day td { border-top: 1.5px solid #000; padding-top: 5px; font-weight: 900; font-size: 12pt; }
+  tr.seg td { font-size: 10.5pt; padding: 1px 0; }
+  tr.seg td.t { white-space: nowrap; padding-right: 8px; }
+  tr.seg td.pay { font-weight: 700; padding: 1px 6px; }
   tr.seg.off td { font-style: italic; }
-  .upto { background: #000; color: #fff; padding: 0 2px; }
-  tr.note td { font-size: 7pt; padding-bottom: 3px; }
-  .box { border: 2px solid #000; padding: 3px 4px; margin-bottom: 4px; }
-  .box h3 { margin: 0 0 2px; font-size: 7.5pt; letter-spacing: 0.12em; text-align: center; border-bottom: 1px solid #000; padding-bottom: 2px; }
-  .box td { font-size: 7.5pt; }
-  .box .bal { font-size: ${narrow ? '16pt' : '18pt'}; font-weight: 900; text-align: center; line-height: 1.1; }
-  .box .bal-l { font-size: 7pt; text-align: center; margin-bottom: 2px; }
-  .box tr.big td { font-size: 10pt; font-weight: 900; }
-  .key { font-size: 6.5pt; margin-top: 2px; line-height: 1.3; }
-  .foot { border-top: 1px solid #000; margin-top: 4px; padding-top: 3px; font-size: 7pt; text-align: center; }
+  .upto { background: #000; color: #fff; padding: 0 3px; }
+  tr.note td { font-size: 9.5pt; padding-bottom: 6px; }
+  .box { border: 2px solid #000; padding: 6px 8px; margin-bottom: 10px; }
+  .box h3 { margin: 0 0 4px; font-size: 10pt; letter-spacing: 0.12em; text-align: center; border-bottom: 1px solid #000; padding-bottom: 3px; }
+  .box td { font-size: 10pt; }
+  .box .bal { font-size: 26pt; font-weight: 900; text-align: center; line-height: 1.1; }
+  .box .bal-l { font-size: 9pt; text-align: center; margin-bottom: 4px; }
+  .box tr.big td { font-size: 13pt; font-weight: 900; }
+  .key { font-size: 9pt; margin-top: 6px; line-height: 1.3; }
+  .foot { border-top: 1px solid #000; margin-top: 12px; padding-top: 6px; font-size: 9pt; text-align: center; }
   </style></head><body>
   <div class="co">COWBOY MEAT CO</div>
   <div class="kind">Time clock summary · ${kind}</div>
@@ -602,8 +584,8 @@ function buildSummaryHTML(
     </div>
   </div>
   <div class="foot">Printed ${esc(md(isoDate()))} ${fmt12(nowHHMM)} MT · Questions? See the office.</div>
-  ${printBackButton(backUrl, 'Back to time clock', true)}
-  ${rollPrintScript(roll)}
+  ${printBackButton(backUrl, 'Back to time clock')}
+  <script>window.onload = () => window.print()</script>
   </body></html>`
 }
 
