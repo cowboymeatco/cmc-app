@@ -78,7 +78,14 @@ const BOX_SERIAL_RE = /^CMC\d{6}[A-Z0-9]{4}$/i
 // invoiced I will send them to finished/call"). The crew's ✓ Complete lands
 // here; Jill's ✓ Invoiced moves it on to complete, which is the Freezer / call
 // list it always was. Our own animals (cmc) are never invoiced, so they skip it.
-type SessionStatus = 'scanning' | 'value_add' | 'ready_to_invoice' | 'complete' | 'baker_storage' | 'picked_up'
+type SessionStatus = 'scanning' | 'burger' | 'value_add' | 'ready_to_invoice' | 'complete' | 'baker_storage' | 'picked_up'
+
+// 'burger' sits between Scanning and Value Add. AE, 2026-11-02: "Can you make
+// a section to send to burger? After cut then send to burger then send to
+// value add or complete ... so [the packager] can see which ones need burger
+// instead of searching scan sheet." The cuts are packed; the trim is still
+// waiting on the grinder. A burger session can be opened and scanned like a
+// scanning one, and goes on to Value Add or Complete from there.
 
 /** Where a packed session goes when the crew calls it done. */
 function finishedStatus(cmc: boolean | null | undefined): SessionStatus {
@@ -3131,6 +3138,7 @@ export default function ScannerPage() {
       inScope.filter(s => s.status === st && (statusFilter === 'all' || statusFilter === st))
 
     const scanning  = pick('scanning')
+    const burger    = pick('burger')
     const valueAdd  = pick('value_add')
     // Ready to Invoice = packed, in the freezer, waiting on the office. Oldest
     // first — the customer has been waiting on a call the longest.
@@ -3145,15 +3153,17 @@ export default function ScannerPage() {
     const bakerStorage = pick('baker_storage')
       .sort((a, b) => a.session_date.localeCompare(b.session_date))
     const pickedUp  = pick('picked_up')
-    const shownCount = scanning.length + valueAdd.length + toInvoice.length + freezer.length + bakerStorage.length + pickedUp.length
+    const shownCount = scanning.length + burger.length + valueAdd.length + toInvoice.length + freezer.length + bakerStorage.length + pickedUp.length
     // Retail orders Jill marked "In Progress" — ready to pack/scan straight in.
     // A search narrows these too, so a lookup isn't buried under unrelated orders.
     const inProgressOrders = orders.filter(o =>
       o.status === 'in_progress' && (!sq || o.customer_name.toLowerCase().includes(sq)))
 
+    const BURGER = '#D96C5A'
     const STATUS_RAIL = [
       { value: 'all' as const,           label: 'All',           dot: '',   color: C.cream },
       { value: 'scanning' as const,      label: 'Scanning',      dot: '●',  color: C.yellow },
+      { value: 'burger' as const,        label: 'Burger',        dot: '🍔', color: BURGER },
       { value: 'value_add' as const,     label: 'Value Add',     dot: '◆',  color: '#E8883A' },
       { value: 'ready_to_invoice' as const, label: 'Ready to Invoice', dot: '💵', color: '#C3A6FF' },
       { value: 'complete' as const,      label: 'Freezer',       dot: '🧊', color: '#7CAFDD' },
@@ -3165,6 +3175,7 @@ export default function ScannerPage() {
 
     const STATUS_CFG = {
       scanning:  { label: 'Scanning',   color: C.yellow,        dot: '●' },
+      burger:    { label: 'Burger',     color: BURGER,          dot: '🍔' },
       value_add: { label: 'Value Add',  color: '#E8883A',       dot: '◆' },
       ready_to_invoice: { label: 'Ready to Invoice', color: '#C3A6FF', dot: '💵' },
       complete:  { label: 'In Freezer', color: '#7CAFDD',       dot: '🧊' },
@@ -3254,19 +3265,25 @@ export default function ScannerPage() {
             </div>
           )}
           <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
-            {(s.status === 'scanning' || s.status === 'value_add') && (
+            {(s.status === 'scanning' || s.status === 'burger' || s.status === 'value_add') && (
               <button disabled={!pluLoaded} onClick={() => startSessionFromExisting(s.customer_name, s.session_date)}
                 style={{ ...btnBase, background: C.tan, color: C.dark, border: 'none', opacity: pluLoaded ? 1 : 0.5 }}>
                 → Open
               </button>
             )}
             {s.status === 'scanning' && (
+              <button onClick={() => quickStatus(s, 'burger')} title="Cuts packed — the trim still has to be ground"
+                style={{ ...btnBase, background: 'transparent', border: '1px solid rgba(217,108,90,0.5)', color: BURGER }}>
+                🍔 Burger
+              </button>
+            )}
+            {(s.status === 'scanning' || s.status === 'burger') && (
               <button onClick={() => quickStatus(s, 'value_add')}
                 style={{ ...btnBase, background: 'transparent', border: '1px solid rgba(232,136,58,0.5)', color: '#E8883A' }}>
                 → Value Add
               </button>
             )}
-            {s.status === 'scanning' && (
+            {(s.status === 'scanning' || s.status === 'burger') && (
               <button onClick={() => quickStatus(s, finishedStatus(s.cmc))}
                 style={{ ...btnBase, background: 'transparent', border: `1px solid rgba(76,175,80,0.5)`, color: C.green }}>
                 ✓ Complete
@@ -3534,6 +3551,7 @@ export default function ScannerPage() {
             <>
               {/* A search should surface every hit, not hide one behind "Show all 46" */}
               {section({ title: '● Scanning',        color: C.yellow, items: scanning })}
+              {section({ title: '🍔 Burger Queue',    color: BURGER,   items: burger })}
               {section({ title: '◆ Value Add Queue', color: '#E8883A', items: valueAdd })}
               {section({ title: '💵 Ready to Invoice', color: '#C3A6FF', items: toInvoice })}
               {section({ title: '🧊 Freezer — Ready for Pickup', color: '#7CAFDD', items: freezer, showAll: showAllFreezer || searching, onToggle: () => setShowAllFreezer(p => !p) })}
@@ -3733,10 +3751,25 @@ export default function ScannerPage() {
             : <span title="No animal on this session — scan its carcass tag to link it (fine to leave for retail or repack)" style={{ color: C.lightBrown, fontSize: '0.72rem' }}>no animal linked</span>}
           {/* Status badge + quick-change */}
           {currentStatus === 'scanning' && (
+            <button onClick={() => updateSessionStatus('burger')} title="Cuts packed — the trim still has to be ground"
+              style={{ background: 'transparent', border: '1px solid rgba(217,108,90,0.4)', color: '#D96C5A', borderRadius: 3, padding: '0.2rem 0.6rem', fontSize: '0.72rem', cursor: 'pointer', fontWeight: 600 }}>
+              🍔 Burger
+            </button>
+          )}
+          {(currentStatus === 'scanning' || currentStatus === 'burger') && (
             <button onClick={() => updateSessionStatus('value_add')}
               style={{ background: 'transparent', border: '1px solid rgba(232,136,58,0.4)', color: '#E8883A', borderRadius: 3, padding: '0.2rem 0.6rem', fontSize: '0.72rem', cursor: 'pointer', fontWeight: 600 }}>
               → Value Add
             </button>
+          )}
+          {currentStatus === 'burger' && (
+            <>
+              <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#D96C5A', background: 'rgba(217,108,90,0.12)', borderRadius: 99, padding: '2px 8px' }}>🍔 Burger</span>
+              <button onClick={() => updateSessionStatus(finishedStatus(cmc))}
+                style={{ background: 'transparent', border: `1px solid rgba(76,175,80,0.4)`, color: C.green, borderRadius: 3, padding: '0.2rem 0.6rem', fontSize: '0.72rem', cursor: 'pointer', fontWeight: 600 }}>
+                ✓ Complete
+              </button>
+            </>
           )}
           {currentStatus === 'value_add' && (
             <>
@@ -4820,7 +4853,7 @@ export default function ScannerPage() {
                         <span style={{ color: C.lightBrown, fontSize: '0.74rem', flexShrink: 0 }}>{s.session_date}</span>
                       </div>
                       <div style={{ color: C.lightBrown, fontSize: '0.74rem', marginTop: '0.15rem' }}>
-                        {s.status === 'value_add' ? '◆ Value Add · ' : ''}{s.box_count} box{s.box_count !== 1 ? 'es' : ''}
+                        {s.status === 'value_add' ? '◆ Value Add · ' : s.status === 'burger' ? '🍔 Burger · ' : ''}{s.box_count} box{s.box_count !== 1 ? 'es' : ''}
                         {s.total_weight > 0 && ` · ${s.total_weight.toFixed(1)} lbs`}
                       </div>
                     </button>

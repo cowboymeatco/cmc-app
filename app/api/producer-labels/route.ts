@@ -97,8 +97,9 @@ export async function GET(req: NextRequest) {
         species: c.species ?? (c.data?.species as string) ?? '',
         kill_date: (c.data?.killDate as string) ?? null,
         // A session that moved past scanning is an animal that's been packed.
-        packing: ss.some(s => s.status === 'scanning'),
-        packed:  ss.length > 0 && ss.every(s => s.status !== 'scanning'),
+        // A session sent to burger is still being packed — the trim isn't ground.
+        packing: ss.some(s => s.status === 'scanning' || s.status === 'burger'),
+        packed:  ss.length > 0 && ss.every(s => s.status !== 'scanning' && s.status !== 'burger'),
       }
     }
     const setKeys = new Set(sets.map(s => labelKey(s.name)))

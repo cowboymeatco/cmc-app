@@ -21,6 +21,13 @@ import type { DemandLine, DemandSummary, RoomCount, SpeciesSupply } from '@/lib/
 // The numbers it leans on are named at the bottom with their dates, because a
 // count is a snapshot — nothing counts a package out of the case when it sells
 // — and a yield is history, not a promise. The list suggests; a person buys.
+//
+// Every short item is listed, covered or not. Charlie, 2026-11-03: "I should
+// have like 49 lbs of ribeye on here?" — eight orders due that Thursday wanted
+// 49 lb of ribeye, and the page hid the row because 473 lb was "coming" off
+// beef hanging and booked through December. Coming is an estimate about weeks
+// away; the short is about this week. So the row stays, with Coming beside it
+// and To buy reading "covered", and hiding the covered rows is the opt-in.
 
 const C = {
   dark:       '#1A0A04',
@@ -74,7 +81,7 @@ export default function DemandPage() {
   const [data, setData]       = useState<Payload | null>(null)
   const [error, setError]     = useState<string | null>(null)
   const [species, setSpecies] = useState<string>('all')
-  const [showCovered, setShowCovered] = useState(false)
+  const [hideCovered, setHideCovered] = useState(false)
   const [open, setOpen]       = useState<Set<string>>(new Set())
 
   useEffect(() => {
@@ -91,8 +98,8 @@ export default function DemandPage() {
   }, [data])
 
   const rows = useMemo(() => (data?.lines ?? []).filter(l =>
-    (species === 'all' || (l.species ?? 'Unknown') === species) && (showCovered || l.toBuy > 0)
-  ), [data, species, showCovered])
+    (species === 'all' || (l.species ?? 'Unknown') === species) && (!hideCovered || l.toBuy > 0)
+  ), [data, species, hideCovered])
 
   const toggle = (key: string) => setOpen(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n })
 
@@ -156,8 +163,8 @@ export default function DemandPage() {
                 }}>{s === 'all' ? 'All species' : s}</button>
               ))}
               <label style={{ marginLeft: 'auto', fontSize: '0.8rem', color: C.lightBrown, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                <input type="checkbox" checked={showCovered} onChange={e => setShowCovered(e.target.checked)} />
-                Show items already covered
+                <input type="checkbox" checked={hideCovered} onChange={e => setHideCovered(e.target.checked)} />
+                Hide items covered by the freezer or what&apos;s coming
               </label>
             </div>
 
