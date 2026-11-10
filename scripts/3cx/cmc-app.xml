@@ -1,0 +1,106 @@
+<?xml version="1.0"?>
+<!--
+  Cowboy Meat Co — 3CX server-side CRM template.
+
+  Loaded in the 3CX Admin Console under Integrations > CRM (needs 3CX Pro or
+  Enterprise). Two scenarios:
+
+    1. Lookup (Id="")   — on every inbound/outbound call, GET
+                          [BaseUrl]/api/pbx/lookup?number=... and show the
+                          customer on the ringing phone.
+    2. ReportCall       — when the call ends, POST the call to
+                          [BaseUrl]/api/pbx/report so it lands in phone_calls.
+
+  Parameters (set in the admin console after loading):
+    BaseUrl   — the app, no trailing slash, e.g. https://app.example.com
+    ApiKey    — the value of PBX_API_KEY in the app's environment
+    MaxLength — digits to match from the right (10 = US number w/o country code)
+
+  The lookup endpoint always returns one contact ("Unknown caller" for a
+  number not on file) because 3CX V20 U6+ skips ReportCall for a call whose
+  lookup returned nothing, and we want every call logged.
+
+  Field names in the ReportCall body are the app's (app/api/pbx/report/route.ts).
+  Times are sent as UTC milliseconds since epoch — the *Millis variables — so
+  no culture-dependent date formatting is involved.
+
+  Reference: https://www.3cx.com/docs/crm-template-xml-description/
+-->
+<Crm xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+     Country="US" Name="Cowboy Meat Co App" Version="1" SupportsEmojis="false">
+  <Number Prefix="AsIs" MaxLength="[MaxLength]" />
+  <Connection MaxConcurrentRequests="4" />
+  <Parameters>
+    <Parameter Name="BaseUrl"   Type="String"   Parent="Cowboy Meat Co App" Editor="String" Title="App URL (no trailing slash):" Default="https://" />
+    <Parameter Name="ApiKey"    Type="Password" Parent="Cowboy Meat Co App" Editor="String" Title="API key (PBX_API_KEY):" Default="" />
+    <Parameter Name="MaxLength" Type="Integer"  Parent="Cowboy Meat Co App" Editor="String" Title="Digits to match (from the right):" Default="10" />
+  </Parameters>
+  <!-- The key travels as a Bearer header on each request, below. -->
+  <Authentication Type="No" />
+  <Scenarios>
+
+    <!-- 1. Who is calling / being called. -->
+    <Scenario Id="" Type="REST">
+      <Request Url="[BaseUrl]/api/pbx/lookup?number=[Number]" MessagePasses="0" RequestEncoding="UrlEncoded" RequestType="Get" ResponseType="Json">
+        <Headers>
+          <Value Key="Authorization">Bearer [ApiKey]</Value>
+          <Value Key="Accept">application/json</Value>
+        </Headers>
+      </Request>
+      <Rules>
+        <Rule Type="Any">contacts.id</Rule>
+      </Rules>
+      <Variables>
+        <Variable Name="ContactId"   Path="contacts.id"><Filter /></Variable>
+        <Variable Name="ContactUrl"  Path="contacts.url"><Filter /></Variable>
+        <Variable Name="FirstName"   Path="contacts.first_name"><Filter /></Variable>
+        <Variable Name="LastName"    Path="contacts.last_name"><Filter /></Variable>
+        <Variable Name="CompanyName" Path="contacts.company"><Filter /></Variable>
+        <Variable Name="Email"       Path="contacts.email"><Filter /></Variable>
+        <Variable Name="Phone"       Path="contacts.phone"><Filter /></Variable>
+      </Variables>
+      <Outputs AllowEmpty="false">
+        <Output Type="ContactUrl"    Passes="0" Value="[ContactUrl]" />
+        <Output Type="ContactID"     Passes="0" Value="[ContactId]" />
+        <Output Type="FirstName"     Passes="0" Value="[FirstName]" />
+        <Output Type="LastName"      Passes="0" Value="[LastName]" />
+        <Output Type="CompanyName"   Passes="0" Value="[CompanyName]" />
+        <Output Type="Email"         Passes="0" Value="[Email]" />
+        <!-- Must equal the number 3CX searched for, or the record is not a match. -->
+        <Output Type="PhoneBusiness" Passes="0" Value="[Phone]" />
+        <Output Type="EntityId"      Passes="0" Value="[ContactId]" />
+        <Output Type="EntityType"    Passes="0" Value="Contacts" />
+      </Outputs>
+    </Scenario>
+
+    <!-- 2. The call just ended: log it. -->
+    <Scenario Id="ReportCall" Type="REST">
+      <Request Url="[BaseUrl]/api/pbx/report" MessagePasses="0" RequestContentType="application/json" RequestEncoding="Json" RequestType="Post" ResponseType="Json">
+        <Headers>
+          <Value Key="Authorization">Bearer [ApiKey]</Value>
+          <Value Key="Accept">application/json</Value>
+        </Headers>
+        <PostValues>
+          <Value Key="call_type"        Passes="1" Type="String">[CallType]</Value>
+          <Value Key="direction"        Passes="1" Type="String">[CallDirection]</Value>
+          <Value Key="number"           Passes="1" Type="String">[Number]</Value>
+          <Value Key="entity_id"        Passes="1" Type="String">[EntityId]</Value>
+          <Value Key="contact_name"     Passes="1" Type="String">[Name]</Value>
+          <Value Key="agent_ext"        Passes="1" Type="String">[Agent]</Value>
+          <Value Key="agent_first"      Passes="1" Type="String">[AgentFirstName]</Value>
+          <Value Key="agent_last"       Passes="1" Type="String">[AgentLastName]</Value>
+          <Value Key="agent_email"      Passes="1" Type="String">[AgentEmail]</Value>
+          <Value Key="queue_ext"        Passes="1" Type="String">[QueueExtension]</Value>
+          <Value Key="started_ms"       Passes="1" Type="String">[CallStartTimeUTCMillis]</Value>
+          <Value Key="answered_ms"      Passes="1" Type="String">[CallEstablishedTimeUTCMillis]</Value>
+          <Value Key="ended_ms"         Passes="1" Type="String">[CallEndTimeUTCMillis]</Value>
+          <Value Key="duration_seconds" Passes="1" Type="String">[[[DurationTimespan].get_TotalSeconds()].ToString("F0")]</Value>
+          <Value Key="transcription"    Passes="1" Type="String">[Transcription]</Value>
+          <Value Key="summary"          Passes="1" Type="String">[Summary]</Value>
+          <Value Key="recording_url"    Passes="1" Type="String">[RecordingUrl]</Value>
+        </PostValues>
+      </Request>
+    </Scenario>
+
+  </Scenarios>
+</Crm>
