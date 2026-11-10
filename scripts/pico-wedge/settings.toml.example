@@ -14,7 +14,9 @@ CMC_WEDGE_TOKEN = "paste-the-token-here"
 # Which scale this board is plugged into, as the crew numbers them: 1, 2 or 3.
 CMC_SCALE = "2"
 
-# How often to ask the app for work, in seconds.
+# How often to ask the app for work, in seconds, while the station is in use.
+# The app tells the board to wait longer (up to a minute) when nobody is at the
+# station, nights and Sundays; this is the floor.
 CMC_POLL_SECONDS = 1
 
 # Pause between keystrokes in milliseconds. 20 is scanner-like; raise it if the

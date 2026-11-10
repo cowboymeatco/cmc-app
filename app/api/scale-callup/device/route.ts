@@ -1,21 +1,37 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
-import { CALLUP_TTL_SECONDS, SCALE_NUMBER_RE } from '@/lib/scaleCallup'
+import { CALLUP_TTL_SECONDS, SCALE_NUMBER_RE, WEDGE_POLL_BUSY_SECONDS, wedgePollSeconds } from '@/lib/scaleCallup'
 
 // POST /api/scale-callup/device — the Pico wedge's one call.
 //
-// Each wedge polls this every second or so with its scale number. In one
-// round trip it reports how the last job went (if it had one) and is handed
-// the next one, so the board's code stays as small as a board's code should.
+// Each wedge polls this with its scale number. In one round trip it reports
+// how the last job went (if it had one), is handed the next one, and is told
+// how long to wait before asking again, so the board's code stays as small
+// as a board's code should.
 //
 //   → { scale: "2", done?: { id, ok, error? } }
-//   ← { job: { id, keys, plu, item_name } | null }
+//   ← { job: { id, keys, plu, item_name } | null, next_in: seconds }
+//
+// Everything on the database side is one function call
+// (scripts/2026-11-10_wedge_check_in.sql): heartbeat, close the last job,
+// expire stale call-ups, claim the next. It used to be four requests per
+// poll, which across three boards was ~630,000 Supabase requests a day and
+// what blew the egress quota on 2026-11-08.
+//
+// next_in is 1 s while someone is working the station (a scanner page has
+// that scale on screen, or it is shop hours) and longer otherwise; see
+// lib/scaleCallup.ts wedgePollSeconds. Older firmware ignores it and keeps
+// polling every second, which still works.
 //
 // Guarded by SCALE_WEDGE_TOKEN (set it in the app's env and in each Pico's
 // settings.toml) and fails CLOSED. The devices never hold a Supabase key.
 
 interface Done { id?: unknown; ok?: unknown; error?: unknown }
+interface Job { id: string; plu: string; keys: string; item_name: string | null }
+interface CheckIn { job?: Job | null; scanner_seen_at?: string | null }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export async function POST(req: NextRequest) {
   const token = process.env.SCALE_WEDGE_TOKEN
@@ -25,61 +41,25 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({})) as { scale?: unknown; done?: Done }
   const scale = String(body.scale ?? '').trim()
   if (!SCALE_NUMBER_RE.test(scale)) return NextResponse.json({ error: 'scale must be the scale number, e.g. 2' }, { status: 400 })
-  const now = new Date()
 
-  // 0. Heartbeat: this wedge is alive and answering to this scale number.
-  //    One tiny upsert a second per board; the call-up and scanner pages read
-  //    it to show which boards are online (scripts/2026-10-22_scale_wedges.sql).
-  const { data: beat } = await supabaseAdmin.from('scale_wedges').select('check_ins').eq('scale', scale).maybeSingle()
-  await supabaseAdmin.from('scale_wedges').upsert(
-    { scale, last_seen_at: now.toISOString(), check_ins: (beat?.check_ins ?? 0) + 1 },
-    { onConflict: 'scale' },
-  )
-
-  // 1. How the last one went. Only a row this wedge claimed can be closed.
+  // A done report names the row this wedge claimed. Anything that is not a
+  // row id is not a report.
   const done = body.done
-  if (done && typeof done.id === 'string') {
-    await supabaseAdmin
-      .from('scale_callup_requests')
-      .update({
-        status: done.ok === true ? 'done' : 'error',
-        completed_at: now.toISOString(),
-        error: done.ok === true ? null : String(done.error ?? 'wedge reported failure').slice(0, 200),
-      })
-      .eq('id', done.id)
-      .eq('scale', scale)
-      .eq('status', 'claimed')
-  }
+  const doneId = done && typeof done.id === 'string' && UUID_RE.test(done.id) ? done.id : null
+  const doneOk = doneId ? done!.ok === true : null
 
-  // 2. Anything that sat unclaimed past its time is stale, not a job: the
-  //    packer has moved on and the scale may have a different cut on it.
-  const stale = new Date(now.getTime() - CALLUP_TTL_SECONDS * 1000).toISOString()
-  await supabaseAdmin
-    .from('scale_callup_requests')
-    .update({ status: 'expired', completed_at: now.toISOString(), error: `nothing typed it within ${CALLUP_TTL_SECONDS}s` })
-    .eq('scale', scale)
-    .eq('status', 'pending')
-    .lt('created_at', stale)
-
-  // 3. The oldest one still waiting for this scale, claimed only if it is
-  //    still pending at the moment we take it (one wedge per scale, but no
-  //    harm being careful).
-  const { data: next, error } = await supabaseAdmin
-    .from('scale_callup_requests')
-    .select('id, plu, keys, item_name')
-    .eq('scale', scale)
-    .eq('status', 'pending')
-    .order('created_at', { ascending: true })
-    .limit(1)
+  const { data, error } = await supabaseAdmin.rpc('wedge_check_in', {
+    p_scale: scale,
+    p_done_id: doneId,
+    p_done_ok: doneOk,
+    p_done_error: doneId && !doneOk ? String(done!.error ?? 'wedge reported failure').slice(0, 200) : null,
+    p_ttl_seconds: CALLUP_TTL_SECONDS,
+  })
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  if (!next?.length) return NextResponse.json({ job: null })
 
-  const { data: claimed } = await supabaseAdmin
-    .from('scale_callup_requests')
-    .update({ status: 'claimed', claimed_at: now.toISOString() })
-    .eq('id', next[0].id)
-    .eq('status', 'pending')
-    .select('id, plu, keys, item_name')
-  if (!claimed?.length) return NextResponse.json({ job: null })
-  return NextResponse.json({ job: claimed[0] })
+  const r = (data ?? {}) as CheckIn
+  const job = r.job ?? null
+  // A board that just typed something is at a busy station whatever the clock says.
+  const nextIn = job ? WEDGE_POLL_BUSY_SECONDS : wedgePollSeconds(new Date(), r.scanner_seen_at)
+  return NextResponse.json({ job, next_in: nextIn })
 }

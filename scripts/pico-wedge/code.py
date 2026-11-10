@@ -2,10 +2,12 @@
 #
 # Runs on a Raspberry Pi Pico W / Pico 2 W plugged into a Hobart HT scale's
 # USB port. The scale sees a USB keyboard, the same thing a barcode scanner
-# is. We join the shop wifi, ask the app every second or so whether the
-# packer has tapped a cut for THIS scale, and if so type the digits and
-# press Enter, which is exactly what a scanner would have sent. The scale
-# calls the product up and the packer weighs it.
+# is. We join the shop wifi, ask the app whether the packer has tapped a cut
+# for THIS scale, and if so type the digits and press Enter, which is
+# exactly what a scanner would have sent. The scale calls the product up and
+# the packer weighs it. We ask every second while the station is in use; the
+# app says how long to wait each time (next_in) and slows us down nights and
+# Sundays so three boards are not hammering it for nothing.
 #
 # CircuitPython. Settings come from settings.toml next to this file (see
 # settings.toml.example); certs.pem next to it holds the roots we trust.
@@ -63,6 +65,7 @@ API_URL      = str(setting("CMC_API_URL", "")).rstrip("/")
 TOKEN        = str(setting("CMC_WEDGE_TOKEN", ""))
 SCALE        = str(setting("CMC_SCALE", "")).strip()
 POLL_SECONDS = float(setting("CMC_POLL_SECONDS", 1.0))
+MAX_WAIT     = 60.0   # never let the app park us longer than this
 KEY_DELAY    = float(setting("CMC_KEY_DELAY_MS", 20)) / 1000.0
 SSID         = str(setting("CIRCUITPY_WIFI_SSID", ""))
 PASSWORD     = str(setting("CIRCUITPY_WIFI_PASSWORD", ""))
@@ -146,14 +149,20 @@ requests = adafruit_requests.Session(pool, ssl_ctx)
 # ── main loop ───────────────────────────────────────────────────────────────
 
 def check_in(done):
-    """One round trip: report the last job (or None) and get the next."""
+    """One round trip: report the last job (or None), get the next, and how
+    long to wait before asking again."""
     body = {"scale": SCALE}
     if done:
         body["done"] = done
     with requests.post(DEVICE_URL, json=body, headers=HEADERS, timeout=15) as r:
         if r.status_code != 200:
             raise RuntimeError("app answered %d: %s" % (r.status_code, r.text[:120]))
-        return r.json().get("job")
+        reply = r.json()
+        try:
+            wait = float(reply.get("next_in", POLL_SECONDS))
+        except (TypeError, ValueError):
+            wait = POLL_SECONDS
+        return reply.get("job"), min(max(wait, POLL_SECONDS), MAX_WAIT)
 
 print("wedge for scale", SCALE, "polling", DEVICE_URL)
 done = None
@@ -162,7 +171,7 @@ while True:
     try:
         if not wifi.radio.connected:
             connect_wifi()
-        job = check_in(done)
+        job, wait = check_in(done)
         done = None
         backoff = POLL_SECONDS
         if job:
@@ -177,7 +186,7 @@ while True:
             # Tell the app straight away rather than waiting a poll.
             continue
         blink(1, on=0.02, off=0)
-        time.sleep(POLL_SECONDS)
+        time.sleep(wait)
     except Exception as e:  # noqa: BLE001 — never let the loop die on the bench
         print("error:", e)
         led.value = True

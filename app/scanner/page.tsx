@@ -1129,20 +1129,23 @@ export default function ScannerPage() {
   // barcode scanner would (scripts/pico-wedge, Charlie 2026-10-22). Tapping a
   // still-to-pack line sends that line's PLU to every scale picked at this
   // station, so the packer never keys a number in. The boards check in once a
-  // second; the dot on each scale button says whether that one is listening.
+  // second while a page like this one has their scale on screen (that is what
+  // ?scales= tells the app) and slower when nobody does; the dot on each scale
+  // button says whether that one is listening.
   const [wedges, setWedges]         = useState<Wedge[]>([])
   const [wedgeNow, setWedgeNow]     = useState(() => Date.now())
   const [callups, setCallups]       = useState<Record<string, string>>({})   // line key → status
+  const scaleNames = scaleIps.map(ip => SCALES.find(x => x.ip === ip)?.name).filter((n): n is string => !!n).join(',')
   useEffect(() => {
-    if (!scaleIps.length) return
+    if (!scaleNames) return
     let stop = false
-    const poll = () => fetch('/api/scale-callup?wedges=1').then(r => r.json())
+    const poll = () => fetch(`/api/scale-callup?wedges=1&scales=${scaleNames}`).then(r => r.json())
       .then((j: { wedges?: Wedge[] }) => { if (!stop) { setWedges(Array.isArray(j?.wedges) ? j.wedges : []); setWedgeNow(Date.now()) } })
       .catch(() => {})
     poll()
     const iv = setInterval(() => { if (document.visibilityState === 'visible') poll() }, 5000)
     return () => { stop = true; clearInterval(iv) }
-  }, [scaleIps.length])
+  }, [scaleNames])
   const wedgeOn = (scaleName: string) => wedgeOnline(wedges.find(w => w.scale === scaleName), wedgeNow)
 
   async function callUp(lineKey: string, housePlu: string, itemName: string) {
