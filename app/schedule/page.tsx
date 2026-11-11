@@ -1115,6 +1115,20 @@ function Modal({ editing, saving, onChange, onSave, onClose, onMoved }: {
               {editing.kill_only ? '🔪 Kill only — not processed here' : 'Slaughter only, no processing'}
             </label>
           </Field>
+          {/* Charlie, 2026-11-11: flagged at booking, billed as flat fees from
+              the price list (Outdoor Kill Fee, Rush Order Fee). */}
+          <Field label="Extra Fees">
+            <div style={{ display:'flex', gap:'1rem', flexWrap:'wrap', minHeight: 36, alignItems:'center' }}>
+              <label style={{ display:'flex', alignItems:'center', gap:'0.4rem', cursor:'pointer', color:'var(--cream)', fontSize:'0.88rem' }}>
+                <input type="checkbox" checked={!!editing.outdoor_kill} onChange={e=>onChange({...editing,outdoor_kill:e.target.checked})} style={{ width: 16, height: 16 }} />
+                Outdoor kill
+              </label>
+              <label style={{ display:'flex', alignItems:'center', gap:'0.4rem', cursor:'pointer', color:'var(--cream)', fontSize:'0.88rem' }}>
+                <input type="checkbox" checked={!!editing.rush} onChange={e=>onChange({...editing,rush:e.target.checked})} style={{ width: 16, height: 16 }} />
+                Rush order
+              </label>
+            </div>
+          </Field>
         </div>
 
         <Field label="Source / Ranch / Producer">

@@ -54,13 +54,10 @@ export const isExcludedProducer = (name: string) =>
   EXCLUDED_PRODUCERS.includes(name.toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim())
 
 // ── Which rate a charge uses ────────────────────────────────────────────────
-// QBO_SERVICE_ITEMS above is the FALLBACK book: estimates (booked dollars,
-// pipeline value, revenue recognition) price from it because they run on every
-// page load and don't need to call QuickBooks. Anything that becomes an actual
-// charge (the billing detector) passes a live RateBook read from QuickBooks —
-// lib/billingRates.ts — so an invoice can never be built off a stale number.
-// A key missing from a live book means QuickBooks has no usable price for it,
-// and the charge comes back null rather than guessed.
+// QBO_SERVICE_ITEMS above is the FALLBACK book for ESTIMATES only (booked
+// dollars, pipeline value, revenue recognition), which run on every page load.
+// Real charges are priced from the price list (lib/priceBook.ts) by
+// lib/billingDetect.ts, never from here. Keep these in step with /price-book.
 
 export type ServiceKey = keyof typeof QBO_SERVICE_ITEMS
 export interface ServiceRate { id: string; name: string; rate: number }
