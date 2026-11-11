@@ -78,6 +78,9 @@ export interface DemandLine {
   plu_number: string | null
   item_name:  string
   species:    string | null
+  /** Tagged `smokehouse` in the order catalog (products.category) — jerky,
+   *  sticks, summer sausage and the rest. Drives the /demand Smokehouse filter. */
+  smokehouse: boolean
   unit:       SaleUnit
   ordered:    number
   filled:     number
@@ -157,8 +160,11 @@ export function buildDemandLines(args: {
   onHand:   Map<string, { lbs: number; pkgs: number }> | null
   supply:   SpeciesSupply[]
   yields:   Map<string, Map<string, YieldRate>>
+  /** PLUs the order catalog files under smokehouse. */
+  smokehousePlus?: Set<string>
 }): DemandLine[] {
   const { lines, plu, onHand, supply, yields } = args
+  const smokehousePlus = args.smokehousePlus ?? new Set<string>()
   const byKey = new Map<string, DemandLine>()
 
   for (const l of lines) {
@@ -170,7 +176,9 @@ export function buildDemandLines(args: {
     const key = l.plu_number ?? `name:${l.item_name.trim().toLowerCase()}`
     const d = byKey.get(key) ?? {
       key, plu_number: l.plu_number, item_name: info?.item_name || l.item_name,
-      species: info?.species ?? null, unit,
+      species: info?.species ?? null,
+      smokehouse: !!l.plu_number && smokehousePlus.has(l.plu_number),
+      unit,
       ordered: 0, filled: 0, short: 0, onHand: null, coming: null,
       comingHanging: 0, comingBooked: 0, toBuy: 0, orders: [],
     }
