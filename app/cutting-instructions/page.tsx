@@ -355,11 +355,18 @@ type CarcassInfo = {
   // and each of those slots is a separate animal with its own carcass.
   slotId: string
   candidates: Candidate[]   // the animals on this check-in, for the picker
+  // Off the rail: this animal (or, unassigned, every animal on the check-in)
+  // is marked cut, delivered or complete. Drives the Cut tab.
+  cut: boolean
 }
 const EMPTY_CARCASS: CarcassInfo = {
   tag: '', lot: '', producer: '', hcw: null, killType: '', over30: null,
-  state: 'unharvested', apptId: '', slotId: '', candidates: [],
+  state: 'unharvested', apptId: '', slotId: '', candidates: [], cut: false,
 }
+
+// harvest_log statuses that mean the carcass is no longer hanging.
+const OFF_RAIL = new Set(['cut', 'delivered', 'complete'])
+const offRail = (l: { status?: string | null } | null | undefined) => OFF_RAIL.has(String(l?.status ?? '').toLowerCase())
 
 // USDA vs Custom Exempt decides whether the meat can ever be sold, so it has to
 // be on the card the floor works from (Jill, 2026-07-21). Part B stores
@@ -506,6 +513,9 @@ function resolveCarcass(
       hcw: l.hot_carcass_weight_lbs ?? null,
       heldBy: rows.filter((a: any) => a.harvest_log_id === l.id).map((a: any) => a.customer_name || 'someone'),
     })),
+    // Its own animal when we know which; otherwise only when the whole
+    // check-in is off the rail, so an unpicked card never reads cut early.
+    cut: log ? offRail(log) : animals.length > 0 && animals.every(offRail),
   }
 }
 
@@ -2297,20 +2307,32 @@ export default function CuttingInstructionsPage() {
     return onFile < declared ? { declared, onFile } : null
   }
 
+  // Every animal this card is linked to is off the rail.
+  const isCut = (id: string) => {
+    const c = carcassStates[id]
+    return !!c?.length && c.every(x => x.cut)
+  }
+  const cutCards = instructions.filter(i => i.status !== 'archived' && isCut(i.id))
+
   const filtered = instructions.filter(i => {
     const species = speciesOf(i)
     if (terms.length) {
       const hay = haystack(i)
       if (!terms.every(t => hay.includes(t))) return false
     }
-    // Archived cards are hidden everywhere except the "archived" tab
+    // Archived cards are hidden everywhere except the "archived" tab. Cards
+    // whose animals are already cut get the same treatment on the working
+    // tabs and gather under "cut" until someone archives them (Charlie,
+    // 2026-11-10: "Start clearing or archiving cards that have been cut?").
     if (filterStatus === 'needs-carcass') {
       if (i.status === 'archived' || !needsCarcass(i.id)) return false
     } else if (filterStatus === 'archived') {
       if (i.status !== 'archived') return false
+    } else if (filterStatus === 'cut') {
+      if (i.status === 'archived' || !isCut(i.id)) return false
     } else if (filterStatus === 'all') {
-      if (i.status === 'archived') return false
-    } else if (i.status !== filterStatus) {
+      if (i.status === 'archived' || isCut(i.id)) return false
+    } else if (i.status !== filterStatus || isCut(i.id)) {
       return false
     }
     if (filterSpecies !== 'all') {
@@ -3292,10 +3314,24 @@ export default function CuttingInstructionsPage() {
           {/* Filters */}
           <div style={{ padding: '1rem', borderBottom: '1px solid rgba(166,120,90,0.15)', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', background: 'rgba(0,0,0,0.2)' }}>
             <div style={{ display: 'flex', gap: '0', border: '1px solid rgba(166,120,90,0.3)', borderRadius: '3px', overflow: 'hidden' }}>
-              {['all','pending','linked','imported','archived'].map(s => (
-                <button key={s} onClick={() => setFilterStatus(s)} style={{ ...tabBtn(filterStatus === s), textTransform: 'capitalize' }}>{s}</button>
+              {['all','pending','linked','imported','cut','archived'].map(s => (
+                <button key={s} onClick={() => setFilterStatus(s)}
+                  title={s === 'cut' ? 'Every animal on the card has been cut — ready to archive' : undefined}
+                  style={{ ...tabBtn(filterStatus === s), textTransform: 'capitalize' }}>
+                  {s === 'cut' ? `✂️ Cut${cutCards.length ? ` (${cutCards.length})` : ''}` : s}
+                </button>
               ))}
             </div>
+            {filterStatus === 'cut' && cutCards.length > 0 && (
+              <button
+                onClick={() => {
+                  if (!confirm(`Archive all ${cutCards.length} cut card${cutCards.length === 1 ? '' : 's'}? They stay under Archived and can be restored.`)) return
+                  markStatus(cutCards.map(i => i.id), 'archived')
+                }}
+                title="Move every card on this tab to Archived"
+                style={{ ...tabBtn(false), border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3 }}
+              >🗄 Archive all {cutCards.length}</button>
+            )}
             <div style={{ display: 'flex', gap: '0', border: '1px solid rgba(166,120,90,0.3)', borderRadius: '3px', overflow: 'hidden' }}>
               {['all','Beef','Hog','Lamb','Goat'].map(s => (
                 <button key={s} onClick={() => setFilterSpecies(s)} style={tabBtn(filterSpecies === s)}>{s}</button>

@@ -82,6 +82,9 @@ export default function DemandPage() {
   const [error, setError]     = useState<string | null>(null)
   const [species, setSpecies] = useState<string>('all')
   const [hideCovered, setHideCovered] = useState(false)
+  // Charlie, 2026-11-03: "Smokehouse filter on this please." Off the order
+  // catalog's smokehouse category, so it sits beside the species chips.
+  const [smokeOnly, setSmokeOnly] = useState(false)
   const [open, setOpen]       = useState<Set<string>>(new Set())
 
   useEffect(() => {
@@ -99,7 +102,8 @@ export default function DemandPage() {
 
   const rows = useMemo(() => (data?.lines ?? []).filter(l =>
     (species === 'all' || (l.species ?? 'Unknown') === species) && (!hideCovered || l.toBuy > 0)
-  ), [data, species, hideCovered])
+      && (!smokeOnly || l.smokehouse)
+  ), [data, species, hideCovered, smokeOnly])
 
   const toggle = (key: string) => setOpen(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n })
 
@@ -162,6 +166,11 @@ export default function DemandPage() {
                   fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer',
                 }}>{s === 'all' ? 'All species' : s}</button>
               ))}
+              <button onClick={() => setSmokeOnly(v => !v)} title="Only items the order catalog files under Smokehouse — jerky, sticks, summer sausage, salami, hot dogs" style={{
+                padding: '0.35rem 0.9rem', borderRadius: 3, border: `1px solid ${smokeOnly ? '#E8883A' : 'rgba(166,120,90,0.35)'}`,
+                background: smokeOnly ? 'rgba(232,136,58,0.18)' : 'transparent', color: smokeOnly ? '#E8883A' : C.lightBrown,
+                fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer',
+              }}>🔥 Smokehouse{smokeOnly ? ' only' : ''}{data ? ` (${data.lines.filter(l => l.smokehouse).length})` : ''}</button>
               <label style={{ marginLeft: 'auto', fontSize: '0.8rem', color: C.lightBrown, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
                 <input type="checkbox" checked={hideCovered} onChange={e => setHideCovered(e.target.checked)} />
                 Hide items covered by the freezer or what&apos;s coming
@@ -185,7 +194,9 @@ export default function DemandPage() {
                 <tbody>
                   {rows.length === 0 && (
                     <tr><td colSpan={7} style={{ ...CELL, color: C.lightBrown, textAlign: 'center', padding: '2rem' }}>
-                      {data.lines.length === 0 ? 'Every open order line is filled. Nothing to buy.' : 'Everything short is covered by the freezer or what’s coming.'}
+                      {data.lines.length === 0 ? 'Every open order line is filled. Nothing to buy.'
+                        : smokeOnly && !data.lines.some(l => l.smokehouse) ? 'No smokehouse items are short on open orders.'
+                        : 'Nothing short matches these filters.'}
                     </td></tr>
                   )}
                   {rows.map(l => {

@@ -288,16 +288,22 @@ export async function GET(req: NextRequest) {
   try {
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Denver' })
 
-    const [lines, counts, own, pluRows] = await Promise.all([
+    const [lines, counts, own, pluRows, catalog] = await Promise.all([
       openLines(),
       onHandFromCounts(),
       ownSupply(today),
-      all<{ plu_number: string; item_name: string; species: string | null; sell_by_weight: boolean | null }>((a, b) =>
-        supabaseAdmin.from('plu_items').select('plu_number, item_name, species, sell_by_weight').range(a, b)),
+      all<{ id: string; plu_number: string; item_name: string; species: string | null; sell_by_weight: boolean | null }>((a, b) =>
+        supabaseAdmin.from('plu_items').select('id, plu_number, item_name, species, sell_by_weight').range(a, b)),
+      // The order catalog is the one place that says which items are
+      // smokehouse product (Charlie, 2026-11-03: "Smokehouse filter on this").
+      all<{ plu_item_id: string | null; category: string | null }>((a, b) =>
+        supabaseAdmin.from('products').select('plu_item_id, category').eq('category', 'smokehouse').range(a, b)),
     ])
     const plu = new Map(pluRows.map(p => [p.plu_number, p]))
+    const smokeIds = new Set(catalog.map(c => c.plu_item_id).filter(Boolean))
+    const smokehousePlus = new Set(pluRows.filter(p => smokeIds.has(p.id)).map(p => p.plu_number))
 
-    const demand = buildDemandLines({ lines, plu, onHand: counts.byPlu, supply: own.supply, yields: own.yields })
+    const demand = buildDemandLines({ lines, plu, onHand: counts.byPlu, supply: own.supply, yields: own.yields, smokehousePlus })
     const summary = summarize(demand)
 
     if (new URL(req.url).searchParams.get('count') === '1') {
