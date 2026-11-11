@@ -68,6 +68,10 @@ export interface HarvestAppointment {
   /** Slaughter only — the carcass leaves whole and is never cut here. Shown
    *  as a badge on the schedule and kept off the cut schedule. */
   kill_only?: boolean
+  /** Outdoor (field) slaughter — bills the Outdoor Kill Fee. Set at booking. */
+  outdoor_kill?: boolean
+  /** Rush order — bills the Rush Order Fee. Set at booking. */
+  rush?: boolean
   /** Breed / weight / description the producer typed in the portal's schedule form. */
   animal_description?: string | null
   /** True when the producer booked it themselves in the portal. */

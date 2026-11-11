@@ -293,7 +293,7 @@ Only do this if the invoice was deleted on purpose or re-done under a new number
       const res = await fetch('/api/billing/detect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
       const json = await res.json()
       if (!res.ok || json.error) throw new Error(json.error ?? 'Detect failed')
-      setDetectMsg(`Scanned ${json.scanned} harvests since ${json.since}: ${json.created} new charge(s), ${json.alreadyDetected} already detected.`
+      setDetectMsg(`Scanned ${json.carcasses} carcasses since ${json.since} and ${json.orders} orders since ${json.ordersSince}: ${json.created} new charge(s), ${json.alreadyDetected} already detected, ${json.repriced} re-priced.`
         + (json.unbillable.length ? ` ⚠ ${json.unbillable.length} unbillable: ${json.unbillable.slice(0, 3).join('; ')}${json.unbillable.length > 3 ? '…' : ''}` : ''))
       await load()
     } catch (e) {
@@ -370,6 +370,7 @@ Only do this if the invoice was deleted on purpose or re-done under a new number
         <Link href="/" style={{ color: C.lightBrown, textDecoration: 'none', fontSize: '0.82rem' }}>← Dashboard</Link>
         <span style={{ color: 'rgba(166,120,90,0.4)' }}>|</span>
         <h1 style={{ fontFamily: 'Georgia, serif', fontSize: '1.1rem', fontWeight: 700, color: C.cream, letterSpacing: '0.08em', textTransform: 'uppercase', margin: 0 }}>Billing</h1>
+        <Link href="/price-book" style={{ marginLeft: 'auto', color: C.tan, textDecoration: 'none', fontSize: '0.82rem' }}>Price list →</Link>
       </header>
 
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: 1100, width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>

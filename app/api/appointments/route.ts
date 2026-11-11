@@ -238,6 +238,9 @@ export async function POST(req: NextRequest) {
       producer_qbo_customer_id: body.producer_qbo_customer_id ?? null,
       producer_qbo_name:        body.producer_qbo_name ?? null,
       kill_only:                !!body.kill_only,
+      // Billed as flat fees (price list: outdoor_kill, rush) — Charlie, 2026-11-11.
+      outdoor_kill:             !!body.outdoor_kill,
+      rush:                     !!body.rush,
     }])
     .select()
     .single()
