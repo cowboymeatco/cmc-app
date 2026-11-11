@@ -13,7 +13,7 @@
 -- history and stay as they were.
 --
 -- Applied 2026-11-11 after Charlie confirmed: keep the name LAMB RACK FRENCH TIPPED,
--- price $26.99. Goat (3101 → 3102) not included.
+-- price $26.99.
 
 begin;
 
@@ -44,7 +44,7 @@ update plu_items set
   active             = false,
   clover_item_id     = '',                         -- column is NOT NULL; '' is how a PLU says "none"
   quickbooks_item_id = '',
-  notes              = trim(both from coalesce(notes, '') || E'\nMerged into PLU 2102 on 2026-11-11.'),
+  notes              = btrim(coalesce(notes, '') || E'\nMerged into PLU 2102 on 2026-11-11.', E'\n '),
   updated_at         = now()
 where plu_number = '2101';
 
@@ -60,3 +60,14 @@ from plu_items p where plu_number in ('2101', '2102');
 select name, price, active, plu_item_id from products where id = '42ef97f7-d86a-4bab-894e-b268ed46431c';
 
 commit;
+
+-- ── Goat rack, same day (Charlie, 2026-11-11: "merge goat too") ──────────────
+-- 3101 GOAT RACK had nothing pointing at it: 0 scans, no orders, counts,
+-- catalog product, Clover or QuickBooks link, and the same $23.99 price. 3102
+-- GOAT RACK FRENCH TIPPED keeps its 10 scans and the goat "rack" cut link, so
+-- the merge is retiring 3101.
+update plu_items set
+  active     = false,
+  notes      = btrim(coalesce(notes, '') || E'\nMerged into PLU 3102 on 2026-11-11.', E'\n '),
+  updated_at = now()
+where plu_number = '3101';
