@@ -40,7 +40,7 @@ kill / cut / value-add / storage ──► charges (app)
 | Sausage / patties | Billed on finished lb **out** |
 | Slicing $10 | Philly only |
 | Off-list rate (e.g. lamb kill $75) | Changed on the invoice preview, not the cut card |
-| Baker storage | $20 transfer when the order moves to Baker; $28 per customer per month while anything sits there; monthly storage on its own invoice |
+| Baker storage | $20 transfer when the order moves to Baker; $28 per customer per month while anything sits there, the month it arrives counting as a full month; monthly storage on its own invoice |
 | Outdoor kill $150, rush $50 | Flagged at booking |
 | Extra long hang | Not automatic. Office adds it |
 | Late fee | Not automatic |
@@ -141,8 +141,8 @@ Each phase ships, gets checked against real orders, then the next one starts.
 4. **Website deploy** needs a Cloudflare token (Charlie's account). Never committed.
 5. **Who approves** = any office login. Revisit if staffing changes.
 6. **Clover "sync"** for processing prices: Clover only ever sees invoices (as open orders) and retail PLUs. Processing services don't need Clover catalog items.
-7. **Curing weight (found while building Phase 1).** On seven September–November hog orders, Jill billed curing on 418.08 lb; the cured box scans total 377.97 lb. That's 40.11 lb × $2 = $80.22 less, about $11.46 per hog. The app has no pre-smoke weight: only 20 of 517 cure tags carry a weight. The detector bills on box scans (Charlie's 7a). If the old basis is wanted, weigh the pieces at the cure tag.
-8. **Smoking fee (my call, reversible).** Pulled pork, smoked brisket, smoked & pulled beef and smoked chops bill Custom Smoking Fee $5/lb on finished weight.
+7. **Curing weight (found while building Phase 1).** On seven September–November hog orders, Jill billed curing on 418.08 lb; the cured box scans total 377.97 lb. That's 40.11 lb × $2 = $80.22 less, about $11.46 per hog. The app has no pre-smoke weight: only 20 of 517 cure tags carry a weight. **Decided 2026-11-11: box-scan cured weight.**
+8. **Smoking fee.** Pulled pork, smoked brisket, smoked & pulled beef and smoked chops bill Custom Smoking Fee $5/lb on finished weight. **Confirmed by Charlie 2026-11-11.**
 9. **Where order charges come from.** Value-add jobs barely carry weights (9 jobs in 120 days). So sausage, patties, curing, smoking and Philly come off the box scans. Sticks, summers, brats, hot dogs and jerky come off the cut sheet's raw lbs, which matches the round 25/50/100 lb lines on past invoices. Pork sausage matched past invoices to the pound on five of six orders checked.
 10. **Order charges start 2026-11-01** (`ordersSince`), so orders already invoiced by hand don't come back as new charges.
 11. **Charges on our own animals' buyers.** The extras on top (curing, sausage, etc.) only bill if the buyer's scanner session isn't flagged as ours (`cmc`). Check on the first sale.
