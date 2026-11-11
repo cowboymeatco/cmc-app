@@ -53,24 +53,59 @@ export const EXCLUDED_PRODUCERS = ['CMC', 'COWBOY MEAT COMPANY', 'COWBOY MEAT CO
 export const isExcludedProducer = (name: string) =>
   EXCLUDED_PRODUCERS.includes(name.toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim())
 
+// ── Which rate a charge uses ────────────────────────────────────────────────
+// QBO_SERVICE_ITEMS above is the FALLBACK book: estimates (booked dollars,
+// pipeline value, revenue recognition) price from it because they run on every
+// page load and don't need to call QuickBooks. Anything that becomes an actual
+// charge (the billing detector) passes a live RateBook read from QuickBooks —
+// lib/billingRates.ts — so an invoice can never be built off a stale number.
+// A key missing from a live book means QuickBooks has no usable price for it,
+// and the charge comes back null rather than guessed.
+
+export type ServiceKey = keyof typeof QBO_SERVICE_ITEMS
+export interface ServiceRate { id: string; name: string; rate: number }
+export type RateBook = Partial<Record<ServiceKey, ServiceRate>>
+
+/** Per-animal negotiated $/lb from the cut card (kill_price_per_lb,
+ *  processing_price_per_lb). Only per-lb lines take them; flat-fee species
+ *  (lamb, goat) ignore them. */
+export interface RateOverride { kill?: number | null; proc?: number | null }
+
+const rateFor = (key: ServiceKey, rates?: RateBook): ServiceRate | null =>
+  rates ? rates[key] ?? null : QBO_SERVICE_ITEMS[key]
+
+function perLb(
+  ruleKey: string, item: ServiceRate, override: number | null | undefined,
+  carcassLbs: number, fraction: number, tag: string, suffix: string,
+): BillingCharge {
+  const negotiated = override != null && override > 0
+  const rate = negotiated ? override! : item.rate
+  const qty = round2(carcassLbs * fraction)
+  return {
+    ruleKey, qboItemId: item.id, qboItemName: item.name,
+    description: `${item.name} — carcass ${tag}, ${qty} lbs${suffix}${negotiated ? ' (negotiated rate)' : ''}`,
+    qty, unit: 'lb', rate, amount: round2(qty * rate),
+  }
+}
+
 // Kill fee for one carcass share. Beef/hog are $/lb on carcass weight;
 // lamb is flat per head — the $50 applies to KILL-ONLY lambs; when a lamb
 // is fully processed the detector supersedes it with the $180 all-in flat
 // fee at cut time. Goat kill is inside the flat processing fee -> null.
-export function killFeeCharge(species: string, carcassLbs: number | null, fraction: number, tag: string): BillingCharge | null {
+export function killFeeCharge(
+  species: string, carcassLbs: number | null, fraction: number, tag: string,
+  rates?: RateBook, override?: RateOverride,
+): BillingCharge | null {
   const frac = ` (${fraction === 1 ? 'whole' : fraction === 0.5 ? 'half' : fraction === 0.25 ? 'quarter' : fraction} share)`
   if (species === 'Beef' || species === 'Hog') {
     if (!carcassLbs || carcassLbs <= 0) return null // no weight recorded yet
-    const item = species === 'Beef' ? QBO_SERVICE_ITEMS.beefKill : QBO_SERVICE_ITEMS.hogKill
-    const qty = round2(carcassLbs * fraction)
-    return {
-      ruleKey: 'kill_fee', qboItemId: item.id, qboItemName: item.name,
-      description: `${item.name} — carcass ${tag}, ${qty} lbs${fraction < 1 ? frac : ''}`,
-      qty, unit: 'lb', rate: item.rate, amount: round2(qty * item.rate),
-    }
+    const item = rateFor(species === 'Beef' ? 'beefKill' : 'hogKill', rates)
+    if (!item) return null
+    return perLb('kill_fee', item, override?.kill, carcassLbs, fraction, tag, fraction < 1 ? frac : '')
   }
   if (species === 'Lamb') {
-    const item = QBO_SERVICE_ITEMS.lambKill
+    const item = rateFor('lambKill', rates)
+    if (!item) return null
     return {
       ruleKey: 'kill_fee', qboItemId: item.id, qboItemName: item.name,
       description: `${item.name} — carcass ${tag}${fraction < 1 ? frac : ''}`,
@@ -82,29 +117,20 @@ export function killFeeCharge(species: string, carcassLbs: number | null, fracti
 
 // Cut & wrap for one portion. Beef rates depend on portion size (quarters
 // cost more per lb); hog is one rate; lamb and goat are flat per head.
-export function cutWrapCharge(species: string, carcassLbs: number | null, fraction: number, tag: string): BillingCharge | null {
-  if (species === 'Beef') {
+export function cutWrapCharge(
+  species: string, carcassLbs: number | null, fraction: number, tag: string,
+  rates?: RateBook, override?: RateOverride,
+): BillingCharge | null {
+  if (species === 'Beef' || species === 'Hog') {
     if (!carcassLbs || carcassLbs <= 0) return null
-    const item = fraction === 0.25 ? QBO_SERVICE_ITEMS.procQuarters : QBO_SERVICE_ITEMS.procWholeHalf
-    const qty = round2(carcassLbs * fraction)
-    return {
-      ruleKey: 'cut_wrap', qboItemId: item.id, qboItemName: item.name,
-      description: `${item.name} — carcass ${tag}, ${qty} lbs`,
-      qty, unit: 'lb', rate: item.rate, amount: round2(qty * item.rate),
-    }
-  }
-  if (species === 'Hog') {
-    if (!carcassLbs || carcassLbs <= 0) return null
-    const item = QBO_SERVICE_ITEMS.hogProcessing
-    const qty = round2(carcassLbs * fraction)
-    return {
-      ruleKey: 'cut_wrap', qboItemId: item.id, qboItemName: item.name,
-      description: `${item.name} — carcass ${tag}, ${qty} lbs`,
-      qty, unit: 'lb', rate: item.rate, amount: round2(qty * item.rate),
-    }
+    const key: ServiceKey = species === 'Hog' ? 'hogProcessing' : fraction === 0.25 ? 'procQuarters' : 'procWholeHalf'
+    const item = rateFor(key, rates)
+    if (!item) return null
+    return perLb('cut_wrap', item, override?.proc, carcassLbs, fraction, tag, '')
   }
   if (species === 'Lamb' || species === 'Goat') {
-    const item = species === 'Lamb' ? QBO_SERVICE_ITEMS.lambSheepFlat : QBO_SERVICE_ITEMS.goatFlat
+    const item = rateFor(species === 'Lamb' ? 'lambSheepFlat' : 'goatFlat', rates)
+    if (!item) return null
     return {
       ruleKey: 'cut_wrap', qboItemId: item.id, qboItemName: item.name,
       description: `${item.name} — carcass ${tag}${fraction < 1 ? ` (${fraction} share)` : ''}`,
