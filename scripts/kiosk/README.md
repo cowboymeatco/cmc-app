@@ -21,7 +21,8 @@ node push.mjs --watch
 
 ## The "Push to scales" button (remote trigger)
 The app button (Processing → Export tab) inserts a row in the `scale_push_requests`
-table. The kiosk's watcher polls that table (every `pollSeconds`), runs the push,
+table. The kiosk's watcher polls that table (every `pollSeconds`, 5 by default; keep
+it there or higher, every poll is a Supabase request), runs the push,
 and writes the result back — which the app shows. So you can trigger from home/phone
 while the kiosk does the on-site send. Requires the app deployed + `watch.bat` running.
 

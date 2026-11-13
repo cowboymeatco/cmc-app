@@ -62,11 +62,13 @@ export default function ScaleCallupPage() {
   }, [])
   const pickScale = (s: string) => { setScale(s); try { localStorage.setItem(SCALE_KEY, s) } catch {} }
 
+  // ?scales= tells the app this scale is on screen, so its board keeps
+  // polling every second instead of the slower off-hours pace.
   const load = useCallback(() =>
-    fetch('/api/scale-callup')
+    fetch(`/api/scale-callup?scales=${scale}`)
       .then(r => r.json())
       .then(j => { setNow(Date.now()); if (j?.error) setError(String(j.error)); else { setData(j); setError(null) } })
-      .catch(() => setError('Could not load the call-ups.')), [])
+      .catch(() => setError('Could not load the call-ups.')), [scale])
 
   // Poll quickly while a call-up is waiting on a board, so the row flips to
   // done by itself the moment the board reports.

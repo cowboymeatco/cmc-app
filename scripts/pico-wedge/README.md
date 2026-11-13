@@ -2,9 +2,17 @@
 
 A Raspberry Pi Pico W (or Pico 2 W) on each Hobart HT scale's USB port. The scale
 sees a USB keyboard, which is what a barcode scanner is. The board joins the shop
-wifi, asks the app every second whether the packer has tapped a cut for its scale,
-and types the digits plus Enter, the way a scanner would. The scale calls the
-product up. Nothing on the scale changes; no HCT involved.
+wifi, asks the app whether the packer has tapped a cut for its scale, and types the
+digits plus Enter, the way a scanner would. The scale calls the product up. Nothing
+on the scale changes; no HCT involved.
+
+It asks every second while the station is in use (a `/scanner` or `/scale-callup`
+page has that scale on screen, or it is 6 AM to 6 PM Mountain, Monday to Saturday)
+and every 10 seconds otherwise; the app says how long to wait in each answer
+(`next_in`). Before 2026-11-10 the boards asked every second around the clock, and
+the four database requests behind each ask were 98% of the Supabase egress that
+tripped the free-tier quota on 2026-11-08. Boards running the older `code.py` still
+work; they just keep asking every second.
 
 Parts list and the plan: the "Pico Scale Wedge Parts" page (2026-09-06).
 
@@ -51,7 +59,8 @@ both pages show a green dot on a scale whose board has checked in within 15 s.
    and put the same string on every board. Until it is set, the device route answers
    503 and the board's LED does the slow on/off.
 7. **Unplug and plug back in.** The board reboots, the LED goes solid while it joins
-   wifi, then gives one quick blink per second: it is checking in.
+   wifi, then gives one quick blink per check-in (every second while the station
+   is in use, every 10 s otherwise): it is checking in.
 
 ## The laptop test (do this before any scale)
 
@@ -71,7 +80,7 @@ scale, not the board.
 | two blinks, pause | a library is missing from `lib`, or the bundle doesn't match the CircuitPython version |
 | slow, even on/off | `settings.toml` is missing one of the keys |
 | solid | joining wifi |
-| one quick blink a second | checked in with the app, nothing to type |
+| one quick blink a second (every 10 s off-hours) | checked in with the app, nothing to type |
 | three fast blinks | typed a call-up |
 | long on, then off | can't reach wifi or the app; it keeps retrying. `MBEDTLS_ERR_X509_FATAL_ERROR` on the serial console means `certs.pem` is missing from the drive; `MBEDTLS_ERR_X509_CERT_VERIFY_FAILED` means the server's chain ends at a root that isn't in it (add it). |
 

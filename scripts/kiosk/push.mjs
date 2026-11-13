@@ -185,7 +185,9 @@ async function rollJulians() {
 }
 
 async function watchLoop() {
-  const every = (cfg.pollSeconds || 2) * 1000
+  // 5 s, not 2: a push is asked for a few times a week, and every poll is a
+  // Supabase request that counts against the org's egress (2026-11-10).
+  const every = (cfg.pollSeconds || 5) * 1000
   console.log(`Watching for scale requests every ${every / 1000}s â€¦ (leave this window open; Ctrl+C to stop)`)
   for (;;) {
     await rollJulians()
