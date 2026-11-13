@@ -26,6 +26,16 @@ it there or higher, every poll is a Supabase request), runs the push,
 and writes the result back — which the app shows. So you can trigger from home/phone
 while the kiosk does the on-site send. Requires the app deployed + `watch.bat` running.
 
+## Read the label formats and graphics off a scale (read only)
+Double-click **read-labels.bat** (first scale in `config.json`), or:
+```
+node read-labels.mjs 192.168.1.190
+```
+Runs HCT's `READ_ALL_LABELS` and `READ_ALL_GRAPHICS` and writes `out\labels_<ip>.ht`
+and `out\graphics_<ip>.ht`. Nothing is sent to the scale. Those two files are the
+capture the label-format push (copy a producer format, swap the logo, send from the
+app) is built from. The scale must be awake; the script checks port 6000 first.
+
 ## What it needs
 - **HCT install** (jre + HCT.exe + lib) — path in `config.json` → `hctDir`.
 - **commons-cli-1.9.0.jar** — bundled here. HCT ships without it (Hobart packaging
