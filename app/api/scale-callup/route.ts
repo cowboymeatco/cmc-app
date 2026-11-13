@@ -1,17 +1,39 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
-import { CALLUP_FORMATS, CALLUP_TTL_SECONDS, PLU_RE, SCALE_NUMBER_RE, callupKeys, type CallupFormat } from '@/lib/scaleCallup'
+import { CALLUP_FORMATS, CALLUP_TTL_SECONDS, PLU_RE, SCALE_NUMBER_RE, callupKeys, type CallupFormat, type Wedge } from '@/lib/scaleCallup'
 
 // GET  /api/scale-callup → the last few call-ups, which wedges are alive, and
 //                          the PLUs that can be called up (the /scale-callup
 //                          bench page). ?wedges=1 → just the wedges and the
 //                          last 20 rows, which is all the scanner polls for.
+//                          ?scales=1,3 → the scales the page has on screen;
+//                          their boards are kept polling every second (see
+//                          lib/scaleCallup.ts wedgePollSeconds).
 // POST /api/scale-callup → queue one: "scale 2, call up PLU 118". The Pico
 //                          wedge on that scale picks it up through
 //                          /api/scale-callup/device and types it.
 //
 // See scripts/2026-10-13_scale_callups.sql and scripts/pico-wedge/README.md.
+
+/** The scale numbers in a ?scales=1,3 parameter, anything else dropped. */
+function scalesParam(req: NextRequest): string[] {
+  return (req.nextUrl.searchParams.get('scales') ?? '').split(',').map(s => s.trim()).filter(s => SCALE_NUMBER_RE.test(s))
+}
+
+/** A page has these scales on screen: note it on their wedge rows so the
+ *  boards keep polling every second. Written at most about once a minute per
+ *  scale, because the pages ask every few seconds and the whole point is
+ *  fewer requests. */
+async function stampScannerSeen(scales: string[], wedges: Wedge[] | null, now: Date) {
+  const stale = scales.filter(s => {
+    const w = wedges?.find(x => x.scale === s)
+    return !!w && (!w.scanner_seen_at || now.getTime() - new Date(w.scanner_seen_at).getTime() > SCANNER_RESTAMP_MS)
+  })
+  if (!stale.length) return
+  await supabaseAdmin.from('scale_wedges').update({ scanner_seen_at: now.toISOString() }).in('scale', stale)
+}
+const SCANNER_RESTAMP_MS = 60_000
 
 export async function GET(req: NextRequest) {
   const light = req.nextUrl.searchParams.get('wedges') === '1'
@@ -21,6 +43,7 @@ export async function GET(req: NextRequest) {
     light ? null : supabaseAdmin.from('plu_items').select('plu_number, item_name, price').eq('active', true).order('plu_number'),
   ])
   if (requests.error) return NextResponse.json({ error: requests.error.message }, { status: 500 })
+  await stampScannerSeen(scalesParam(req), wedges.data as Wedge[] | null, new Date())
   // Only what the price push sends is on the scales (see lib/scaleReads).
   const plus = (items?.data ?? [])
     .filter(p => p.price != null && Number(p.price) > 0.01)
@@ -43,12 +66,17 @@ export async function POST(req: NextRequest) {
 
   // A scale shows one product at a time, so a newer tap for the same scale
   // replaces any call-up still waiting there. Only pending ones: a claimed
-  // row is already being typed.
-  await supabaseAdmin
-    .from('scale_callup_requests')
-    .update({ status: 'expired', completed_at: new Date().toISOString(), error: 'replaced by a newer call-up' })
-    .eq('scale', scale)
-    .eq('status', 'pending')
+  // row is already being typed. And someone is plainly at this station, so
+  // its board should be asking every second.
+  const now = new Date().toISOString()
+  await Promise.all([
+    supabaseAdmin
+      .from('scale_callup_requests')
+      .update({ status: 'expired', completed_at: now, error: 'replaced by a newer call-up' })
+      .eq('scale', scale)
+      .eq('status', 'pending'),
+    supabaseAdmin.from('scale_wedges').update({ scanner_seen_at: now }).eq('scale', scale),
+  ])
 
   const { data, error } = await supabaseAdmin
     .from('scale_callup_requests')
