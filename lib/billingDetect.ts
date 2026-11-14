@@ -37,7 +37,7 @@
 // ──────────────────────────────────────────────────────────────────────────────
 
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
-import { isExcludedProducer, PORTION_FRACTION } from '@/lib/billingRules'
+import { isExcludedProducer, isCmcAnimalNotBilled, PORTION_FRACTION } from '@/lib/billingRules'
 import { PriceBook, round2 } from '@/lib/priceBook'
 import { smokeLines, type SmokeLine } from '@/lib/pipelineValue'
 import { selectIn } from '@/lib/selectIn'
@@ -66,6 +66,7 @@ interface HarvestRow {
 interface ApptRow {
   id: string; harvest_date: string; species: string; customers: AppointmentCustomer[] | null
   kill_only: boolean; outdoor_kill: boolean; rush: boolean; producer_qbo_customer_id: string | null
+  head_count: number | null
 }
 interface SessionRow {
   id: string; customer_name: string; session_date: string; status: string | null
@@ -142,7 +143,7 @@ export async function detectCharges(opts: { since: string; ordersSince: string }
     ...harvests.map(h => h.appointment_id), ...sessions.map(s => s.linked_appointment_id),
   ].filter(Boolean))] as string[]
   const appts = await selectIn<ApptRow>(apptIds, b => supabaseAdmin.from('harvest_appointments')
-    .select('id, harvest_date, species, customers, kill_only, outdoor_kill, rush, producer_qbo_customer_id').in('id', b))
+    .select('id, harvest_date, species, customers, kill_only, outdoor_kill, rush, producer_qbo_customer_id, head_count').in('id', b))
   const apptById = new Map(appts.map(a => [a.id, a]))
   // Producer name per appointment, off its carcasses (the booking has no name column).
   const producerOfAppt = new Map<string, string>()
@@ -163,6 +164,36 @@ export async function detectCharges(opts: { since: string; ordersSince: string }
     b => supabaseAdmin.from('processing_inputs').select('linked_harvest_id, pack_date').in('linked_harvest_id', b).not('pack_date', 'is', null))
   const cutDate = new Map<string, string>()
   for (const p of packs) { const prev = cutDate.get(p.linked_harvest_id); if (!prev || p.pack_date < prev) cutDate.set(p.linked_harvest_id, p.pack_date) }
+
+  // Which buyers are on WHICH carcass. A booking can cover many head (12 beef on
+  // one appointment), and its customers list is every buyer across all of them.
+  // Billing that whole list against each carcass charged every buyer once per
+  // animal on the booking — 12× on the Aug 14 CMC beef (found 2026-11-13).
+  // carcass_assignments (the assign modal / cut schedule) ties a buyer's slot to
+  // one carcass. A one-carcass booking needs no assignment.
+  const assigns = await selectIn<{ harvest_log_id: string; appointment_customer_id: string | null; customer_name: string | null; portion: string | null; linked_cutting_instruction_id: string | null }>(
+    harvests.map(h => h.id), b => supabaseAdmin.from('carcass_assignments')
+      .select('harvest_log_id, appointment_customer_id, customer_name, portion, linked_cutting_instruction_id').in('harvest_log_id', b))
+  const assignsByCarcass = new Map<string, typeof assigns>()
+  for (const a of assigns) assignsByCarcass.set(a.harvest_log_id, [...(assignsByCarcass.get(a.harvest_log_id) ?? []), a])
+  const carcassesPerAppt = new Map<string, number>()
+  for (const h of harvests) if (h.appointment_id) carcassesPerAppt.set(h.appointment_id, (carcassesPerAppt.get(h.appointment_id) ?? 0) + 1)
+  /** The booking slots that belong to this carcass, or null when a multi-head booking has no assignment for it. */
+  const slotsForCarcass = (h: HarvestRow, appt?: ApptRow): AppointmentCustomer[] | null => {
+    const all = (appt?.customers ?? []) as AppointmentCustomer[]
+    const rows = assignsByCarcass.get(h.id)
+    if (rows?.length) {
+      return rows.map(r => {
+        const slot = all.find(s => s.id === r.appointment_customer_id)
+        return slot
+          ? { ...slot, portion: r.portion || slot.portion, linked_cutting_instruction_id: r.linked_cutting_instruction_id || slot.linked_cutting_instruction_id }
+          : ({ id: r.appointment_customer_id ?? '', customer_name: r.customer_name ?? '', portion: r.portion ?? '', linked_cutting_instruction_id: r.linked_cutting_instruction_id ?? '' } as AppointmentCustomer)
+      })
+    }
+    const head = Math.max(carcassesPerAppt.get(h.appointment_id ?? '') ?? 0, Number(appt?.head_count) || 0)
+    if (!h.appointment_id || head <= 1) return all
+    return null
+  }
 
   const events: EventRow[] = []
   const unbillable: string[] = []
@@ -195,17 +226,20 @@ export async function detectCharges(opts: { since: string; ordersSince: string }
   const supersededLambIds: string[] = []
   for (const h of harvests) {
     const appt = h.appointment_id ? apptById.get(h.appointment_id) : undefined
-    const slots = (appt?.customers ?? []) as AppointmentCustomer[]
     const tag = `${h.carcass_tag || h.id.slice(0, 8)} (${h.species})`
+    const assigned = slotsForCarcass(h, appt)
+    const slots = assigned ?? []
     const hcw = Number(h.hot_carcass_weight_lbs) || 0
     const src = { sourceTable: 'harvest_log', sourceId: h.id, tag }
 
     if (isExcludedProducer(h.producer!)) {
       // Our own animal: only the named buyers pay, at the advertised all-in price.
+      if (!assigned) { unbillable.push(`${tag}: our animal on a ${appt?.head_count ?? 'multi'}-head booking with no buyer assigned to this carcass — assign it on the cut schedule`); continue }
       const buyers = new Map<string, { frac: number; slots: AppointmentCustomer[] }>()
       for (const s of slots) {
         const f = PORTION_FRACTION[s.portion] ?? 0
         if (!s.customer_name?.trim() || f <= 0) continue
+        if (isCmcAnimalNotBilled(s.customer_name)) continue
         const b = buyers.get(s.customer_name.trim()) ?? { frac: 0, slots: [] }
         buyers.set(s.customer_name.trim(), { frac: b.frac + f, slots: [...b.slots, s] })
       }
@@ -233,6 +267,10 @@ export async function detectCharges(opts: { since: string; ordersSince: string }
 
     // Customer animal: split into payer shares.
     const producer = h.producer!
+    if (!assigned && ((appt?.customers ?? []) as AppointmentCustomer[]).some(s => s.payment_responsibility === 'customer')) {
+      unbillable.push(`${tag}: ${producer}'s ${appt?.head_count ?? 'multi'}-head booking has customer-paid shares but no buyer assigned to this carcass — assign it on the cut schedule`)
+      continue
+    }
     const byName = new Map<string, { frac: number; allQuarters: boolean; slots: AppointmentCustomer[] }>()
     const producerSlots: AppointmentCustomer[] = []
     let customerPaid = 0

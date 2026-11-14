@@ -678,7 +678,7 @@ Only do this if the invoice was deleted on purpose or re-done under a new number
                 )}
               </div>
               <div style={{ color: C.lightBrown, fontSize: '0.78rem' }}>
-                Services detected from harvests and cutting since 7/11 — kill fees split across paying portions, cut &amp; wrap at carcass weight.
+                Services detected from harvests and cutting since 11/13/26 (earlier work was invoiced by hand) — kill fees split across paying portions, cut &amp; wrap at carcass weight.
               </div>
               {detectMsg && <div style={{ color: C.green, fontSize: '0.78rem', marginTop: '0.3rem' }}>{detectMsg}</div>}
             </div>
