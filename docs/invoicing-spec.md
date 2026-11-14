@@ -64,19 +64,20 @@ kill · cut · cure · value-add · Baker      (the crew's normal scans)
 | Deposits | None (2026-11-14) |
 | Checks / transfers | Entered in the app (one screen); the app records them in QuickBooks |
 | Late fee | **18% a year = 1.5% a month** on the past-due balance, added automatically. Terms printed on every invoice (2026-11-14) |
-| Reminders | Automatic, by email and text, at due date, +7 and +30 days |
+| Customer messages | Automatic email and text from 30 days before the appointment to 30 days after (Charlie, 2026-11-14). See *Customer messages* |
+| Unpaid or not picked up 30 days after the appointment | Order moves to Baker storage (Charlie, 2026-11-14). The $20 transfer applies; monthly storage waits on the Baker decision |
 | Grouping | One invoice per order at Ready to Invoice. Kill-only producers: one per producer per kill day |
 | Billing start | Charges from **2026-11-13** on. Everything earlier was invoiced by hand and never comes back |
 | CMC animals | One all-in price per share to the customer. Split behind the scenes into CMC harvest + CMC processing + CMC product (the carcass) |
 | Own product vs custom service | Kept separate in QuickBooks (Charlie, 2026-11-14) |
 | Kill vs processing | Kept separate in QuickBooks so each side of the business shows (Charlie, 2026-11-14) |
-| Retail meat at pickup | Rung up separately at the Clover counter as a normal retail sale, not added to the processing invoice |
+| Retail meat at pickup | Rung up **with the invoice** (Charlie, 2026-11-14): the counter adds retail cuts to the order's Clover open order and the customer pays once. The added items come back with the payment and post to QuickBooks as a Retail Meat line on that invoice. They are **not** also counted in the daily Clover-sales entry |
 | CMC Retail, Western Meat Block | Never billed the CMC all-in price. WMB cattle are bought from Charlie's dad; harvest and freight settle against his account with his dad / Arrow Livestock |
 | Curing | Billed on cured weight (box scans) |
 | Smokehouse | Billed on raw lb in, from the cut sheet |
 | Sausage / patties | Billed on finished lb out, from box scans |
 | Off-list rates | Set on the cut card or as a customer deal **before** the work, never on the invoice |
-| Extra long hang | $5/day past 14 days, automatic from kill date to first cut scan |
+| Extra long hang | **Not charged** until the plant is reliable about cut dates (Charlie, 2026-11-14). The app still tracks days hung so the charge can be switched on later |
 | Disposal | Inside the kill fee, never a line |
 | Baker | $20 transfer when an order moves to Baker. The $28 monthly storage is hidden until Charlie decides how Baker should work |
 | Margins | Later: alert Charlie when margins tighten (not this project) |
@@ -93,10 +94,11 @@ detail lives in the app; the books show what each part of the business earned.
 | Custom | Processing Services | Cut & wrap; lamb and goat flat fees |
 | Custom | Value-Add Services | Curing, sausage, patties, links, smokehouse, smoking, slicing |
 | Custom | Wild Game Services | All wild game |
-| Custom | Fees | Baker transfer, outdoor kill, rush, extra long hang, late fee |
+| Custom | Fees | Baker transfer, outdoor kill, rush, late fee |
 | CMC | CMC Harvest | Kill on our own animals |
 | CMC | CMC Processing | Cut & wrap on our own animals |
 | CMC | CMC Product | The carcass: advertised price minus CMC harvest and processing |
+| Both | Retail Meat | Retail cuts the counter adds to the order at pickup |
 
 Value-add done on a CMC buyer's order is service work and goes to Value-Add
 Services, like anyone else's.
@@ -114,6 +116,21 @@ Services, like anyone else's.
 **Example, one custom beef order:** QuickBooks shows Harvest Services $270.18,
 Processing Services $831.87, Value-Add Services $44.00. The customer's invoice from
 the app shows every line.
+
+## Customer messages
+
+All automatic, by email and text, from the contact on the booking. Every message
+says what's needed and links to it. Nobody at the plant sends these.
+
+| When | Message |
+|---|---|
+| 30 days before the appointment | Reminder: date, what to bring, and "get your cut sheet in" with the link. Repeats weekly while the cut sheet is missing (replaces today's cut-sheet reminders) |
+| About a week before | Confirmation: date, drop-off time, cut sheet status |
+| Order reaches Ready to Invoice | "Your order is ready": the itemized invoice, the Clover pay link, pickup hours, and that orders are released once paid |
+| Weekly until paid and picked up | Reminder with the balance and the pay link |
+| 30 days after the appointment, still unpaid or not picked up | Notice that the order has moved to Baker storage, the $20 transfer, and how to pick it up there |
+
+The 1.5% monthly late fee runs on any balance past due, wherever the order is.
 
 ## The price book
 
@@ -154,7 +171,7 @@ Each phase ships, gets checked against real orders, then the next starts.
 - **Fix-the-source list:** every order the app can't price, with the reason and a
   link to the screen that fixes it (assign the carcass, add the weight, make the
   cut cards agree).
-- Extra long hang added automatically.
+- Days hung tracked per carcass (extra long hang stays uncharged for now).
 
 ### Phase 3: send and collect
 - Turned on **one kind of order at a time**, once its match rate is 100% for two
@@ -162,11 +179,13 @@ Each phase ships, gets checked against real orders, then the next starts.
 - For each automatic order: email and text with the pay link; Clover open order;
   QuickBooks summary invoice; barcode slip.
 - **Pickup gate:** the scanner won't release an order with a balance.
+- **Retail added at the counter:** items the cashier adds to the Clover open order come back with the payment and post as a Retail Meat line on the QuickBooks invoice, then the payment applies to the full amount.
 - **Payments record themselves:** pay link and Clover payments post to QuickBooks
   against the invoice, once each, logged. Partials post as partial. Anything that
   doesn't match goes to the Fix-the-source list.
 - Checks and transfers: one screen in the app; the app records them in QuickBooks.
-- Reminders at due date, +7 and +30 days; the 1.5% monthly late fee posts on its own.
+- Customer messages per the schedule above; the 1.5% monthly late fee posts on its own.
+- 30 days after the appointment, an unpaid or unclaimed order moves to Baker storage automatically and the customer is told.
 - The daily Clover-sales entry keeps excluding invoice payments so nothing counts
   twice.
 
@@ -211,7 +230,7 @@ Each phase ships, gets checked against real orders, then the next starts.
    bill $5/lb on finished weight.
 7. **Value-add on CMC buyers' orders** bills only if the order's scanner session
    isn't flagged as ours (`cmc`). Check on the first CMC sale.
-8. **Baker storage:** how it should work, then switch the $28 monthly line back on.
+8. **Baker storage:** how it should work, then switch the $28 monthly line back on. Now more pressing: unpaid or unclaimed orders move there automatically at 30 days. Also decide whether Baker pickups are held until paid, like the plant.
 9. **Habits the plan depends on:** buyers assigned to carcasses on kill day, cut
    cards complete before cutting, special deals set before the work, one person in the
    office watching the Fix-the-source list.
