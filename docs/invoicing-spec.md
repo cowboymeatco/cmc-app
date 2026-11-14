@@ -135,7 +135,9 @@ Each phase ships, gets checked against real orders, then the next one starts.
 
 ## Open items / risks
 
-1. **Under-billing to decide on:** kill-only beef billed at $0.38 instead of $0.53 on 2878C, 2920C (Arrow Livestock) and 2940C (Ben Reilly). 8,125.29 lb × $0.15 = **$1,218.79**. Re-bill, credit, or let it go is Charlie's call. The app won't touch past invoices.
+1. **Under-billing (closed 2026-11-12):** kill-only beef billed at $0.38 instead of $0.53 on 2878C, 2920C (Arrow Livestock) and 2940C (Ben Reilly). 8,125.29 lb × $0.15 = $1,218.79. **Charlie: let it go.** No re-bill or credit; the app won't touch past invoices.
+- **Wild game prices (decided 2026-11-12):** QuickBooks is right. Sticks, summer/salami and brats are $4.75/lb, $6.00/lb with cheese. The price book was corrected from the website's $4.50 / $5.25, and six rows were renamed to their existing QuickBooks items so Check QuickBooks links them instead of creating duplicates.
+- **CMC LAMB item price:** leave unticked in Check QuickBooks. QuickBooks has $375; the invoice line carries the $600 whole-lamb rate.
 2. **Patty / sausage finished weight.** Value-add jobs carry weight out. Patties made on the cutting floor may not go through a value-add job; if not, the weight comes off box scans of the patty PLUs. Verify on real orders in Phase 1. The office can override on the preview either way.
 3. **Cured weight.** Comes off cure tags / box scans. Same verification.
 4. **Website deploy** needs a Cloudflare token (Charlie's account). Never committed.
