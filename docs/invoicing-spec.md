@@ -43,7 +43,7 @@ kill / cut / value-add / storage ──► charges (app)
 | Baker storage | $20 transfer when the order moves to Baker; $28 per customer per month while anything sits there; monthly storage on its own invoice |
 | Outdoor kill $150, rush $50 | Flagged at booking |
 | Extra long hang | Not automatic. Office adds it |
-| Late fee | Not automatic |
+| Late fee | Not automatic. Rate follows what the office charges (Charlie, 2026-11-14), not the $2 in the old book |
 | Disposal | Included in the kill fee. Never a separate line |
 | Kill-only beef | $0.53/lb is right. The three $0.38 invoices were mistakes |
 | Lamb kill only | $75 |
@@ -114,7 +114,9 @@ Each phase ships, gets checked against real orders, then the next one starts.
   - Hog, per head: kill 0.58 and processing 1.17 on the share's hanging lb; the carcass is the rest. Whole $700 at 200 lb = 116 + 234 + **350**; half $400 at 100 lb = 58 + 117 + **225**.
   - Lamb, whole $600 = lamb flat fee 180 + carcass **420**.
   - Guard: if kill + processing ever exceed the advertised price (a very heavy hog), the invoice is held for the office instead of posting a negative carcass line.
-  - Open, for Charlie and his accountant: (a) CMC BEEF / HOG / LAMB are **inventory** items with 0 on hand, so every sale would drive negative inventory and post COGS at QuickBooks' average cost. Switch them to non-inventory unless cattle are tracked as inventory. (b) Custom Processing revenue will now include our own animals. Use separate "CMC Processing" items if outside-customer processing must stay separate in the P&L.
+  - **Own product vs custom service stay separate (Charlie, 2026-11-14):** a CMC bundle never uses the Custom Kill / Custom Processing service items. It gets its own CMC harvest and CMC processing items, so custom-service revenue is only outside customers and the CMC side shows everything we own and sell. The new items go in the price book and are created through Check QuickBooks under the CMC carcass parent; which income accounts is for the accountant.
+  - Open, for the accountant: CMC BEEF / HOG / LAMB are **inventory** items with 0 on hand, so every sale would drive negative inventory and post COGS at QuickBooks' average cost. Switch them to non-inventory unless cattle are tracked as inventory.
+  - Bundles in QuickBooks as of 2026-11-14: Beef H&P Whole/Half (1.55), Beef H&P Quarter (1.60), Hog H&P (1.75), CMC Beef Whole / Half / Quarter, CMC Lamb. **CMC Hog** still to make. The CMC ones get re-pointed at the CMC harvest/processing items once those exist.
   - The kill and cut & wrap charges can land on different days (kill day vs cut). The invoice builds once both are pending. A carcass that's killed but not yet cut stays out of the invoice until it is.
   - QuickBooks Sales setting "Display bundle components" off, so only the bundle line prints.
 - Preview: edit qty / rate (reason required, logged), add retail items or any QBO item, add manual lines (extra long hang, off-list rates), drop lines.
