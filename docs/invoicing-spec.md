@@ -40,7 +40,7 @@ kill / cut / value-add / storage ──► charges (app)
 | Sausage / patties | Billed on finished lb **out** |
 | Slicing $10 | Philly only |
 | Off-list rate (e.g. lamb kill $75) | Changed on the invoice preview, not the cut card |
-| Baker storage | $20 transfer when the order moves to Baker; $28 per customer per month while anything sits there; monthly storage on its own invoice |
+| Baker storage | $20 transfer when the order moves to Baker. The $28 monthly storage line is **hidden** (never billed in 12 months) until Charlie decides how Baker storage should work (2026-11-14) |
 | Outdoor kill $150, rush $50 | Flagged at booking |
 | Extra long hang | Not automatic. Office adds it |
 | Late fee | Not automatic. Rate follows what the office charges (Charlie, 2026-11-14), not the $2 in the old book |
