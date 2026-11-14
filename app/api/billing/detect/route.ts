@@ -9,14 +9,18 @@ import { detectCharges, type EventRow } from '@/lib/billingDetect'
 // price list (lib/priceBook.ts, /price-book).
 //
 // POST { since?, ordersSince?, dryRun? }
-//   since        carcasses killed on/after this date (default 2026-07-11, as before)
+//   since        carcasses killed on/after this date
 //   ordersSince  orders (value-add, curing, smokehouse, Baker) packed on/after
-//                this date. Defaults to 2026-11-01 so orders the office already
-//                invoiced by hand don't come back as new charges.
+//                this date.
+//   Both default to BILLING_START, 2026-11-13 (Charlie): everything before it
+//   was invoiced by hand and must never come back as a new charge. An earlier
+//   date passed in is raised to it.
 //   dryRun       compute and return, write nothing.
 //
 // Pending rows are re-priced in place when their rate, item, quantity or
 // description changes. Skipped, superseded and pushed rows are never touched.
+
+const BILLING_START = '2026-11-13'
 
 const keyOf = (e: { rule_key: string; source_table: string; source_id: string; customer_name: string }) =>
   `${e.rule_key}|${e.source_table}|${e.source_id}|${e.customer_name}`
@@ -24,8 +28,9 @@ const keyOf = (e: { rule_key: string; source_table: string; source_id: string; c
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}))
-    const since = typeof body.since === 'string' && body.since ? body.since : '2026-07-11'
-    const ordersSince = typeof body.ordersSince === 'string' && body.ordersSince ? body.ordersSince : '2026-11-01'
+    const floor = (v: unknown) => (typeof v === 'string' && v > BILLING_START ? v : BILLING_START)
+    const since = floor(body.since)
+    const ordersSince = floor(body.ordersSince)
     const dryRun = body.dryRun === true
 
     const found = await detectCharges({ since, ordersSince })

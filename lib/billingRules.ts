@@ -53,6 +53,18 @@ export const EXCLUDED_PRODUCERS = ['CMC', 'COWBOY MEAT COMPANY', 'COWBOY MEAT CO
 export const isExcludedProducer = (name: string) =>
   EXCLUDED_PRODUCERS.includes(name.toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim())
 
+// Named "buyers" on our own animals who are never billed the all-in CMC price
+// (Charlie, 2026-11-13):
+//   CMC Retail          — beef we cut for our own counter; not a sale.
+//   Western Meat Block  — cattle they buy from Charlie's dad; we do the harvest
+//                         and freight and it's settled against Charlie's account
+//                         with his dad / Arrow Livestock, not invoiced.
+export const CMC_ANIMAL_NOT_BILLED = ['CMC RETAIL', 'WESTERN MEAT BLOCK']
+export const isCmcAnimalNotBilled = (name: string) => {
+  const n = name.toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim()
+  return isExcludedProducer(name) || CMC_ANIMAL_NOT_BILLED.includes(n)
+}
+
 // ── Which rate a charge uses ────────────────────────────────────────────────
 // QBO_SERVICE_ITEMS above is the FALLBACK book for ESTIMATES only (booked
 // dollars, pipeline value, revenue recognition), which run on every page load.
