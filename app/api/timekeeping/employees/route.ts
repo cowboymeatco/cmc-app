@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireExec } from '@/lib/execGate'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { clearPinFailures, hashPin, jsonError, validPin } from '@/lib/timeclockServer'
+import { endHrSessionsFor } from '@/lib/hrDocsServer'
 
 // POST  /api/timekeeping/employees — add someone to the time clock.
 // PATCH /api/timekeeping/employees — edit, set or reset a PIN, or deactivate.
@@ -66,10 +67,14 @@ export async function PATCH(req: NextRequest) {
     // lockout — the kiosk tells a locked-out person to ask a manager.
     if (body.pin || body.resetPin) {
       await supabaseAdmin.from('tk_kiosk_sessions').delete().eq('employee_id', body.id)
+      await endHrSessionsFor(body.id)
       await clearPinFailures(body.id)
     }
-    // Deactivating someone signs them out of the kiosk.
-    if (body.active === false) await supabaseAdmin.from('tk_kiosk_sessions').delete().eq('employee_id', body.id)
+    // Deactivating someone signs them out of the kiosk, and of the handbook.
+    if (body.active === false) {
+      await supabaseAdmin.from('tk_kiosk_sessions').delete().eq('employee_id', body.id)
+      await endHrSessionsFor(body.id)
+    }
     return NextResponse.json({ ok: true })
   } catch (e) {
     return jsonError(e)
