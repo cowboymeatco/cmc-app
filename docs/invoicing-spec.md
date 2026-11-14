@@ -59,7 +59,7 @@ kill · cut · cure · value-add · Baker      (the crew's normal scans)
 | What QuickBooks gets | A summary invoice, one line per part of the business (table below). No bundles, no item-level lines (2026-11-14) |
 | What Clover gets | The itemized open order "NAME — INV 26318-01", so the counter can collect |
 | Delivery | App emails and texts the itemized invoice with a pay link; the barcode slip prints for the order |
-| Collecting | Pay link, or pay at the Clover counter at pickup (2026-11-14) |
+| Collecting | Clover pay link, or pay at the Clover counter at pickup (2026-11-14) |
 | Pickup | **Nothing leaves unpaid.** The scanner won't release an order whose invoice has a balance (2026-11-14). Exemptions, if ever, are per customer and set in the app |
 | Deposits | None (2026-11-14) |
 | Checks / transfers | Entered in the app (one screen); the app records them in QuickBooks |
@@ -198,8 +198,8 @@ Each phase ships, gets checked against real orders, then the next starts.
    LAMB stay inventory items (today every sale would drive negative inventory and
    post COGS at QuickBooks' average cost). Summary items replace them on invoices,
    but the inventory question still matters for how cattle are costed.
-2. **Pay link provider:** Clover (same processor as the counter, recommended) or
-   QuickBooks Payments. Decide before Phase 3.
+2. **Pay link provider: Clover** (decided 2026-11-14), the same processor as the
+   counter, so link and counter payments land in one place.
 3. **Late fee terms:** check with the accountant or attorney that 18% a year is fine
    in Montana for these accounts, and print the terms on every invoice.
 4. **Patty / sausage and cured weight** come off box scans. Verify on the first real
