@@ -108,7 +108,13 @@ Each phase ships, gets checked against real orders, then the next one starts.
   - **Beef Harvest & Processing – Quarters** = Custom Beef Kill $0.38 + Custom Processing-Quarters $1.22 → $1.60/lb
   - **Hog Harvest & Processing** = Custom Hog Kill $0.58 + Custom Hog Processing $1.17 → $1.75/lb
   - Components are qty 1 each; the bundle qty is the hanging lb. A negotiated cut-card rate edits the matching component, so the customer still sees one line at the combined rate.
-  - Kill-only (beef $0.53, lamb $75), lamb and goat flat fees, and CMC animals stay single items.
+  - Kill-only (beef $0.53, lamb $75) and lamb and goat flat fees stay single items.
+- **CMC animals post as a three-part bundle (Charlie, 2026-11-14):** kill + processing + carcass. The carcass part is the advertised price minus kill and processing, so it carries the animal plus the margin. The customer sees one line at the advertised price. The P&L shows what processing earned on our own animals and what the cattle side earned. One bundle per species (the existing "CMC Beef Whole" bundle becomes the beef one). The app sets every component's qty and rate on each invoice, so whole/half/quarter don't need separate items.
+  - Beef, $/lb hanging on the share: whole 5.39 = 0.38 + 1.17 + **3.84**; half 5.49 = 0.38 + 1.17 + **3.94**; quarter 5.59 = 0.38 + 1.22 + **3.99**. Example: 711 lb whole = $3,832.29 = 270.18 kill + 831.87 processing + 2,730.24 carcass.
+  - Hog, per head: kill 0.58 and processing 1.17 on the share's hanging lb; the carcass is the rest. Whole $700 at 200 lb = 116 + 234 + **350**; half $400 at 100 lb = 58 + 117 + **225**.
+  - Lamb, whole $600 = lamb flat fee 180 + carcass **420**.
+  - Guard: if kill + processing ever exceed the advertised price (a very heavy hog), the invoice is held for the office instead of posting a negative carcass line.
+  - Open, for Charlie and his accountant: (a) CMC BEEF / HOG / LAMB are **inventory** items with 0 on hand, so every sale would drive negative inventory and post COGS at QuickBooks' average cost. Switch them to non-inventory unless cattle are tracked as inventory. (b) Custom Processing revenue will now include our own animals. Use separate "CMC Processing" items if outside-customer processing must stay separate in the P&L.
   - The kill and cut & wrap charges can land on different days (kill day vs cut). The invoice builds once both are pending. A carcass that's killed but not yet cut stays out of the invoice until it is.
   - QuickBooks Sales setting "Display bundle components" off, so only the bundle line prints.
 - Preview: edit qty / rate (reason required, logged), add retail items or any QBO item, add manual lines (extra long hang, off-list rates), drop lines.
