@@ -103,6 +103,14 @@ Each phase ships, gets checked against real orders, then the next one starts.
 
 ### Phase 2 — Build and post invoices
 - "Build invoice" on Billing and on the scanner's Ready to Invoice card. Groups that order's pending charges by customer. Kill-only producers group per kill day. Baker storage runs as its own monthly invoice.
+- **Kill + cut & wrap post as one QuickBooks bundle line (Charlie, 2026-11-14).** The customer sees one all-in line that matches the website. The bundle's two components still post revenue to the kill and processing items, so the P&L keeps both sides of the business separate. Bundles (made in QuickBooks by hand; the connector can't create them):
+  - **Beef Harvest & Processing – Whole/Half** = Custom Beef Kill $0.38 + Custom Processing-Whole, Half $1.17 → $1.55/lb hanging
+  - **Beef Harvest & Processing – Quarters** = Custom Beef Kill $0.38 + Custom Processing-Quarters $1.22 → $1.60/lb
+  - **Hog Harvest & Processing** = Custom Hog Kill $0.58 + Custom Hog Processing $1.17 → $1.75/lb
+  - Components are qty 1 each; the bundle qty is the hanging lb. A negotiated cut-card rate edits the matching component, so the customer still sees one line at the combined rate.
+  - Kill-only (beef $0.53, lamb $75), lamb and goat flat fees, and CMC animals stay single items.
+  - The kill and cut & wrap charges can land on different days (kill day vs cut). The invoice builds once both are pending. A carcass that's killed but not yet cut stays out of the invoice until it is.
+  - QuickBooks Sales setting "Display bundle components" off, so only the bundle line prints.
 - Preview: edit qty / rate (reason required, logged), add retail items or any QBO item, add manual lines (extra long hang, off-list rates), drop lines.
 - Approve → posts once (idempotent request id; duplicate check against QuickBooks). Number `yyddd-##` from the shop date. QuickBooks emails it, the barcode slip prints, the invoice is linked to the animal, and the scanner card moves to Freezer / Call.
 - The daily Clover-sales invoice switches to the same numbering.
