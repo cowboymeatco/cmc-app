@@ -284,6 +284,20 @@ function Editor({ doc, employees, reload, onBack }: { doc: HrManageDoc; employee
           <h2 style={{ ...h2, margin: 0 }}>Page</h2>
           <button style={preview ? ghost : btn(C.medBrown)} onClick={() => setPreview(false)}>Write</button>
           <button style={preview ? btn(C.medBrown) : ghost} onClick={() => setPreview(true)}>Preview</button>
+          {/* Bring a page in from a file written elsewhere (a converted Word handbook). Read in the browser; nothing is uploaded until Save. */}
+          <label style={{ ...ghost, display: 'inline-block' }}>
+            Load from file…
+            <input type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" style={{ display: 'none' }}
+              onChange={async e => {
+                const f = e.target.files?.[0]
+                e.target.value = ''
+                if (!f) return
+                if (f.size > 2_000_000) { setErr('That file is over 2 MB. A handbook page should be text only.'); return }
+                if (draft.body.trim() && !window.confirm('Replace what is written here with the file? Nothing is saved until you press Save draft.')) return
+                setDraft({ ...draft, body: await f.text() }); setPreview(true); setErr('')
+                setMsg(`Loaded ${f.name}. Check the preview, then Save draft.`)
+              }} />
+          </label>
           <span style={{ color: C.lightBrown, fontSize: '0.75rem', marginLeft: 'auto' }}>
             # Heading · ## Section · **bold** · - bullet · 1. numbered · | table | row | · --- line
           </span>
