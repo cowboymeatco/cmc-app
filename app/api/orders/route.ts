@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { isoDate } from '@/lib/dates'
 import { pluMatchKey } from '@/lib/pluAliases'
+import { syncPortalHeader } from '@/lib/portalOrderSync'
 
 export const dynamic = 'force-dynamic'
 
@@ -138,6 +139,7 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   const body = await req.json()
   const { id, ...updates } = body
+  if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
 
   const { data, error } = await supabaseAdmin
     .from('retail_orders')
@@ -147,7 +149,11 @@ export async function PATCH(req: NextRequest) {
     .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json((await attachScans([data]))[0])
+  // Due date and fulfillment carry to the customer's portal copy; status
+  // already does, through the sync_portal_order_status trigger.
+  const warning = await syncPortalHeader(id, updates)
+  const full = (await attachScans([data]))[0]
+  return NextResponse.json(warning ? { ...full, portal_warning: warning } : full)
 }
 
 // DELETE /api/orders?id= â€” permanently delete an order.

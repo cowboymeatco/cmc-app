@@ -19,6 +19,8 @@ interface OrderItem {
   qty_ordered: number
   qty_filled:  number
   notes:       string
+  /** NULL follows the order's condition; set only where this line differs. */
+  fresh_or_frozen?: FreshFrozen | null
   /** Packed on the scanner into a box linked to this order (added by /api/orders). */
   scanned_qty?: number
 }
@@ -72,6 +74,21 @@ interface RetailOrder {
 }
 
 interface PluItem { plu_number: string; item_name: string; unit: string; price?: number | null }
+
+// Fresh or frozen is the order's, unless a line says otherwise (Charlie,
+// 2026-11-12: Hysham Student Council wanted fresh, not frozen, ground beef).
+const lineCondition = (i: OrderItem, o: RetailOrder): FreshFrozen => i.fresh_or_frozen ?? o.fresh_or_frozen
+const lineOverrides = (i: OrderItem, o: RetailOrder) => !!i.fresh_or_frozen && i.fresh_or_frozen !== o.fresh_or_frozen
+
+// A datetime-local box holds Mountain wall-clock time with no zone. Sent as
+// is, Postgres read it as UTC, so a 5:00 PM pickup came back as 10:00 AM.
+// These convert through the browser's own zone (the shop's) both ways.
+const toLocalInput = (ts: string | null) => {
+  if (!ts) return ''
+  const d = new Date(ts)
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16)
+}
+const fromLocalInput = (v: string) => v ? new Date(v).toISOString() : null
 
 const C = {
   dark:       '#1A0A04',
@@ -252,13 +269,13 @@ function NewOrderTab({ onSaved, pluList }: { onSaved: () => void; pluList: PluIt
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...form,
-        pickup_datetime:   form.pickup_datetime   || null,
+        pickup_datetime:   fromLocalInput(form.pickup_datetime),
         // A shipping order has no delivery time, so its ship date rides in the
         // same column (nothing else reads it). Noon, so the day can't slip
         // across midnight on the way to UTC.
         delivery_datetime: form.fulfillment_type === 'shipping'
           ? (form.ship_date ? `${form.ship_date}T12:00:00` : null)
-          : form.delivery_datetime || null,
+          : fromLocalInput(form.delivery_datetime),
         delivery_address:  form.delivery_address  || null,
         shipping_address:  form.shipping_address  || null,
         items: items.map(it => ({ ...it, qty_ordered: parseFloat(it.qty_ordered) || 0 })),
@@ -533,7 +550,7 @@ function printOrder(order: RetailOrder) {
     const filled = filledQty(i) > 0
     return `<tr>
       <td class="plu">${i.plu_number ? esc(i.plu_number) : ''}</td>
-      <td class="nm">${esc(i.item_name)}</td>
+      <td class="nm">${esc(i.item_name)}${lineOverrides(i, order) ? ` <strong>— ${lineCondition(i, order) === 'fresh' ? 'FRESH' : 'FROZEN'}</strong>` : ''}</td>
       <td class="qty">${esc(String(i.qty_ordered))}</td>
       <td class="un">${esc(i.unit || '')}</td>
       <td class="pick">${filled ? `<span class="pre">${esc(String(filledQty(i)))}</span>` : ''}</td>
@@ -545,7 +562,7 @@ function printOrder(order: RetailOrder) {
 
   const boxes = [
     { k: 'Due',         v: fmtDay(order.due_date) },
-    { k: 'Condition',   v: order.fresh_or_frozen === 'fresh' ? 'FRESH' : 'FROZEN' },
+    { k: 'Condition',   v: (order.fresh_or_frozen === 'fresh' ? 'FRESH' : 'FROZEN') + (items.some(i => lineOverrides(i, order)) ? ' (see lines)' : '') },
     // A ship date is a day, not a time of day.
     { k: 'Fulfillment', v: !handoff.when ? handoff.label
         : order.fulfillment_type === 'shipping' ? `Ships ${fmtDay(handoff.when.slice(0, 10))}`
@@ -628,6 +645,115 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
   const need = addressNeed(order)
   const [addrDraft, setAddrDraft]   = useState('')
   const [addrSaving, setAddrSaving] = useState(false)
+  // Something saved here that the customer's portal copy didn't take.
+  const [portalWarn, setPortalWarn] = useState<string | null>(null)
+  const noteWarn = (body: { portal_warning?: string } | null) => { if (body?.portal_warning) setPortalWarn(body.portal_warning) }
+
+  // ── Editing the order itself ──
+  // Charlie, 2026-11-12: "I need to be able to edit more fields on retail
+  // orders." Everything New Order asks for, after the fact.
+  const headerDraft = () => ({
+    customer_name:     order.customer_name,
+    customer_phone:    order.customer_phone ?? '',
+    taken_by:          order.taken_by ?? '',
+    order_date:        order.order_date,
+    due_date:          order.due_date,
+    fresh_or_frozen:   order.fresh_or_frozen,
+    fulfillment_type:  order.fulfillment_type,
+    pickup_datetime:   toLocalInput(order.pickup_datetime),
+    delivery_datetime: order.fulfillment_type === 'shipping' ? '' : toLocalInput(order.delivery_datetime),
+    ship_date:         order.fulfillment_type === 'shipping' && order.delivery_datetime ? order.delivery_datetime.slice(0, 10) : '',
+    delivery_address:  order.delivery_address ?? '',
+    shipping_address:  order.shipping_address ?? '',
+    notes:             order.notes ?? '',
+  })
+  const [editingHeader, setEditingHeader] = useState(false)
+  const [hd, setHd] = useState(headerDraft)
+  const [hdSaving, setHdSaving] = useState(false)
+  const [hdErr, setHdErr] = useState<string | null>(null)
+  const hf = (k: keyof ReturnType<typeof headerDraft>) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
+    setHd(p => ({ ...p, [k]: e.target.value }))
+  const hdNeed = addressNeed(hd)
+  const hdOk = !!hd.customer_name.trim() && !!hd.due_date && !hdNeed?.missing
+
+  async function saveHeader() {
+    if (!hdOk) return
+    setHdSaving(true); setHdErr(null)
+    const res = await fetch('/api/orders', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id:                order.id,
+        customer_name:     hd.customer_name.trim(),
+        customer_phone:    hd.customer_phone.trim(),
+        taken_by:          hd.taken_by.trim(),
+        order_date:        hd.order_date,
+        due_date:          hd.due_date,
+        fresh_or_frozen:   hd.fresh_or_frozen,
+        fulfillment_type:  hd.fulfillment_type,
+        pickup_datetime:   hd.fulfillment_type === 'pickup' ? fromLocalInput(hd.pickup_datetime) : null,
+        delivery_datetime: hd.fulfillment_type === 'shipping'
+          ? (hd.ship_date ? `${hd.ship_date}T12:00:00` : null)
+          : hd.fulfillment_type === 'delivery' ? fromLocalInput(hd.delivery_datetime) : null,
+        delivery_address:  hd.fulfillment_type === 'delivery' ? hd.delivery_address.trim() || null : order.delivery_address,
+        shipping_address:  hd.fulfillment_type === 'shipping' ? hd.shipping_address.trim() || null : order.shipping_address,
+        notes:             hd.notes,
+      }),
+    })
+    const body = await res.json().catch(() => null)
+    setHdSaving(false)
+    if (!res.ok) { setHdErr(body?.error ?? 'Could not save the order.'); return }
+    noteWarn(body)
+    setEditingHeader(false)
+    onUpdated(body)
+  }
+
+  // ── Editing one line ──
+  type LineDraft = { item_name: string; plu_number: string; unit: string; qty_ordered: string; notes: string; fresh_or_frozen: '' | FreshFrozen }
+  const [editLine, setEditLine] = useState<string | null>(null)
+  const [ld, setLd] = useState<LineDraft>({ item_name: '', plu_number: '', unit: 'LB', qty_ordered: '', notes: '', fresh_or_frozen: '' })
+  const [ldSaving, setLdSaving] = useState(false)
+  const [ldErr, setLdErr] = useState<string | null>(null)
+
+  function startLine(i: OrderItem) {
+    setEditingItem(null)
+    setLdErr(null)
+    setEditLine(i.id)
+    setLd({
+      item_name: i.item_name, plu_number: i.plu_number ?? '', unit: i.unit,
+      qty_ordered: String(i.qty_ordered), notes: i.notes ?? '', fresh_or_frozen: i.fresh_or_frozen ?? '',
+    })
+  }
+
+  async function saveLine(i: OrderItem) {
+    const qty = parseFloat(ld.qty_ordered)
+    if (!ld.item_name.trim() || isNaN(qty)) return
+    setLdSaving(true); setLdErr(null)
+    const patch: Record<string, unknown> = { id: i.id }
+    if (ld.item_name.trim() !== i.item_name)        patch.item_name   = ld.item_name.trim()
+    if ((ld.plu_number.trim() || null) !== (i.plu_number || null)) patch.plu_number = ld.plu_number.trim() || null
+    if (ld.unit !== i.unit)                          patch.unit        = ld.unit
+    if (qty !== Number(i.qty_ordered))               patch.qty_ordered = qty
+    if (ld.notes !== (i.notes ?? ''))                patch.notes       = ld.notes
+    // Same as the order means "follow the order", so a later change to the
+    // order's condition carries this line with it.
+    const cond = ld.fresh_or_frozen && ld.fresh_or_frozen !== order.fresh_or_frozen ? ld.fresh_or_frozen : null
+    if (cond !== (i.fresh_or_frozen ?? null))        patch.fresh_or_frozen = cond
+    if (Object.keys(patch).length === 1) { setEditLine(null); setLdSaving(false); return }
+
+    const res = await fetch('/api/orders/items', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+    const body = await res.json().catch(() => null)
+    setLdSaving(false)
+    if (!res.ok) { setLdErr(body?.error ?? 'Could not save this line.'); return }
+    noteWarn(body)
+    // Keep what /api/orders worked out from the scanner; the PATCH doesn't.
+    onUpdated({ ...order, retail_order_items: order.retail_order_items.map(x => x.id === i.id ? { ...x, ...body, scanned_qty: x.scanned_qty } : x) })
+    setEditLine(null)
+  }
 
   async function saveAddress() {
     if (!need || !addrDraft.trim()) return
@@ -645,7 +771,7 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
   const [showAddItem, setShowAddItem]       = useState(false)
   const [addPluSearch, setAddPluSearch]     = useState('')
   const [addPluDropdown, setAddPluDropdown] = useState<PluItem[]>([])
-  const [addNewItem, setAddNewItem]         = useState({ plu_number: '', item_name: '', unit: 'LB', qty_ordered: '' })
+  const [addNewItem, setAddNewItem]         = useState({ plu_number: '', item_name: '', unit: 'LB', qty_ordered: '', fresh_or_frozen: '' as '' | FreshFrozen })
   const [addingSaving, setAddingSaving]     = useState(false)
 
   function searchAddPlu(q: string) {
@@ -675,18 +801,22 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
         item_name:   addNewItem.item_name,
         unit:        addNewItem.unit,
         qty_ordered: parseFloat(addNewItem.qty_ordered) || 0,
+        fresh_or_frozen: addNewItem.fresh_or_frozen && addNewItem.fresh_or_frozen !== order.fresh_or_frozen ? addNewItem.fresh_or_frozen : null,
       }),
     })
     const created = await res.json()
+    if (!res.ok) { setAddingSaving(false); alert(created?.error ?? 'Could not add the item.'); return }
+    noteWarn(created)
     onUpdated({ ...order, retail_order_items: [...order.retail_order_items, created] })
-    setAddNewItem({ plu_number: '', item_name: '', unit: 'LB', qty_ordered: '' })
+    setAddNewItem({ plu_number: '', item_name: '', unit: 'LB', qty_ordered: '', fresh_or_frozen: '' })
     setAddPluSearch('')
     setAddingSaving(false)
     setShowAddItem(false)
   }
 
   async function deleteItem(itemId: string) {
-    await fetch(`/api/orders/items?id=${itemId}`, { method: 'DELETE' })
+    const res = await fetch(`/api/orders/items?id=${itemId}`, { method: 'DELETE' })
+    noteWarn(await res.json().catch(() => null))
     onUpdated({ ...order, retail_order_items: order.retail_order_items.filter(i => i.id !== itemId) })
   }
 
@@ -787,6 +917,13 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
             🖨 Print Order
           </button>
           <button
+            onClick={() => { setHd(headerDraft()); setHdErr(null); setEditingHeader(e => !e) }}
+            title="Change who, when, how it leaves, and notes"
+            style={{ background: editingHeader ? 'rgba(166,120,90,0.15)' : 'rgba(255,255,255,0.05)', border: '1px solid rgba(166,120,90,0.35)', color: C.tan, borderRadius: 3, padding: '0.4rem 0.9rem', fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer' }}
+          >
+            {editingHeader ? '✕ Cancel edit' : '✏️ Edit Order'}
+          </button>
+          <button
             onClick={deleteOrder}
             disabled={deleting}
             title="Delete this order"
@@ -796,6 +933,67 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
           </button>
         </div>
       </div>
+
+      {portalWarn && (
+        <div style={{ background: 'rgba(217,119,6,0.12)', border: `1px solid ${C.yellow}`, borderRadius: 4, padding: '0.6rem 0.85rem', fontSize: '0.82rem', color: '#f0b866', display: 'flex', justifyContent: 'space-between', gap: '0.75rem' }}>
+          <span>⚠ {portalWarn}</span>
+          <button onClick={() => setPortalWarn(null)} style={{ background: 'none', border: 'none', color: '#f0b866', cursor: 'pointer' }}>✕</button>
+        </div>
+      )}
+
+      {editingHeader && (
+        <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 4, padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+            <div><label style={LABEL}>Customer Name *</label><input style={INPUT} value={hd.customer_name} onChange={hf('customer_name')} /></div>
+            <div><label style={LABEL}>Phone</label><input style={INPUT} value={hd.customer_phone} onChange={hf('customer_phone')} /></div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
+            <div><label style={LABEL}>Taken By</label><input style={INPUT} value={hd.taken_by} onChange={hf('taken_by')} /></div>
+            <div><label style={LABEL}>Order Date</label><input type="date" style={INPUT} value={hd.order_date} onChange={hf('order_date')} /></div>
+            <div><label style={LABEL}>Due Date *</label><input type="date" style={INPUT} value={hd.due_date} onChange={hf('due_date')} /></div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+            <div>
+              <label style={LABEL}>Condition (whole order)</label>
+              <select style={INPUT} value={hd.fresh_or_frozen} onChange={hf('fresh_or_frozen')}>
+                <option value="frozen">Frozen</option>
+                <option value="fresh">Fresh</option>
+              </select>
+            </div>
+            <div>
+              <label style={LABEL}>Fulfillment</label>
+              <select style={INPUT} value={hd.fulfillment_type} onChange={hf('fulfillment_type')}>
+                <option value="pickup">Pickup</option>
+                <option value="delivery">Delivery</option>
+                <option value="shipping">Shipping</option>
+              </select>
+            </div>
+          </div>
+          {hd.fulfillment_type === 'pickup' && (
+            <div><label style={LABEL}>Pickup Date / Time</label><input type="datetime-local" style={INPUT} value={hd.pickup_datetime} onChange={hf('pickup_datetime')} /></div>
+          )}
+          {hd.fulfillment_type === 'delivery' && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '0.75rem' }}>
+              <div><label style={LABEL}>Delivery Date / Time</label><input type="datetime-local" style={INPUT} value={hd.delivery_datetime} onChange={hf('delivery_datetime')} /></div>
+              <div><label style={LABEL}>Delivery Address *</label><input style={INPUT} value={hd.delivery_address} onChange={hf('delivery_address')} placeholder="Street, City, State ZIP" /></div>
+            </div>
+          )}
+          {hd.fulfillment_type === 'shipping' && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '0.75rem' }}>
+              <div><label style={LABEL}>Ship Date</label><input type="date" style={INPUT} value={hd.ship_date} onChange={hf('ship_date')} /></div>
+              <div><label style={LABEL}>Shipping Address *</label><textarea style={{ ...INPUT, height: 56, resize: 'vertical' }} value={hd.shipping_address} onChange={hf('shipping_address')} /></div>
+            </div>
+          )}
+          <div><label style={LABEL}>Notes</label><textarea style={{ ...INPUT, height: 56, resize: 'vertical' }} value={hd.notes} onChange={hf('notes')} /></div>
+          {hdErr && <div style={{ color: C.red, fontSize: '0.8rem' }}>{hdErr}</div>}
+          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+            <button style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.3)' }} onClick={() => setEditingHeader(false)}>Cancel</button>
+            <button style={{ ...BTN(C.tan), opacity: hdOk && !hdSaving ? 1 : 0.5 }} disabled={!hdOk || hdSaving} onClick={saveHeader}>
+              {hdSaving ? 'Saving…' : 'Save changes'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Info bar */}
       <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
@@ -891,7 +1089,7 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
         {/* Add item form */}
         {showAddItem && (
           <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(166,120,90,0.25)', borderRadius: 4, padding: '0.85rem', marginBottom: '0.75rem' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 70px 90px auto', gap: '0.5rem', alignItems: 'end' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 70px 90px 100px auto', gap: '0.5rem', alignItems: 'end' }}>
               {/* PLU search */}
               <div style={{ position: 'relative' }}>
                 <label style={LABEL}>PLU / Item Name</label>
@@ -938,6 +1136,14 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
                   placeholder="0"
                 />
               </div>
+              <div>
+                <label style={LABEL}>Condition</label>
+                <select style={INPUT} value={addNewItem.fresh_or_frozen} onChange={e => setAddNewItem(p => ({ ...p, fresh_or_frozen: e.target.value as '' | FreshFrozen }))}>
+                  <option value="">As order</option>
+                  <option value="fresh">Fresh</option>
+                  <option value="frozen">Frozen</option>
+                </select>
+              </div>
               <button
                 style={{ ...BTN(C.tan), alignSelf: 'flex-end', whiteSpace: 'nowrap', opacity: addNewItem.item_name && addNewItem.qty_ordered ? 1 : 0.5 }}
                 onClick={saveAddItem}
@@ -968,6 +1174,12 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
                     <span style={{ color: done ? C.green : C.cream, fontWeight: 600, fontSize: '0.88rem' }}>
                       {done && '✓ '}{item.item_name}
                     </span>
+                    {lineOverrides(item, order) && (
+                      <span style={{ marginLeft: '0.5rem', fontSize: '0.68rem', fontWeight: 700, padding: '0.1rem 0.4rem', borderRadius: 3, background: 'rgba(76,175,80,0.15)', color: lineCondition(item, order) === 'fresh' ? C.green : C.blue }}>
+                        {lineCondition(item, order) === 'fresh' ? '🌿 FRESH' : '❄️ FROZEN'}
+                      </span>
+                    )}
+                    {item.notes && <div style={{ fontSize: '0.75rem', color: C.tan, fontStyle: 'italic', marginTop: '0.15rem' }}>{item.notes}</div>}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                     <span style={{ fontSize: '0.82rem', color: C.tan }}>
@@ -1003,6 +1215,11 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
                       </button>
                     )}
                     <button
+                      onClick={() => editLine === item.id ? setEditLine(null) : startLine(item)}
+                      title="Edit item, quantity, condition or notes"
+                      style={{ background: 'none', border: 'none', color: C.lightBrown, cursor: 'pointer', fontSize: '0.85rem', lineHeight: 1, padding: '0 0.1rem' }}
+                    >✏️</button>
+                    <button
                       onClick={() => deleteItem(item.id)}
                       title="Remove item"
                       style={{ background: 'none', border: 'none', color: 'rgba(166,120,90,0.4)', cursor: 'pointer', fontSize: '0.95rem', lineHeight: 1, padding: '0 0.1rem' }}
@@ -1011,6 +1228,33 @@ function OrderDetail({ order, onUpdated, onDeleted, pluList }: { order: RetailOr
                     >×</button>
                   </div>
                 </div>
+                {editLine === item.id && (
+                  <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 70px 80px 100px', gap: '0.5rem', alignItems: 'end', margin: '0.5rem 0' }}>
+                    <div><label style={LABEL}>PLU</label><input style={INPUT} value={ld.plu_number} onChange={e => setLd(p => ({ ...p, plu_number: e.target.value }))} /></div>
+                    <div><label style={LABEL}>Item</label><input style={INPUT} value={ld.item_name} onChange={e => setLd(p => ({ ...p, item_name: e.target.value }))} /></div>
+                    <div>
+                      <label style={LABEL}>Unit</label>
+                      <select style={INPUT} value={ld.unit} onChange={e => setLd(p => ({ ...p, unit: e.target.value }))}>
+                        {[...new Set(['LB', 'EA', item.unit])].map(u => <option key={u} value={u}>{u}</option>)}
+                      </select>
+                    </div>
+                    <div><label style={LABEL}>Qty</label><input type="number" step="0.1" min="0" style={INPUT} value={ld.qty_ordered} onChange={e => setLd(p => ({ ...p, qty_ordered: e.target.value }))} /></div>
+                    <div>
+                      <label style={LABEL}>Condition</label>
+                      <select style={INPUT} value={ld.fresh_or_frozen} onChange={e => setLd(p => ({ ...p, fresh_or_frozen: e.target.value as '' | FreshFrozen }))}>
+                        <option value="">As order ({order.fresh_or_frozen})</option>
+                        <option value="fresh">Fresh</option>
+                        <option value="frozen">Frozen</option>
+                      </select>
+                    </div>
+                    <div style={{ gridColumn: '1 / span 4' }}><label style={LABEL}>Notes</label><input style={INPUT} value={ld.notes} onChange={e => setLd(p => ({ ...p, notes: e.target.value }))} onKeyDown={e => { if (e.key === 'Enter') saveLine(item) }} /></div>
+                    <div style={{ display: 'flex', gap: '0.35rem' }}>
+                      <button style={{ ...BTN(C.green), opacity: ldSaving ? 0.5 : 1 }} disabled={ldSaving} onClick={() => saveLine(item)}>{ldSaving ? '…' : '✓'}</button>
+                      <button style={{ ...BTN('transparent', C.lightBrown), border: '1px solid rgba(166,120,90,0.3)' }} onClick={() => setEditLine(null)}>✕</button>
+                    </div>
+                    {ldErr && <div style={{ gridColumn: '1 / -1', color: C.red, fontSize: '0.8rem' }}>{ldErr}</div>}
+                  </div>
+                )}
                 {item.unit === 'LB' && (
                   <div style={{ height: 4, background: 'rgba(255,255,255,0.08)', borderRadius: 99, overflow: 'hidden' }}>
                     <div style={{ height: '100%', width: `${itemPct}%`, borderRadius: 99, background: done ? C.green : C.tan, transition: 'width 0.3s' }} />
