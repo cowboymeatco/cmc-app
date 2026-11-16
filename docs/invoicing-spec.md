@@ -65,7 +65,7 @@ kill · cut · cure · value-add · Baker      (the crew's normal scans)
 | Checks / transfers | Entered in the app (one screen); the app records them in QuickBooks |
 | Late fee | **18% a year = 1.5% a month** on the past-due balance, added automatically. Terms printed on every invoice (2026-11-14) |
 | Customer messages | Automatic email and text from 30 days before the appointment to 30 days after (Charlie, 2026-11-14). See *Customer messages* |
-| Unpaid or not picked up 30 days after the appointment | Order moves to Baker storage (Charlie, 2026-11-14). The $20 transfer applies; monthly storage waits on the Baker decision |
+| Unpaid or not picked up 30 days after the appointment | Order moves to Baker storage (Charlie, 2026-11-14); Baker fees apply |
 | Grouping | One invoice per order at Ready to Invoice. Kill-only producers: one per producer per kill day |
 | Billing start | Charges from **2026-11-13** on. Everything earlier was invoiced by hand and never comes back |
 | CMC animals | One all-in price per share to the customer. Split behind the scenes into CMC harvest + CMC processing + CMC product (the carcass) |
@@ -79,7 +79,7 @@ kill · cut · cure · value-add · Baker      (the crew's normal scans)
 | Off-list rates | Set on the cut card or as a customer deal **before** the work, never on the invoice |
 | Extra long hang | **Not charged** until the plant is reliable about cut dates (Charlie, 2026-11-14). The app still tracks days hung so the charge can be switched on later |
 | Disposal | Inside the kill fee, never a line |
-| Baker | $20 transfer when an order moves to Baker. The $28 monthly storage is hidden until Charlie decides how Baker should work |
+| Baker | **$100 per pallet** freight & transfer when it goes to Baker; **$35 per pallet for every month-end it's still at Baker** (Charlie, 2026-11-16). One pallet per order, a second over 40 cases. See *Baker storage* |
 | Margins | Later: alert Charlie when margins tighten (not this project) |
 
 ## QuickBooks: summary items
@@ -94,7 +94,7 @@ detail lives in the app; the books show what each part of the business earned.
 | Custom | Processing Services | Cut & wrap; lamb and goat flat fees |
 | Custom | Value-Add Services | Curing, sausage, patties, links, smokehouse, smoking, slicing |
 | Custom | Wild Game Services | All wild game |
-| Custom | Fees | Baker transfer, outdoor kill, rush, late fee |
+| Custom | Fees | Baker freight & transfer, Baker storage, outdoor kill, rush, late fee |
 | CMC | CMC Harvest | Kill on our own animals |
 | CMC | CMC Processing | Cut & wrap on our own animals |
 | CMC | CMC Product | The carcass: advertised price minus CMC harvest and processing |
@@ -128,9 +128,43 @@ says what's needed and links to it. Nobody at the plant sends these.
 | About a week before | Confirmation: date, drop-off time, cut sheet status |
 | Order reaches Ready to Invoice | "Your order is ready": the itemized invoice, the Clover pay link, pickup hours, and that orders are released once paid |
 | Weekly until paid and picked up | Reminder with the balance and the pay link |
-| 30 days after the appointment, still unpaid or not picked up | Notice that the order has moved to Baker storage, the $20 transfer, and how to pick it up there |
+| 30 days after the appointment, still unpaid or not picked up | Notice that the order has moved to Baker storage, the $100 per pallet transfer and $35 per pallet per month, and how to pick it up there |
 
 The 1.5% monthly late fee runs on any balance past due, wherever the order is.
+
+## Baker storage (Charlie, 2026-11-16)
+
+Baker Transfer & Storage, Billings: 108 miles, 1.75 hours each way. Baker bills
+us $30 for each pallet on hand on the **last business day of the month** (billed in
+advance: the Oct 31 invoice is "November Cold Storage"). A pallet pulled before
+then isn't charged. Plus $10 per pull (W ticket). Net 60.
+
+**Rules**
+- **Every order gets its own pallet**, so Baker's crew pulls one pallet per pickup
+  and charging in and out is one-to-one. Over 40 cases gets a second pallet.
+- **$100 per pallet** freight & transfer when it leaves for Baker.
+- **$35 per pallet for each last business day of the month it's still at Baker**, the
+  same snapshot Baker bills us on. Pulled before then: no storage charge.
+- The truck carries **12 pallets**. A trip costs about **$592** (216 miles × $2.00 +
+  4 hours × $40). Per pallet: $100 in, minus $592/12 truck share and the $10 pull,
+  leaves **+$40.67**, then **+$5 every month-end** it stays. Break-even is $592 ÷ $90 =
+  **7 pallets a trip**; don't run under 7 unless the truck carries something else.
+- Customer reminders while at Baker name the deadline: "pick up before [last business
+  day] to avoid the $35 storage charge."
+- Released at Baker only when paid, same as the plant: no W ticket until the
+  balance is zero.
+
+**Slots and the monthly match**
+- Each Baker pallet position gets a **slot name** in the app (Baker's own pallet
+  number if they have one). The scanner records which order (or our own product)
+  goes on which slot when the truck is loaded, and clears it when Baker pulls it.
+- Each month the app reads Baker's statement and matches it: pallets billed vs.
+  slots in use, every W-ticket pull against an order. Mismatches go to the
+  Fix-the-source list.
+- **Monthly Baker report:** what Baker billed us, what we billed customers, and
+  what we absorbed, split customer orders vs. **our own product** (hog fat and the
+  like), so Charlie sees the opportunity cost of storing our own goods.
+- Freight trips logged with pallet count, so trips under 10 pallets show up.
 
 ## The price book
 
@@ -230,7 +264,7 @@ Each phase ships, gets checked against real orders, then the next starts.
    bill $5/lb on finished weight.
 7. **Value-add on CMC buyers' orders** bills only if the order's scanner session
    isn't flagged as ours (`cmc`). Check on the first CMC sale.
-8. **Baker storage:** how it should work, then switch the $28 monthly line back on. Now more pressing: unpaid or unclaimed orders move there automatically at 30 days. Also decide whether Baker pickups are held until paid, like the plant.
+8. **Baker storage:** rates set 2026-11-16 (price book: transfer $100, storage $35). Storage stays switched off until the detector bills per pallet on hand at each month-end (last business day); today's code bills per customer from the arrival month. Pallet slots, the trip log and the statement match are Phase 3 work.
 9. **Habits the plan depends on:** buyers assigned to carcasses on kill day, cut
    cards complete before cutting, special deals set before the work, one person in the
    office watching the Fix-the-source list.
