@@ -19,7 +19,7 @@ const C = {
 
 // Two destinations behind one button.
 //
-// Everything in FEEDBACK_TYPES (bug, idea, customer incident, safety) goes to
+// Everything in FEEDBACK_TYPES (bug, idea, customer incident, safety, rework) goes to
 // Charlie's punch list in the feedback table.
 // 'cleaning' is about the plant — buildup on a machine, something the night
 // crew missed — and goes to the cleaning issue inbox instead. Same button
@@ -213,6 +213,7 @@ export default function FeedbackButton() {
                 {type === 'cleaning' ? 'Report a Cleaning Issue'
                   : type === 'incident' ? 'Report a Customer Incident'
                   : type === 'safety' ? 'Report a Safety Issue'
+                  : type === 'rework' ? 'Report Rework or a Mistake'
                   : 'Send Feedback'}
               </span>
               <button
@@ -249,7 +250,7 @@ export default function FeedbackButton() {
               ))}
             </div>
             <div style={{ display: 'flex', gap: 6, marginTop: -6 }}>
-              {(['incident', 'safety'] as ReportType[]).map(t => (
+              {(['incident', 'safety', 'rework'] as ReportType[]).map(t => (
                 <button
                   key={t}
                   onClick={() => setType(t)}
@@ -266,7 +267,7 @@ export default function FeedbackButton() {
                     whiteSpace: 'nowrap',
                   } as React.CSSProperties}
                 >
-                  {t === 'incident' ? '📋 Customer incident' : '⚠️ Safety issue'}
+                  {t === 'incident' ? '📋 Customer incident' : t === 'safety' ? '⚠️ Safety issue' : '🔁 Rework'}
                 </button>
               ))}
             </div>

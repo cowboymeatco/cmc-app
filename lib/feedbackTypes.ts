@@ -10,7 +10,7 @@
 // all: it posts to the cleaning issue inbox, carries its own urgency and photo,
 // and the widget branches on it well before this list matters.
 
-export type FeedbackType = 'bug' | 'idea' | 'incident' | 'safety'
+export type FeedbackType = 'bug' | 'idea' | 'incident' | 'safety' | 'rework'
 
 export interface FeedbackTypeSpec {
   key: FeedbackType
@@ -51,6 +51,14 @@ export const FEEDBACK_TYPES: FeedbackTypeSpec[] = [
     key: 'safety', chip: '⚠️ Safety', badge: '⚠️ SAFETY', tab: '⚠️ Safety', color: '#F97316',
     placeholder: 'What happened, or what nearly did?',
     note: 'Injuries, near misses, and anything unsafe. If somebody is hurt right now, go get help first — this is the record, not the alarm.',
+  },
+  // Charlie, 2026-11-11: "How do I track rework, double takes, mistakes,
+  // defectives, things like that." 2026-11-16: start it as a type on this
+  // button rather than its own log, so it lands in the same punch list.
+  {
+    key: 'rework', chip: '🔁 Rework', badge: '🔁 REWORK', tab: '🔁 Rework', color: '#A78BFA',
+    placeholder: 'What had to be redone or thrown out, whose order, and about how much?',
+    note: 'Rework, double handling, mistakes and defective product — what happened and roughly what it cost (pounds, packages or time).',
   },
 ]
 
