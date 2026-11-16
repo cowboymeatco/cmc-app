@@ -79,7 +79,7 @@ kill · cut · cure · value-add · Baker      (the crew's normal scans)
 | Off-list rates | Set on the cut card or as a customer deal **before** the work, never on the invoice |
 | Extra long hang | **Not charged** until the plant is reliable about cut dates (Charlie, 2026-11-14). The app still tracks days hung so the charge can be switched on later |
 | Disposal | Inside the kill fee, never a line |
-| Baker | **$100 per pallet** freight & transfer when it goes to Baker; **$35 per pallet per month** starting the month after it arrives (Charlie, 2026-11-16). One pallet per order, a second over 40 cases. See *Baker storage* |
+| Baker | **$100 per pallet** freight & transfer when it goes to Baker; **$35 per pallet for every month-end it's still at Baker** (Charlie, 2026-11-16). One pallet per order, a second over 40 cases. See *Baker storage* |
 | Margins | Later: alert Charlie when margins tighten (not this project) |
 
 ## QuickBooks: summary items
@@ -135,20 +135,22 @@ The 1.5% monthly late fee runs on any balance past due, wherever the order is.
 ## Baker storage (Charlie, 2026-11-16)
 
 Baker Transfer & Storage, Billings: 108 miles, 1.75 hours each way. Baker bills
-us $30 per pallet per month (billed in advance: the Oct 31 invoice is "November
-Cold Storage") and $10 per pull (W ticket), Net 60.
+us $30 for each pallet on hand on the **last business day of the month** (billed in
+advance: the Oct 31 invoice is "November Cold Storage"). A pallet pulled before
+then isn't charged. Plus $10 per pull (W ticket). Net 60.
 
 **Rules**
 - **Every order gets its own pallet**, so Baker's crew pulls one pallet per pickup
   and charging in and out is one-to-one. Over 40 cases gets a second pallet.
 - **$100 per pallet** freight & transfer when it leaves for Baker.
-- **$35 per pallet per month**, starting the month after it arrives.
+- **$35 per pallet for each last business day of the month it's still at Baker**, the
+  same snapshot Baker bills us on. Pulled before then: no storage charge.
 - The truck carries **12 pallets**. A trip costs about **$592** (216 miles × $2.00 +
-  4 hours × $40). Per pallet: $100 in, minus $592/12 truck share, the $10 pull and
-  Baker's first month ($30), leaves **+$10.67**, then **+$5 a month**. Break-even is
-  **10 pallets a trip**, so don't run under 10 unless the truck carries something else.
-- To confirm with Baker: whether a pallet arriving mid-month is billed for that month.
-  If it is, start our $35 from the arrival month.
+  4 hours × $40). Per pallet: $100 in, minus $592/12 truck share and the $10 pull,
+  leaves **+$40.67**, then **+$5 every month-end** it stays. Break-even is $592 ÷ $90 =
+  **7 pallets a trip**; don't run under 7 unless the truck carries something else.
+- Customer reminders while at Baker name the deadline: "pick up before [last business
+  day] to avoid the $35 storage charge."
 - Released at Baker only when paid, same as the plant: no W ticket until the
   balance is zero.
 
@@ -262,7 +264,7 @@ Each phase ships, gets checked against real orders, then the next starts.
    bill $5/lb on finished weight.
 7. **Value-add on CMC buyers' orders** bills only if the order's scanner session
    isn't flagged as ours (`cmc`). Check on the first CMC sale.
-8. **Baker storage:** rates set 2026-11-16 (price book: transfer $100, storage $35). Storage stays switched off until the detector bills per pallet starting the month after arrival; today's code bills per customer from the arrival month. Pallet slots, the trip log and the statement match are Phase 3 work.
+8. **Baker storage:** rates set 2026-11-16 (price book: transfer $100, storage $35). Storage stays switched off until the detector bills per pallet on hand at each month-end (last business day); today's code bills per customer from the arrival month. Pallet slots, the trip log and the statement match are Phase 3 work.
 9. **Habits the plan depends on:** buyers assigned to carcasses on kill day, cut
    cards complete before cutting, special deals set before the work, one person in the
    office watching the Fix-the-source list.
