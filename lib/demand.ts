@@ -20,6 +20,8 @@
 //
 // Nothing is ordered. This is a list for a person to act on.
 
+import { pluMatchKey, pluLead } from './pluAliases'
+
 export type SaleUnit = 'LB' | 'EA'
 
 /** An open order line, with what the scanner has packed against it. */
@@ -163,25 +165,50 @@ export function buildDemandLines(args: {
   /** PLUs the order catalog files under smokehouse. */
   smokehousePlus?: Set<string>
 }): DemandLine[] {
-  const { lines, plu, onHand, supply, yields } = args
+  const { lines, plu, supply } = args
   const smokehousePlus = args.smokehousePlus ?? new Set<string>()
   const byKey = new Map<string, DemandLine>()
+
+  // Charlie, 2026-11-17: "I am like 500 lbs of 85/15 ahead on inventory" while
+  // /demand said 0 on hand and no yield. The order line was PLU 204, a Clover
+  // price group; the scale labels, the freezer count and the yield scans all
+  // say 100. Everything below keys on pluMatchKey (lib/pluAliases), the same
+  // rule the scanner uses to fill an order line, so 204/202/203 and 100 are
+  // one item: one row, one on-hand, one yield.
+  const onHand = args.onHand && sumByMatchKey(args.onHand)
+  const yields = new Map<string, Map<string, YieldRate>>()
+  for (const [sp, rates] of args.yields) {
+    const merged = new Map<string, YieldRate>()
+    for (const [p, r] of rates) {
+      const k = pluMatchKey(p)
+      const t = merged.get(k) ?? { lbPerHangLb: 0, pkgPerHangLb: 0 }
+      t.lbPerHangLb += r.lbPerHangLb; t.pkgPerHangLb += r.pkgPerHangLb
+      merged.set(k, t)
+    }
+    yields.set(sp, merged)
+  }
 
   for (const l of lines) {
     const short = lineShort(l)
     if (short <= 0) continue
-    const info = l.plu_number ? plu.get(l.plu_number) : undefined
+    const matchKey = pluMatchKey(l.plu_number)
+    // A merged row is named by the group's lead PLU (100 for ground beef) when
+    // the catalog has it, so the row reads as what the label says.
+    const lead = matchKey ? pluLead(l.plu_number!) : ''
+    const rowPlu = lead && plu.has(lead) ? lead : l.plu_number
+    const info = rowPlu ? plu.get(rowPlu) : undefined
     // The PLU's sell-by-weight flag is the truth; the line's unit is what was typed.
     const unit: SaleUnit = info ? (info.sell_by_weight === false ? 'EA' : 'LB') : saleUnit(l.unit)
-    const key = l.plu_number ?? `name:${l.item_name.trim().toLowerCase()}`
+    const key = matchKey || `name:${l.item_name.trim().toLowerCase()}`
     const d = byKey.get(key) ?? {
-      key, plu_number: l.plu_number, item_name: info?.item_name || l.item_name,
+      key, plu_number: rowPlu, item_name: info?.item_name || l.item_name,
       species: info?.species ?? null,
-      smokehouse: !!l.plu_number && smokehousePlus.has(l.plu_number),
+      smokehouse: false,
       unit,
       ordered: 0, filled: 0, short: 0, onHand: null, coming: null,
       comingHanging: 0, comingBooked: 0, toBuy: 0, orders: [],
     }
+    if (l.plu_number && smokehousePlus.has(l.plu_number)) d.smokehouse = true
     d.ordered += Number(l.qty_ordered) || 0
     d.filled  += filledQty(l)
     d.short   += short
@@ -195,13 +222,13 @@ export function buildDemandLines(args: {
   for (const d of byKey.values()) {
     if (d.plu_number) {
       if (onHand) {
-        const h = onHand.get(d.plu_number)
+        const h = onHand.get(d.key)
         d.onHand = h ? (d.unit === 'LB' ? h.lbs : h.pkgs) : 0
       }
       // Coming: every species' supply × that species' rate for this PLU.
       let hanging = 0, booked = 0, rated = false
       for (const s of supply) {
-        const rate = yields.get(s.species)?.get(d.plu_number)
+        const rate = yields.get(s.species)?.get(d.key)
         if (!rate) continue
         rated = true
         const per = d.unit === 'LB' ? rate.lbPerHangLb : rate.pkgPerHangLb
@@ -222,6 +249,19 @@ export function buildDemandLines(args: {
 
   return [...byKey.values()].sort((a, b) =>
     b.toBuy - a.toBuy || b.short - a.short || a.item_name.localeCompare(b.item_name))
+}
+
+/** Add up per-PLU totals under each PLU's match key, so aliases land together. */
+function sumByMatchKey(m: Map<string, { lbs: number; pkgs: number }>): Map<string, { lbs: number; pkgs: number }> {
+  const out = new Map<string, { lbs: number; pkgs: number }>()
+  for (const [p, v] of m) {
+    const k = pluMatchKey(p)
+    if (!k) continue
+    const t = out.get(k) ?? { lbs: 0, pkgs: 0 }
+    t.lbs += v.lbs; t.pkgs += v.pkgs
+    out.set(k, t)
+  }
+  return out
 }
 
 export interface DemandSummary {

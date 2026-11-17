@@ -38,6 +38,14 @@ export function pluMatchKey(plu: string | null | undefined): string {
   return KEY_OF.get(p) ?? p
 }
 
+/** The PLU that names an alias group on a merged line: 100 (GROUND BEEF) for
+ *  the lean ratios, the group's first PLU otherwise. A PLU with no alias is
+ *  itself. */
+export function pluLead(plu: string): string {
+  const key = KEY_OF.get(plu.trim())
+  return key ? key.slice('alias:'.length) : plu.trim()
+}
+
 /** A PLU that lives only on the register (a Clover price group), never on the
  *  scale. Nothing the crew scans will carry its number, so it should not be
  *  offered when a line is put on a retail order. */
