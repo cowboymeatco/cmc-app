@@ -99,6 +99,7 @@ export interface DepositItem {
   label: string
   paymentMethodId: string | null
   depositedIn: { id: string; date: string } | null
+  note?: string
 }
 
 export interface HandDeposit {
@@ -167,6 +168,7 @@ async function candidates(date: string, undepositedId: string, cardMethodId: str
       label: p.CustomerRef?.name ?? p.CustomerRef?.value ?? 'Payment',
       paymentMethodId: p.PaymentMethodRef?.value ?? null,
       depositedIn: depositedIn.get(`Payment:${p.Id}`) ?? null,
+      note: p.PrivateNote ?? '',
     })
   }
   for (const j of jes.QueryResponse.JournalEntry ?? []) {
@@ -189,7 +191,7 @@ async function candidates(date: string, undepositedId: string, cardMethodId: str
 // is named, so a person knows which payment still has to be recorded.
 function pickItems(s: DaySummary, pool: DepositItem[]): { items: DepositItem[]; missing: string[]; ties: number } {
   const card = s.byTender.find(t => t.kind === 'card')
-  const expected: { label: string; cents: number; types: DepositItem['txnType'][] }[] = []
+  const expected: { label: string; cents: number; types: DepositItem['txnType'][]; orderId?: string }[] = []
   if (card && card.retailCents > 0) expected.push({ label: `retail card sales to CMC`, cents: card.retailCents, types: ['Payment'] })
   // A ring-up / hand-keyed order is recorded as one payment for what the card
   // actually took for it — its card share if the order was split, the short
@@ -205,7 +207,7 @@ function pickItems(s: DaySummary, pool: DepositItem[]): { items: DepositItem[]; 
     if (!cardShare) continue
     const gift = Math.min(giftByOrder.get(orderId) ?? 0, cardShare)
     giftOnCard += gift
-    if (cardShare - gift > 0 && labels.has(orderId)) expected.push({ label: labels.get(orderId)!, cents: cardShare - gift, types: ['Payment'] })
+    if (cardShare - gift > 0 && labels.has(orderId)) expected.push({ label: labels.get(orderId)!, cents: cardShare - gift, types: ['Payment'], orderId })
   }
   if (giftOnCard > 0) expected.push({ label: 'gift cards sold on card', cents: giftOnCard + s.totals.tipsCents, types: ['JournalEntry'] })
 
@@ -220,6 +222,18 @@ function pickItems(s: DaySummary, pool: DepositItem[]): { items: DepositItem[]; 
     const missing: string[] = []
     let ties = 0
     for (const e of expected) {
+      // The register payment recorder (lib/ringUpPayments) books one payment
+      // per invoice per tender, memo-marked with the ticket's order id, so a
+      // ticket covering two invoices arrives as two card payments. Take them
+      // together when they add up to what the card took for the ticket.
+      if (e.orderId) {
+        const tag = `[clover-ringup ${e.orderId}:`
+        const mine = pool.filter(p => !used.has(p.txnId) && p.txnType === 'Payment' && (p.note ?? '').includes(tag) && (p.note ?? '').includes(':card]'))
+        if (mine.length && mine.reduce((x, p) => x + p.amountCents, 0) === e.cents) {
+          for (const p of mine) { used.add(p.txnId); items.push(p) }
+          continue
+        }
+      }
       const hits = pool
         .filter(p => !used.has(p.txnId) && e.types.includes(p.txnType) && p.amountCents === e.cents)
         .sort((a, b) => (prefer ? Number(depKey(b) === prefer) - Number(depKey(a) === prefer) : 0) || dist(a.txnDate) - dist(b.txnDate))
