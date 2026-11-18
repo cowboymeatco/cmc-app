@@ -153,7 +153,7 @@ export default function SeasoningsTab() {
         <h3 style={H3}>🛒 Order</h3>
         {!plan?.orders.length && (
           <div style={{ color: C.lightBrown, fontSize: '0.85rem' }}>
-            Nothing adds up yet — a flavour needs a recipe with a seasoning and a ratio before its demand shows here.
+            Nothing adds up yet — a flavour needs a recipe with ingredient lines linked to supplies before its demand shows here.
           </div>
         )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
