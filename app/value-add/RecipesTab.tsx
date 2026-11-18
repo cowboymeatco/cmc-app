@@ -1,7 +1,8 @@
 'use client'
 
-// The smokehouse recipe book — one row per flavour: seasoning and its ratio,
-// cure, other adds, casing, and the steps done from memory.
+// The smokehouse recipe book — one row per flavour: every ingredient as a line
+// in lb per 100 lb of meat, casing, the label's ingredient statement, and the
+// steps done from memory.
 //
 // Built 2026-09-26 when the people who carry the formulations announced they
 // were leaving. Filling this in IS the knowledge capture; everything after it
@@ -25,8 +26,12 @@ const C = {
 }
 
 interface Flavor { id: string; product: string; val: string; label: string; plu_number: string | null }
+// One ingredient: lb per 100 lb of meat. A line points at a supply when it's
+// something we order; meat and water don't. Cups / counts go in qty_note.
+interface RLine { item: string; supply_id: string | null; lb_per_100: number | null; qty_note: string | null }
 interface Recipe {
   id: string; wizard_flavor_id: string | null; product: string; label: string
+  lines: RLine[]; label_statement: string | null
   seasoning_id: string | null; seasoning_lb_per_100: number | null
   cure_id: string | null; cure_oz_per_100: number | null; other_adds: string | null
   casing_type: string | null; casing_size: string | null; steps: string | null; notes: string | null
@@ -69,9 +74,12 @@ const NAME_KEY = 'cmc.recipeBook.name'
 function loadName(): string { try { return localStorage.getItem(NAME_KEY) ?? '' } catch { return '' } }
 function saveName(n: string) { try { localStorage.setItem(NAME_KEY, n) } catch { /* private window */ } }
 
-// "Written down" = the seasoning and its ratio exist. Cure and casing don't
-// apply to every product (jerky has no casing), so they show as chips instead.
-const isFilled = (r: Recipe | null) => !!r && !!r.seasoning_id && r.seasoning_lb_per_100 != null
+// "Written down" = at least one ingredient line we order, with an amount (or,
+// for a recipe saved before lines existed, its seasoning and ratio). Casing
+// and label don't apply to every product, so they show as chips instead.
+const hasLines = (r: Recipe | null) => !!r && (r.lines ?? []).some(l => l.supply_id && l.lb_per_100 != null)
+const isFilled = (r: Recipe | null) => hasLines(r) || (!!r && !!r.seasoning_id && r.seasoning_lb_per_100 != null)
+const fmt = (n: number) => String(Math.round(n * 10000) / 10000)
 
 function Chip({ on, children }: { on: boolean; children: React.ReactNode }) {
   const color = on ? C.green : C.lightBrown
@@ -137,7 +145,7 @@ export default function RecipesTab() {
             {filled} of {all.length} written down
           </div>
           <div style={{ color: C.lightBrown, fontSize: '0.8rem', marginTop: '0.2rem' }}>
-            A recipe counts once it has a seasoning and a ratio. Tap any flavour to fill it in.
+            A recipe counts once it has ingredient lines with amounts. Tap any flavour to fill it in.
           </div>
           <div style={{ height: 6, background: 'rgba(0,0,0,0.3)', borderRadius: 3, marginTop: '0.5rem', overflow: 'hidden' }}>
             <div style={{ height: '100%', width: `${all.length ? (filled / all.length) * 100 : 0}%`, background: C.green }} />
@@ -242,6 +250,8 @@ function Row({ line, supplies, onClick }: { line: Line; supplies: Supply[]; onCl
   const r = line.recipe
   const seasoning = supplies.find(x => x.id === r?.seasoning_id)?.name
   const filled = isFilled(r)
+  const nLines = r?.lines?.length ?? 0
+  const verify = /VERIFY/.test(r?.notes ?? '')
   return (
     <button onClick={onClick} style={{
       textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit',
@@ -254,10 +264,12 @@ function Row({ line, supplies, onClick }: { line: Line; supplies: Supply[]; onCl
         {line.plu && <span style={{ color: C.lightBrown, fontFamily: 'monospace', fontWeight: 400, fontSize: '0.75rem', marginLeft: '0.5rem' }}>PLU {line.plu}</span>}
       </span>
       <span style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
-        <Chip on={filled}>{filled ? `${seasoning ?? 'Seasoning'} · ${r!.seasoning_lb_per_100} lb/100` : 'Seasoning'}</Chip>
-        <Chip on={!!r?.cure_id}>Cure</Chip>
+        <Chip on={filled}>{nLines ? `${nLines} ingredients` : filled ? `${seasoning ?? 'Seasoning'} · ${r!.seasoning_lb_per_100} lb/100` : 'Ingredients'}</Chip>
+        <Chip on={!!r?.label_statement}>Label</Chip>
         <Chip on={!!r?.casing_type}>{r?.casing_type ?? 'Casing'}</Chip>
         <Chip on={!!r?.steps}>Steps</Chip>
+        {verify && <span style={{ background: `${C.yellow}22`, border: `1px solid ${C.yellow}66`, color: C.yellow,
+          fontSize: '0.65rem', fontWeight: 700, borderRadius: 99, padding: '0.1rem 0.5rem' }}>⚠ Verify</span>}
       </span>
       {r?.updated_by && (
         <span style={{ color: C.lightBrown, fontSize: '0.7rem', width: '100%' }}>
@@ -268,8 +280,20 @@ function Row({ line, supplies, onClick }: { line: Line; supplies: Supply[]; onCl
   )
 }
 
-type Form = Record<'product' | 'label' | 'seasoning_id' | 'seasoning_lb_per_100' |
-  'cure_id' | 'cure_oz_per_100' | 'other_adds' | 'casing_type' | 'casing_size' | 'steps' | 'notes', string>
+type Form = Record<'product' | 'label' | 'other_adds' | 'casing_type' | 'casing_size' | 'steps' | 'notes' | 'label_statement', string>
+// Editor copy of a line: amounts stay strings while typing.
+interface LineForm { item: string; supply_id: string; lb: string; qty_note: string }
+
+// A recipe saved before ingredient lines existed opens with its seasoning and
+// cure as the first lines, so nothing written down earlier is lost.
+function startLines(r: Recipe | null, supplies: Supply[]): LineForm[] {
+  if (r?.lines?.length) return r.lines.map(l => ({ item: l.item, supply_id: l.supply_id ?? '', lb: l.lb_per_100 == null ? '' : String(l.lb_per_100), qty_note: l.qty_note ?? '' }))
+  const out: LineForm[] = []
+  const nm = (id: string | null) => supplies.find(x => x.id === id)?.name ?? ''
+  if (r?.seasoning_id) out.push({ item: nm(r.seasoning_id), supply_id: r.seasoning_id, lb: r.seasoning_lb_per_100 == null ? '' : String(r.seasoning_lb_per_100), qty_note: '' })
+  if (r?.cure_id) out.push({ item: nm(r.cure_id), supply_id: r.cure_id, lb: r.cure_oz_per_100 == null ? '' : fmt(r.cure_oz_per_100 / 16), qty_note: '' })
+  return out
+}
 
 // Pick a supply, or name a new one right here — making someone leave the recipe
 // to go create a seasoning first is how recipes stay half-written.
@@ -312,10 +336,15 @@ function Editor({ line, house, name, onSaved, onCancel, onDeleted, supplies, onS
   const s = (v: string | number | null | undefined) => v == null ? '' : String(v)
   const [form, setForm] = useState<Form>({
     product: r?.product ?? line.product, label: r?.label ?? line.label,
-    seasoning_id: s(r?.seasoning_id),
-    seasoning_lb_per_100: s(r?.seasoning_lb_per_100), cure_id: s(r?.cure_id),
-    cure_oz_per_100: s(r?.cure_oz_per_100), other_adds: s(r?.other_adds),
+    other_adds: s(r?.other_adds), label_statement: s(r?.label_statement),
     casing_type: s(r?.casing_type), casing_size: s(r?.casing_size), steps: s(r?.steps), notes: s(r?.notes),
+  })
+  const [lines, setLines] = useState<LineForm[]>(() => startLines(r, supplies))
+  const setLine = (i: number, patch: Partial<LineForm>) => setLines(p => p.map((l, j) => j === i ? { ...l, ...patch } : l))
+  const move = (i: number, d: -1 | 1) => setLines(p => {
+    const j = i + d
+    if (j < 0 || j >= p.length) return p
+    const n = [...p]; [n[i], n[j]] = [n[j], n[i]]; return n
   })
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -331,16 +360,22 @@ function Editor({ line, house, name, onSaved, onCancel, onDeleted, supplies, onS
   const save = async () => {
     if (!name.trim()) { setErr('Type your name at the top first.'); return }
     if (house && (!form.label.trim())) { setErr('Name the product.'); return }
-    const seas = num(form.seasoning_lb_per_100), cure = num(form.cure_oz_per_100)
-    if (seas === 'bad' || cure === 'bad') { setErr('Ratios must be numbers.'); return }
+    const kept = lines.filter(l => l.item.trim() || l.supply_id || l.lb.trim())
+    const out = []
+    for (const l of kept) {
+      const item = l.item.trim() || supplies.find(x => x.id === l.supply_id)?.name || ''
+      if (!item) { setErr('Every ingredient line needs a name.'); return }
+      const lb = num(l.lb)
+      if (lb === 'bad') { setErr(`${item}: amount must be a number.`); return }
+      out.push({ item, supply_id: l.supply_id || null, lb_per_100: lb, qty_note: l.qty_note.trim() || null })
+    }
     setBusy(true); setErr('')
     const res = await fetch('/api/smokehouse-recipes', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...form,
         product: house ? (form.product.trim() || HOUSE) : line.product,
-        seasoning_lb_per_100: seas, cure_oz_per_100: cure,
-        seasoning_id: form.seasoning_id || null, cure_id: form.cure_id || null,
+        lines: out,
         id: r?.id, wizard_flavor_id: line.flavorId, updated_by: name,
       }),
     })
@@ -374,22 +409,12 @@ function Editor({ line, house, name, onSaved, onCancel, onDeleted, supplies, onS
         </div>
       )}
 
-      <div style={grid}>
-        <div>
-          <label style={LABEL}>Seasoning</label>
-          <SupplyPicker value={form.seasoning_id} onChange={v => setForm(p => ({ ...p, seasoning_id: v }))}
-            supplies={supplies} name={name} onSupplyAdded={onSupplyAdded} placeholder="— pick the seasoning —" />
-        </div>
-        <div><label style={LABEL}>lb seasoning per 100 lb meat</label><input style={INPUT} inputMode="decimal" value={form.seasoning_lb_per_100} onChange={f('seasoning_lb_per_100')} /></div>
-      </div>
+      <LinesEditor lines={lines} setLine={setLine} move={move}
+        remove={i => setLines(p => p.filter((_, j) => j !== i))}
+        add={() => setLines(p => [...p, { item: '', supply_id: '', lb: '', qty_note: '' }])}
+        supplies={supplies} name={name} onSupplyAdded={onSupplyAdded} />
 
       <div style={grid}>
-        <div>
-          <label style={LABEL}>Cure</label>
-          <SupplyPicker value={form.cure_id} onChange={v => setForm(p => ({ ...p, cure_id: v }))}
-            supplies={supplies} name={name} onSupplyAdded={onSupplyAdded} placeholder="— none —" />
-        </div>
-        <div><label style={LABEL}>oz cure per 100 lb meat</label><input style={INPUT} inputMode="decimal" value={form.cure_oz_per_100} onChange={f('cure_oz_per_100')} /></div>
         <div>
           <label style={LABEL}>Casing</label>
           <select style={INPUT} value={form.casing_type} onChange={f('casing_type')}>
@@ -401,13 +426,18 @@ function Editor({ line, house, name, onSaved, onCancel, onDeleted, supplies, onS
       </div>
 
       <div>
-        <label style={LABEL}>Other adds (with amounts)</label>
+        <label style={LABEL}>Other adds (free text — anything not on a line above)</label>
         <textarea style={{ ...INPUT, minHeight: 50 }} value={form.other_adds} onChange={f('other_adds')}
           placeholder="Cheese, water, binder, encapsulated citric…" />
       </div>
       <div>
         <label style={LABEL}>Steps — mixing order, stuffing, anything done from memory</label>
         <textarea style={{ ...INPUT, minHeight: 90 }} value={form.steps} onChange={f('steps')} />
+      </div>
+      <div>
+        <label style={LABEL}>Label ingredient statement (allergens included)</label>
+        <textarea style={{ ...INPUT, minHeight: 60 }} value={form.label_statement} onChange={f('label_statement')}
+          placeholder="INGREDIENTS: BEEF, WATER, … CONTAINS: MILK." />
       </div>
       <div>
         <label style={LABEL}>Notes</label>
@@ -421,6 +451,53 @@ function Editor({ line, house, name, onSaved, onCancel, onDeleted, supplies, onS
         {r && !r.wizard_flavor_id && (
           <button style={{ ...BTN('transparent', C.red), marginLeft: 'auto' }} onClick={remove}>Delete</button>
         )}
+      </div>
+    </div>
+  )
+}
+
+// The ingredient list. Amounts are lb per 100 lb of meat — the same number the
+// old sheet's "Per #" column shows × 100. Small amounts also show in ounces so
+// a cure line reads the way it's weighed out.
+function LinesEditor({ lines, setLine, move, remove, add, supplies, name, onSupplyAdded }: {
+  lines: LineForm[]; setLine: (i: number, p: Partial<LineForm>) => void; move: (i: number, d: -1 | 1) => void
+  remove: (i: number) => void; add: () => void
+  supplies: Supply[]; name: string; onSupplyAdded: (s: Supply) => void
+}) {
+  const small: React.CSSProperties = { ...INPUT, padding: '0.35rem 0.45rem', fontSize: '0.82rem' }
+  const iconBtn: React.CSSProperties = { ...BTN('transparent', C.lightBrown), padding: '0.2rem 0.4rem', fontSize: '0.8rem' }
+  return (
+    <div>
+      <label style={LABEL}>Ingredients — lb per 100 lb of meat</label>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+        {lines.map((l, i) => {
+          const lb = Number(l.lb)
+          const oz = l.lb.trim() && isFinite(lb) && lb > 0 && lb < 1 ? `= ${fmt(lb * 16)} oz` : ''
+          return (
+            <div key={i} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center',
+              background: 'rgba(0,0,0,0.15)', borderRadius: 3, padding: '0.35rem' }}>
+              <input style={{ ...small, flex: '2 1 150px', width: 'auto' }} value={l.item} placeholder="Ingredient (Beef Trim, Water…)"
+                onChange={e => setLine(i, { item: e.target.value })} />
+              <div style={{ flex: '2 1 170px' }}>
+                <SupplyPicker value={l.supply_id} supplies={supplies} name={name} onSupplyAdded={onSupplyAdded}
+                  placeholder="— not ordered —"
+                  onChange={v => setLine(i, { supply_id: v, ...(l.item.trim() ? {} : { item: supplies.find(x => x.id === v)?.name ?? '' }) })} />
+              </div>
+              <input style={{ ...small, flex: '0 1 80px', width: 80 }} inputMode="decimal" value={l.lb} placeholder="lb/100"
+                onChange={e => setLine(i, { lb: e.target.value })} />
+              <span style={{ color: C.lightBrown, fontSize: '0.72rem', minWidth: 60 }}>{oz}</span>
+              <input style={{ ...small, flex: '1 1 120px', width: 'auto' }} value={l.qty_note} placeholder="note (10 cups, 1 per batch…)"
+                onChange={e => setLine(i, { qty_note: e.target.value })} />
+              <span style={{ display: 'flex' }}>
+                <button type="button" style={iconBtn} onClick={() => move(i, -1)} aria-label="Move up">↑</button>
+                <button type="button" style={iconBtn} onClick={() => move(i, 1)} aria-label="Move down">↓</button>
+                <button type="button" style={{ ...iconBtn, color: C.red }} onClick={() => remove(i)} aria-label="Remove line">✕</button>
+              </span>
+            </div>
+          )
+        })}
+        <button type="button" style={{ ...BTN('transparent', C.tan), border: '1px dashed rgba(166,120,90,0.45)', alignSelf: 'flex-start' }}
+          onClick={add}>+ Add ingredient</button>
       </div>
     </div>
   )

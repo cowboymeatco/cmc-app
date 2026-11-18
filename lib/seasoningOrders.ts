@@ -8,7 +8,9 @@
 // for an order (same rule as lib/smokehouseBook.ts).
 //
 // Each flavour's pounds × its recipe (lib: smokehouse_recipes) become pounds of
-// a seasoning and of a cure. A house BLEND is made from other supplies, so what
+// every supply the recipe's ingredient lines point at — seasoning, cure, cheese,
+// spices. A recipe with no lines yet falls back to its single seasoning + cure.
+// Lines measured in cups or by count carry no pounds and don't count. A house BLEND is made from other supplies, so what
 // the shelf can't cover explodes into its ingredients by % weight — the order
 // list only ever orders BOUGHT things, and says how much blend to mix.
 //
@@ -23,7 +25,9 @@ const PRODUCT_TITLE: Record<string, string> = {
 }
 
 export interface FlavorRow  { id: string; product: string; val: string; label: string }
+export interface RecipeLineRow { recipe_id: string; supply_id: string | null; lb_per_100: number | null }
 export interface RecipeRow  {
+  id: string
   wizard_flavor_id: string | null
   seasoning_id: string | null; seasoning_lb_per_100: number | null
   cure_id: string | null;      cure_oz_per_100: number | null
@@ -141,11 +145,13 @@ function usesOf(needs: Need[]) {
 
 export function buildSeasoningPlan(args: {
   appts: ApptRow[]; sheets: SheetRow[]
-  flavors: FlavorRow[]; recipes: RecipeRow[]
+  flavors: FlavorRow[]; recipes: RecipeRow[]; recipeLines?: RecipeLineRow[]
   supplies: SupplyRow[]; blendLines: BlendLineRow[]
   from: string; to: string; today: string
 }): SeasoningPlan {
   const { appts, sheets, flavors, recipes, supplies, blendLines, from, to, today } = args
+  const recipeLines = new Map<string, RecipeLineRow[]>()
+  for (const l of args.recipeLines ?? []) recipeLines.set(l.recipe_id, [...(recipeLines.get(l.recipe_id) ?? []), l])
   const rates = learnFlavorRates(sheets)
 
   const sheetsByAppt = new Map<string, SheetRow[]>()
@@ -214,6 +220,14 @@ export function buildSeasoningPlan(args: {
     const r = f ? recipeByFlavor.get(f.id) : undefined
     const why = `${title} — ${label}`
     if (!f)      { gaps.push({ title, label, lb: round(lb, 1), reason: 'Not a flavour in the wizard list' }); continue }
+    const lines = r ? recipeLines.get(r.id) ?? [] : []
+    if (lines.length) {
+      // Ingredient lines are the recipe. Same supply on two lines adds up.
+      const counted = lines.filter(l => l.supply_id && l.lb_per_100 != null)
+      if (!counted.length) gaps.push({ title, label, lb: round(lb, 1), reason: 'Recipe lines have no supplies linked' })
+      for (const l of counted) for (const n of all) push(l.supply_id!, { date: n.date, lb: n.lb * Number(l.lb_per_100) / 100, why })
+      continue
+    }
     if (!r || !r.seasoning_id || r.seasoning_lb_per_100 == null) {
       gaps.push({ title, label, lb: round(lb, 1), reason: !r ? 'No recipe written down' : 'Recipe has no seasoning + ratio' })
     } else {
