@@ -38,6 +38,7 @@ import {
 } from '@/lib/cloverOrders'
 import { getOpenInvoices, type OpenInvoice } from '@/lib/qboInvoices'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
+import { ordersWithRecordedPayment } from '@/lib/ringUpPayments'
 
 // Each create costs 2 Clover calls and each update 3, all sequential to stay
 // under Clover's rate limit. Cap the work per run so a first sync of a large
@@ -57,7 +58,7 @@ export interface SyncDecision {
   lineName?: string
 }
 
-async function classify(inv: OpenInvoice, order: CloverOrder | undefined): Promise<SyncDecision> {
+async function classify(inv: OpenInvoice, order: CloverOrder | undefined, recordedOrders: Set<string>): Promise<SyncDecision> {
   const base = {
     docNumber: inv.docNumber,
     customerName: inv.customerName,
@@ -92,6 +93,14 @@ async function classify(inv: OpenInvoice, order: CloverOrder | undefined): Promi
     const payments = await getOrderPayments(order.id)
     if (payments.length > 0) {
       const total = payments.reduce((s, p) => s + (p.amount ?? 0), 0)
+      // Paid short at the counter, and the app has recorded that payment in
+      // QuickBooks (lib/ringUpPayments): the balance left is real, so it goes
+      // back on the register as a new ticket. Only on the app's own record —
+      // a paid ticket whose payment nobody recorded yet may just be waiting,
+      // and a second ticket then would invite charging the customer twice.
+      if (recordedOrders.has(order.id)) {
+        return { ...base, action: 'create', reason: `remaining balance after $${(total / 100).toFixed(2)} paid on the register` }
+      }
       return skip(`paid on the register ($${(total / 100).toFixed(2)})`)
     }
 
@@ -124,17 +133,23 @@ export async function loadContext(): Promise<ReconcileContext> {
 export async function planSync(ctx?: ReconcileContext): Promise<SyncDecision[]> {
   const { invoices, orders } = ctx ?? (await loadContext())
 
-  // Last write wins if a document number somehow has two orders; the duplicate
-  // surfaces through the sweep rather than being silently reconciled here.
+  // The NEWEST order per invoice is the live one (orders come back newest
+  // first), the same one the sweep keeps when it clears duplicates. That
+  // matters once a partly paid ticket has a remaining-balance ticket after it:
+  // the old, paid one is history. Any other duplicate surfaces through the
+  // sweep rather than being silently reconciled here.
   const byDoc = new Map<string, CloverOrder>()
   for (const o of orders) {
     const doc = parseRingUpDocNumber(o.title)
-    if (doc) byDoc.set(doc, o)
+    if (doc && !byDoc.has(doc)) byDoc.set(doc, o)
   }
+  // Empty until the payment recorder is live (its log table doesn't exist in
+  // test mode), so until then this changes nothing.
+  const recordedOrders = await ordersWithRecordedPayment([...byDoc.values()].map(o => o.id))
 
   const decisions: SyncDecision[] = []
   for (const inv of invoices) {
-    decisions.push(await classify(inv, byDoc.get(inv.docNumber)))
+    decisions.push(await classify(inv, byDoc.get(inv.docNumber), recordedOrders))
   }
   return decisions
 }

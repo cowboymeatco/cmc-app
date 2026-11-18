@@ -5,6 +5,7 @@ import Link from 'next/link'
 import InvoiceSlips, { SlipInvoice } from '@/components/InvoiceSlips'
 import CloverCapitalCard from '@/components/CloverCapitalCard'
 import CloverDailySales from '@/components/CloverDailySales'
+import RegisterPayments from '@/components/RegisterPayments'
 
 // Billing: producer -> QuickBooks customer recognition (phase 1), then
 // billable events review + accumulating invoices (next phases).
@@ -910,6 +911,9 @@ Only do this if the invoice was deleted on purpose or re-done under a new number
 
         {/* ── Clover Capital advance ─────────────────────────────────── */}
         <CloverCapitalCard />
+
+        {/* ── Invoice tickets paid at the register → QuickBooks ──────── */}
+        <RegisterPayments />
 
         {/* ── Register sales → QuickBooks ────────────────────────────── */}
         <CloverDailySales />
