@@ -206,6 +206,11 @@ export default function CloverDailySales() {
       {error && <div style={{ color: C.red, fontSize: '0.8rem', marginBottom: '0.5rem' }}>{error}</div>}
       {msg && <div style={{ color: C.green, fontSize: '0.8rem', marginBottom: '0.5rem' }}>{msg}</div>}
 
+      <DepositQueue onOpen={date => {
+        if (open !== date) void toggle(date)
+        document.getElementById(`clover-day-${date}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }} />
+
       {!days ? (
         <div style={{ color: C.lightBrown, fontSize: '0.83rem' }}>Loading…</div>
       ) : (
@@ -241,7 +246,7 @@ function DayRowView(props: {
   const t = detail?.summary.totals
   return (
     <>
-      <tr>
+      <tr id={`clover-day-${row.date}`}>
         <td style={TD}>{dateLabel(row.date, { weekday: 'short', month: 'short', day: 'numeric' })}</td>
         <td style={{ ...TD, color: status.color, fontSize: '0.78rem' }}>{status.text}</td>
         <td style={NUM}>{$(t?.retailNetCents ?? row.retailNetCents)}</td>
@@ -592,7 +597,7 @@ function DepositPanel({ date }: { date: string }) {
               In QuickBooks already: deposit #{p.alreadyDeposited.id} on {p.alreadyDeposited.date} — {$(p.alreadyDeposited.totalCents)} after
               loan {$(p.alreadyDeposited.loanCents)} and fees {$(p.alreadyDeposited.feeCents)}.
               {p.alreadyDeposited.loanCents !== p.holdbackDefaultCents && (
-                <span style={{ color: C.yellow }}> The usual 25% holdback would be {$(p.holdbackDefaultCents)}.</span>
+                <span style={{ color: C.yellow }}> The app expects a holdback of {$(p.holdbackDefaultCents)}.</span>
               )}
             </div>
           )}
@@ -608,7 +613,7 @@ function DepositPanel({ date }: { date: string }) {
               ))}
               <tr><td style={{ ...TD, fontWeight: 700 }}>Card sales for the day (Clover)</td><td style={{ ...NUM, fontWeight: 700 }}>{$(p.grossCents)}</td></tr>
               <tr>
-                <td style={TD}>Clover Loan Payable — holdback{p.holdbackCents === p.holdbackDefaultCents ? ' (25%)' : ''}</td>
+                <td style={TD}>Clover Loan Payable — holdback{p.holdbackCents !== p.holdbackDefaultCents ? ' (typed)' : p.holdbackNote ? ' (end of the advance)' : ' (25%)'}</td>
                 <td style={NUM}>{$(-p.holdbackCents)}</td>
               </tr>
               <tr>
@@ -649,10 +654,98 @@ function DepositPanel({ date }: { date: string }) {
                 style={{ ...BTN(canPost ? C.green : 'rgba(166,120,90,0.25)'), cursor: canPost ? 'pointer' : 'not-allowed' }}>
                 Approve &amp; record deposit
               </button>
-              {!postingFrom && <span style={{ fontSize: '0.75rem', color: C.lightBrown }}>Posting is off.</span>}
+              {!postingFrom && <span style={{ fontSize: '0.75rem', color: C.lightBrown }}>Recording deposits is off (test mode).</span>}
+              {postingFrom && date < postingFrom && <span style={{ fontSize: '0.75rem', color: C.lightBrown }}>Before {dateLabel(postingFrom, { month: 'short', day: 'numeric' })}, entered by hand.</span>}
             </div>
           )}
         </>
+      )}
+    </div>
+  )
+}
+
+// ── Card deposits waiting ───────────────────────────────────────────────────
+// The last three weeks' card days and whether each one's deposit is in
+// QuickBooks. A day whose money should be at First State Bank by now is
+// "ready": open it, type what the bank shows, and the app works out the fee.
+
+interface QueueDay {
+  date: string; grossCents: number; holdbackCents: number; bankDate: string
+  status: 'deposited' | 'ready' | 'on_the_way'
+  deposit: { id: string; date: string; totalCents: number } | null
+}
+
+function DepositQueue({ onOpen }: { onOpen: (date: string) => void }) {
+  const [days, setDays] = useState<QueueDay[] | null>(null)
+  const [postingFrom, setPostingFrom] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [showAll, setShowAll] = useState(false)
+
+  useEffect(() => {
+    fetch('/api/clover/deposits?queue=1')
+      .then(async res => {
+        const json = await res.json()
+        if (!res.ok || json.error) throw new Error(json.error ?? 'Load failed')
+        setDays(json.days)
+        setPostingFrom(json.postingFrom)
+      })
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+  }, [])
+
+  if (err) return <div style={{ color: C.lightBrown, fontSize: '0.78rem', marginBottom: '0.6rem' }}>Card deposits: couldn&apos;t check ({err}).</div>
+  if (!days) return <div style={{ color: C.lightBrown, fontSize: '0.78rem', marginBottom: '0.6rem' }}>Checking card deposits…</div>
+
+  const ready = days.filter(d => d.status === 'ready')
+  const coming = days.filter(d => d.status === 'on_the_way')
+  const list = showAll ? days : [...ready, ...coming]
+  const label = (s: QueueDay['status']) =>
+    s === 'deposited' ? { text: 'in QuickBooks', color: C.green }
+      : s === 'ready' ? { text: 'type the FSB amount', color: C.yellow }
+      : { text: 'on the way', color: C.lightBrown }
+
+  return (
+    <div style={{ border: '1px solid rgba(166,120,90,0.2)', borderRadius: 3, padding: '0.6rem 0.8rem', marginBottom: '0.8rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <div style={{ color: C.tan, fontWeight: 700, fontSize: '0.85rem' }}>
+          Card deposits: {ready.length ? `${ready.length} day${ready.length === 1 ? '' : 's'} to record` : 'nothing waiting'}
+          {coming.length ? `, ${coming.length} on the way` : ''}
+        </div>
+        <button onClick={() => setShowAll(v => !v)} style={{ ...BTN('transparent', C.lightBrown), padding: '0.2rem 0.5rem', fontSize: '0.75rem' }}>
+          {showAll ? 'Hide recorded' : 'Show last 3 weeks'}
+        </button>
+      </div>
+      <div style={{ fontSize: '0.75rem', color: C.lightBrown, margin: '0.2rem 0 0.4rem' }}>
+        Open a day, type what First State Bank shows for it, and the app works out Clover&apos;s holdback and fees.
+        {postingFrom ? ` Recording is on for days from ${dateLabel(postingFrom, { month: 'short', day: 'numeric' })}.` : ' Recording is off (test mode): nothing goes to QuickBooks.'}
+      </div>
+      {list.length > 0 && (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr>
+            <th style={TH}>Sales day</th><th style={{ ...TH, textAlign: 'right' }}>Card sales</th>
+            <th style={{ ...TH, textAlign: 'right' }}>25% holdback</th><th style={TH}>Bank by</th><th style={TH}>Status</th><th style={TH}></th>
+          </tr></thead>
+          <tbody>
+            {list.map(d => {
+              const st = label(d.status)
+              return (
+                <tr key={d.date}>
+                  <td style={TD}>{dateLabel(d.date, { weekday: 'short', month: 'short', day: 'numeric' })}</td>
+                  <td style={NUM}>{$(d.grossCents)}</td>
+                  <td style={NUM}>{$(d.holdbackCents)}</td>
+                  <td style={TD}>{dateLabel(d.bankDate, { weekday: 'short', month: 'short', day: 'numeric' })}</td>
+                  <td style={{ ...TD, color: st.color }}>
+                    {st.text}{d.deposit ? ` · #${d.deposit.id} ${$(d.deposit.totalCents)}` : ''}
+                  </td>
+                  <td style={TD}>
+                    {d.status !== 'deposited' && (
+                      <button onClick={() => onOpen(d.date)} style={{ ...BTN(C.tan), padding: '0.2rem 0.6rem', fontSize: '0.75rem' }}>Open</button>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
       )}
     </div>
   )

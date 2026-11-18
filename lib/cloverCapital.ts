@@ -28,9 +28,10 @@
 // ──────────────────────────────────────────────────────────────────────────────
 
 import { readCloverDay, type DaySummary } from '@/lib/cloverSales'
-import { cardGrossCents, defaultHoldbackCents, expectedBankDate } from '@/lib/qboDeposits'
+import { bookedDeposits, cardGrossCents, defaultHoldbackCents, expectedBankDate, type BookedDeposit } from '@/lib/qboDeposits'
+import { entryMarker } from '@/lib/qboDailySales'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
-import { addDaysISO, daysBetweenISO } from '@/lib/dates'
+import { addDaysISO, daysBetweenISO, isoDate } from '@/lib/dates'
 
 export interface Advance {
   advance_number: string
@@ -251,4 +252,104 @@ export async function capitalStatus(today: string, maxReads = 4): Promise<Capita
     pending: { from, to: today, days: pendingDays.length, holdbackCents, missing },
     todayHoldbackCents, estBalanceCents, cardSalesNeededCents, pace, payoffDate, paidOff, show,
   }
+}
+
+// ── One day's holdback, for its card deposit ────────────────────────────────
+
+export interface DayHoldback {
+  cents: number
+  /** Plain-words reason when it isn't simply the usual share of the day. */
+  note: string | null
+}
+
+/**
+ * What Clover keeps from one sales day's card batch toward the advance, for
+ * the deposit (lib/qboDeposits). The usual share of the day, except:
+ *   - no advance on record: the usual 25%, as the deposits were always built;
+ *   - the advance was closed before this day: nothing;
+ *   - the advance runs out in the days on the way: only what's left of it,
+ *     in the same day-by-day order capitalStatus uses, so the deposit and
+ *     the report agree on when the holdback stops.
+ * Days already inside the dashboard's "paid to date" keep the usual share:
+ * Clover took it.
+ */
+export async function holdbackForDay(date: string, grossCents: number): Promise<DayHoldback> {
+  const advance = await currentAdvance()
+  if (!advance) return { cents: defaultHoldbackCents(grossCents), note: null }
+  const share = Math.round(grossCents * advance.holdback_rate)
+  if (advance.closed_date && date > advance.closed_date) {
+    return { cents: 0, note: `Clover Capital advance paid off ${advance.closed_date}: no holdback` }
+  }
+  const lp = advance.last_payment_date
+  if (expectedBankDate(date) <= lp) return { cents: share, note: null }
+
+  const pendingDays = eachDay(addDaysISO(lp, -6), date).filter(d => expectedBankDate(d) > lp)
+  const stored = await storedDays(pendingDays[0] ?? date, date)
+  const missing = pendingDays.filter(d => d !== date && !stored.has(d))
+  const applied = applyHoldbacks(advance.balance_cents, pendingDays.map(d => ({
+    date: d, holdbackCents: d === date ? share : stored.get(d)?.holdback_cents ?? 0,
+  })))
+  const cents = applied.get(date) ?? share
+  if (cents === share) {
+    return { cents, note: missing.length ? `${missing.length} earlier card day(s) aren't on record, so the advance balance is an estimate` : null }
+  }
+  return {
+    cents,
+    note: cents === 0
+      ? 'By the app\'s count the Clover Capital advance was paid off before this day, so no holdback. Check the Clover dashboard'
+      : `Last of the Clover Capital advance: only $${(cents / 100).toFixed(2)} left to hold back. Check the Clover dashboard`,
+  }
+}
+
+// ── Card days still to deposit ──────────────────────────────────────────────
+
+export type QueueStatus = 'deposited' | 'ready' | 'on_the_way'
+
+export interface QueueDay {
+  date: string
+  grossCents: number
+  holdbackCents: number
+  bankDate: string                 // when Clover's batch should reach First State Bank
+  status: QueueStatus
+  deposit: Pick<BookedDeposit, 'id' | 'date' | 'totalCents'> | null
+}
+
+/**
+ * The card days filed in the last `days` days (the 5:00 PM report files
+ * them) and whether each one's deposit is in QuickBooks yet. A day counts as
+ * deposited when a deposit into First State Bank names it (the app's own
+ * marker) or carries a loan line of exactly that day's holdback, dated from
+ * the day of sale to ten days after its bank date (how Jill booked them).
+ * Read-only.
+ */
+export async function depositQueue(days = 20, today = isoDate()): Promise<QueueDay[]> {
+  const from = addDaysISO(today, -days)
+  const stored = [...(await storedDays(from, today)).values()]
+    .filter(d => d.card_gross_cents > 0)
+    .sort((a, b) => a.business_date.localeCompare(b.business_date))
+  if (!stored.length) return []
+  const booked = await bookedDeposits(stored[0].business_date, addDaysISO(today, 10))
+  const used = new Set<string>()
+  const find = (date: string, bankDate: string, holdbackCents: number) => {
+    const marker = entryMarker(date)
+    const byMarker = booked.find(d => !used.has(d.id) && d.note.includes(marker))
+    if (byMarker) return byMarker
+    if (!holdbackCents) return null
+    return booked
+      .filter(d => !used.has(d.id) && d.loanCents === holdbackCents && d.date >= date && d.date <= addDaysISO(bankDate, 10))
+      .sort((a, b) => Math.abs(daysBetweenISO(bankDate, a.date)) - Math.abs(daysBetweenISO(bankDate, b.date)))[0] ?? null
+  }
+  return stored.map(d => {
+    const bankDate = expectedBankDate(d.business_date)
+    const hit = find(d.business_date, bankDate, d.holdback_cents)
+    if (hit) used.add(hit.id)
+    return {
+      date: d.business_date,
+      grossCents: d.card_gross_cents,
+      holdbackCents: d.holdback_cents,
+      bankDate,
+      status: hit ? 'deposited' : bankDate <= today ? 'ready' : 'on_the_way',
+      deposit: hit ? { id: hit.id, date: hit.date, totalCents: hit.totalCents } : null,
+    }
+  })
 }

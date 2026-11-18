@@ -1,8 +1,9 @@
 export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { readCloverDay } from '@/lib/cloverSales'
-import { proposeDeposit, postDeposit, depositRecord } from '@/lib/qboDeposits'
-import { postingFrom, PostRefused } from '@/lib/qboDailySales'
+import { proposeDeposit, postDeposit, depositRecord, depositPostingFrom } from '@/lib/qboDeposits'
+import { PostRefused } from '@/lib/qboDailySales'
+import { depositQueue } from '@/lib/cloverCapital'
 import { requireExec } from '@/lib/execGate'
 
 // The bank side of a day's Clover card sales, for /billing.
@@ -10,7 +11,10 @@ import { requireExec } from '@/lib/execGate'
 //        (card payments out of Undeposited Funds, less loan holdback and fees).
 //        deposit/holdback are cents; deposit is what the bank shows. Dry run.
 //   POST {date, depositCents, holdbackCents, bankDate, fingerprint, approvedBy}
-//        -> a person approves; posts it once. Exec passphrase + posting switch.
+//        -> a person approves; posts it once. Exec passphrase + its own switch,
+//        CLOVER_DEPOSITS_POSTING_FROM.
+//   GET ?queue=1 -> the last three weeks' card days and whether each one's
+//        deposit is in QuickBooks yet. Read-only.
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -22,6 +26,13 @@ function cents(v: unknown): number | null {
 
 export async function GET(req: NextRequest) {
   const p = req.nextUrl.searchParams
+  if (p.get('queue')) {
+    try {
+      return NextResponse.json({ days: await depositQueue(), postingFrom: depositPostingFrom() })
+    } catch (e) {
+      return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 })
+    }
+  }
   const date = p.get('date') ?? ''
   if (!DATE.test(date)) return NextResponse.json({ error: 'date must be YYYY-MM-DD' }, { status: 400 })
   const bankDate = p.get('bankDate')
@@ -35,7 +46,7 @@ export async function GET(req: NextRequest) {
       }),
       depositRecord(date).catch(() => null),
     ])
-    return NextResponse.json({ proposal, record, fingerprint: summary.fingerprint, postingFrom: postingFrom() })
+    return NextResponse.json({ proposal, record, fingerprint: summary.fingerprint, postingFrom: depositPostingFrom() })
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 })
   }
@@ -53,7 +64,7 @@ export async function POST(req: NextRequest) {
     if (depositCents == null || holdbackCents == null) return NextResponse.json({ error: 'depositCents and holdbackCents are required (whole cents)' }, { status: 400 })
     if (typeof b.fingerprint !== 'string' || !b.fingerprint) return NextResponse.json({ error: 'fingerprint required — approve from the page' }, { status: 400 })
     if (typeof b.approvedBy !== 'string' || !b.approvedBy.trim()) return NextResponse.json({ error: 'Say who is approving' }, { status: 400 })
-    if (!postingFrom()) return NextResponse.json({ error: 'Posting to QuickBooks is switched off — deposits are still entered by hand.' }, { status: 409 })
+    if (!depositPostingFrom()) return NextResponse.json({ error: 'Recording deposits in QuickBooks is switched off — deposits are still entered by hand.' }, { status: 409 })
 
     // Recomputed server-side from Clover and QuickBooks as they are now.
     const summary = await readCloverDay(b.date)

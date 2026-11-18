@@ -34,7 +34,7 @@ import { qboFetch } from '@/lib/qbo'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { addDaysISO, dayOfWeekISO } from '@/lib/dates'
 import type { DaySummary } from '@/lib/cloverSales'
-import { entryMarker, postingFrom, PostRefused } from '@/lib/qboDailySales'
+import { entryMarker, PostRefused } from '@/lib/qboDailySales'
 
 export const CLOVER_HOLDBACK_RATE = 0.25
 
@@ -112,7 +112,8 @@ export interface DepositProposal {
   items: DepositItem[]           // what the deposit pulls out of Undeposited Funds
   itemsCents: number
   holdbackCents: number          // Clover Loan Payable line (entered or default)
-  holdbackDefaultCents: number
+  holdbackDefaultCents: number   // what Clover should have kept (25%, or the advance's last dollars)
+  holdbackNote: string | null
   depositCents: number | null    // what the bank shows — typed by a person
   feeCents: number | null        // gross − holdback − deposit
   bankDate: string | null
@@ -255,7 +256,21 @@ export async function proposeDeposit(s: DaySummary, input: {
 }): Promise<DepositProposal> {
   const acc = await accountIds()
   const gross = cardGrossCents(s)
-  const holdbackDefault = defaultHoldbackCents(gross)
+  // The holdback Clover should have kept: the usual share, unless the Clover
+  // Capital advance runs out on or before this day (lib/cloverCapital). Loaded
+  // lazily because that module builds on this one.
+  let holdbackDefault = defaultHoldbackCents(gross)
+  let holdbackNote: string | null = null
+  if (gross > 0) {
+    try {
+      const { holdbackForDay } = await import('@/lib/cloverCapital')
+      const h = await holdbackForDay(s.date, gross)
+      holdbackDefault = h.cents
+      holdbackNote = h.note
+    } catch (e) {
+      holdbackNote = `Couldn't read the Clover Capital advance (${e instanceof Error ? e.message : String(e)}), so the holdback is the usual 25%`
+    }
+  }
   const holdback = input.holdbackCents ?? holdbackDefault
   const deposit = input.depositCents ?? null
   const fee = deposit == null ? null : gross - holdback - deposit
@@ -293,11 +308,12 @@ export async function proposeDeposit(s: DaySummary, input: {
   if (fee != null && fee > 0 && gross > 0 && fee / gross > 0.1) {
     warnings.push(`Fees come to ${((fee / gross) * 100).toFixed(1)}% of the day — usually Clover's monthly fees landing on this deposit, but check Clover's deposit detail. If the loan holdback stopped, the "fee" is really the 25% (9/10 was booked that way).`)
   }
-  if (holdback !== holdbackDefault) warnings.push(`Holdback set to $${(holdback / 100).toFixed(2)} instead of the usual 25% ($${(holdbackDefault / 100).toFixed(2)})`)
+  if (holdbackNote) warnings.push(holdbackNote)
+  if (holdback !== holdbackDefault) warnings.push(`Holdback set to $${(holdback / 100).toFixed(2)} instead of the expected $${(holdbackDefault / 100).toFixed(2)}`)
 
   return {
     date: s.date, grossCents: gross, items, itemsCents,
-    holdbackCents: holdback, holdbackDefaultCents: holdbackDefault,
+    holdbackCents: holdback, holdbackDefaultCents: holdbackDefault, holdbackNote,
     depositCents: deposit, feeCents: fee, bankDate: input.bankDate ?? null,
     accounts: { bankId: acc.bankId, loanId: acc.loanId, feeId: acc.feeId, cardMethodId: acc.cardMethodId },
     alreadyDeposited, blockers, warnings,
@@ -305,12 +321,19 @@ export async function proposeDeposit(s: DaySummary, input: {
 }
 
 // ── Posting ─────────────────────────────────────────────────────────────────
-// Same guards as the sales posting: off until CLOVER_SALES_POSTING_FROM, one
+// Deposits have their own switch, CLOVER_DEPOSITS_POSTING_FROM (YYYY-MM-DD),
+// so they can go on without the daily sales posting and the other way round.
+// Unset, the page still builds each day's deposit but records nothing. One
 // row per shop day (a batch can't be deposited twice), every write logged.
+export function depositPostingFrom(): string | null {
+  const v = process.env.CLOVER_DEPOSITS_POSTING_FROM?.trim()
+  return v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null
+}
+
 export async function postDeposit(opts: { summary: DaySummary; proposal: DepositProposal; approvedFingerprint: string; approvedBy: string }) {
   const { summary: s, proposal: p, approvedFingerprint, approvedBy } = opts
-  const from = postingFrom()
-  if (!from) throw new PostRefused('Posting to QuickBooks is switched off (CLOVER_SALES_POSTING_FROM is not set).')
+  const from = depositPostingFrom()
+  if (!from) throw new PostRefused('Recording deposits in QuickBooks is switched off (CLOVER_DEPOSITS_POSTING_FROM is not set).')
   if (s.date < from) throw new PostRefused(`${s.date} is before ${from} — deposits for earlier days are entered by hand.`)
   if (s.fingerprint !== approvedFingerprint) throw new PostRefused('Clover\'s numbers for this day changed since the page loaded. Reload and review again.')
   if (p.blockers.length) throw new PostRefused(`Not ready: ${p.blockers.join(' · ')}`)
@@ -376,6 +399,25 @@ export async function postDeposit(opts: { summary: DaySummary; proposal: Deposit
     await supabaseAdmin.from('clover_card_deposits').update({ status: 'error', error: msg }).eq('business_date', s.date)
     throw new Error(`Deposit for ${s.date}: ${msg}`)
   }
+}
+
+/** A deposit already in QuickBooks, as the deposit queue needs to see it. */
+export interface BookedDeposit {
+  id: string; date: string; totalCents: number; loanCents: number; feeCents: number; note: string
+}
+
+/** Every QuickBooks deposit into First State Bank Checking dated in [from, to]. */
+export async function bookedDeposits(from: string, to: string): Promise<BookedDeposit[]> {
+  const acc = await accountIds()
+  const res = await qboFetch<QueryRes<QboDeposit & { DepositToAccountRef?: { value: string } }>>(
+    q(`select * from Deposit where TxnDate >= '${from}' and TxnDate <= '${to}' maxresults 500`),
+  )
+  return (res.QueryResponse.Deposit ?? [])
+    .filter(d => d.DepositToAccountRef?.value === acc.bankId)
+    .map(d => {
+      const sum = (id: string) => -Math.round(d.Line.filter(l => l.DepositLineDetail?.AccountRef?.value === id).reduce((x, l) => x + l.Amount, 0) * 100)
+      return { id: d.Id, date: d.TxnDate, totalCents: Math.round(d.TotalAmt * 100), loanCents: sum(acc.loanId), feeCents: sum(acc.feeId), note: d.PrivateNote ?? '' }
+    })
 }
 
 export async function depositRecord(date: string) {
