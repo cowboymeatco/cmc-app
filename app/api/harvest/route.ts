@@ -182,6 +182,14 @@ export async function PATCH(req: NextRequest) {
     updates.yield_pct = lw && hcw ? Math.round((hcw / lw) * 1000) / 10 : null
   }
 
+  // When a carcass came off the rail, for the staging list and the carcass QR
+  // page. The cut schedule's Cut ✓ comes through here; putting a carcass back
+  // on the rail clears it.
+  if (table === 'harvest_log' && id && typeof updates.status === 'string') {
+    if (updates.status === 'cut' && !('cut_at' in updates)) updates.cut_at = new Date().toISOString()
+    if (updates.status === 'chilling') { updates.cut_at = null; updates.cut_by = null }
+  }
+
   const { data, error } = await supabaseAdmin
     .from(table)
     .update(updates)

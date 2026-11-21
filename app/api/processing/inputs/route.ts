@@ -266,7 +266,7 @@ export async function POST(req: NextRequest) {
     if (allSidesScanned(siblings ?? [])) {
       const { data: pulled } = await supabaseAdmin
         .from('harvest_log')
-        .update({ status: 'cut' })
+        .update({ status: 'cut', cut_at: new Date().toISOString() })
         .eq('id', linked_harvest_id)
         .eq('status', 'chilling')
         .select('id')
@@ -319,7 +319,7 @@ export async function DELETE(req: NextRequest) {
     if (!allSidesScanned(siblings ?? [])) {
       await supabaseAdmin
         .from('harvest_log')
-        .update({ status: 'chilling' })
+        .update({ status: 'chilling', cut_at: null, cut_by: null })
         .eq('id', row.linked_harvest_id)
         .eq('status', 'cut')
     }

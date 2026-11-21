@@ -7,6 +7,7 @@ import { setFeedbackContext, clearFeedbackContext } from '@/lib/feedbackTelemetr
 import { isoDate, isoDateTime, addDaysISO } from '@/lib/dates'
 import { splitsIntoHalves, WHOLE_WEIGHT_LABEL } from '@/lib/carcass'
 import ScaleReadButton from '@/components/ScaleReadButton'
+import QRCode from 'qrcode'
 
 type Tab = 'parta' | 'partb' | 'worksheet' | 'harvestlog' | 'chill'
 
@@ -56,13 +57,55 @@ function tempColor(t: number | null) {
   return C.red
 }
 
-// ── Carcass tag print (2.4" × 5" Brother DK continuous, Code 128) ─────────────
-function printCarcassTags(h: HarvestLog) {
+// ── Carcass tag print (2.4" × 5" Brother QL-810W, DK-2205 continuous) ─────────
+// One tag per side on a split carcass, one tag on a whole one. Each side tag
+// carries that side's own weight and the carcass total; the Code 128 keeps the
+// side (-L / -R) for the processing scan guns, and the QR — one per carcass,
+// the same on both sides (Charlie, 2026-11-21: per carcass, "I don't want to
+// split. Twice as much to track") — opens /carcass/<id> on a phone: cut card,
+// days hung against the aging target, move to staging, mark cut.
+//
+// The window opens on the click and fills once the customers and the QR are
+// in, so the browser doesn't treat the late window.open as a popup. On the
+// harvest laptop Chrome runs with --kiosk-printing, so print() goes straight
+// to the QL-810W with no dialog; afterprint closes the window again.
+const escHtml = (v: unknown) => String(v ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]!))
+
+async function tagCustomers(h: HarvestLog): Promise<{ label: string; names: string[] }> {
+  try {
+    const asg = await fetch(`/api/carcass-assignments?harvest_log_ids=${encodeURIComponent(h.id)}`).then(r => r.json())
+    if (Array.isArray(asg) && asg.length) {
+      return { label: 'For', names: (asg as { customer_name: string; portion: string }[])
+        .map(a => `${a.customer_name}${a.portion && a.portion !== 'Whole' ? ` (${a.portion})` : ''}`) }
+    }
+    // Not assigned to a carcass yet — on kill day that's usual. The booking's
+    // buyers are still worth having on the tag, marked as the booking's.
+    if (h.appointment_id) {
+      const appts = await fetch(`/api/appointments?ids=${encodeURIComponent(h.appointment_id)}`).then(r => r.json())
+      const custs = (Array.isArray(appts) ? (appts[0] as HarvestAppointment | undefined)?.customers : null) ?? []
+      const names = custs.map(c => c.customer_name).filter(n => n && n.trim())
+      if (names.length) return { label: 'Booked', names }
+    }
+  } catch { /* the tag still prints without names */ }
+  return { label: '', names: [] }
+}
+
+async function printCarcassTags(h: HarvestLog) {
+  const w = window.open('', '_blank', 'width=300,height=580')
+  if (!w) { alert('The tag window was blocked. Allow pop-ups for this site, then print again.'); return }
+  w.document.write('<p style="font-family:Arial;padding:1rem">Preparing tag…</p>')
+
+  const [cust, qr] = await Promise.all([
+    tagCustomers(h),
+    QRCode.toDataURL(`${window.location.origin}/carcass/${h.id}`, { margin: 0, width: 240, errorCorrectionLevel: 'M' }).catch(() => ''),
+  ])
+
   const dateStr   = new Date(h.harvest_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-  const totalHCW  = h.hot_carcass_weight_lbs
-  const avgHalfWt = totalHCW != null ? (totalHCW / 2) : null
+  const totalHCW  = h.hot_carcass_weight_lbs ?? (h.half_1_weight_lbs != null && h.half_2_weight_lbs != null ? h.half_1_weight_lbs + h.half_2_weight_lbs : null)
   const identParts = [h.ear_tag ? `ET: ${h.ear_tag}` : null, h.sex || null, h.breed || null].filter(Boolean)
   const identLine  = identParts.join('  ·  ')
+  // Left half is half_1, right half is half_2 — the Weights step's order.
+  const sideWt = (side: 'L' | 'R') => side === 'L' ? h.half_1_weight_lbs : h.half_2_weight_lbs
 
   const css = `
     @page { size: 2.4in 5in; margin: 0.18in 0.14in 0.1in; }
@@ -74,24 +117,31 @@ function printCarcassTags(h: HarvestLog) {
        one label. break-after: page is the modern alias for page-break-after. */
     .label { min-height: 4.72in; page-break-after: always; break-after: page; page-break-inside: avoid; break-inside: avoid; }
     .label:last-child { min-height: 0; page-break-after: auto; break-after: auto; }
-    .header { text-align: center; margin-bottom: 4pt; }
+    .header { text-align: center; margin-bottom: 3pt; }
     .co { font-size: 10pt; font-weight: 900; letter-spacing: 0.18em; text-transform: uppercase; line-height: 1.1; }
     .co-sub { font-size: 6.5pt; letter-spacing: 0.2em; text-transform: uppercase; color: #444; margin-top: 1pt; }
-    hr { border: none; border-top: 0.75pt solid #000; margin: 4pt 0; }
-    .half-badge { text-align: center; font-size: 11pt; font-weight: 900; letter-spacing: 0.22em; text-transform: uppercase; border: 2pt solid #000; padding: 3pt 0; margin: 3pt 0; }
-    .producer { text-align: center; font-size: 10.5pt; font-weight: 700; line-height: 1.15; margin-bottom: 1pt; }
-    .species  { text-align: center; font-size: 9pt; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: #333; }
-    .tagnum   { text-align: center; font-size: 52pt; font-weight: 900; line-height: 1.0; letter-spacing: 0.02em; margin: 2pt 0; }
-    .ident    { text-align: center; font-size: 7.5pt; color: #333; letter-spacing: 0.03em; margin-bottom: 2pt; }
-    .bc-wrap  { text-align: center; margin: 4pt 0; padding: 0 2pt; }
+    hr { border: none; border-top: 0.75pt solid #000; margin: 3pt 0; }
+    .half-badge { text-align: center; font-size: 11pt; font-weight: 900; letter-spacing: 0.22em; text-transform: uppercase; border: 2pt solid #000; padding: 2pt 0; margin: 2pt 0; }
+    .producer { text-align: center; font-size: 10pt; font-weight: 700; line-height: 1.15; }
+    .species  { text-align: center; font-size: 8.5pt; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: #333; }
+    .tagnum   { text-align: center; font-size: 44pt; font-weight: 900; line-height: 1.0; letter-spacing: 0.02em; margin: 1pt 0; }
+    .ident    { text-align: center; font-size: 7.5pt; color: #333; letter-spacing: 0.03em; margin-bottom: 1pt; }
+    .cust     { text-align: center; font-size: 8.5pt; font-weight: 700; line-height: 1.2; margin: 2pt 0; max-height: 0.4in; overflow: hidden; }
+    .cust .k  { font-weight: 400; color: #444; text-transform: uppercase; font-size: 6.5pt; letter-spacing: 0.12em; }
+    .bc-wrap  { text-align: center; margin: 3pt 0; padding: 0 2pt; }
     .bc-wrap svg { max-width: 100%; display: block; margin: 0 auto; }
-    .row { display: flex; justify-content: space-between; align-items: baseline; font-size: 8.5pt; padding: 2pt 0; border-bottom: 0.3pt solid #eee; }
+    .low { display: flex; gap: 5pt; align-items: flex-start; }
+    .info { flex: 1; min-width: 0; }
+    .qr { width: 0.92in; text-align: center; }
+    .qr img { width: 0.92in; height: 0.92in; display: block; }
+    .qr div { font-size: 5.5pt; color: #444; margin-top: 1pt; letter-spacing: 0.05em; }
+    .row { display: flex; justify-content: space-between; align-items: baseline; font-size: 8pt; padding: 1.5pt 0; border-bottom: 0.3pt solid #eee; }
     .row:last-child { border-bottom: none; }
-    .row.hl { font-size: 10.5pt; font-weight: 700; padding: 3pt 0; }
+    .row.hl { font-size: 9.5pt; font-weight: 700; padding: 2pt 0; }
     .lbl { color: #555; }
     .val { font-weight: 600; color: #000; }
     .val.big { font-size: 12pt; }
-    .otm { margin-top: 5pt; text-align: center; font-size: 8.5pt; font-weight: 700; color: #bb0000; border: 2pt solid #bb0000; padding: 3pt 0; letter-spacing: 0.14em; text-transform: uppercase; }
+    .otm { margin-top: 4pt; text-align: center; font-size: 8pt; font-weight: 700; color: #bb0000; border: 2pt solid #bb0000; padding: 2pt 0; letter-spacing: 0.14em; text-transform: uppercase; }
   `
   function makeLabel(side: 'L' | 'R' | 'WHOLE', bcId: string) {
     const whole      = side === 'WHOLE'
@@ -99,27 +149,36 @@ function printCarcassTags(h: HarvestLog) {
     const shortDate  = h.harvest_date.replace(/-/g, '').slice(2)
     // Whole-carcass tags carry no -L/-R side suffix on the barcode.
     const barcodeVal = whole ? `${shortDate}-${h.carcass_tag}` : `${shortDate}-${h.carcass_tag}-${side}`
-    const producerHtml = h.producer ? `<div class="producer">${h.producer}</div>` : ''
-    const identHtml    = identLine  ? `<div class="ident">${identLine}</div>`      : ''
+    const producerHtml = h.producer ? `<div class="producer">${escHtml(h.producer)}</div>` : ''
+    const identHtml    = identLine  ? `<div class="ident">${escHtml(identLine)}</div>`      : ''
+    const custHtml     = cust.names.length ? `<div class="cust"><span class="k">${cust.label}</span> ${cust.names.map(escHtml).join(' · ')}</div>` : ''
     const otmHtml      = h.over_30_months ? `<div class="otm">&#9888; Over 30 Months</div>` : ''
-    // Split carcasses (beef) highlight average half weight; a whole small-animal
-    // carcass highlights its full hot carcass weight instead.
-    const avgHtHtml    = !whole && avgHalfWt != null ? `<div class="row hl"><span class="lbl">Avg Half Wt</span><span class="val big">${avgHalfWt.toFixed(1)} lbs</span></div>` : ''
-    const wholeWtHtml  =  whole && totalHCW  != null ? `<div class="row hl"><span class="lbl">Carcass Wt</span><span class="val big">${totalHCW} lbs</span></div>` : ''
-    const totalHtml    = !whole && totalHCW  != null ? `<div class="row"><span class="lbl">Total HCW</span><span class="val">${totalHCW} lbs</span></div>` : ''
+    // A side tag leads with that side's own weight off the scale; a whole
+    // small-animal carcass leads with its full hot carcass weight.
+    const sw           = whole ? null : sideWt(side as 'L' | 'R')
+    const sideHtml     = !whole && sw != null ? `<div class="row hl"><span class="lbl">${side} side</span><span class="val big">${sw} lb</span></div>` : ''
+    const wholeWtHtml  =  whole && totalHCW != null ? `<div class="row hl"><span class="lbl">Carcass</span><span class="val big">${totalHCW} lb</span></div>` : ''
+    const totalHtml    = !whole && totalHCW != null ? `<div class="row"><span class="lbl">HCW</span><span class="val">${totalHCW} lb</span></div>` : ''
     const yieldHtml    = h.yield_pct  != null ? `<div class="row"><span class="lbl">Yield</span><span class="val">${h.yield_pct}%</span></div>` : ''
-    const inspHtml     = h.inspector_initials ? `<div class="row"><span class="lbl">Inspector</span><span class="val">${h.inspector_initials}</span></div>` : ''
+    const inspHtml     = h.inspector_initials ? `<div class="row"><span class="lbl">Insp.</span><span class="val">${escHtml(h.inspector_initials)}</span></div>` : ''
     const badgeHtml    = whole ? '' : `<div class="half-badge">${halfLabel}</div>`
+    const qrHtml       = qr ? `<div class="qr"><img src="${qr}" alt=""/><div>SCAN · STATUS</div></div>` : ''
     return `<div class="label">
       <div class="header"><div class="co">Cowboy Meat Co.</div><div class="co-sub">Forsyth, Montana &nbsp;&middot;&nbsp; Carcass Tag</div></div>
       ${badgeHtml}<hr/>
-      ${producerHtml}<div class="species">${h.species}</div>
-      <div class="tagnum">${h.carcass_tag || '—'}</div>
-      ${identHtml}
+      ${producerHtml}<div class="species">${escHtml(h.species)}${h.kill_type ? ` · ${escHtml(h.kill_type)}` : ''}</div>
+      <div class="tagnum">${escHtml(h.carcass_tag || '—')}</div>
+      ${identHtml}${custHtml}
       <div class="bc-wrap"><svg id="${bcId}"></svg></div><hr/>
-      <div class="row"><span class="lbl">Date</span><span class="val">${dateStr}</span></div>
-      ${avgHtHtml}${wholeWtHtml}${totalHtml}${yieldHtml}${inspHtml}${otmHtml}
-      <script>JsBarcode("#${bcId}","${barcodeVal}",{format:"CODE128",width:2.4,height:70,displayValue:true,fontSize:9,margin:10,textMargin:2});<\/script>
+      <div class="low">
+        <div class="info">
+          <div class="row"><span class="lbl">Killed</span><span class="val">${dateStr}</span></div>
+          ${sideHtml}${wholeWtHtml}${totalHtml}${yieldHtml}${inspHtml}
+        </div>
+        ${qrHtml}
+      </div>
+      ${otmHtml}
+      <script>JsBarcode("#${bcId}","${barcodeVal}",{format:"CODE128",width:2.2,height:46,displayValue:true,fontSize:9,margin:6,textMargin:2});<\/script>
     </div>`
   }
   // Split carcasses (beef, sows, boars) get one tag per side; whole-hanging
@@ -129,16 +188,15 @@ function printCarcassTags(h: HarvestLog) {
     ? `${makeLabel('L','bc-l')}${makeLabel('R','bc-r')}`
     : makeLabel('WHOLE','bc-w')
   const html = `<!DOCTYPE html><html><head>
+  <title>Tag ${escHtml(h.carcass_tag)}</title>
   <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
   <style>${css}</style></head><body>
   ${labelsHtml}
-  <script>window.onload=function(){window.print()};<\/script>
+  <script>window.onafterprint=function(){window.close()};window.onload=function(){window.print()};<\/script>
   </body></html>`
-  const w = window.open('', '_blank', 'width=300,height=580')
-  if (w) { w.document.write(html); w.document.close() }
+  w.document.open(); w.document.write(html); w.document.close()
 }
 
-// ── Shared small components ────────────────────────────────────────────────────
 function StatusDot({ pass, label }: { pass: boolean | null | undefined; label: string }) {
   const color = (pass === null || pass === undefined) ? 'rgba(166,120,90,0.4)' : pass ? C.green : C.red
   return (
@@ -2527,6 +2585,7 @@ export default function HarvestPage() {
           <Link href="/" style={{ color: C.lightBrown, textDecoration: 'none', fontSize: '0.82rem' }}>← Dashboard</Link>
           <span style={{ color: 'rgba(166,120,90,0.4)' }}>|</span>
           <h1 style={{ fontFamily: 'Georgia, serif', fontSize: '1.1rem', fontWeight: 700, color: C.cream, letterSpacing: '0.08em', textTransform: 'uppercase', margin: 0 }}>Harvest</h1>
+          <Link href="/staging" style={{ color: C.tan, textDecoration: 'none', fontSize: '0.82rem', border: '1px solid rgba(166,120,90,0.3)', borderRadius: 3, padding: '0.3rem 0.6rem' }}>Cooler &amp; Staging</Link>
         </div>
 
         {/* Date picker (Part A / Part B only) */}

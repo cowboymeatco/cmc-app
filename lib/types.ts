@@ -192,6 +192,16 @@ export interface HarvestLog {
   zero_tolerance_direct_obs: boolean
   initial_cooler_temp_f:    number | null
   kill_type:                'USDA' | 'Custom' | null
+  // Floor tracking off the carcass QR (/carcass/[id], /staging). Staged is
+  // not a status: the carcass stays 'chilling' (capacity, the cut schedule and
+  // the cooler charts all count 'chilling' as hanging) and staged_at says it
+  // has been moved to the staging cooler.
+  staged_at?:               string | null
+  staged_by?:               string | null
+  cut_at?:                  string | null
+  cut_by?:                  string | null
+  /** Days to hang before it is ready to cut. Null = the species default. */
+  aging_target_days?:       number | null
 }
 
 export interface CorrectiveAction {
