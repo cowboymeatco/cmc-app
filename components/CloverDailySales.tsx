@@ -41,6 +41,7 @@ const $ = (c: number | null | undefined) => (c == null ? '—' : `${c < 0 ? '−
 interface DayListRow {
   date: string
   status: 'not_posted' | 'posting' | 'posted' | 'error'
+  stuck: boolean          // 'posting' long past the route's time limit: cut off, can be finished
   changedAfterPost: boolean
   invoiceDoc: string | null
   approvedBy: string | null
@@ -64,9 +65,11 @@ function statusOf(row: DayListRow, detail?: DayDetail): { text: string; color: s
   if (row.status === 'posted' && (row.changedAfterPost || detail?.record?.changed_after_post)) return { text: '⚠ changed after posting', color: C.red }
   if (row.status === 'posted') return { text: `posted${row.invoiceDoc ? ` · INV ${row.invoiceDoc}` : ''}`, color: C.green }
   if (row.status === 'error') return { text: 'failed part-way', color: C.red }
+  if (row.status === 'posting' && row.stuck) return { text: 'stopped part-way', color: C.red }
   if (row.status === 'posting') return { text: 'posting…', color: C.yellow }
   if (!detail) return { text: 'not posted', color: C.lightBrown }
   const p = detail.proposal
+  if (p.alreadyPosted?.open) return { text: `in QuickBooks · INV ${p.alreadyPosted.docNumber} · payments missing`, color: C.yellow }
   if (p.alreadyPosted) return { text: `in QuickBooks · INV ${p.alreadyPosted.docNumber}`, color: C.green }
   if (p.handEntered) return { text: `entered by hand · INV ${p.handEntered.docNumber}`, color: C.lightBrown }
   if (detail.summary.orderCount === 0) return { text: 'no sales', color: C.lightBrown }
@@ -281,7 +284,8 @@ function DayDetailView({ row, d, onMap, onApprove, onReload, loading }: {
   const p = d.proposal
   const mapByClover = new Map(d.mappings.map(m => [m.cloverItemId, m]))
   const posted = row.status === 'posted' || d.record?.status === 'posted'
-  const canPost = !!d.postingFrom && s.date >= d.postingFrom && p.blockers.length === 0 && !posted && row.status !== 'posting'
+  const finishing = row.status === 'error' || row.stuck || !!p.alreadyPosted?.open
+  const canPost = !!d.postingFrom && s.date >= d.postingFrom && p.blockers.length === 0 && !posted && (row.status !== 'posting' || row.stuck)
 
   const totals: [string, number | null, string?][] = [
     ['Taken in (all payments)', t.collectedCents],
@@ -313,6 +317,11 @@ function DayDetailView({ row, d, onMap, onApprove, onReload, loading }: {
       )}
       {d.record?.status === 'error' && (
         <div style={{ color: C.red, fontSize: '0.8rem', margin: '0.5rem 0' }}>Posting stopped part-way: {d.record.error}</div>
+      )}
+      {row.stuck && (
+        <div style={{ color: C.red, fontSize: '0.8rem', margin: '0.5rem 0' }}>
+          Posting was cut off before it finished. Approve again to finish: what&apos;s already in QuickBooks is kept and only the missing entries are added.
+        </div>
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: '0.3rem 1rem', margin: '0.5rem 0' }}>
@@ -465,7 +474,7 @@ function DayDetailView({ row, d, onMap, onApprove, onReload, loading }: {
                 style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(166,120,90,0.35)', borderRadius: 3, padding: '0.4rem 0.6rem', color: C.cream, fontSize: '0.83rem' }} />
               <button disabled={!canPost || !approver.trim()} onClick={() => onApprove(approver.trim())}
                 style={{ ...BTN(canPost && approver.trim() ? C.green : 'rgba(166,120,90,0.25)'), cursor: canPost && approver.trim() ? 'pointer' : 'not-allowed' }}>
-                {row.status === 'error' ? 'Approve — finish posting' : 'Approve & post to QuickBooks'}
+                {finishing ? 'Approve — finish posting' : 'Approve & post to QuickBooks'}
               </button>
               {!d.postingFrom && <span style={{ fontSize: '0.75rem', color: C.lightBrown }}>Posting is off.</span>}
               {d.postingFrom && s.date < d.postingFrom && <span style={{ fontSize: '0.75rem', color: C.lightBrown }}>Before {dateLabel(d.postingFrom, { month: 'short', day: 'numeric' })} — entered by hand.</span>}

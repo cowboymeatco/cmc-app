@@ -333,7 +333,9 @@ export interface Proposal {
   balanced: boolean
   blockers: string[]
   handEntered: null | { id: string; docNumber: string; txnDate: string; totalAmt: number }
-  alreadyPosted: null | { id: string; docNumber: string }
+  // open: the app's invoice for the day is in QuickBooks but not fully paid —
+  // a post that stopped part-way. Approving again adds only what is missing.
+  alreadyPosted: null | { id: string; docNumber: string; totalCents: number; balanceCents: number; open: boolean }
 }
 
 export interface DayProposal {
@@ -427,7 +429,15 @@ export async function proposeDay(s: DaySummary): Promise<DayProposal> {
   // the day's retail. A same-total invoice for a different day is possible but
   // rare enough that a person confirming it is the right trade.
   const hand = !mine ? around.find(i => Math.round(i.TotalAmt * 100) === invoiceTotal && invoiceTotal > 0) : undefined
-  if (mine) blockers.push(`Already posted to QuickBooks (invoice ${mine.DocNumber ?? mine.Id})`)
+  // The app's own invoice for the day. Fully paid: the day is done. Still owing:
+  // a post that stopped part-way (the request was cut off after the invoice),
+  // which approving again finishes — unless Clover's total has moved since.
+  const mineTotal = mine ? Math.round(mine.TotalAmt * 100) : 0
+  const mineOpen = !!mine && Math.round(mine.Balance * 100) > 0
+  if (mine && !mineOpen) blockers.push(`Already posted to QuickBooks (invoice ${mine.DocNumber ?? mine.Id})`)
+  if (mine && mineOpen && mineTotal !== invoiceTotal) {
+    blockers.push(`QuickBooks invoice ${mine.DocNumber ?? mine.Id} for this day is $${(mineTotal / 100).toFixed(2)}, but Clover now says $${(invoiceTotal / 100).toFixed(2)} — finish it in QuickBooks`)
+  }
   if (hand) blockers.push(`Looks already entered by hand: CMC invoice ${hand.DocNumber ?? hand.Id} dated ${hand.TxnDate} for the same $${hand.TotalAmt.toFixed(2)}`)
 
   if (!dayClosed(s.date)) blockers.push(`The shop hasn't closed yet — the day can be posted from ${SHOP_CLOSE_LABEL} Mountain Time`)
@@ -447,7 +457,7 @@ export async function proposeDay(s: DaySummary): Promise<DayProposal> {
       balanced,
       blockers,
       handEntered: hand ? { id: hand.Id, docNumber: hand.DocNumber ?? hand.Id, txnDate: hand.TxnDate, totalAmt: hand.TotalAmt } : null,
-      alreadyPosted: mine ? { id: mine.Id, docNumber: mine.DocNumber ?? mine.Id } : null,
+      alreadyPosted: mine ? { id: mine.Id, docNumber: mine.DocNumber ?? mine.Id, totalCents: mineTotal, balanceCents: Math.round(mine.Balance * 100), open: mineOpen } : null,
     },
     mappings,
     candidates,
@@ -483,6 +493,16 @@ export interface DayRow {
   posted_at: string | null
   last_checked_at: string | null
   error: string | null
+  updated_at: string
+}
+
+// A post runs inside one request, and the route's limit is 5 minutes
+// (maxDuration 300). A row still 'posting' well past that was cut off, not
+// running: it may be approved again to finish.
+export const STUCK_POSTING_MS = 6 * 60_000
+
+export function postingStuck(row: Pick<DayRow, 'status' | 'updated_at'>, now: number = Date.now()): boolean {
+  return row.status === 'posting' && now - new Date(row.updated_at).getTime() > STUCK_POSTING_MS
 }
 
 async function log(date: string, step: string, status: 'ok' | 'error', extra: {
@@ -540,6 +560,42 @@ export class PostRefused extends Error {}
  * that didn't land (never repeats one that did). QuickBooks' requestid makes a
  * retried request return the original result instead of writing again.
  */
+/** What this app already wrote to QuickBooks for the day, found by the
+ *  [clover-sales DATE] marker. A request can be cut off between a QuickBooks
+ *  write and its log line, so a resume can't rely on the log alone. */
+async function postedPieces(date: string, p: Proposal): Promise<{
+  invoice: { id: string; docNumber: string | null } | null
+  payments: Map<string, string>        // log step (payment:<tender>) → Payment Id
+  journalId: string | null
+}> {
+  type Pay = { Id: string; PrivateNote?: string; PaymentRefNum?: string }
+  type Je = { Id: string; PrivateNote?: string }
+  const mark = (x: { PrivateNote?: string }) => (x.PrivateNote ?? '').includes(p.marker)
+  const cust = p.invoice?.customerId
+  const [inv, pay, je] = await Promise.all([
+    cust ? qboFetch<QueryRes<QboInvoiceLite>>(q(`select * from Invoice where CustomerRef = '${esc(cust)}' and TxnDate = '${date}'`)) : null,
+    cust ? qboFetch<QueryRes<Pay>>(q(`select * from Payment where CustomerRef = '${esc(cust)}' and TxnDate = '${date}'`)) : null,
+    p.journal ? qboFetch<QueryRes<Je>>(q(`select * from JournalEntry where TxnDate = '${date}'`)) : null,
+  ])
+  const invoices = (inv?.QueryResponse.Invoice ?? []).filter(mark)
+  if (invoices.length > 1) throw new PostRefused(`QuickBooks has ${invoices.length} invoices marked ${p.marker} — a person needs to sort them out in QuickBooks first.`)
+  const payments = new Map<string, string>()
+  const mine = (pay?.QueryResponse.Payment ?? []).filter(mark)
+  for (const x of p.payments) {
+    const ref = x.refNum.slice(0, 21)
+    const hits = mine.filter(m => m.PaymentRefNum === ref)
+    if (hits.length > 1) throw new PostRefused(`QuickBooks has ${hits.length} ${x.label} payments marked ${p.marker} — a person needs to sort them out in QuickBooks first.`)
+    if (hits.length) payments.set(`payment:${x.tender}`, hits[0].Id)
+  }
+  const journals = (je?.QueryResponse.JournalEntry ?? []).filter(mark)
+  if (journals.length > 1) throw new PostRefused(`QuickBooks has ${journals.length} journal entries marked ${p.marker} — a person needs to sort them out in QuickBooks first.`)
+  return {
+    invoice: invoices[0] ? { id: invoices[0].Id, docNumber: invoices[0].DocNumber ?? null } : null,
+    payments,
+    journalId: journals[0]?.Id ?? null,
+  }
+}
+
 export async function postDay(opts: {
   summary: DaySummary
   built: DayProposal
@@ -559,7 +615,10 @@ export async function postDay(opts: {
   const { data: existing, error: readErr } = await supabaseAdmin
     .from('clover_daily_sales').select('*').eq('business_date', s.date).maybeSingle()
   if (readErr) throw new Error(`Can't read the posting record: ${readErr.message}`)
-  if (existing && existing.status !== 'error') throw new PostRefused(`${s.date} is already ${existing.status}.`)
+  if (existing && existing.status === 'posting' && !postingStuck(existing as DayRow)) {
+    throw new PostRefused(`${s.date} is being posted right now. If it still says posting after ${STUCK_POSTING_MS / 60_000} minutes, approve it again to finish.`)
+  }
+  if (existing && existing.status === 'posted') throw new PostRefused(`${s.date} is already posted.`)
   if (existing && existing.fingerprint !== s.fingerprint) {
     throw new PostRefused(`${s.date} failed part-way on different Clover numbers — a person needs to finish it in QuickBooks, not a re-post.`)
   }
@@ -567,17 +626,31 @@ export async function postDay(opts: {
     business_date: s.date, status: 'posting' as const, fingerprint: s.fingerprint, last_fingerprint: s.fingerprint,
     summary: s, proposal: p, approved_by: approvedBy, error: null, updated_at: new Date().toISOString(),
   }
-  const { error: claimErr } = existing
-    ? await supabaseAdmin.from('clover_daily_sales').update(claim).eq('business_date', s.date).eq('status', 'error')
-    : await supabaseAdmin.from('clover_daily_sales').insert(claim)
-  if (claimErr) throw new PostRefused(`Could not claim ${s.date} for posting (${claimErr.message}) — someone else may be posting it.`)
+  // Resuming takes the row only if nobody else took it since it was read
+  // (same status, same updated_at), so two people finishing a stuck day can't
+  // both run.
+  const { data: claimed, error: claimErr } = existing
+    ? await supabaseAdmin.from('clover_daily_sales').update(claim)
+        .eq('business_date', s.date).eq('status', existing.status).eq('updated_at', existing.updated_at).select('business_date')
+    : await supabaseAdmin.from('clover_daily_sales').insert(claim).select('business_date')
+  if (claimErr || !claimed?.length) throw new PostRefused(`Could not claim ${s.date} for posting${claimErr ? ` (${claimErr.message})` : ''} — someone else may be posting it.`)
   await log(s.date, 'claim', 'ok', { actor: approvedBy, request: { fingerprint: s.fingerprint } })
 
-  const done = await okSteps(s.date)
+  // What's already in QuickBooks: the log, and the entries themselves (the
+  // log line can be missing if the request was cut off right after a write).
+  const [done, found] = await Promise.all([okSteps(s.date), postedPieces(s.date, p)])
+  const adopt = async (step: string, qboId: string) => {
+    if (done.get(step)) return
+    done.set(step, qboId)
+    await log(s.date, step, 'ok', { qboId, actor: approvedBy, request: { found: 'already in QuickBooks, carrying the day marker' } })
+  }
+  if (found.invoice) await adopt('invoice', found.invoice.id)
+  for (const [step, id] of found.payments) await adopt(step, id)
+  if (found.journalId) await adopt('journal', found.journalId)
   const note = `${p.marker} Clover register sales for ${s.date} (Mountain Time). Posted by the CMC app, approved by ${approvedBy}. Clover fingerprint ${s.fingerprint}.`
   const rid = (step: string) => `clv-${s.date}-${step}-${s.fingerprint.slice(0, 8)}`
   let invoiceId = done.get('invoice') ?? null
-  let invoiceDoc: string | null = null
+  let invoiceDoc: string | null = found.invoice?.docNumber ?? null
   const paymentIds: string[] = []
   let journalId = done.get('journal') ?? null
   let step = 'invoice'
@@ -672,7 +745,7 @@ export async function noteRecheck(s: DaySummary): Promise<DayRow | null> {
 export async function listDays(fromISO: string, toISO: string): Promise<DayRow[]> {
   const { data, error } = await supabaseAdmin
     .from('clover_daily_sales')
-    .select('business_date, status, fingerprint, last_fingerprint, changed_after_post, qbo_invoice_id, qbo_invoice_doc, qbo_payment_ids, qbo_journal_id, approved_by, posted_at, last_checked_at, error, summary')
+    .select('business_date, status, fingerprint, last_fingerprint, changed_after_post, qbo_invoice_id, qbo_invoice_doc, qbo_payment_ids, qbo_journal_id, approved_by, posted_at, last_checked_at, error, summary, updated_at')
     .gte('business_date', fromISO).lte('business_date', toISO)
     .order('business_date', { ascending: false })
   if (error) throw new Error(error.message)

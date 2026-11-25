@@ -1,8 +1,7 @@
-export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { readCloverDay } from '@/lib/cloverSales'
 import {
-  proposeDay, postDay, noteRecheck, listDays, saveItemMapping, postingFrom, PostRefused, type DayRow,
+  proposeDay, postDay, noteRecheck, listDays, saveItemMapping, postingFrom, postingStuck, PostRefused, type DayRow,
 } from '@/lib/qboDailySales'
 import { requireExec } from '@/lib/execGate'
 import { addDaysISO, isoDate } from '@/lib/dates'
@@ -17,6 +16,13 @@ import { addDaysISO, isoDate } from '@/lib/dates'
 // Posting follows app/api/qbo/push: dry run by default, a person approves,
 // every write logged. It is additionally behind the exec passphrase and the
 // CLOVER_SALES_POSTING_FROM switch (off until the handoff from Jill).
+
+// Node runtime with a 5-minute limit, not edge. An edge function must start
+// its response within 25 seconds, and a busy register day (one Clover call per
+// ticket, then the QuickBooks invoice and a payment per tender) takes longer:
+// on 2026-11-24 Vercel killed the approval after the invoice was written and
+// before the payments, leaving the day stuck at "posting".
+export const maxDuration = 300
 
 const DAYS_SHOWN = 21
 
@@ -36,6 +42,7 @@ export async function GET(req: NextRequest) {
         return {
           date: d,
           status: r?.status ?? 'not_posted',
+          stuck: r ? postingStuck(r) : false,
           changedAfterPost: r?.changed_after_post ?? false,
           invoiceDoc: r?.qbo_invoice_doc ?? null,
           approvedBy: r?.approved_by ?? null,
