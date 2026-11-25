@@ -1,4 +1,3 @@
-export const runtime = 'edge'
 import { NextRequest, NextResponse } from 'next/server'
 import { buildDailyReport } from '@/lib/dailyReport'
 import { fillCardDays } from '@/lib/cloverCapital'
@@ -22,6 +21,11 @@ import { addDaysISO, isoDate, isoDateTime } from '@/lib/dates'
 // report; the pace line fills in over the first week.
 //
 // Guarded by CRON_SECRET and fails CLOSED.
+
+// Node runtime with a 5-minute limit, not edge: an edge function must start its
+// response within 25 seconds, and reading a busy day from Clover can take
+// longer (Vercel stopped this cron on 2026-11-24).
+export const maxDuration = 300
 
 const RECIPIENTS = (process.env.DAILY_REPORT_TO ?? 'charlie@cowboymeats.com')
   .split(',').map(s => s.trim()).filter(Boolean)
