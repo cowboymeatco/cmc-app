@@ -1049,7 +1049,7 @@ export default function CutScheduleTab() {
           ))}
         </div>
 
-        <div style={{ display: 'flex', gap: '0.6rem' }}>
+        <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
           {!showPast && (
             <div style={{ display: 'inline-flex', border: '1px solid rgba(201,168,130,0.45)', borderRadius: 4, overflow: 'hidden' }}>
               {(['list', 'week'] as const).map(v => (
@@ -1113,6 +1113,21 @@ export default function CutScheduleTab() {
             }}
           >
             📱 Crew View ↗
+          </Link>
+          {/* Charlie, 2026-11-27: plan from the phone. Office only — don't
+              send this one to the crew; it changes the plan. */}
+          <Link
+            href="/cut-schedule/plan"
+            title="Plan cutting days from your phone — office only, not for the crew. Saves the same plan as this tab."
+            style={{
+              background: 'rgba(245,158,11,0.12)', color: C.amber,
+              border: '1px solid rgba(245,158,11,0.45)', borderRadius: 4,
+              padding: '0.5rem 1rem', fontWeight: 700, fontSize: '0.85rem',
+              textDecoration: 'none', whiteSpace: 'nowrap',
+              display: 'inline-flex', alignItems: 'center',
+            }}
+          >
+            ✏️ Phone Planner ↗
           </Link>
           {!showPast && <>
           <button
